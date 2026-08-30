@@ -1344,10 +1344,10 @@ def test_real_upload_without_case_authority_ignores_permissive_global_aliases():
     _goto_page(at, "Inputs")
     at.session_state["_input_tab"] = f"1 {chr(0x00B7)} Analysis settings"
     at.run()
-    assert at.selectbox(key="_torsion_case_design_basis::PL-01").value == (
+    assert at.selectbox(key="_torsion_case_design_basis::0::PL-01").value == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
-    assert at.selectbox(key="_torsion_case_member_scope::PL-01").value == (
+    assert at.selectbox(key="_torsion_case_member_scope::0::PL-01").value == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
 

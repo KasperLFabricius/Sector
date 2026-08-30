@@ -5993,6 +5993,87 @@ def test_report_profiles_require_exact_coherent_torsion_authority(
             )
 
 
+def test_audit_drops_stale_torsion_subchecks_when_applicability_is_blocked():
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+        },
+        40.0,
+    )
+    torsion = {
+        "applicability": applicability,
+        "applicability_blocked": True,
+        "t_ed": 40.0,
+        "valid": True,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "full_resistance_assessed": True,
+        "closed_links_present": True,
+        "trd": 999.0,
+        "util": 0.001,
+        "assessment_status": "PASS",
+        "interaction": {
+            "valid": True,
+            "value": 987.654,
+            "t_ed": 40.0,
+            "trd_max": 100.0,
+            "v_ed": 50.0,
+            "vrd_max": 150.0,
+            "cot": 2.0,
+            "theta_deg": 26.565,
+        },
+        "min_reinf": {
+            "applicable": True,
+            "value": 876.543,
+            "ok": True,
+            "t_ed": 40.0,
+            "trd_c": 100.0,
+            "v_ed": 50.0,
+            "vrd_c": 150.0,
+            "solid": True,
+        },
+    }
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        torsion_T=40.0,
+        torsion_design_basis=capacity.TORSION_DESIGN_EQUILIBRIUM,
+        torsion_member_scope=capacity.TORSION_MEMBER_CLOSED,
+    )
+    out = {
+        "torsion": torsion,
+        "worked_example_selection": {
+            "schema": 1,
+            "families": {"torsion": {"case_id": "__single__"}},
+            "crack_examples": [],
+            "cracking_threshold": None,
+            "torsion_subchecks": {
+                "interaction": {
+                    "case_id": "__single__",
+                    "component": None,
+                },
+                "minimum_reinforcement": {
+                    "case_id": "__single__",
+                    "component": None,
+                },
+            },
+        },
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, profile="Audit",
+    )).split())
+
+    assert "NOT ASSESSED" in text
+    assert "987.654" not in text
+    assert "876.543" not in text
+    assert "Governing shear + torsion concrete-strut interaction" not in text
+    assert "Governing shear + torsion minimum-reinforcement screen" not in text
+    assert "All calculated V+T screens remain" not in text
+    assert "All calculated Formula 6.31 screens remain" not in text
+
+
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
 def test_report_profiles_identify_each_plastic_case_torsion_authority(profile):
     inp = _inp()

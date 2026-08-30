@@ -2491,6 +2491,13 @@ class ReportBuilder:
             for case_inp, case_out in plastic_contexts:
                 if self._case_id(case_inp, "plastic") != selection.get("case_id"):
                     continue
+                if (
+                    presentation.torsion_applicability_publication_status(
+                        case_out.get("torsion") or {}
+                    )
+                    != "APPLICABLE"
+                ):
+                    continue
                 case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
                 jobs.append((
                     case_inp,
@@ -8975,6 +8982,13 @@ class ReportBuilder:
         ):
             return None, None
         torsion_result = self.out.get("torsion") or {}
+        if (
+            presentation.torsion_applicability_publication_status(
+                torsion_result
+            )
+            != "APPLICABLE"
+        ):
+            return None, None
         component = selection.get("component")
         if component is None:
             item = torsion_result

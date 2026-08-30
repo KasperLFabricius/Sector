@@ -1336,6 +1336,8 @@ def _torsion_subcheck_selection(out):
     selected = {}
     for case_order, (case_id, case_out) in enumerate(_publication_cases(out, "plastic")):
         torsion = case_out.get("torsion") or {}
+        if torsion_applicability_publication_status(torsion) != "APPLICABLE":
+            continue
         directional = torsion.get("directional_interactions") or {}
         items = [(key, directional[key]) for key in ("vx", "vy") if key in directional]
         if not items:

@@ -1295,10 +1295,10 @@ def _enable_shared_links(at):
 def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
     at = _fresh_unclassified()
     at.run()
-    assert at.selectbox(key="_torsion_case_design_basis::PL-01").value == (
+    assert at.selectbox(key="_torsion_case_design_basis::0::PL-01").value == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
-    assert at.selectbox(key="_torsion_case_member_scope::PL-01").value == (
+    assert at.selectbox(key="_torsion_case_member_scope::0::PL-01").value == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
 
@@ -1336,12 +1336,12 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
         "calculate",
         (
             "selectbox",
-            "_torsion_case_design_basis::PL-01",
+            "_torsion_case_design_basis::0::PL-01",
             capacity.TORSION_DESIGN_EQUILIBRIUM,
         ),
         (
             "selectbox",
-            "_torsion_case_member_scope::PL-01",
+            "_torsion_case_member_scope::0::PL-01",
             capacity.TORSION_MEMBER_CLOSED,
         ),
     )
@@ -1361,7 +1361,7 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
         "calculate",
         (
             "selectbox",
-            "_torsion_case_design_basis::PL-01",
+            "_torsion_case_design_basis::0::PL-01",
             capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL,
         ),
     )
@@ -1376,7 +1376,7 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
         "calculate",
         (
             "selectbox",
-            "_torsion_case_member_scope::PL-01",
+            "_torsion_case_member_scope::0::PL-01",
             capacity.TORSION_MEMBER_OPEN,
         ),
     )
@@ -1489,22 +1489,22 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
         at,
         (
             "selectbox",
-            "_torsion_case_design_basis::EQ-01",
+            "_torsion_case_design_basis::0::EQ-01",
             capacity.TORSION_DESIGN_EQUILIBRIUM,
         ),
         (
             "selectbox",
-            "_torsion_case_member_scope::EQ-01",
+            "_torsion_case_member_scope::0::EQ-01",
             capacity.TORSION_MEMBER_CLOSED,
         ),
         (
             "selectbox",
-            "_torsion_case_design_basis::COMP-01",
+            "_torsion_case_design_basis::1::COMP-01",
             capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER,
         ),
         (
             "selectbox",
-            "_torsion_case_member_scope::COMP-01",
+            "_torsion_case_member_scope::1::COMP-01",
             capacity.TORSION_MEMBER_CLOSED,
         ),
     )
@@ -1520,6 +1520,11 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
     eq_entry, comp_entry = at.session_state["results"]["plastic_cases"]
     eq_torsion = eq_entry["results"]["torsion"]
     comp_torsion = comp_entry["results"]["torsion"]
+    context_sig_before = at.session_state["_latest_inputs"][
+        "plastic_case_context_sig"
+    ]
+    plastic_sig_before = at.session_state["_latest_inputs"]["plastic_sig"]
+    overall_sig_before = at.session_state["_latest_inputs"]["signature"]
     assert eq_torsion["applicability"]["status"] == "APPLICABLE"
     assert eq_torsion["trd"] is not None
     assert comp_torsion["assessment_status"] == "NOT ASSESSED"
@@ -1541,7 +1546,7 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
         "calculate",
         (
             "selectbox",
-            "_torsion_case_design_basis::EQ-01",
+            "_torsion_case_design_basis::0::EQ-01",
             capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
         ),
     )
@@ -1551,6 +1556,13 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
     assert changed[0]["results"]["torsion"]["assessment_status"] == (
         "NOT ASSESSED"
     )
+    assert changed[1]["reused"] is True
+    assert changed[1]["results"] is comp_entry["results"]
+    assert changed[1]["results"]["torsion"] is comp_torsion
+    latest = at.session_state["_latest_inputs"]
+    assert latest["plastic_case_context_sig"] == context_sig_before
+    assert latest["plastic_sig"] == plastic_sig_before
+    assert latest["signature"] != overall_sig_before
 
     renamed_rows = [
         {**rows[0], "name": "EQ-RENAMED"},
@@ -1575,6 +1587,45 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
     assert set(at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY]) == {
         "COMP-01"
     }
+    assert not at.exception
+
+
+def test_duplicate_plastic_case_names_keep_authority_widgets_distinct():
+    import load_cases
+
+    at = _fresh()
+    at.run()
+    _calculate(at)
+    retained_results = at.session_state["results"]
+    row = at.session_state[load_cases.PLASTIC_TABLE_KEY].to_dict("records")[0]
+    duplicate = dict(row)
+    _replace_plastic_cases(at, [row, duplicate])
+
+    design_keys = {
+        item.key
+        for item in at.selectbox
+        if item.key and item.key.startswith("_torsion_case_design_basis::")
+    }
+    member_keys = {
+        item.key
+        for item in at.selectbox
+        if item.key and item.key.startswith("_torsion_case_member_scope::")
+    }
+    assert design_keys == {
+        "_torsion_case_design_basis::0::PL-01",
+        "_torsion_case_design_basis::1::PL-01",
+    }
+    assert member_keys == {
+        "_torsion_case_member_scope::0::PL-01",
+        "_torsion_case_member_scope::1::PL-01",
+    }
+    assert not at.exception
+
+    _calculate(at)
+
+    visible = " ".join(error.value for error in at.error)
+    assert "Use a unique name" in visible
+    assert at.session_state["results"] is retained_results
     assert not at.exception
 
 

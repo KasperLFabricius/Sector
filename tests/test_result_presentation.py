@@ -200,6 +200,7 @@ def test_torsion_subcheck_selection_accepts_positive_infinity_and_first_tie():
     out = {"plastic_cases": [{
         "name": "PL-INF",
         "results": {"torsion": {
+            **_applicable_torsion_evidence(),
             "valid": True,
             "util": 0.5,
             "directional_interactions": {
@@ -221,6 +222,24 @@ def test_torsion_subcheck_selection_accepts_positive_infinity_and_first_tie():
     assert selected["minimum_reinforcement"] == {
         "case_id": "PL-INF", "component": "vx",
     }
+
+
+def test_torsion_subchecks_require_applicable_publication_authority():
+    out = {"plastic_cases": [{
+        "name": "PL-BLOCKED",
+        "results": {"torsion": {
+            **_applicable_torsion_evidence(),
+            "applicability_blocked": True,
+            "interaction": {"valid": True, "value": 987.654},
+            "min_reinf": {"applicable": True, "value": 876.543},
+        }},
+    }]}
+
+    selected = presentation.worked_example_selection({}, out)[
+        "torsion_subchecks"
+    ]
+
+    assert selected == {}
 
 
 @pytest.mark.parametrize(

@@ -2629,11 +2629,12 @@ def _torsion_case_authority_controls(box, plastic_cases, *, disabled):
         plastic_cases,
         load_cases.PLASTIC_TABLE_KEY,
     )
-    names = tuple(
-        str(name).strip()
-        for name in cases[load_cases.NAME].tolist()
+    case_rows = tuple(
+        (row_index, str(name).strip())
+        for row_index, name in enumerate(cases[load_cases.NAME].tolist())
         if str(name).strip()
     )
+    names = tuple(name for _, name in case_rows)
     raw_mapping = st.session_state.get(capacity.TORSION_CASE_AUTHORITIES_KEY)
     pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {})
     selected = {}
@@ -2644,10 +2645,11 @@ def _torsion_case_authority_controls(box, plastic_cases, *, disabled):
             "section check; establish any compatibility redistribution and "
             "member or system conditions outside this calculation."
         )
-    for name in names:
+    for row_index, name in case_rows:
         authority = capacity.torsion_case_authority(raw_mapping, name)
-        design_key = f"_torsion_case_design_basis::{name}"
-        member_key = f"_torsion_case_member_scope::{name}"
+        row_key = f"{row_index}::{name}"
+        design_key = f"_torsion_case_design_basis::{row_key}"
+        member_key = f"_torsion_case_member_scope::{row_key}"
         if design_key not in pending:
             st.session_state[design_key] = authority[
                 capacity.TORSION_CASE_DESIGN_BASIS_KEY
@@ -2881,6 +2883,25 @@ def _case_table_signature(value, key):
             row.append(cell)
         rows.append(tuple(row))
     return tuple(rows)
+
+
+def _torsion_case_authority_signature(value, plastic_cases):
+    """Return case-aligned authority identity without changing shared context."""
+
+    frame = load_cases.active_table(
+        plastic_cases,
+        load_cases.PLASTIC_TABLE_KEY,
+    )
+    signature = []
+    for name in frame[load_cases.NAME].tolist():
+        name = str(name).strip()
+        authority = capacity.torsion_case_authority(value, name)
+        signature.append((
+            name,
+            authority[capacity.TORSION_CASE_DESIGN_BASIS_KEY],
+            authority[capacity.TORSION_CASE_MEMBER_SCOPE_KEY],
+        ))
+    return tuple(signature)
 
 
 def _fatigue_spectrum_signature(value):
@@ -6067,7 +6088,14 @@ _SHEAR_SIG_KEYS = (
 )
 _CAPACITY_CONTEXT_SIG_KEYS = tuple(
     key for key in _SHEAR_SIG_KEYS
-    if key not in {"shear_V", "torsion_T", "shear_gamma_v"}
+    if key not in {
+        "shear_V",
+        "torsion_T",
+        "shear_gamma_v",
+        "torsion_design_basis",
+        "torsion_member_scope",
+        capacity.TORSION_CASE_AUTHORITIES_KEY,
+    }
 ) + (
     "minimum_reinforcement_on", "clear_spacing_on",
     "transverse_detailing_on", "detailing_edition",
@@ -8291,6 +8319,10 @@ def build_inputs(host=st):
         case_frames[load_cases.PLASTIC_TABLE_KEY],
         load_cases.PLASTIC_TABLE_KEY,
     )
+    torsion_case_authority_sig = _torsion_case_authority_signature(
+        torsion_case_authorities,
+        case_frames[load_cases.PLASTIC_TABLE_KEY],
+    )
     elastic_table_sig = _case_table_signature(
         case_frames[load_cases.ELASTIC_TABLE_KEY],
         load_cases.ELASTIC_TABLE_KEY,
@@ -8326,7 +8358,10 @@ def build_inputs(host=st):
         if fatigue_on
         else ("fatigue", False)
     )
-    sig = plastic_sig + elastic_sig + (fatigue_sig,)
+    sig = plastic_sig + elastic_sig + (
+        fatigue_sig,
+        ("torsion-case-authorities", torsion_case_authority_sig),
+    )
     st.session_state.pop("_auto_all", None)   # one-shot: applied this run only
     # Fill the reserved Save-Load / About slots now the inputs exist, so the
     # project download captures the fully-built section and loads.
