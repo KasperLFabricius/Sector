@@ -1168,6 +1168,11 @@ def _worked_family_selection(out, family):
         result = case_out.get(family)
         if not result:
             continue
+        if (
+            family == "torsion"
+            and torsion_applicability_publication_status(result) != "APPLICABLE"
+        ):
+            continue
         direction = None
         if family == "plastic":
             if not result.get("converged"):

@@ -242,6 +242,33 @@ def test_torsion_subchecks_require_applicable_publication_authority():
     assert selected == {}
 
 
+def test_torsion_worked_family_ignores_blocked_higher_utilisation():
+    blocked = {
+        **_applicable_torsion_evidence(),
+        "applicability_blocked": True,
+        "valid": True,
+        "util": 9.0,
+    }
+    applicable = {
+        **_applicable_torsion_evidence(),
+        "valid": True,
+        "util": 0.8,
+    }
+    out = {
+        "plastic_cases": [
+            {"name": "PL-BLOCKED", "results": {"torsion": blocked}},
+            {"name": "PL-APPLICABLE", "results": {"torsion": applicable}},
+        ]
+    }
+
+    selected = presentation.worked_example_selection({}, out)["families"]
+
+    assert selected["torsion"] == {
+        "case_id": "PL-APPLICABLE",
+        "component": None,
+    }
+
+
 @pytest.mark.parametrize(
     ("check", "status", "note"),
     [

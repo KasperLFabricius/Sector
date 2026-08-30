@@ -7930,6 +7930,7 @@ def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
             "links": {"res": {"valid": True}, "util": 0.40},
         },
         "torsion": {
+            **_torsion_out(),
             "valid": True, "util": 0.40,
             "min_reinf": {"applicable": True, "value": 9.0},
             "interaction": {"valid": True, "value": 8.0},
@@ -7944,7 +7945,7 @@ def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
             "res": {"valid": True}, "util": 0.85,
             "links": {"res": {"valid": True}, "util": 0.80},
         },
-        "torsion": {"valid": True, "util": 0.75},
+        "torsion": {**_torsion_out(), "valid": True, "util": 0.75},
         "combined": {"valid": True, "dkna_sum": 0.90},
     }
     invalid = {
@@ -7972,6 +7973,70 @@ def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
     assert selected["torsion_subchecks"]["minimum_reinforcement"][
         "case_id"
     ] == "PL-A"
+
+
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+def test_report_main_torsion_worked_example_requires_applicable_case(profile):
+    inp = _inp()
+    actions = [
+        {
+            "name": "PL-BLOCKED",
+            "description": "Blocked retained result",
+            "n_ed_kn": 0.0,
+            "mx_ed_knm": 0.0,
+            "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0,
+            "vy_ed_kn": 0.0,
+            "vx_face": "auto",
+            "vy_face": "auto",
+            "t_ed_knm": 40.0,
+        },
+        {
+            "name": "PL-APPLICABLE",
+            "description": "Applicable governing result",
+            "n_ed_kn": 0.0,
+            "mx_ed_knm": 0.0,
+            "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0,
+            "vy_ed_kn": 0.0,
+            "vx_face": "auto",
+            "vy_face": "auto",
+            "t_ed_knm": 40.0,
+        },
+    ]
+    inp["plastic_cases"] = actions
+    blocked = _torsion_out()
+    blocked.update(applicability_blocked=True, valid=True, util=9.0)
+    applicable = _torsion_out()
+    applicable.update(valid=True, util=0.8)
+    out = {
+        "plastic_cases": [
+            {
+                "name": actions[0]["name"],
+                "actions": actions[0],
+                "evaluated": True,
+                "results": {"torsion": blocked},
+            },
+            {
+                "name": actions[1]["name"],
+                "actions": actions[1],
+                "evaluated": True,
+                "results": {"torsion": applicable},
+            },
+        ]
+    }
+
+    flat = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, profile=profile, figures=False,
+            )
+        ).split()
+    )
+
+    assert "Torsion (thin-walled tube) - PL-APPLICABLE" in flat
+    assert "Torsion (thin-walled tube) - PL-BLOCKED" in flat
+    assert "900.0 %" not in flat
 
 
 def test_report_includes_combined_section():

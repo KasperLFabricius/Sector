@@ -1629,6 +1629,112 @@ def test_duplicate_plastic_case_names_keep_authority_widgets_distinct():
     assert not at.exception
 
 
+def test_duplicate_case_authority_edits_do_not_transfer_after_name_resolution():
+    import load_cases
+
+    at = _fresh_unclassified()
+    at.run()
+    row = {
+        "name": "PL-01",
+        "description": "Member assessment required",
+        "vy_ed_kn": 30.0,
+        "t_ed_knm": 40.0,
+    }
+    _replace_plastic_cases(at, [row])
+    _set(
+        at,
+        (
+            "selectbox",
+            "_torsion_case_design_basis::0::PL-01",
+            capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER,
+        ),
+        (
+            "selectbox",
+            "_torsion_case_member_scope::0::PL-01",
+            capacity.TORSION_MEMBER_CLOSED,
+        ),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("checkbox", "shear_links", True),
+    )
+    original = at.session_state["results"]["plastic_cases"][0]["results"]
+    assert original["torsion"]["assessment_status"] == "NOT ASSESSED"
+    assert original["torsion"]["trd"] is None
+    retained_authority = {
+        "PL-01": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        }
+    }
+    assert at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] == (
+        retained_authority
+    )
+
+    canonical = at.session_state[load_cases.PLASTIC_TABLE_KEY].to_dict("records")[0]
+    _replace_plastic_cases(at, [canonical, dict(canonical)])
+    _set(
+        at,
+        (
+            "selectbox",
+            "_torsion_case_design_basis::0::PL-01",
+            capacity.TORSION_DESIGN_EQUILIBRIUM,
+        ),
+    )
+    assert at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] == (
+        retained_authority
+    )
+
+    _replace_plastic_cases(at, [canonical])
+    assert at.selectbox(
+        key="_torsion_case_design_basis::0::PL-01"
+    ).value == capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+    _calculate(at)
+    after_delete = at.session_state["results"]["plastic_cases"][0]["results"]
+    assert after_delete["torsion"]["assessment_status"] == "NOT ASSESSED"
+    assert after_delete["torsion"]["trd"] is None
+
+    _replace_plastic_cases(at, [canonical, dict(canonical)])
+    _set(
+        at,
+        (
+            "selectbox",
+            "_torsion_case_design_basis::1::PL-01",
+            capacity.TORSION_DESIGN_EQUILIBRIUM,
+        ),
+    )
+    assert at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] == (
+        retained_authority
+    )
+
+    renamed = {**canonical, "name": "PL-RENAMED"}
+    _replace_plastic_cases(at, [canonical, renamed])
+    mapping = at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY]
+    assert mapping["PL-01"] == retained_authority["PL-01"]
+    assert mapping["PL-RENAMED"] == {
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        ),
+        capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        ),
+    }
+    _calculate(at)
+    after_rename = at.session_state["results"]["plastic_cases"]
+    assert all(
+        entry["results"]["torsion"]["assessment_status"] == "NOT ASSESSED"
+        for entry in after_rename
+    )
+    assert all(entry["results"]["torsion"]["trd"] is None for entry in after_rename)
+    assert not at.exception
+
+
 def test_app_torsion_without_current_closed_links_is_not_assessed():
     at = _fresh()
     at.run()

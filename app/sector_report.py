@@ -5146,7 +5146,11 @@ class ReportBuilder:
         if family in {"plastic", "elastic"}:
             return result.get("converged") is False
         if family == "torsion":
-            return result.get("valid") is False
+            return (
+                result.get("valid") is False
+                or presentation.torsion_applicability_publication_status(result)
+                == "NOT ASSESSED"
+            )
         if family in {"minimum_reinforcement", "transverse_reinforcement"}:
             checks = tuple(result.get("checks") or ())
             if not checks:

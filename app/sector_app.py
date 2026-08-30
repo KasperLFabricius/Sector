@@ -2616,7 +2616,43 @@ def _load_case_editors(box):
     }
 
 
-def _torsion_case_authority_controls(box, plastic_cases, *, disabled):
+def _case_name_identity_is_valid(plastic_cases, elastic_cases):
+    """Return whether every active action-set name has one stable identity."""
+
+    seen = set()
+    for value, key in (
+        (plastic_cases, load_cases.PLASTIC_TABLE_KEY),
+        (elastic_cases, load_cases.ELASTIC_TABLE_KEY),
+    ):
+        frame = load_cases.active_table(value, key)
+        for raw_name in frame[load_cases.NAME].tolist():
+            name = str(raw_name).strip()
+            folded = name.casefold()
+            if not name or folded in seen:
+                return False
+            seen.add(folded)
+    return True
+
+
+def _retained_torsion_case_authorities(value):
+    """Return a defensive copy of the last committed case-authority mapping."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    return {
+        name: capacity.torsion_case_authority(value, name)
+        for name in value
+        if type(name) is str and name and name == name.strip()
+    }
+
+
+def _torsion_case_authority_controls(
+    box,
+    plastic_cases,
+    elastic_cases,
+    *,
+    disabled,
+):
     """Render and commit one torsion-applicability choice per Plastic case.
 
     The separately persisted mapping is authoritative. Widget keys are merely
@@ -2636,6 +2672,11 @@ def _torsion_case_authority_controls(box, plastic_cases, *, disabled):
     )
     names = tuple(name for _, name in case_rows)
     raw_mapping = st.session_state.get(capacity.TORSION_CASE_AUTHORITIES_KEY)
+    retained_mapping = _retained_torsion_case_authorities(raw_mapping)
+    case_name_identity_valid = _case_name_identity_is_valid(
+        plastic_cases,
+        elastic_cases,
+    )
     pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {})
     selected = {}
     if names:
@@ -2693,16 +2734,16 @@ def _torsion_case_authority_controls(box, plastic_cases, *, disabled):
             capacity.TORSION_CASE_DESIGN_BASIS_KEY: design_basis,
             capacity.TORSION_CASE_MEMBER_SCOPE_KEY: member_scope,
         }
-    first = next(
-        iter(selected.values()),
-        {
-            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
-                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
-            ),
-            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
-                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
-            ),
-        },
+    # An invalid name is not a case identity. Keep rendering row-indexed controls
+    # so the engineer can correct the table, but discard every authority edit made
+    # while names are blank or non-unique. The next valid rerun is then reseeded
+    # from the last committed mapping instead of transferring a duplicate row's
+    # transient choice to a surviving or renamed case.
+    committed = selected if case_name_identity_valid else retained_mapping
+    first_name = names[0] if names else next(iter(committed), "")
+    first = capacity.torsion_case_authority(
+        committed,
+        first_name,
     )
     # These historical aliases remain available to direct single-case callers,
     # but are never widget authority. In particular, a pre-mapping project must
@@ -2713,8 +2754,8 @@ def _torsion_case_authority_controls(box, plastic_cases, *, disabled):
     st.session_state["torsion_member_scope"] = first[
         capacity.TORSION_CASE_MEMBER_SCOPE_KEY
     ]
-    st.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] = selected
-    return selected
+    st.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] = committed
+    return committed
 
 
 _FATIGUE_EDITOR_KEY = "fatigue_spectrum_editor"
@@ -7291,6 +7332,7 @@ def build_inputs(host=st):
     torsion_case_authorities = _torsion_case_authority_controls(
         sts,
         case_frames[load_cases.PLASTIC_TABLE_KEY],
+        case_frames[load_cases.ELASTIC_TABLE_KEY],
         disabled=not torsion_on,
     )
     first_torsion_authority = next(
