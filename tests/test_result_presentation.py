@@ -614,6 +614,7 @@ def test_formula_631_condition_and_detailing_matrix_remain_separate(
         "plastic_case": {"id": "PL-631", "type": "ULS", "source": "C1"},
     }
     torsion = {
+        **_applicable_torsion_evidence(),
         "valid": True,
         "tube_valid": True,
         "transverse_resistance_assessed": True,
