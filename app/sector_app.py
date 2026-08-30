@@ -15017,11 +15017,10 @@ def torsion_view(inp, results):
         member_scope = applicability.get("member_scope")
         if member_scope not in capacity.TORSION_MEMBER_SCOPES:
             member_scope = capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
-        applicability_status = str(
-            applicability.get("status") or "NOT ASSESSED"
-        ).upper()
-        if t.get("applicability_blocked") is True:
-            applicability_status = "NOT ASSESSED"
+        applicability_status = (
+            presentation.torsion_applicability_publication_status(t)
+            or "NOT ASSESSED"
+        )
         st.markdown("**Torsion applicability and member scope**")
         st.caption(
             f"Design basis: {design_basis}. Member scope: {member_scope}. "
@@ -15034,11 +15033,11 @@ def torsion_view(inp, results):
             and isinstance(limitation, str)
         ):
             st.caption(limitation)
-        if applicability_status == "NOT ASSESSED":
+        if applicability_status != "APPLICABLE":
             _manual_warning(
                 st,
                 "method-applicability",
-                "The torsion assessment is NOT ASSESSED. "
+                f"The torsion assessment is {applicability_status}. "
                 + presentation.torsion_applicability_note(t)
                 + ". Resistance, utilisation, governing angle, longitudinal "
                 "demand and dependent interaction verdicts are withheld.",
@@ -16686,6 +16685,7 @@ _CAPACITY_RESULT_KEYS = frozenset({
     "combined",
     "minimum_reinforcement",
     "transverse_reinforcement",
+    "clear_spacing",
 })
 _CAPACITY_RESULT_VIEWS = frozenset({
     "Detailing",

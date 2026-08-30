@@ -5681,7 +5681,16 @@ def test_report_includes_torsion_section():
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_report_profiles_fail_closed_for_unestablished_torsion_scope(profile):
+@pytest.mark.parametrize(
+    "retained_blocker",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param(False, id="explicit-false"),
+    ],
+)
+def test_report_profiles_fail_closed_for_unestablished_torsion_scope(
+    profile, retained_blocker
+):
     applicability = capacity.torsion_applicability(
         {
             "torsion_design_basis": (
@@ -5709,9 +5718,14 @@ def test_report_profiles_fail_closed_for_unestablished_torsion_scope(profile):
         asl_req=999.0,
         resistance_status="PASS",
     )
+    if retained_blocker is None:
+        torsion.pop("applicability_blocked", None)
+    else:
+        torsion["applicability_blocked"] = retained_blocker
     inp = _inp()
     inp.update(
         torsion_on=True,
+        combined_on=True,
         torsion_T=40.0,
         torsion_design_basis=capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER,
         torsion_member_scope=capacity.TORSION_MEMBER_OPEN,
@@ -5719,7 +5733,21 @@ def test_report_profiles_fail_closed_for_unestablished_torsion_scope(profile):
     )
 
     pdf = sector_report.build_report(
-        {}, inp, {"torsion": torsion}, figures=False, profile=profile
+        {},
+        inp,
+        {
+            "torsion": torsion,
+            "combined": {
+                "valid": True,
+                "method": codes.EC2_2005_DKNA.label,
+                "dkna_valid": True,
+                "dkna_sum": 0.01,
+                "dkna_status": "PASS",
+                "dkna_ok": True,
+            },
+        },
+        figures=False,
+        profile=profile,
     )
     text = " ".join(_pdf_text(pdf).split())
 
@@ -5729,6 +5757,7 @@ def test_report_profiles_fail_closed_for_unestablished_torsion_scope(profile):
     assert "Open thin-walled or warping-sensitive section" in text
     assert "NOT ASSESSED" in text
     assert "separate member or system assessment" in text
+    assert "Combined" in text
     assert "999" not in text
     assert "PASS" not in text
     assert "FAIL" not in text

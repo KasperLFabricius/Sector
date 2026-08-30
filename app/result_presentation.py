@@ -686,6 +686,20 @@ def combined_bending_assessment_blocker(results):
         combined is not None
         and isinstance(torsion, Mapping)
         and (
+            applicability_status := torsion_applicability_publication_status(
+                torsion
+            )
+        ) is not None
+        and applicability_status != "APPLICABLE"
+    ):
+        return (
+            "Torsion prerequisite is not assessed: "
+            + torsion_applicability_note(torsion)
+        )
+    if (
+        combined is not None
+        and isinstance(torsion, Mapping)
+        and (
             "tube_valid" in torsion
             or "full_resistance_assessed" in torsion
         )
@@ -1873,6 +1887,34 @@ def torsion_applicability_note(torsion):
         "torsion",
         context="torsion applicability reason",
     )
+
+
+def torsion_applicability_publication_status(torsion):
+    """Return the only applicability status safe for result publication."""
+
+    torsion = torsion or {}
+    applicability = torsion.get("applicability")
+    if not isinstance(applicability, Mapping):
+        return None
+    status = applicability.get("status")
+    if type(status) is not str:
+        return "NOT ASSESSED"
+    status = status.upper()
+    if status not in {"APPLICABLE", "NOT APPLICABLE", "NOT ASSESSED"}:
+        return "NOT ASSESSED"
+    design_basis = applicability.get("design_basis")
+    member_scope = applicability.get("member_scope")
+    if design_basis not in capacity.TORSION_DESIGN_BASES:
+        return "NOT ASSESSED"
+    if member_scope not in capacity.TORSION_MEMBER_SCOPES:
+        return "NOT ASSESSED"
+    if status == "APPLICABLE" and (
+        design_basis == capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+        or design_basis == capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        or member_scope != capacity.TORSION_MEMBER_CLOSED
+    ):
+        return "NOT ASSESSED"
+    return status
 
 
 _MINIMUM_REINFORCEMENT_SCREEN_NOTES = {
@@ -3231,6 +3273,8 @@ def result_summary_rows(inp, results, *, stale=False):
     torsion = results.get("torsion")
     torsion_tube_valid = False
     torsion_transverse_resistance_assessed = False
+    torsion_applicability_status = None
+    torsion_applicability_blocks = False
     if torsion is None and inp.get("torsion_on"):
         rows.append(_summary_row(
             "Torsion", "plastic", "NOT RUN",
@@ -3238,19 +3282,22 @@ def result_summary_rows(inp, results, *, stale=False):
             overview_key="torsion",
         ))
     elif torsion is not None and inp.get("torsion_on"):
-        applicability = torsion.get("applicability")
-        if isinstance(applicability, Mapping):
-            applicability_status = str(
-                applicability.get("status") or "NOT ASSESSED"
-            ).upper()
+        torsion_applicability_status = torsion_applicability_publication_status(
+            torsion
+        )
+        torsion_applicability_blocks = (
+            torsion_applicability_status is not None
+            and torsion_applicability_status != "APPLICABLE"
+        ) or torsion.get("applicability_blocked") is True
+        if torsion_applicability_status is not None:
             applicability_case = (
                 action_set(inp, "plastic")["id"] or "Unnamed case"
             )
             rows.append(_summary_row(
                 "Torsion applicability",
                 "plastic",
-                applicability_status,
-                applicability_status,
+                torsion_applicability_status,
+                torsion_applicability_status,
                 "Design basis and member scope",
                 None,
                 "Torsion",
@@ -3271,7 +3318,7 @@ def result_summary_rows(inp, results, *, stale=False):
             if "full_resistance_assessed" in torsion
             else torsion.get("valid") is True
         )
-        if torsion.get("applicability_blocked") is True:
+        if torsion_applicability_blocks:
             torsion_tube_valid = False
             torsion_transverse_resistance_assessed = False
         if (
@@ -3280,12 +3327,25 @@ def result_summary_rows(inp, results, *, stale=False):
         ):
             torsion_transverse_resistance_assessed = False
         if not torsion_tube_valid:
-            tube_reason = str(torsion.get("reason") or "")
-            tube_status = (
-                "NOT ASSESSED"
-                if tube_reason in _TORSION_WALL_APPLICABILITY_REASONS
-                else "INVALID"
-            )
+            if torsion_applicability_blocks:
+                tube_status = (
+                    "NOT APPLICABLE"
+                    if torsion_applicability_status == "NOT APPLICABLE"
+                    else "NOT ASSESSED"
+                )
+                tube_note = torsion_applicability_note(torsion)
+            else:
+                tube_reason = str(torsion.get("reason") or "")
+                tube_status = (
+                    "NOT ASSESSED"
+                    if tube_reason in _TORSION_WALL_APPLICABILITY_REASONS
+                    else "INVALID"
+                )
+                tube_note = result_reason(
+                    torsion.get("reason") or "torsion tube evidence is invalid",
+                    "torsion",
+                    context="torsion summary geometry reason",
+                )
             rows.append(_summary_row(
                 "Torsion",
                 "plastic",
@@ -3294,11 +3354,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 "-",
                 None,
                 "Torsion",
-                result_reason(
-                    torsion.get("reason") or "torsion tube evidence is invalid",
-                    "torsion",
-                    context="torsion summary geometry reason",
-                ),
+                tube_note,
                 inp,
                 overview_key="torsion",
             ))
@@ -3449,20 +3505,21 @@ def result_summary_rows(inp, results, *, stale=False):
             detailing_row["overview_scope_in_result_table"] = True
             rows.append(detailing_row)
 
-        directional_screens = torsion.get("directional_interactions") or {}
-        if directional_screens:
-            for component, label in (
-                ("vx", "Vx+T Formula (6.31) minimum-reinforcement screen"),
-                ("vy", "Vy+T Formula (6.31) minimum-reinforcement screen"),
-            ):
-                item = directional_screens.get(component) or {}
-                append_minimum_reinforcement_screen(
-                    item.get("min_reinf"),
-                    label=label,
-                    overview_key=f"torsion:minimum_reinforcement:{component}",
-                )
-        else:
-            append_minimum_reinforcement_screen(torsion.get("min_reinf"))
+        if not torsion_applicability_blocks:
+            directional_screens = torsion.get("directional_interactions") or {}
+            if directional_screens:
+                for component, label in (
+                    ("vx", "Vx+T Formula (6.31) minimum-reinforcement screen"),
+                    ("vy", "Vy+T Formula (6.31) minimum-reinforcement screen"),
+                ):
+                    item = directional_screens.get(component) or {}
+                    append_minimum_reinforcement_screen(
+                        item.get("min_reinf"),
+                        label=label,
+                        overview_key=f"torsion:minimum_reinforcement:{component}",
+                    )
+            else:
+                append_minimum_reinforcement_screen(torsion.get("min_reinf"))
 
     combined = results.get("combined")
     if combined is None and inp.get("combined_on"):
@@ -3471,8 +3528,13 @@ def result_summary_rows(inp, results, *, stale=False):
         )
         torsion_not_assessed = (
             torsion is not None
-            and torsion_tube_valid
-            and not torsion_transverse_resistance_assessed
+            and (
+                torsion_applicability_blocks
+                or (
+                    torsion_tube_valid
+                    and not torsion_transverse_resistance_assessed
+                )
+            )
         )
         rows.append(_summary_row(
             (

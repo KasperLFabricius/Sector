@@ -1831,7 +1831,16 @@ def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
     assert all(row["util"] is None for row in combined_rows)
 
 
-def test_torsion_applicability_blocker_outranks_poisoned_publication_values():
+@pytest.mark.parametrize(
+    "retained_blocker",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param(False, id="explicit-false"),
+    ],
+)
+def test_torsion_applicability_blocker_outranks_poisoned_publication_values(
+    retained_blocker,
+):
     applicability = capacity.torsion_applicability(
         {
             "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
@@ -1856,6 +1865,10 @@ def test_torsion_applicability_blocker_outranks_poisoned_publication_values():
         util=0.01,
         resistance_status="PASS",
     )
+    if retained_blocker is None:
+        torsion.pop("applicability_blocked", None)
+    else:
+        torsion["applicability_blocked"] = retained_blocker
     rows = presentation.result_summary_rows(
         _inp(
             mode="Plastic",
@@ -1880,6 +1893,7 @@ def test_torsion_applicability_blocker_outranks_poisoned_publication_values():
     assert by_check["Torsion"]["status"] == "NOT ASSESSED"
     assert by_check["Torsion"]["result"] == "-"
     assert by_check["Torsion"]["util"] is None
+    assert "Torsion transverse/strut resistance" not in by_check
     combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
     assert combined_rows
     assert all(row["status"] == "NOT ASSESSED" for row in combined_rows)

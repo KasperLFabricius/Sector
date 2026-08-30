@@ -1386,6 +1386,34 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
     assert open_member["util"] is None
     assert open_member["asl_req"] is None
 
+    open_member.update(
+        applicability_blocked=False,
+        valid=True,
+        tube_valid=True,
+        transverse_resistance_assessed=True,
+        full_resistance_assessed=True,
+        closed_links_present=True,
+        trd=999.0,
+        util=0.01,
+        cot=1.5,
+        theta_deg=33.69,
+        asl_req=999.0,
+        resistance_status="PASS",
+        assessment_status="PASS",
+    )
+    _select_view(at, "Torsion")
+    poisoned_visible = " ".join(
+        str(item.value)
+        for element_type in ("warning", "caption", "markdown", "info")
+        for item in getattr(at, element_type)
+    )
+    poisoned_metrics = {metric.label: metric.value for metric in at.metric}
+    assert "torsion assessment is NOT ASSESSED" in poisoned_visible
+    assert poisoned_metrics[r"Section resistance $T_{Rd}$"] == "-"
+    assert poisoned_metrics["Utilisation"] == "-"
+    assert "999" not in poisoned_visible
+    assert "PASS" not in poisoned_visible
+
 
 def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle():
     rows = [
@@ -2429,6 +2457,49 @@ def test_pre_m05_capacity_and_buffered_report_are_hidden_until_recalculated():
     assert refreshed["combined"] is not combined_before
     assert "pre_mvt_m05_poison" not in refreshed["torsion"]
     assert "pre_mvt_m05_poison" not in refreshed["combined"]
+    assert at.session_state[sector_app._RESULT_CAPACITY_CONTRACT_KEY] == (
+        current_token
+    )
+
+
+def test_pre_m05_contract_with_changed_spacing_hides_old_spacing_until_recalculated():
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Both"),
+        ("checkbox", "clear_spacing_on", True),
+        ("number_input", "detailing_d_upper", 16.0),
+    )
+    spacing_before = at.session_state["results"]["clear_spacing"]
+    assert spacing_before["status"] == "PASS"
+    assert spacing_before["governing"]["clear_mm"] == pytest.approx(40.0)
+    assert spacing_before["governing"]["required_mm"] == pytest.approx(21.0)
+
+    current_token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+    marker = "torsion-case-applicability-v1"
+    assert marker in current_token
+    old_token = tuple(item for item in current_token if item != marker)
+    at.session_state[sector_app._RESULT_CAPACITY_CONTRACT_KEY] = old_token
+
+    _set(at, ("number_input", "detailing_d_upper", 100.0))
+    _select_view(at, "Results Overview")
+    overview = "\n".join(
+        frame.value.to_string(index=False) for frame in at.table
+    )
+    assert "Reinforcement clear spacing" not in overview
+    assert "40.0 mm" not in overview
+    assert ">= 21.0 mm" not in overview
+    assert any("recalculation" in item.value for item in at.caption)
+
+    _calculate(at)
+    spacing_after = at.session_state["results"]["clear_spacing"]
+    assert spacing_after["status"] == "FAIL"
+    assert spacing_after["governing"]["clear_mm"] == pytest.approx(40.0)
+    assert spacing_after["governing"]["required_mm"] > 40.0
     assert at.session_state[sector_app._RESULT_CAPACITY_CONTRACT_KEY] == (
         current_token
     )

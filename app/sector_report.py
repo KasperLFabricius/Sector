@@ -9157,7 +9157,11 @@ class ReportBuilder:
         critical = self._selected_family("torsion", self.inp) is not None
         self._case_heading("Torsion (thin-walled tube)", "plastic")
         applicability = t.get("applicability")
-        if not isinstance(applicability, Mapping) and t.get("applicability_blocked") is True:
+        missing_applicability_blocked = (
+            not isinstance(applicability, Mapping)
+            and t.get("applicability_blocked") is True
+        )
+        if missing_applicability_blocked:
             applicability = {
                 "design_basis": capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
                 "member_scope": capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
@@ -9170,11 +9174,11 @@ class ReportBuilder:
             member_scope = applicability.get("member_scope")
             if member_scope not in capacity.TORSION_MEMBER_SCOPES:
                 member_scope = capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
-            applicability_status = str(
-                applicability.get("status") or "NOT ASSESSED"
-            ).upper()
-            if t.get("applicability_blocked") is True:
-                applicability_status = "NOT ASSESSED"
+            applicability_status = (
+                "NOT ASSESSED"
+                if missing_applicability_blocked
+                else presentation.torsion_applicability_publication_status(t)
+            )
             self._h2("Torsion applicability and member scope")
             self._table(
                 [
@@ -9199,9 +9203,9 @@ class ReportBuilder:
                 and isinstance(limitation, str)
             ):
                 self._small(_html_escape(limitation))
-            if applicability_status == "NOT ASSESSED":
+            if applicability_status != "APPLICABLE":
                 self._p(
-                    "<b>NOT ASSESSED:</b> "
+                    f"<b>{applicability_status}:</b> "
                     + _html_escape(presentation.torsion_applicability_note(t))
                     + ". Resistance, utilisation, governing angle, longitudinal "
                     "demand and dependent interaction verdicts are withheld."
@@ -9218,7 +9222,7 @@ class ReportBuilder:
                             f"{_fmt(t.get('t_ed'), 3)} kN&#183;m",
                             "-",
                             "-",
-                            "NOT ASSESSED",
+                            applicability_status,
                         ],
                     ],
                     [45 * mm, 45 * mm, 45 * mm, 45 * mm],
