@@ -316,6 +316,21 @@ def test_retained_worked_family_is_reconciled_without_mutating_completed_state()
     }
     out["worked_example_selection"] = {"schema": True, "families": {}}
     assert presentation.validated_worked_example_selection({}, out) == {}
+    out["worked_example_selection"] = {
+        "schema": 1,
+        "families": {},
+        "crack_examples": [{
+            "case_id": "__single__",
+            "system": "governing",
+            "branch": [],
+            "label": "long-term",
+        }],
+        "crack_comparison": None,
+        "cracking_threshold": None,
+        "torsion_subchecks": {},
+        "heightened_crack_control": None,
+    }
+    assert presentation.validated_worked_example_selection({}, out) == {}
     assert presentation.validated_worked_example_selection({}, {}) == {}
 
 

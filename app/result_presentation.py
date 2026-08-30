@@ -1422,6 +1422,29 @@ def _worked_case_identity(item, *, component=False):
     return True
 
 
+_WORKED_CRACK_EXAMPLE_SHAPES = frozenset({
+    ("governing", "crack", "long-term"),
+    ("governing", "crack_short", "short-term"),
+    ("fine", "crack", "long-term (fine)"),
+    ("fine", "crack_short", "short-term (fine)"),
+    ("coarse", "crack_coarse", "long-term (coarse)"),
+    ("coarse", "crack_short_coarse", "short-term (coarse)"),
+})
+
+
+def _valid_worked_crack_example(item):
+    """Return whether a retained crack selection has the complete schema-1 shape."""
+
+    if not _worked_case_identity(item):
+        return False
+    if set(item) != {"case_id", "system", "branch", "label"}:
+        return False
+    values = (item.get("system"), item.get("branch"), item.get("label"))
+    if not all(type(value) is str for value in values):
+        return False
+    return values in _WORKED_CRACK_EXAMPLE_SHAPES
+
+
 def validated_worked_example_selection(inp, out):
     """Validate retained family identities against the complete current result.
 
@@ -1450,7 +1473,7 @@ def validated_worked_example_selection(inp, out):
     crack_examples = retained.get("crack_examples", ())
     if (
         not isinstance(crack_examples, (list, tuple))
-        or not all(_worked_case_identity(item) for item in crack_examples)
+        or not all(_valid_worked_crack_example(item) for item in crack_examples)
     ):
         return {}
     for key in ("crack_comparison", "cracking_threshold"):

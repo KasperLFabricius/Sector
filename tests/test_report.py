@@ -3348,6 +3348,20 @@ def test_report_fails_closed_when_worked_example_selection_is_absent():
             "cracking_threshold": None,
             "torsion_subchecks": {"interaction": ["__single__"]},
         },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [{
+                "case_id": "__single__",
+                "system": "governing",
+                "branch": [],
+                "label": "long-term",
+            }],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
     ),
 )
 def test_report_fails_closed_on_corrupt_worked_example_selection(selection):
