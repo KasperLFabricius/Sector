@@ -280,6 +280,22 @@ _SHEAR_REASON_MESSAGES = {
     ),
 }
 _TORSION_REASON_MESSAGES = {
+    "torsion design basis not established": EngineerMessage(
+        "TORSION-BASIS-NOT-ESTABLISHED",
+        "Select whether the entered torsion is equilibrium torsion or a deliberately retained compatibility-torsion design action",
+    ),
+    "compatibility torsion requires member or system assessment": EngineerMessage(
+        "TORSION-COMPATIBILITY-MEMBER-ASSESSMENT",
+        "Compatibility torsion requires a separate member or system assessment before a sectional resistance verdict can be given",
+    ),
+    "torsion member scope not established": EngineerMessage(
+        "TORSION-MEMBER-SCOPE-NOT-ESTABLISHED",
+        "Confirm that the section is closed or solid and that warping torsion does not govern, or use an applicable member assessment",
+    ),
+    "open or warping-sensitive torsion requires member analysis": EngineerMessage(
+        "TORSION-WARPING-MEMBER-ASSESSMENT",
+        "Open thin-walled or warping-sensitive sections require a separate member assessment before a sectional resistance verdict can be given",
+    ),
     "selected strut-angle range is outside the permitted method range": EngineerMessage(
         "TORSION-STRUT-ANGLE-RANGE",
         "The entered compression-strut range is outside the permitted range for "
@@ -410,7 +426,12 @@ _TORSION_WALL_APPLICABILITY_REASONS = frozenset(
     reason
     for reason in _TORSION_REASON_MESSAGES
     if reason.startswith("torsion sub-tube reinforcement")
-)
+) | frozenset({
+    "torsion design basis not established",
+    "compatibility torsion requires member or system assessment",
+    "torsion member scope not established",
+    "open or warping-sensitive torsion requires member analysis",
+})
 _COMBINED_REASON_MESSAGES = {
     "selected strut-angle range is outside the permitted method range": EngineerMessage(
         "COMBINED-STRUT-ANGLE-RANGE",
@@ -1820,6 +1841,40 @@ def torsion_assessment_note(torsion):
     )
 
 
+def torsion_applicability_note(torsion):
+    """Return safe member-scope guidance for a retained torsion result."""
+
+    torsion = torsion or {}
+    applicability = torsion.get("applicability")
+    if not isinstance(applicability, Mapping):
+        return (
+            "The torsion design basis and member scope have not been established"
+        )
+    status = str(applicability.get("status") or "NOT ASSESSED").upper()
+    if status == "APPLICABLE":
+        basis = applicability.get("design_basis")
+        if basis == capacity.TORSION_DESIGN_EQUILIBRIUM:
+            return (
+                "Equilibrium torsion is selected; the entered TEd must be resisted "
+                "by the section"
+            )
+        if basis == capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL:
+            return (
+                "Compatibility torsion is retained as a deliberately entered "
+                "residual design action; Sector checks that TEd in full but does "
+                "not establish redistribution or member/system conditions"
+            )
+    if status == "NOT APPLICABLE":
+        return "No torsion resistance assessment is required for TEd = 0"
+    return result_reason(
+        applicability.get("reason")
+        or torsion.get("assessment_reason")
+        or "torsion design basis not established",
+        "torsion",
+        context="torsion applicability reason",
+    )
+
+
 _MINIMUM_REINFORCEMENT_SCREEN_NOTES = {
     "applicable_first_generation_rectangle": (
         "Formula (6.31) uses the first-generation V_Rd,c result for this "
@@ -3183,6 +3238,24 @@ def result_summary_rows(inp, results, *, stale=False):
             overview_key="torsion",
         ))
     elif torsion is not None and inp.get("torsion_on"):
+        applicability = torsion.get("applicability")
+        if isinstance(applicability, Mapping):
+            applicability_status = str(
+                applicability.get("status") or "NOT ASSESSED"
+            ).upper()
+            rows.append(_summary_row(
+                "Torsion applicability",
+                "plastic",
+                applicability_status,
+                applicability_status,
+                "Design basis and member scope",
+                None,
+                "Torsion",
+                torsion_applicability_note(torsion),
+                inp,
+                overview_key="torsion:applicability",
+                overview_parent="torsion",
+            ))
         torsion_tube_valid = (
             torsion.get("tube_valid") is True
             if "tube_valid" in torsion
@@ -3195,6 +3268,9 @@ def result_summary_rows(inp, results, *, stale=False):
             if "full_resistance_assessed" in torsion
             else torsion.get("valid") is True
         )
+        if torsion.get("applicability_blocked") is True:
+            torsion_tube_valid = False
+            torsion_transverse_resistance_assessed = False
         if (
             "closed_links_present" in torsion
             and torsion.get("closed_links_present") is not True

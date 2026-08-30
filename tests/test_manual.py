@@ -498,6 +498,19 @@ def test_manual_documents_automatic_subtube_wall_thickness_boundary():
     assert "implementation-fixture bar centres" in text
 
 
+def test_manual_distinguishes_torsion_basis_and_member_scope_limitations():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+
+    assert "equilibrium torsion, which must be resisted" in text
+    assert "deliberately retained residual compatibility torsion" in text
+    assert "compatibility torsion requiring a member/system assessment" in text
+    assert "open thin-walled or warping-sensitive" in text
+    assert "warping-torsion/member analysis outside Sector" in text
+    assert "Sector does not establish redistribution, restraints or member response" in text
+    assert "resistance, utilisation, governing angle, longitudinal demand" in text
+    assert "dependent M-V-T verdicts are shown as **NOT ASSESSED**" in text
+
+
 def test_manual_pdf_starts_combined_mvt_after_the_torsion_applicability_page():
     pdf = manual.build_manual_pdf_bytes(figures=False)
     reader = pypdf.PdfReader(io.BytesIO(pdf))
@@ -515,7 +528,12 @@ def test_manual_pdf_starts_combined_mvt_after_the_torsion_applicability_page():
     assert "upper angle limit is 2.5 for class B/C" in pages[torsion_page - 1]
     assert combined_page > torsion_page
     assert "6.8 Combined M-V-T interaction" not in pages[combined_page - 1]
-    assert "Subdivide into sub-tubes" in pages[combined_page - 1]
+    torsion_section = " ".join(pages[torsion_page:combined_page])
+    assert "Subdivide into sub-tubes" in torsion_section
+    assert "whether the action is equilibrium torsion" in torsion_section
+    assert "open thin-walled members may require warping-torsion" in (
+        torsion_section.casefold()
+    )
 
 
 def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():

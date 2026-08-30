@@ -65,9 +65,9 @@ _MANUAL_CROPS = (
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # The release bump changes only the visible product version in this
-        # otherwise stable 71-page cover/footer crop.
-        "e471338cc3068e4843655202a4c7bf111f9eede90df6a3895158bb2eb8309065",
+        # MVT-M05 adds one governed applicability page; the cover/footer crop
+        # changes only because its final page count is now 75.
+        "2da8c1dc98c1977617f8a4dc5440f83af2a3ec59ea0e2e4521e20d1815d13619",
     ),
 )
 
@@ -374,6 +374,9 @@ def validate_pdf_content(pdf: bytes) -> str:
         "DS/EN 1992-2:2005/AC:2008",
         "6.106",
         "Project-defined / uncited",
+        "equilibrium torsion, which must be resisted",
+        "open thin-walled or warping-sensitive members",
+        "warping-torsion/member assessment",
         "Part D - Reference",
     ):
         if expected not in text and expected not in flat_text:

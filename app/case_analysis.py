@@ -195,6 +195,7 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
             },
         },
         torsion_T=abs(t_ed),
+        torsion_T_signed=t_ed,
         shear_requested=bool(base.get("shear_on")),
         torsion_requested=bool(base.get("torsion_on")),
         combined_requested=bool(base.get("combined_on")),

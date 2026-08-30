@@ -261,7 +261,8 @@ SCALAR_KEYS = [
     "shear_vy_transverse_leg_spacing", "strut_cot_min",
     "strut_cot_max",
     # Torsion and combined resistance.
-    "torsion_on", "torsion_method", "torsion_T", "torsion_tef",
+    "torsion_on", "torsion_method", "torsion_design_basis",
+    "torsion_member_scope", "torsion_T", "torsion_tef",
     "torsion_nu_v", "torsion_gamma_ct", "torsion_subdivide",
     "torsion_nsub", "torsion_sub_x0", "torsion_sub_y0",
     "torsion_sub_x1", "torsion_sub_y1", "torsion_sub_x2",
@@ -377,6 +378,8 @@ _TEXT_SCALAR_KEYS = frozenset({
     "shear_section_form",
     "shear_duct_case",
     "torsion_method",
+    "torsion_design_basis",
+    "torsion_member_scope",
     "combined_method",
     "capacity_steel_material_id",
     "rep_proj_no",
@@ -411,6 +414,8 @@ _EXACT_TEXT_OPTIONS = {
     "qsv_qs_rebar_mode": frozenset({"By number", "By spacing"}),
     "shear_section_form": frozenset(shear.SHEAR_SECTION_FORMS),
     "shear_duct_case": frozenset(shear.SHEAR_DUCT_CASES),
+    "torsion_design_basis": frozenset(capacity.TORSION_DESIGN_BASES),
+    "torsion_member_scope": frozenset(capacity.TORSION_MEMBER_SCOPES),
     "conc_preset": frozenset(material_presets.CONCRETE_PRESETS),
     "mild_preset": frozenset({
         *material_catalog.presets("mild"),
@@ -1083,6 +1088,14 @@ def _canonical_scalars(
     migrate_gamma_v: bool = False,
 ) -> dict:
     payload = _validated_scalar_payload(scalars)
+    payload.setdefault(
+        "torsion_design_basis",
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+    )
+    payload.setdefault(
+        "torsion_member_scope",
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+    )
     try:
         plastic.plastic_sweep_angles(
             payload.get("v_min", 0.0),

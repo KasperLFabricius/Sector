@@ -1350,7 +1350,12 @@ def test_gross_area_centroid_rect_and_hole():
 
 def _fresh():
     from streamlit.testing.v1 import AppTest
-    return AppTest.from_file(APP, default_timeout=90)
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.session_state["torsion_design_basis"] = (
+        capacity.TORSION_DESIGN_EQUILIBRIUM
+    )
+    at.session_state["torsion_member_scope"] = capacity.TORSION_MEMBER_CLOSED
+    return at
 
 
 def _goto_page(at, page):

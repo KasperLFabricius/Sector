@@ -791,6 +791,16 @@ def test_governing_strut_cot_reversed_band():
 
 def _fresh():
     from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.session_state["torsion_design_basis"] = (
+        capacity.TORSION_DESIGN_EQUILIBRIUM
+    )
+    at.session_state["torsion_member_scope"] = capacity.TORSION_MEMBER_CLOSED
+    return at
+
+
+def _fresh_unclassified():
+    from streamlit.testing.v1 import AppTest
     return AppTest.from_file(APP, default_timeout=90)
 
 
@@ -1143,6 +1153,63 @@ def _run_member(
     ]
     _set_and_click(at, "calculate", *bands)
     return at
+
+
+def test_app_blocked_torsion_retains_shear_and_blocks_every_combined_verdict():
+    at = _fresh_unclassified()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+
+    assert not at.exception
+    results = at.session_state["results"]
+    assert results["shear"]["assessment_status"] in {"PASS", "FAIL"}
+    assert results["shear"]["nominal_resistance"]["resistance"] is not None
+    assert results["torsion"]["assessment_status"] == "NOT ASSESSED"
+    assert results["torsion"]["trd"] is None
+    assert results["torsion"]["util"] is None
+    assert results["combined"]["valid"] is False
+    assert results["combined"]["torsion_assessment_status"] == "NOT ASSESSED"
+    assert "dkna_sum" not in results["combined"]
+    assert "action_alone" not in results["combined"]
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    torsion_rows = overview.loc[
+        overview["Check"].str.contains("Torsion", case=False, regex=False)
+    ]
+    assert "NOT ASSESSED" in set(torsion_rows["Status"])
+    assert not any(
+        value not in {"-", "NOT ASSESSED"}
+        for value in torsion_rows.loc[
+            torsion_rows["Status"] == "NOT ASSESSED", "Result"
+        ]
+    )
+    combined_rows = overview.loc[
+        overview["Check"].str.contains("Combined M-V-T", regex=False)
+    ]
+    assert not combined_rows.empty
+    assert set(combined_rows["Status"]) == {"NOT ASSESSED"}
+
+    _select_view(at, "M-V-T Combined")
+    visible = " ".join(
+        str(item.value)
+        for element_type in ("warning", "caption", "markdown", "info")
+        for item in getattr(at, element_type)
+    )
+    assert "NOT ASSESSED" in visible
+    assert "torsion" in visible.casefold()
 
 
 def test_app_combined_assembles_all_three():

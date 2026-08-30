@@ -5913,6 +5913,7 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "nominal-shear-resistance-route-v1",
     "combined-edition-scope-v1",
     "compression-strut-applicability-v1",
+    "torsion-applicability-v1",
 )
 _FATIGUE_RESULT_CONTRACT_TOKEN = (
     "fatigue-result-contract",
@@ -5948,7 +5949,8 @@ _SHEAR_SIG_KEYS = (
     "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max",
-    "torsion_on", "torsion_method", "torsion_T", "torsion_tef", "torsion_nu_v",
+    "torsion_on", "torsion_method", "torsion_design_basis",
+    "torsion_member_scope", "torsion_T", "torsion_tef", "torsion_nu_v",
     "torsion_gamma_ct",
     "torsion_subdivide", "torsion_nsub",
     "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
@@ -7152,6 +7154,40 @@ def build_inputs(host=st):
              "shear-torsion crushing check. The overall status also considers "
              "longitudinal reinforcement. Without links, only concrete resistance "
              "and reinforcement demand are reported.")
+    torsion_design_basis = _seeded_selectbox(
+        sts,
+        "Torsion design basis",
+        list(capacity.TORSION_DESIGN_BASES),
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+        key="torsion_design_basis",
+        disabled=not torsion_on,
+        help=(
+            "Equilibrium torsion must be resisted in full. Compatibility torsion "
+            "may be omitted at ULS only when the member and system conditions, "
+            "including applicable minimum reinforcement, are established outside "
+            "this section calculation. Choose the residual-action route only when "
+            "TEd deliberately retains the compatibility torsion to be resisted."
+        ),
+    )
+    torsion_member_scope = _seeded_selectbox(
+        sts,
+        "Torsion member scope",
+        list(capacity.TORSION_MEMBER_SCOPES),
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+        key="torsion_member_scope",
+        disabled=not torsion_on,
+        help=(
+            "Sector performs a sectional thin-walled-tube check. Open thin-walled "
+            "or warping-sensitive members may require a separate warping-torsion "
+            "and member assessment."
+        ),
+    )
+    if torsion_on:
+        sts.caption(
+            "Sector does not determine compatibility-torsion redistribution, "
+            "static indeterminacy, stability independence, restraints or member "
+            "response."
+        )
     torsion_method = _seeded_selectbox(
         sts, "Torsion method", list(shear_codes_by_label),
         codes.EC2_2005_DKNA.label,
@@ -8351,7 +8387,10 @@ def build_inputs(host=st):
                 strut_cot_max=strut_cot_max,
                 torsion_on=torsion_on,
                 torsion_method=(combined_method if combined_on else torsion_method),
-                torsion_T=torsion_T, torsion_tef=torsion_tef,
+                torsion_design_basis=torsion_design_basis,
+                torsion_member_scope=torsion_member_scope,
+                torsion_T=torsion_T, torsion_T_signed=torsion_T,
+                torsion_tef=torsion_tef,
                 torsion_nu_v=torsion_nu_v,
                 torsion_gamma_ct=torsion_gamma_ct,
                 torsion_subdivide=torsion_subdivide,
@@ -9964,6 +10003,12 @@ def _run_uniaxial_capacity_checks(inp, out):
     if shear_payload is not None:
         out["shear"] = shear_payload
     tors_ctx = capacity.build_torsion_context(inp, n_ed_comp)
+    if (
+        tors_ctx is not None
+        and tors_ctx.get("applicability_blocked") is True
+    ):
+        out["torsion"] = capacity.unassessed_torsion_applicability(tors_ctx)
+        tors_ctx = None
 
     # ---- Member strut angle (EN 1992-1-1 6.3.2(2)) ----------------------------
     # One strut angle serves shear AND torsion (the same web struts carry both).
@@ -10559,7 +10604,10 @@ def _run_uniaxial_capacity_checks(inp, out):
                 tube=tube_main, trd_s=primary["trd_s"], trd_max=primary["trd_max"],
                 trd=trd, trd_c=primary["trd_c"], cot=primary["cot"],
                 theta_deg=primary["theta_deg"], util=util_t, asl_req=asl_req,
-                t_ed=t_ed, fcd=tors_ctx["fcd"], fywd=tors_ctx["fywd_t"],
+                t_ed=t_ed, t_ed_signed=tors_ctx["t_ed_signed"],
+                applicability=tors_ctx["applicability"],
+                applicability_blocked=False,
+                fcd=tors_ctx["fcd"], fywd=tors_ctx["fywd_t"],
                 fyd_long=tors_ctx["fyd_long"], nu=primary["nu"],
                 alpha_cw=tors_ctx["alpha_cw"], fctd=tors_ctx["fctd"],
                 fctk_005=tors_ctx["fctk_005"],
@@ -14852,6 +14900,51 @@ def torsion_view(inp, results):
         return
     t = results["torsion"]
     _member_material_note(inp)
+    applicability = t.get("applicability")
+    if not isinstance(applicability, dict) and t.get("applicability_blocked") is True:
+        applicability = {
+            "design_basis": capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+            "member_scope": capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+            "status": "NOT ASSESSED",
+        }
+    if isinstance(applicability, dict):
+        design_basis = applicability.get("design_basis")
+        if design_basis not in capacity.TORSION_DESIGN_BASES:
+            design_basis = capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        member_scope = applicability.get("member_scope")
+        if member_scope not in capacity.TORSION_MEMBER_SCOPES:
+            member_scope = capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        applicability_status = str(
+            applicability.get("status") or "NOT ASSESSED"
+        ).upper()
+        if t.get("applicability_blocked") is True:
+            applicability_status = "NOT ASSESSED"
+        st.markdown("**Torsion applicability and member scope**")
+        st.caption(
+            f"Design basis: {design_basis}. Member scope: {member_scope}. "
+            + presentation.torsion_applicability_note(t)
+            + "."
+        )
+        limitation = applicability.get("limitation")
+        if (
+            design_basis == capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL
+            and isinstance(limitation, str)
+        ):
+            st.caption(limitation)
+        if applicability_status == "NOT ASSESSED":
+            _manual_warning(
+                st,
+                "method-applicability",
+                "The torsion assessment is NOT ASSESSED. "
+                + presentation.torsion_applicability_note(t)
+                + ". Resistance, utilisation, governing angle, longitudinal "
+                "demand and dependent interaction verdicts are withheld.",
+            )
+            m1, m2, m3 = st.columns(3)
+            m1.metric(r"Applied $T_{Ed}$", f"{t['t_ed']:.3f} kNm")
+            m2.metric(r"Section resistance $T_{Rd}$", "-")
+            m3.metric("Utilisation", "-")
+            return
     tube = t["tube"]
     tube_valid = (
         t.get("tube_valid") is True

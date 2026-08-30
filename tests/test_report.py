@@ -97,6 +97,8 @@ def _inp():
         "sls_fctm": 2.9, "sls_cw": True, "conc_Ec": 33.0,
         "shear_gamma_v": 1.40,
         "torsion_gamma_ct": 1.70,
+        "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+        "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
         "v_min": 0.0, "v_max": 360.0, "v_inc": 90.0,
     }
 
@@ -5602,6 +5604,15 @@ def _torsion_out(interaction=False):
            "resistance_status": "PASS",
            "assessment_status": "NOT ASSESSED", "assessment_ok": None,
            "overall_reason": "longitudinal_torsion_reinforcement_not_verified",
+           "t_ed_signed": 40.0,
+           "applicability_blocked": False,
+           "applicability": capacity.torsion_applicability(
+               {
+                   "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+                   "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+               },
+               40.0,
+           ),
            "longitudinal_assessment": {
                "status": "NOT ASSESSED",
                "reason": "longitudinal_torsion_reinforcement_not_verified",
@@ -5666,6 +5677,66 @@ def test_report_includes_torsion_section():
     assert not any(
         token in txt for token in ("sqrt", "Cfrac", "Big", "sincos", "sum A", "kN.m")
     )
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_fail_closed_for_unestablished_torsion_scope(profile):
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": (
+                capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+            ),
+            "torsion_member_scope": capacity.TORSION_MEMBER_OPEN,
+        },
+        40.0,
+    )
+    torsion = capacity.unassessed_torsion_applicability({
+        "applicability": applicability,
+        "t_ed": 40.0,
+        "t_ed_signed": -40.0,
+        "method": codes.EC2_2005_DKNA.label,
+    })
+    torsion.update(
+        tube_valid=True,
+        transverse_resistance_assessed=True,
+        full_resistance_assessed=True,
+        valid=True,
+        trd=999.0,
+        util=0.001,
+        cot=2.0,
+        theta_deg=26.565,
+        asl_req=999.0,
+        resistance_status="PASS",
+    )
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        torsion_T=40.0,
+        torsion_design_basis=capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER,
+        torsion_member_scope=capacity.TORSION_MEMBER_OPEN,
+        shear_links=True,
+    )
+
+    pdf = sector_report.build_report(
+        {}, inp, {"torsion": torsion}, figures=False, profile=profile
+    )
+    text = " ".join(_pdf_text(pdf).split())
+
+    assert "Torsion design basis" in text
+    assert "Compatibility torsion" in text
+    assert "Torsion member scope" in text
+    assert "Open thin-walled or warping-sensitive section" in text
+    assert "NOT ASSESSED" in text
+    assert "separate member or system assessment" in text
+    assert "999" not in text
+    assert "PASS" not in text
+    assert "FAIL" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Torsion applicability and member scope" in text
+        assert "Resistance, utilisation, governing angle" in text
+        assert "6.3.1(1)-(3)" in text
+        assert "6.3.3(1)-(2)" in text
+        assert "Formula (6.28) demand" not in text
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])

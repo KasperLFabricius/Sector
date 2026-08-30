@@ -20,6 +20,42 @@ from .engineer_message import EngineerMessage
 SHEAR_CODES = {c.label: c for c in (codes.EC2_2005_DKNA, codes.EC2_2005)}
 SHEAR_METHODS = dict(SHEAR_CODES, **{codes.EC2_2023.label: codes.EC2_2023})
 TORSION_RESISTANCE_EXCEEDED = "torsion_resistance_exceeded"
+_CHOICE_SEPARATOR = " " + chr(0x2014) + " "
+TORSION_DESIGN_EQUILIBRIUM = (
+    "Equilibrium torsion" + _CHOICE_SEPARATOR + "full resistance required"
+)
+TORSION_DESIGN_COMPATIBILITY_RESIDUAL = (
+    "Compatibility torsion"
+    + _CHOICE_SEPARATOR
+    + "entered residual TEd retained for full resistance"
+)
+TORSION_DESIGN_COMPATIBILITY_MEMBER = (
+    "Compatibility torsion"
+    + _CHOICE_SEPARATOR
+    + "member/system assessment required"
+)
+TORSION_APPLICABILITY_NOT_ESTABLISHED = "Not established"
+TORSION_DESIGN_BASES = (
+    TORSION_DESIGN_EQUILIBRIUM,
+    TORSION_DESIGN_COMPATIBILITY_RESIDUAL,
+    TORSION_DESIGN_COMPATIBILITY_MEMBER,
+    TORSION_APPLICABILITY_NOT_ESTABLISHED,
+)
+TORSION_MEMBER_CLOSED = (
+    "Closed or solid section"
+    + _CHOICE_SEPARATOR
+    + "warping torsion not governing"
+)
+TORSION_MEMBER_OPEN = "Open thin-walled or warping-sensitive section"
+TORSION_MEMBER_SCOPES = (
+    TORSION_MEMBER_CLOSED,
+    TORSION_MEMBER_OPEN,
+    TORSION_APPLICABILITY_NOT_ESTABLISHED,
+)
+TORSION_APPLICABILITY_CLAUSES = (
+    "EN 1992-1-1:2004, 6.3.1(1)-(3)",
+    "EN 1992-1-1:2004, 6.3.3(1)-(2)",
+)
 _MISSING = object()
 _TORSION_GAMMA_CT_INPUT = EngineerMessage(
     "TORSION-GAMMA-CT",
@@ -71,6 +107,129 @@ class CapacityMethodError(CapacityInputError):
 
 class CapacityResultError(ArithmeticError):
     """A retained low-level solver violated its published result contract."""
+
+
+def torsion_applicability(inp: Mapping[str, Any], t_ed: float) -> dict[str, Any]:
+    """Resolve the member-scope gate before any sectional torsion kernel.
+
+    The two exact selections are project-wide evidence for every non-zero
+    Plastic torsion case. Unrecognised in-memory values are normalised to the
+    safe ``Not established`` state; the project boundary rejects them earlier.
+    """
+
+    design_raw = inp.get("torsion_design_basis")
+    member_raw = inp.get("torsion_member_scope")
+    design_valid = type(design_raw) is str and design_raw in TORSION_DESIGN_BASES
+    member_valid = type(member_raw) is str and member_raw in TORSION_MEMBER_SCOPES
+    design_basis = (
+        design_raw if design_valid else TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+    member_scope = (
+        member_raw if member_valid else TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+
+    status = "APPLICABLE"
+    reason = None
+    guidance = None
+    full_resistance_route = False
+    if t_ed == 0.0:
+        status = "NOT APPLICABLE"
+        reason = "zero torsion action"
+        guidance = "No torsion resistance assessment is required for TEd = 0."
+    elif design_basis == TORSION_DESIGN_COMPATIBILITY_MEMBER:
+        status = "NOT ASSESSED"
+        reason = "compatibility torsion requires member or system assessment"
+        guidance = (
+            "Compatibility torsion requires a separate member or system "
+            "assessment before a sectional resistance verdict can be given."
+        )
+    elif design_basis == TORSION_APPLICABILITY_NOT_ESTABLISHED:
+        status = "NOT ASSESSED"
+        reason = "torsion design basis not established"
+        guidance = (
+            "Select whether the entered torsion is equilibrium torsion or a "
+            "deliberately retained compatibility-torsion design action."
+        )
+    elif member_scope == TORSION_MEMBER_OPEN:
+        status = "NOT ASSESSED"
+        reason = "open or warping-sensitive torsion requires member analysis"
+        guidance = (
+            "Open thin-walled or warping-sensitive sections require a separate "
+            "member assessment before a sectional resistance verdict can be given."
+        )
+    elif member_scope == TORSION_APPLICABILITY_NOT_ESTABLISHED:
+        status = "NOT ASSESSED"
+        reason = "torsion member scope not established"
+        guidance = (
+            "Confirm that the section is closed or solid and that warping torsion "
+            "does not govern, or use an applicable member assessment."
+        )
+    else:
+        full_resistance_route = True
+
+    route = (
+        "equilibrium full resistance"
+        if design_basis == TORSION_DESIGN_EQUILIBRIUM
+        else "compatibility residual full resistance"
+        if design_basis == TORSION_DESIGN_COMPATIBILITY_RESIDUAL
+        else None
+    )
+    limitation = None
+    if design_basis == TORSION_DESIGN_COMPATIBILITY_RESIDUAL:
+        limitation = (
+            "Sector checks only the residual TEd deliberately entered as a design "
+            "action; it does not determine redistribution, static indeterminacy, "
+            "stability independence, restraints or member response."
+        )
+
+    return {
+        "design_basis": design_basis,
+        "member_scope": member_scope,
+        "design_basis_valid": design_valid,
+        "member_scope_valid": member_valid,
+        "status": status,
+        "reason": reason,
+        "guidance": guidance,
+        "full_resistance_route_entered": full_resistance_route,
+        "route": route,
+        "limitation": limitation,
+        "clauses": TORSION_APPLICABILITY_CLAUSES,
+    }
+
+
+def unassessed_torsion_applicability(context: Mapping[str, Any]) -> dict[str, Any]:
+    """Return a value-free torsion result for a blocked member-scope route."""
+
+    applicability = dict(context["applicability"])
+    reason = applicability.get("reason")
+    return {
+        "valid": False,
+        "tube_valid": None,
+        "closed_links_present": None,
+        "transverse_resistance_assessed": False,
+        "full_resistance_assessed": False,
+        "assessment_reason": reason,
+        "resistance_status": "NOT ASSESSED",
+        "assessment_status": "NOT ASSESSED",
+        "assessment_ok": None,
+        "overall_reason": reason,
+        "reason": reason,
+        "t_ed": context["t_ed"],
+        "t_ed_signed": context["t_ed_signed"],
+        "method": context.get("method"),
+        "trd_s": None,
+        "trd_max": None,
+        "trd": None,
+        "trd_c": None,
+        "cot": None,
+        "theta_deg": None,
+        "util": None,
+        "asl_req": None,
+        "longitudinal_assessment": None,
+        "interaction": None,
+        "applicability_blocked": True,
+        "applicability": applicability,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -2146,6 +2305,20 @@ def build_torsion_context(inp, n_ed_comp):
     """Return the angle-independent context for the active torsion check."""
     if not inp.get("torsion_on"):
         return None
+    t_ed_signed = _finite_solver_result(
+        inp.get("torsion_T_signed", inp.get("torsion_T")),
+        "entered torsion action",
+    )
+    t_ed = abs(t_ed_signed)
+    applicability = torsion_applicability(inp, t_ed)
+    if applicability["status"] == "NOT ASSESSED":
+        return {
+            "applicability_blocked": True,
+            "applicability": applicability,
+            "t_ed": t_ed,
+            "t_ed_signed": t_ed_signed,
+            "method": inp.get("torsion_method"),
+        }
     closed_links_present = _shared_links_present(inp)
     nu_detail_requested = inp.get("torsion_nu_v", _MISSING)
     if type(nu_detail_requested) is not bool:
@@ -2212,13 +2385,6 @@ def build_torsion_context(inp, n_ed_comp):
         "basis": "first-generation torsion compression-strut range",
         "clause": "EN 1992-1-1:2005, 6.3.2(2)",
     }
-    # The entered torsion sign identifies the applied sense; every resistance,
-    # reinforcement-demand and interaction equation consumes its magnitude.  The
-    # case-table adapter already performs this conversion, but the public direct
-    # analysis path reaches this shared boundary without that adapter.
-    t_ed = abs(
-        _finite_solver_result(inp.get("torsion_T"), "entered torsion action")
-    )
     angle_applicability = _module("shear").strut_angle_applicability(
         cot_min,
         cot_max,
@@ -2418,6 +2584,9 @@ def build_torsion_context(inp, n_ed_comp):
         "torque_distribution": asdict(distribution),
         "sub_dims": dimensions,
         "t_ed": t_ed,
+        "t_ed_signed": t_ed_signed,
+        "applicability": applicability,
+        "applicability_blocked": False,
         "tcode": tcode,
         "fck": fck,
         "fcd": fcd,
@@ -2813,7 +2982,7 @@ def _dkna_torsion_action_alone(inp):
     )
     n_prestress = prestress_axial(isolated)
     context = build_torsion_context(isolated, n_prestress)
-    if context is None:
+    if context is None or context.get("applicability_blocked") is True:
         return _dkna_action_record(
             "T", t_ed, None, valid=False,
             reason=_DKNA_ACTION_ALONE_GUIDANCE,

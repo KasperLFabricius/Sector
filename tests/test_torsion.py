@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from sector import codes, shear, templates, torsion
+from sector import capacity, codes, shear, templates, torsion
 
 
 def _rect(b, h):
@@ -1126,6 +1126,16 @@ from app_case_inputs import (  # noqa: E402
 
 def _fresh():
     from streamlit.testing.v1 import AppTest
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.session_state["torsion_design_basis"] = (
+        capacity.TORSION_DESIGN_EQUILIBRIUM
+    )
+    at.session_state["torsion_member_scope"] = capacity.TORSION_MEMBER_CLOSED
+    return at
+
+
+def _fresh_unclassified():
+    from streamlit.testing.v1 import AppTest
     return AppTest.from_file(APP, default_timeout=90)
 
 
@@ -1252,6 +1262,101 @@ def _centred_wall_bar_points(b_mm, h_mm, a_mm, *, diameter_mm=20.0):
 def _enable_shared_links(at):
     _set(at, ("checkbox", "shear_links", True))
     return at
+
+
+def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
+    at = _fresh_unclassified()
+    at.run()
+    assert at.selectbox(key="torsion_design_basis").value == (
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+    assert at.selectbox(key="torsion_member_scope").value == (
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "torsion_T", -40.0),
+    )
+    assert not at.exception
+    blocked = at.session_state["results"]["torsion"]
+    assert blocked["assessment_status"] == "NOT ASSESSED"
+    assert blocked["applicability_blocked"] is True
+    assert blocked["t_ed_signed"] == pytest.approx(-40.0)
+    assert blocked["t_ed"] == pytest.approx(40.0)
+    for key in ("trd", "util", "cot", "theta_deg", "asl_req", "interaction"):
+        assert blocked[key] is None
+    _select_view(at, "Torsion")
+    visible = " ".join(
+        str(item.value)
+        for element_type in ("warning", "caption", "markdown", "info")
+        for item in getattr(at, element_type)
+    )
+    assert "torsion assessment is NOT ASSESSED" in visible
+    assert "Select whether the entered torsion is equilibrium torsion" in visible
+    metrics = {metric.label: metric.value for metric in at.metric}
+    assert metrics[r"Section resistance $T_{Rd}$"] == "-"
+    assert metrics["Utilisation"] == "-"
+    assert "PASS" not in visible
+    assert "FAIL" not in visible
+
+    _set_and_click(
+        at,
+        "calculate",
+        (
+            "selectbox",
+            "torsion_design_basis",
+            capacity.TORSION_DESIGN_EQUILIBRIUM,
+        ),
+        (
+            "selectbox",
+            "torsion_member_scope",
+            capacity.TORSION_MEMBER_CLOSED,
+        ),
+    )
+    recovered = at.session_state["results"]["torsion"]
+    assert recovered["applicability"]["status"] == "APPLICABLE"
+    assert recovered["applicability_blocked"] is False
+    assert recovered["trd"] is not None
+    assert recovered["util"] is not None
+    assert recovered["cot"] is not None
+
+    reference = {
+        key: recovered[key]
+        for key in ("trd", "util", "cot", "theta_deg", "asl_req")
+    }
+    _set_and_click(
+        at,
+        "calculate",
+        (
+            "selectbox",
+            "torsion_design_basis",
+            capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL,
+        ),
+    )
+    residual = at.session_state["results"]["torsion"]
+    assert residual["applicability"]["status"] == "APPLICABLE"
+    assert residual["applicability"]["limitation"] is not None
+    for key, value in reference.items():
+        assert residual[key] == pytest.approx(value)
+
+    _set_and_click(
+        at,
+        "calculate",
+        (
+            "selectbox",
+            "torsion_member_scope",
+            capacity.TORSION_MEMBER_OPEN,
+        ),
+    )
+    open_member = at.session_state["results"]["torsion"]
+    assert open_member["assessment_status"] == "NOT ASSESSED"
+    assert open_member["trd"] is None
+    assert open_member["util"] is None
+    assert open_member["asl_req"] is None
 
 
 def test_app_torsion_without_current_closed_links_is_not_assessed():
@@ -1972,6 +2077,88 @@ def test_mvt_m02_contract_recomputes_stale_capacity_and_reuses_other_families():
     assert refreshed["plastic_cases"][0]["reused"] is False
     assert refreshed["plastic_cases"][0]["results"]["plastic"] is plastic_before
     assert refreshed["elastic_cases"][0]["reused"] is True
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        assert tuple(at.session_state[key]).count(token) == 1
+
+
+def test_mvt_m05_contract_discards_poisoned_torsion_and_combined_results():
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("radio", "mode", "Both"),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 50.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    _calculate(at)
+
+    latest = at.session_state["_latest_inputs"]
+    token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+    marker = "torsion-applicability-v1"
+    assert marker in token
+    pre_applicability_token = tuple(item for item in token if item != marker)
+
+    before = at.session_state["results"]
+    plastic_before = before["plastic"]
+    elastic_before = before["elastic"]
+    torsion_before = before["torsion"]
+    combined_before = before["combined"]
+    expected_trd = torsion_before["trd"]
+    expected_util = torsion_before["util"]
+    expected_resistance_status = torsion_before["resistance_status"]
+    cached_case = before["plastic_cases"][0]
+    assert cached_case["results"]["torsion"] is torsion_before
+    torsion_before.update(
+        pre_mvt_m05_marker=True,
+        valid=True,
+        trd=999_000.0,
+        util=0.001,
+        assessment_status="PASS",
+    )
+    combined_before.update(
+        pre_mvt_m05_marker=True,
+        valid=True,
+        dkna_sum=0.001,
+        dkna_status="PASS",
+        dkna_ok=True,
+    )
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        at.session_state[key] = tuple(
+            pre_applicability_token if item == token else item
+            for item in at.session_state[key]
+        )
+    assert at.session_state["result_sig"] != latest["signature"]
+
+    _calculate(at)
+    refreshed = at.session_state["results"]
+    assert refreshed["plastic"] is plastic_before
+    assert refreshed["elastic"] is elastic_before
+    assert refreshed["torsion"] is not torsion_before
+    assert refreshed["combined"] is not combined_before
+    assert "pre_mvt_m05_marker" not in refreshed["torsion"]
+    assert "pre_mvt_m05_marker" not in refreshed["combined"]
+    assert refreshed["torsion"]["trd"] != pytest.approx(999_000.0)
+    assert refreshed["torsion"]["util"] != pytest.approx(0.001)
+    assert refreshed["torsion"]["trd"] == pytest.approx(expected_trd)
+    assert refreshed["torsion"]["util"] == pytest.approx(expected_util)
+    assert refreshed["torsion"]["resistance_status"] == expected_resistance_status
+    assert refreshed["plastic_cases"][0]["reused"] is False
+    assert refreshed["elastic_cases"][0]["reused"] is True
+    assert refreshed["plastic_cases"][0]["results"]["plastic"] is plastic_before
     for key in (
         "result_sig",
         "result_plastic_sig",

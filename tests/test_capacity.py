@@ -62,6 +62,8 @@ def _member_input(**overrides):
         "shear_fywk": 550.0,
         "torsion_on": False,
         "torsion_method": codes.EC2_2005_DKNA.label,
+        "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+        "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
         "torsion_tef": 0.0,
         "torsion_nu_v": False,
         "torsion_gamma_ct": codes.EC2_2005_DKNA.gamma_ct,
@@ -90,6 +92,149 @@ def _torsion_input(**overrides):
     values = {"bars": _torsion_wall_bars()}
     values.update(overrides)
     return _member_input(**values)
+
+
+@pytest.mark.parametrize(
+    ("design_basis", "member_scope", "expected_reason"),
+    (
+        (
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+            capacity.TORSION_MEMBER_CLOSED,
+            "torsion design basis not established",
+        ),
+        (
+            capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER,
+            capacity.TORSION_MEMBER_CLOSED,
+            "compatibility torsion requires member or system assessment",
+        ),
+        (
+            capacity.TORSION_DESIGN_EQUILIBRIUM,
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+            "torsion member scope not established",
+        ),
+        (
+            capacity.TORSION_DESIGN_EQUILIBRIUM,
+            capacity.TORSION_MEMBER_OPEN,
+            "open or warping-sensitive torsion requires member analysis",
+        ),
+    ),
+)
+def test_torsion_applicability_blocks_before_sectional_kernels(
+    monkeypatch,
+    design_basis,
+    member_scope,
+    expected_reason,
+):
+    def forbidden(*_args, **_kwargs):
+        pytest.fail("sectional torsion preparation must not run")
+
+    monkeypatch.setattr(capacity, "_shared_links_present", forbidden)
+    inp = _torsion_input(
+        torsion_on=True,
+        torsion_T=-40.0,
+        torsion_design_basis=design_basis,
+        torsion_member_scope=member_scope,
+        section=None,
+        outer=None,
+    )
+
+    context = capacity.build_torsion_context(inp, 0.0)
+    result = capacity.unassessed_torsion_applicability(context)
+
+    assert context["applicability_blocked"] is True
+    assert context["t_ed_signed"] == pytest.approx(-40.0)
+    assert context["t_ed"] == pytest.approx(40.0)
+    assert context["applicability"]["reason"] == expected_reason
+    assert context["applicability"]["full_resistance_route_entered"] is False
+    assert result["assessment_status"] == "NOT ASSESSED"
+    assert result["valid"] is False
+    assert result["assessment_ok"] is None
+    for key in ("trd", "util", "cot", "theta_deg", "asl_req", "interaction"):
+        assert result[key] is None
+
+
+@pytest.mark.parametrize(
+    "key,bad_value",
+    (
+        ("torsion_design_basis", True),
+        ("torsion_design_basis", np.bool_(False)),
+        ("torsion_design_basis", 1),
+        ("torsion_design_basis", "Equilibrium torsion"),
+        ("torsion_member_scope", False),
+        ("torsion_member_scope", np.bool_(True)),
+        ("torsion_member_scope", 1.0),
+        ("torsion_member_scope", "Closed section"),
+    ),
+)
+def test_torsion_applicability_malformed_in_memory_choices_fail_closed(
+    monkeypatch, key, bad_value
+):
+    monkeypatch.setattr(
+        capacity,
+        "_shared_links_present",
+        lambda *_args, **_kwargs: pytest.fail("torsion kernel preparation entered"),
+    )
+    context = capacity.build_torsion_context(
+        _torsion_input(torsion_on=True, **{key: bad_value}),
+        0.0,
+    )
+
+    assert context["applicability_blocked"] is True
+    assert context["applicability"]["status"] == "NOT ASSESSED"
+    assert context["applicability"]["design_basis"] in (
+        *capacity.TORSION_DESIGN_BASES,
+    )
+    assert context["applicability"]["member_scope"] in (
+        *capacity.TORSION_MEMBER_SCOPES,
+    )
+
+
+def test_permitted_torsion_applicability_routes_retain_baseline_and_signed_action():
+    results = []
+    for design_basis in (
+        capacity.TORSION_DESIGN_EQUILIBRIUM,
+        capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL,
+    ):
+        context = capacity.build_torsion_context(
+            _torsion_input(
+                torsion_on=True,
+                torsion_T=-40.0,
+                shear_links=True,
+                torsion_design_basis=design_basis,
+                torsion_member_scope=capacity.TORSION_MEMBER_CLOSED,
+            ),
+            0.0,
+        )
+        result = capacity.tube_torsion(
+            context["tube"], context["t_ed"], **context["_tk"]
+        )
+        assert context["applicability_blocked"] is False
+        assert context["applicability"]["status"] == "APPLICABLE"
+        assert context["applicability"]["full_resistance_route_entered"] is True
+        assert context["t_ed_signed"] == pytest.approx(-40.0)
+        results.append(result)
+
+    for result in results:
+        assert result["valid"] is True
+        assert result["trd"] == pytest.approx(78.81358728136769)
+        assert result["util"] == pytest.approx(0.5075267016738927)
+        assert result["cot"] == pytest.approx(1.6420676070939326)
+        assert result["asl_req"] == pytest.approx(1003.154029061021)
+    assert results[0]["trd"] == pytest.approx(results[1]["trd"])
+    assert results[0]["util"] == pytest.approx(results[1]["util"])
+
+
+def test_zero_torsion_action_does_not_require_member_scope_classification():
+    zero = capacity.torsion_applicability({}, 0.0)
+    smallest_nonzero = capacity.torsion_applicability(
+        {}, math.nextafter(0.0, 1.0)
+    )
+
+    assert zero["status"] == "NOT APPLICABLE"
+    assert zero["reason"] == "zero torsion action"
+    assert zero["full_resistance_route_entered"] is False
+    assert smallest_nonzero["status"] == "NOT ASSESSED"
+    assert smallest_nonzero["reason"] == "torsion design basis not established"
 
 
 def _shear_route_result(v_ed, *, vrd_c=103.417, vrd_links=None):

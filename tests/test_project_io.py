@@ -692,6 +692,104 @@ def test_shared_link_authority_round_trips_and_missing_defaults_false():
     assert resaved["scalars"]["torsion_nu_v"] is False
 
 
+def test_torsion_applicability_choices_round_trip_and_missing_defaults_safe():
+    tables, scalars = _current_project()
+    scalars.update(
+        torsion_design_basis=capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL,
+        torsion_member_scope=capacity.TORSION_MEMBER_CLOSED,
+    )
+
+    text = project_io.dump_project(tables, scalars)
+    loaded_tables, loaded = project_io.parse_project(text)
+
+    assert loaded["torsion_design_basis"] == (
+        capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL
+    )
+    assert loaded["torsion_member_scope"] == capacity.TORSION_MEMBER_CLOSED
+    assert json.loads(
+        project_io.dump_project(loaded_tables, loaded)
+    )["scalars"]["torsion_design_basis"] == (
+        capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL
+    )
+
+    payload = json.loads(text)
+    payload["scalars"].pop("torsion_design_basis")
+    payload["scalars"].pop("torsion_member_scope")
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    _, missing = project_io.parse_project(json.dumps(payload))
+
+    assert missing["torsion_design_basis"] == (
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+    assert missing["torsion_member_scope"] == (
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+
+
+@pytest.mark.parametrize("source_version", (25, 26, 27))
+def test_omitted_torsion_applicability_defaults_safe_in_supported_schemas(
+    source_version,
+):
+    tables, scalars = _current_project()
+    if source_version == 25:
+        payload = _schema25_payload(tables, scalars)
+    elif source_version == 26:
+        payload = _schema26_payload(tables, scalars)
+    else:
+        payload = json.loads(project_io.dump_project(tables, scalars))
+    payload["scalars"].pop("torsion_design_basis", None)
+    payload["scalars"].pop("torsion_member_scope", None)
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+
+    _, loaded = project_io.parse_project(json.dumps(payload))
+
+    assert loaded["torsion_design_basis"] == (
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+    assert loaded["torsion_member_scope"] == (
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+
+
+@pytest.mark.parametrize(
+    "key,invalid",
+    (
+        ("torsion_design_basis", True),
+        ("torsion_design_basis", 1),
+        ("torsion_design_basis", 1.0),
+        ("torsion_design_basis", "Equilibrium torsion"),
+        ("torsion_design_basis", "equilibrium torsion"),
+        ("torsion_member_scope", False),
+        ("torsion_member_scope", 0),
+        ("torsion_member_scope", 0.0),
+        ("torsion_member_scope", "Closed section"),
+        ("torsion_member_scope", "Not established "),
+    ),
+)
+def test_torsion_applicability_choices_are_strict_exact_text(key, invalid):
+    tables, scalars = _current_project()
+    valid_text = project_io.dump_project(tables, scalars)
+    scalars[key] = invalid
+
+    with pytest.raises(ValueError, match=rf"^{key} "):
+        project_io.dump_project(tables, scalars)
+
+    payload = json.loads(valid_text)
+    payload["scalars"][key] = invalid
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    with pytest.raises(project_io.ProjectInputError):
+        project_io.parse_project(json.dumps(payload))
+
+
 @pytest.mark.parametrize("key", ("shear_links", "torsion_nu_v"))
 @pytest.mark.parametrize("invalid", (None, 0, 1, "true", [], {}))
 def test_shared_link_authorities_must_be_serialized_booleans(key, invalid):
@@ -1918,8 +2016,7 @@ def test_obsolete_compliance_and_approval_inputs_are_not_in_schema():
         "bridge_standard",
         "design_basis",
     }
-    joined = "\n".join(project_io.SCALAR_KEYS)
-    assert not any(name in joined for name in forbidden)
+    assert not forbidden.intersection(project_io.SCALAR_KEYS)
 
 
 def test_calculation_record_is_correlated_but_results_are_not_persisted():

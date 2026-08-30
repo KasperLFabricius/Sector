@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import result_presentation as presentation  # noqa: E402
 
 from app import modelled_direction  # noqa: E402
-from sector import codes, combined as combined_core  # noqa: E402
+from sector import capacity, codes, combined as combined_core  # noqa: E402
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
 
 
@@ -1826,6 +1826,61 @@ def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
     assert torsion_row["result"] == "-"
     assert torsion_row["util"] is None
     assert "outside the permitted range" in torsion_row["note"]
+    assert combined_rows
+    assert all(row["status"] == "NOT ASSESSED" for row in combined_rows)
+    assert all(row["util"] is None for row in combined_rows)
+
+
+def test_torsion_applicability_blocker_outranks_poisoned_publication_values():
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "torsion_member_scope": capacity.TORSION_MEMBER_OPEN,
+        },
+        40.0,
+    )
+    torsion = capacity.unassessed_torsion_applicability(
+        {
+            "applicability": applicability,
+            "t_ed": 40.0,
+            "t_ed_signed": -40.0,
+            "method": codes.EC2_2005_DKNA.label,
+        }
+    )
+    torsion.update(
+        tube_valid=True,
+        transverse_resistance_assessed=True,
+        full_resistance_assessed=True,
+        valid=True,
+        trd=999.0,
+        util=0.01,
+        resistance_status="PASS",
+    )
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            torsion_on=True,
+            combined_on=True,
+            shear_links=True,
+        ),
+        {
+            "plastic": _plastic(),
+            "torsion": torsion,
+            "combined": {
+                "valid": True,
+                "dkna_valid": True,
+                "dkna_sum": 0.01,
+                "dkna_ok": True,
+            },
+        },
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Torsion applicability"]["status"] == "NOT ASSESSED"
+    assert by_check["Torsion"]["status"] == "NOT ASSESSED"
+    assert by_check["Torsion"]["result"] == "-"
+    assert by_check["Torsion"]["util"] is None
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
     assert combined_rows
     assert all(row["status"] == "NOT ASSESSED" for row in combined_rows)
     assert all(row["util"] is None for row in combined_rows)

@@ -1175,6 +1175,20 @@ def manual_blocks() -> list:
        "$T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd,c}$, $T_{Ed}/T_{Rd}$ and the required "
        "longitudinal steel $\\sum A_{sl}$. The utilisation is the transverse/strut "
        "resistance component, not by itself an overall torsion verdict.")
+    md("**Applicability and member scope.** For every non-zero $T_{Ed}$, select "
+       "whether the action is equilibrium torsion, deliberately retained residual "
+       "compatibility torsion, or compatibility torsion requiring a member/system "
+       "assessment. Also confirm whether the section is closed or solid with "
+       "warping torsion not governing. Missing evidence, compatibility torsion "
+       "requiring member assessment, and open thin-walled or warping-sensitive "
+       "members are **NOT ASSESSED** before the sectional torsion calculation.")
+    call("limit", "Compatibility torsion may normally be omitted at ULS only when "
+         "the applicable statically indeterminate system, stability independence "
+         "and minimum-reinforcement conditions are established. Sector does not "
+         "establish redistribution, restraints or member response. The residual "
+         "route checks only the $T_{Ed}$ deliberately retained as a design action. "
+         "Open thin-walled members may require warping-torsion/member analysis "
+         "outside Sector.")
     md("**Actions and tube geometry.** Enter signed $T_{Ed}$ in each "
        "Plastic/capacity row; zero skips torsion for that row. Sector derives "
        "$A$, $u$, $t_{ef}$, $A_k$ and $u_k$ from the outline and the modelled "
@@ -1391,6 +1405,11 @@ def manual_blocks() -> list:
        "are also defined it adds the combined shear+torsion crushing check. A "
        "resistance-component PASS never overrides an insufficient or unverified "
        "longitudinal-reinforcement assessment.")
+    md("The view also reports the selected torsion design basis and member scope. "
+       "When either selection requires a separate member assessment, resistance, "
+       "utilisation, governing angle, longitudinal demand and dependent M-V-T "
+       "verdicts are shown as **NOT ASSESSED** / '-'. Independent bending, shear "
+       "and detailing results may remain available.")
     h2("M-V-T Combined results")
     md("The **M-V-T Combined** view shows the $M$, $V$ and $T$ utilisations, the "
        "DK NA $\\sum(S_{Ed}/S_{Rd})$ sum, the concrete-crushing interaction with a "
@@ -2115,6 +2134,15 @@ def manual_blocks() -> list:
        "giving $V_{Rd} = 555.4$ kN.")
 
     h1("Torsion (thin-walled tube)")
+    md("EN 1992-1-1 6.3.1 distinguishes equilibrium torsion, which must be "
+       "resisted, from compatibility torsion, which may be omitted at ULS only "
+       "under the stated system and minimum-reinforcement conditions. Sector "
+       "does not establish those member/system conditions. It checks compatibility "
+       "torsion only when a residual $T_{Ed}$ is deliberately retained as the "
+       "design action. Under 6.3.3, open thin-walled or warping-sensitive members "
+       "may require a separate warping-torsion/member assessment; the sectional "
+       "tube result is therefore withheld unless the closed/solid member scope is "
+       "established.")
     md("A section resisting torsion is idealised as a thin-walled closed tube "
        "(6.3.2(1)): the torque is carried by a constant shear flow round the walls. "
        "The effective thickness may start from $A/u$ ($A$ the area within the "
