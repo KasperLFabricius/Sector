@@ -303,6 +303,17 @@ def test_retained_worked_family_is_reconciled_without_mutating_completed_state()
         "component": None,
     }
     assert retained["families"]["torsion"]["case_id"] == "PL-BLOCKED"
+    out["worked_example_selection"] = {
+        "schema": 1,
+        "families": {},
+        "crack_examples": [],
+    }
+    assert presentation.validated_worked_example_selection({}, out)[
+        "families"
+    ]["torsion"] == {
+        "case_id": "PL-APPLICABLE",
+        "component": None,
+    }
     assert presentation.validated_worked_example_selection({}, {}) == {}
 
 

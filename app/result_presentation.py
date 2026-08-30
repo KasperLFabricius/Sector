@@ -1409,6 +1409,19 @@ _WORKED_FAMILY_KEYS = frozenset({
 })
 
 
+def _worked_case_identity(item, *, component=False):
+    if not isinstance(item, Mapping):
+        return False
+    case_id = item.get("case_id")
+    if type(case_id) is not str or not case_id.strip():
+        return False
+    if component:
+        direction = item.get("component")
+        if direction is not None and type(direction) is not str:
+            return False
+    return True
+
+
 def validated_worked_example_selection(inp, out):
     """Validate retained family identities against the complete current result.
 
@@ -1425,29 +1438,41 @@ def validated_worked_example_selection(inp, out):
     if not isinstance(families, Mapping):
         return {}
     for family, item in families.items():
-        if family not in _WORKED_FAMILY_KEYS or not isinstance(item, Mapping):
-            return {}
-        case_id = item.get("case_id")
-        component = item.get("component")
         if (
-            type(case_id) is not str
-            or not case_id.strip()
-            or component is not None
-            and type(component) is not str
+            family not in _WORKED_FAMILY_KEYS
+            or not _worked_case_identity(item, component=True)
         ):
             return {}
+    crack_examples = retained.get("crack_examples", ())
+    if (
+        not isinstance(crack_examples, (list, tuple))
+        or not all(_worked_case_identity(item) for item in crack_examples)
+    ):
+        return {}
+    for key in ("crack_comparison", "cracking_threshold"):
+        item = retained.get(key)
+        if item is not None and not _worked_case_identity(item):
+            return {}
+    torsion_subchecks = retained.get("torsion_subchecks", {})
+    if (
+        not isinstance(torsion_subchecks, Mapping)
+        or not all(
+            _worked_case_identity(item, component=True)
+            for item in torsion_subchecks.values()
+        )
+    ):
+        return {}
+    heightened = retained.get("heightened_crack_control")
+    if heightened is not None and (
+        not isinstance(heightened, Mapping)
+        or type(heightened.get("result_key")) is not str
+    ):
+        return {}
 
     current = worked_example_selection(inp, out)
     current_families = current.get("families") or {}
-    reconciled_families = dict(families)
-    for family in tuple(reconciled_families):
-        current_item = current_families.get(family)
-        if current_item is None:
-            reconciled_families.pop(family, None)
-        else:
-            reconciled_families[family] = current_item
     reconciled = dict(retained)
-    reconciled["families"] = reconciled_families
+    reconciled["families"] = dict(current_families)
     return reconciled
 
 
