@@ -1432,7 +1432,11 @@ def validated_worked_example_selection(inp, out):
     """
 
     retained = (out or {}).get("worked_example_selection")
-    if not isinstance(retained, Mapping) or retained.get("schema") != 1:
+    if (
+        not isinstance(retained, Mapping)
+        or type(retained.get("schema")) is not int
+        or retained.get("schema") != 1
+    ):
         return {}
     families = retained.get("families")
     if not isinstance(families, Mapping):

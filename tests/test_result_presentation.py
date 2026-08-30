@@ -314,6 +314,8 @@ def test_retained_worked_family_is_reconciled_without_mutating_completed_state()
         "case_id": "PL-APPLICABLE",
         "component": None,
     }
+    out["worked_example_selection"] = {"schema": True, "families": {}}
+    assert presentation.validated_worked_example_selection({}, out) == {}
     assert presentation.validated_worked_example_selection({}, {}) == {}
 
 

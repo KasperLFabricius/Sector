@@ -3326,6 +3326,7 @@ def test_report_fails_closed_when_worked_example_selection_is_absent():
 @pytest.mark.parametrize(
     "selection",
     (
+        {"schema": True, "families": {}},
         {"schema": 99, "families": {"plastic": {"case_id": "__single__"}}},
         {"schema": 1, "families": ["plastic"], "crack_examples": "crack"},
         {

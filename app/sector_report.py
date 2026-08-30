@@ -1214,7 +1214,11 @@ class ReportBuilder:
                 self._base_inp,
                 self._base_out,
             )
-            if isinstance(selection, Mapping) and selection.get("schema") == 1
+            if (
+                isinstance(selection, Mapping)
+                and type(selection.get("schema")) is int
+                and selection.get("schema") == 1
+            )
             else {}
         )
         families = self._worked_example_selection.get("families")
