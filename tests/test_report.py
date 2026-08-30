@@ -8025,6 +8025,9 @@ def test_report_main_torsion_worked_example_requires_applicable_case(profile):
             },
         ]
     }
+    out["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inp, out)
+    )
 
     flat = " ".join(
         _pdf_text(

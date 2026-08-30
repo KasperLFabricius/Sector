@@ -2688,7 +2688,14 @@ def _torsion_case_authority_controls(
         )
     for row_index, name in case_rows:
         authority = capacity.torsion_case_authority(raw_mapping, name)
-        row_key = f"{row_index}::{name}"
+        # Keep an event emitted by an invalid-name render in a separate widget
+        # namespace. If a rapid delete or rename interrupts that rerun, its
+        # pending value cannot be replayed into the now-valid surviving case.
+        row_key = (
+            f"{row_index}::{name}"
+            if case_name_identity_valid
+            else f"invalid::{row_index}::{name}"
+        )
         design_key = f"_torsion_case_design_basis::{row_key}"
         member_key = f"_torsion_case_member_scope::{row_key}"
         if design_key not in pending:

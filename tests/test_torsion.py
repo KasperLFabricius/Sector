@@ -1612,12 +1612,12 @@ def test_duplicate_plastic_case_names_keep_authority_widgets_distinct():
         if item.key and item.key.startswith("_torsion_case_member_scope::")
     }
     assert design_keys == {
-        "_torsion_case_design_basis::0::PL-01",
-        "_torsion_case_design_basis::1::PL-01",
+        "_torsion_case_design_basis::invalid::0::PL-01",
+        "_torsion_case_design_basis::invalid::1::PL-01",
     }
     assert member_keys == {
-        "_torsion_case_member_scope::0::PL-01",
-        "_torsion_case_member_scope::1::PL-01",
+        "_torsion_case_member_scope::invalid::0::PL-01",
+        "_torsion_case_member_scope::invalid::1::PL-01",
     }
     assert not at.exception
 
@@ -1683,13 +1683,18 @@ def test_duplicate_case_authority_edits_do_not_transfer_after_name_resolution():
         at,
         (
             "selectbox",
-            "_torsion_case_design_basis::0::PL-01",
+            "_torsion_case_design_basis::invalid::0::PL-01",
             capacity.TORSION_DESIGN_EQUILIBRIUM,
         ),
     )
     assert at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] == (
         retained_authority
     )
+    at.session_state["_pending_input_events"] = {
+        "_torsion_case_design_basis::invalid::0::PL-01": (
+            capacity.TORSION_DESIGN_EQUILIBRIUM
+        )
+    }
 
     _replace_plastic_cases(at, [canonical])
     assert at.selectbox(
@@ -1705,13 +1710,18 @@ def test_duplicate_case_authority_edits_do_not_transfer_after_name_resolution():
         at,
         (
             "selectbox",
-            "_torsion_case_design_basis::1::PL-01",
+            "_torsion_case_design_basis::invalid::1::PL-01",
             capacity.TORSION_DESIGN_EQUILIBRIUM,
         ),
     )
     assert at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] == (
         retained_authority
     )
+    at.session_state["_pending_input_events"] = {
+        "_torsion_case_design_basis::invalid::1::PL-01": (
+            capacity.TORSION_DESIGN_EQUILIBRIUM
+        )
+    }
 
     renamed = {**canonical, "name": "PL-RENAMED"}
     _replace_plastic_cases(at, [canonical, renamed])
