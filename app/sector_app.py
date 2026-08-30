@@ -15004,49 +15004,47 @@ def torsion_view(inp, results):
     t = results["torsion"]
     _member_material_note(inp)
     applicability = t.get("applicability")
-    if not isinstance(applicability, dict) and t.get("applicability_blocked") is True:
-        applicability = {
-            "design_basis": capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
-            "member_scope": capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
-            "status": "NOT ASSESSED",
-        }
-    if isinstance(applicability, dict):
-        design_basis = applicability.get("design_basis")
-        if design_basis not in capacity.TORSION_DESIGN_BASES:
-            design_basis = capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
-        member_scope = applicability.get("member_scope")
-        if member_scope not in capacity.TORSION_MEMBER_SCOPES:
-            member_scope = capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
-        applicability_status = (
-            presentation.torsion_applicability_publication_status(t)
-            or "NOT ASSESSED"
-        )
-        st.markdown("**Torsion applicability and member scope**")
-        st.caption(
-            f"Design basis: {design_basis}. Member scope: {member_scope}. "
+    if not isinstance(applicability, dict):
+        applicability = {}
+    design_basis = applicability.get("design_basis")
+    if design_basis not in capacity.TORSION_DESIGN_BASES:
+        design_basis = capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    member_scope = applicability.get("member_scope")
+    if member_scope not in capacity.TORSION_MEMBER_SCOPES:
+        member_scope = capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    applicability_status = (
+        presentation.torsion_applicability_publication_status(t)
+    )
+    st.markdown("**Torsion applicability and member scope**")
+    st.caption(
+        f"Design basis: {design_basis}. Member scope: {member_scope}. "
+        + presentation.torsion_applicability_note(t)
+        + "."
+    )
+    limitation = applicability.get("limitation")
+    if (
+        design_basis == capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL
+        and isinstance(limitation, str)
+    ):
+        st.caption(limitation)
+    if applicability_status != "APPLICABLE":
+        _manual_warning(
+            st,
+            "method-applicability",
+            f"The torsion assessment is {applicability_status}. "
             + presentation.torsion_applicability_note(t)
-            + "."
+            + ". Resistance, utilisation, governing angle, longitudinal "
+            "demand and dependent interaction verdicts are withheld.",
         )
-        limitation = applicability.get("limitation")
-        if (
-            design_basis == capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL
-            and isinstance(limitation, str)
-        ):
-            st.caption(limitation)
-        if applicability_status != "APPLICABLE":
-            _manual_warning(
-                st,
-                "method-applicability",
-                f"The torsion assessment is {applicability_status}. "
-                + presentation.torsion_applicability_note(t)
-                + ". Resistance, utilisation, governing angle, longitudinal "
-                "demand and dependent interaction verdicts are withheld.",
-            )
-            m1, m2, m3 = st.columns(3)
-            m1.metric(r"Applied $T_{Ed}$", f"{t['t_ed']:.3f} kNm")
-            m2.metric(r"Section resistance $T_{Rd}$", "-")
-            m3.metric("Utilisation", "-")
-            return
+        t_ed = viz.utilisation_value(t.get("t_ed"))
+        m1, m2, m3 = st.columns(3)
+        m1.metric(
+            r"Applied $T_{Ed}$",
+            "-" if t_ed is None else f"{t_ed:.3f} kNm",
+        )
+        m2.metric(r"Section resistance $T_{Rd}$", "-")
+        m3.metric("Utilisation", "-")
+        return
     tube = t["tube"]
     tube_valid = (
         t.get("tube_valid") is True

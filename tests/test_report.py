@@ -5770,6 +5770,124 @@ def test_report_profiles_fail_closed_for_unestablished_torsion_scope(
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize(
+    "retained_blocker",
+    [
+        pytest.param(None, id="missing-flag"),
+        pytest.param(False, id="explicit-false-flag"),
+    ],
+)
+@pytest.mark.parametrize(
+    "applicability_evidence",
+    (
+        "missing",
+        "non-mapping",
+        "contradictory-applicable",
+        "incomplete-applicable",
+    ),
+)
+def test_report_profiles_fail_closed_for_untrusted_torsion_applicability(
+    profile, retained_blocker, applicability_evidence
+):
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+            "torsion_member_scope": (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        },
+        40.0,
+    )
+    torsion = capacity.unassessed_torsion_applicability(
+        {
+            "applicability": applicability,
+            "t_ed": 40.0,
+            "t_ed_signed": 40.0,
+            "method": codes.EC2_2005_DKNA.label,
+        }
+    )
+    torsion.update(
+        tube_valid=True,
+        transverse_resistance_assessed=True,
+        full_resistance_assessed=True,
+        closed_links_present=True,
+        valid=True,
+        trd=999.0,
+        util=0.001,
+        cot=2.0,
+        theta_deg=26.565,
+        asl_req=999.0,
+        resistance_status="PASS",
+        assessment_status="PASS",
+    )
+    if applicability_evidence == "missing":
+        torsion.pop("applicability", None)
+    elif applicability_evidence == "non-mapping":
+        torsion["applicability"] = []
+    elif applicability_evidence == "contradictory-applicable":
+        torsion["applicability"] = {
+            **applicability,
+            "status": "APPLICABLE",
+            "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "member_scope": capacity.TORSION_MEMBER_OPEN,
+            "design_basis_valid": True,
+            "member_scope_valid": True,
+            "reason": None,
+        }
+    else:
+        torsion["applicability"] = {
+            "status": "APPLICABLE",
+            "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "member_scope": capacity.TORSION_MEMBER_CLOSED,
+        }
+    if retained_blocker is None:
+        torsion.pop("applicability_blocked", None)
+    else:
+        torsion["applicability_blocked"] = retained_blocker
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        combined_on=True,
+        torsion_T=40.0,
+        torsion_design_basis=(
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        ),
+        torsion_member_scope=capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+        shear_links=True,
+    )
+    pdf = sector_report.build_report(
+        {},
+        inp,
+        {
+            "torsion": torsion,
+            "combined": {
+                "valid": True,
+                "method": codes.EC2_2005_DKNA.label,
+                "dkna_valid": True,
+                "dkna_sum": 0.01,
+                "dkna_status": "PASS",
+                "dkna_ok": True,
+            },
+        },
+        figures=False,
+        profile=profile,
+    )
+    text = " ".join(_pdf_text(pdf).split())
+
+    assert "Torsion applicability" in text
+    assert "NOT ASSESSED" in text
+    assert "Combined" in text
+    assert "999" not in text
+    assert "PASS" not in text
+    assert "FAIL" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Resistance, utilisation, governing angle" in text
+        assert "Formula (6.28) demand" not in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
 def test_report_profiles_identify_each_plastic_case_torsion_authority(profile):
     inp = _inp()
     inp.update(

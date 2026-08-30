@@ -277,6 +277,7 @@ def test_formula_631_scope_row_remains_in_the_governing_overview():
         "plastic_case": {"id": "PL-631", "type": "ULS", "source": "C1"},
     }
     torsion = {
+        **_applicable_torsion_evidence(15.0),
         "valid": True,
         "tube_valid": True,
         "transverse_resistance_assessed": True,
@@ -375,6 +376,7 @@ def test_formula_631_overview_keeps_dkna_combined_requirement(
         "plastic_case": {"id": "PL-DK", "type": "ULS", "source": "C1"},
     }
     torsion = {
+        **_applicable_torsion_evidence(15.0),
         "valid": True,
         "tube_valid": True,
         "transverse_resistance_assessed": True,
@@ -700,6 +702,20 @@ def _inp(**updates):
     }
     inp.update(updates)
     return inp
+
+
+def _applicable_torsion_evidence(t_ed=40.0):
+    return {
+        "t_ed": t_ed,
+        "applicability_blocked": False,
+        "applicability": capacity.torsion_applicability(
+            {
+                "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+                "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+            },
+            t_ed,
+        ),
+    }
 
 
 @pytest.mark.parametrize(
@@ -1782,6 +1798,7 @@ def test_out_of_range_links_keep_angle_free_concrete_route_and_no_link_verdict()
 def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
     reason = "selected strut-angle range is outside the permitted method range"
     torsion = {
+        **_applicable_torsion_evidence(),
         "tube_valid": True,
         "closed_links_present": True,
         "transverse_resistance_assessed": False,
@@ -1838,8 +1855,18 @@ def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
         pytest.param(False, id="explicit-false"),
     ],
 )
+@pytest.mark.parametrize(
+    "applicability_evidence",
+    (
+        "canonical-blocked",
+        "missing",
+        "non-mapping",
+        "contradictory-applicable",
+        "incomplete-applicable",
+    ),
+)
 def test_torsion_applicability_blocker_outranks_poisoned_publication_values(
-    retained_blocker,
+    retained_blocker, applicability_evidence,
 ):
     applicability = capacity.torsion_applicability(
         {
@@ -1865,6 +1892,22 @@ def test_torsion_applicability_blocker_outranks_poisoned_publication_values(
         util=0.01,
         resistance_status="PASS",
     )
+    if applicability_evidence == "missing":
+        torsion.pop("applicability", None)
+    elif applicability_evidence == "non-mapping":
+        torsion["applicability"] = []
+    elif applicability_evidence == "contradictory-applicable":
+        torsion["applicability"] = dict(
+            applicability,
+            status="APPLICABLE",
+            reason=None,
+        )
+    elif applicability_evidence == "incomplete-applicable":
+        torsion["applicability"] = {
+            "status": "APPLICABLE",
+            "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "member_scope": capacity.TORSION_MEMBER_CLOSED,
+        }
     if retained_blocker is None:
         torsion.pop("applicability_blocked", None)
     else:
@@ -1956,6 +1999,7 @@ def test_shear_without_links_retains_concrete_screening_verdict():
 
 def test_torsion_without_full_resistance_is_not_assessed_on_every_summary():
     torsion = {
+        **_applicable_torsion_evidence(),
         "tube_valid": True,
         "closed_links_present": False,
         "full_resistance_assessed": False,
@@ -2004,6 +2048,7 @@ def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
         else "longitudinal_torsion_reinforcement_not_verified"
     )
     return {
+        **_applicable_torsion_evidence(),
         "tube_valid": True,
         "closed_links_present": True,
         "transverse_resistance_assessed": True,
@@ -2151,6 +2196,7 @@ def test_combined_longitudinal_component_publishes_governing_ratio():
 
 def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
     torsion = {
+        **_applicable_torsion_evidence(),
         "tube_valid": True,
         "closed_links_present": False,
         "full_resistance_assessed": True,
@@ -2201,6 +2247,7 @@ def test_torsion_geometry_failure_remains_distinct_from_missing_links():
         {
             "plastic": _plastic(),
             "torsion": {
+                **_applicable_torsion_evidence(),
                 "tube_valid": False,
                 "closed_links_present": True,
                 "full_resistance_assessed": True,
@@ -2225,6 +2272,7 @@ def test_torsion_wall_evidence_failure_is_not_assessed_without_stale_value():
         {
             "plastic": _plastic(),
             "torsion": {
+                **_applicable_torsion_evidence(),
                 "tube_valid": False,
                 "closed_links_present": True,
                 "transverse_resistance_assessed": False,

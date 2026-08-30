@@ -1864,7 +1864,7 @@ def torsion_applicability_note(torsion):
         return (
             "The torsion design basis and member scope have not been established"
         )
-    status = str(applicability.get("status") or "NOT ASSESSED").upper()
+    status = torsion_applicability_publication_status(torsion)
     if status == "APPLICABLE":
         basis = applicability.get("design_basis")
         if basis == capacity.TORSION_DESIGN_EQUILIBRIUM:
@@ -1895,12 +1895,15 @@ def torsion_applicability_publication_status(torsion):
     torsion = torsion or {}
     applicability = torsion.get("applicability")
     if not isinstance(applicability, Mapping):
-        return None
+        return "NOT ASSESSED"
     status = applicability.get("status")
     if type(status) is not str:
         return "NOT ASSESSED"
     status = status.upper()
     if status not in {"APPLICABLE", "NOT APPLICABLE", "NOT ASSESSED"}:
+        return "NOT ASSESSED"
+    t_ed = _publication_metric(torsion.get("t_ed"))
+    if t_ed is None or t_ed < 0.0:
         return "NOT ASSESSED"
     design_basis = applicability.get("design_basis")
     member_scope = applicability.get("member_scope")
@@ -1908,13 +1911,23 @@ def torsion_applicability_publication_status(torsion):
         return "NOT ASSESSED"
     if member_scope not in capacity.TORSION_MEMBER_SCOPES:
         return "NOT ASSESSED"
-    if status == "APPLICABLE" and (
-        design_basis == capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
-        or design_basis == capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    if status == "NOT APPLICABLE":
+        return "NOT APPLICABLE" if t_ed == 0.0 else "NOT ASSESSED"
+    if status != "APPLICABLE":
+        return "NOT ASSESSED"
+    if (
+        t_ed == 0.0
+        or applicability.get("design_basis_valid") is not True
+        or applicability.get("member_scope_valid") is not True
+        or design_basis
+        not in {
+            capacity.TORSION_DESIGN_EQUILIBRIUM,
+            capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL,
+        }
         or member_scope != capacity.TORSION_MEMBER_CLOSED
     ):
         return "NOT ASSESSED"
-    return status
+    return "APPLICABLE"
 
 
 _MINIMUM_REINFORCEMENT_SCREEN_NOTES = {

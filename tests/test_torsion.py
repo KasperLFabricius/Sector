@@ -1385,9 +1385,9 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
     assert open_member["trd"] is None
     assert open_member["util"] is None
     assert open_member["asl_req"] is None
+    open_applicability = dict(open_member["applicability"])
 
     open_member.update(
-        applicability_blocked=False,
         valid=True,
         tube_valid=True,
         transverse_resistance_assessed=True,
@@ -1401,18 +1401,51 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
         resistance_status="PASS",
         assessment_status="PASS",
     )
-    _select_view(at, "Torsion")
-    poisoned_visible = " ".join(
-        str(item.value)
-        for element_type in ("warning", "caption", "markdown", "info")
-        for item in getattr(at, element_type)
-    )
-    poisoned_metrics = {metric.label: metric.value for metric in at.metric}
-    assert "torsion assessment is NOT ASSESSED" in poisoned_visible
-    assert poisoned_metrics[r"Section resistance $T_{Rd}$"] == "-"
-    assert poisoned_metrics["Utilisation"] == "-"
-    assert "999" not in poisoned_visible
-    assert "PASS" not in poisoned_visible
+
+    def assert_poisoned_torsion_is_withheld():
+        _select_view(at, "Torsion")
+        poisoned_visible = " ".join(
+            str(item.value)
+            for element_type in ("warning", "caption", "markdown", "info")
+            for item in getattr(at, element_type)
+        )
+        poisoned_metrics = {metric.label: metric.value for metric in at.metric}
+        assert "torsion assessment is NOT ASSESSED" in poisoned_visible
+        assert poisoned_metrics[r"Section resistance $T_{Rd}$"] == "-"
+        assert poisoned_metrics["Utilisation"] == "-"
+        assert "999" not in poisoned_visible
+        assert "PASS" not in poisoned_visible
+
+    for applicability_evidence, retained_blocker in (
+        (open_applicability, False),
+        (None, None),
+        ([], False),
+        (
+            {
+                **open_applicability,
+                "status": "APPLICABLE",
+                "reason": None,
+            },
+            False,
+        ),
+        (
+            {
+                "status": "APPLICABLE",
+                "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+                "member_scope": capacity.TORSION_MEMBER_CLOSED,
+            },
+            None,
+        ),
+    ):
+        if applicability_evidence is None:
+            open_member.pop("applicability", None)
+        else:
+            open_member["applicability"] = applicability_evidence
+        if retained_blocker is None:
+            open_member.pop("applicability_blocked", None)
+        else:
+            open_member["applicability_blocked"] = retained_blocker
+        assert_poisoned_torsion_is_withheld()
 
 
 def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle():
