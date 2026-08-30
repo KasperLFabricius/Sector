@@ -287,6 +287,10 @@ def test_retained_worked_family_is_reconciled_without_mutating_completed_state()
             "torsion": {"case_id": "PL-BLOCKED", "component": None},
         },
         "crack_examples": [],
+        "crack_comparison": None,
+        "cracking_threshold": None,
+        "torsion_subchecks": {},
+        "heightened_crack_control": None,
     }
     out = {
         "plastic_cases": [
@@ -307,6 +311,10 @@ def test_retained_worked_family_is_reconciled_without_mutating_completed_state()
         "schema": 1,
         "families": {},
         "crack_examples": [],
+        "crack_comparison": None,
+        "cracking_threshold": None,
+        "torsion_subchecks": {},
+        "heightened_crack_control": None,
     }
     assert presentation.validated_worked_example_selection({}, out)[
         "families"
@@ -358,6 +366,40 @@ def test_retained_worked_family_is_reconciled_without_mutating_completed_state()
         },
         valid_fine_coarse[1],
     ]) is False
+    complete = presentation.worked_example_selection({}, out)
+    out["worked_example_selection"] = complete
+    assert presentation.validated_worked_example_selection({}, out)
+
+    incomplete = copy.deepcopy(complete)
+    incomplete.pop("crack_examples")
+    impossible_family = copy.deepcopy(complete)
+    impossible_family["families"]["plastic"] = {
+        "case_id": "PL-IMPOSSIBLE",
+        "component": "vx",
+    }
+    unhashable_family = copy.deepcopy(complete)
+    unhashable_family["families"]["shear"] = {
+        "case_id": "PL-SHEAR",
+        "component": [],
+    }
+    unhashable_subcheck = copy.deepcopy(complete)
+    unhashable_subcheck["torsion_subchecks"] = {
+        "interaction": {"case_id": "PL-T", "component": {}},
+    }
+    unhashable_duration = copy.deepcopy(complete)
+    unhashable_duration["crack_comparison"] = {
+        "case_id": "EL-C",
+        "duration": [],
+    }
+    for malformed in (
+        incomplete,
+        impossible_family,
+        unhashable_family,
+        unhashable_subcheck,
+        unhashable_duration,
+    ):
+        out["worked_example_selection"] = malformed
+        assert presentation.validated_worked_example_selection({}, out) == {}
     assert presentation.validated_worked_example_selection({}, {}) == {}
 
 

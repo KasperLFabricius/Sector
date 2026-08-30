@@ -3365,6 +3365,56 @@ def test_report_fails_closed_when_worked_example_selection_is_absent():
         {
             "schema": 1,
             "families": {},
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {
+                "plastic": {"case_id": "PL-TEST", "component": "vx"},
+            },
+            "crack_examples": [],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {
+                "shear": {"case_id": "PL-TEST", "component": []},
+            },
+            "crack_examples": [],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {
+                "interaction": {"case_id": "PL-T", "component": {}},
+            },
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [],
+            "crack_comparison": {"case_id": "EL-C", "duration": []},
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {},
             "crack_examples": [
                 {
                     "case_id": "EL-FIRST",
@@ -3543,10 +3593,12 @@ def test_infinite_torsion_subcheck_with_partial_operands_is_unavailable(
             "schema": 1,
             "families": {},
             "crack_examples": [],
+            "crack_comparison": None,
             "cracking_threshold": None,
             "torsion_subchecks": {
                 selection_key: {"case_id": "__single__", "component": None},
             },
+            "heightened_crack_control": None,
         },
     }
     builder = sector_report.ReportBuilder(
@@ -5379,6 +5431,10 @@ def test_brief_governing_depth_does_not_publish_worked_selection_register():
                 "shear": {"case_id": "PL-CURRENT", "component": None},
             },
             "crack_examples": [],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
         },
     }
     selection_before = copy.deepcopy(out["worked_example_selection"])
@@ -6104,8 +6160,11 @@ def test_audit_drops_stale_torsion_subchecks_when_applicability_is_blocked():
         "torsion": torsion,
         "worked_example_selection": {
             "schema": 1,
-            "families": {"torsion": {"case_id": "__single__"}},
+            "families": {
+                "torsion": {"case_id": "__single__", "component": None},
+            },
             "crack_examples": [],
+            "crack_comparison": None,
             "cracking_threshold": None,
             "torsion_subchecks": {
                 "interaction": {
@@ -6117,6 +6176,7 @@ def test_audit_drops_stale_torsion_subchecks_when_applicability_is_blocked():
                     "component": None,
                 },
             },
+            "heightened_crack_control": None,
         },
     }
 
@@ -8093,8 +8153,10 @@ def test_report_main_torsion_worked_example_requires_applicable_case(profile):
             "torsion": {"case_id": "PL-BLOCKED", "component": None},
         },
         "crack_examples": [],
+        "crack_comparison": None,
         "cracking_threshold": None,
         "torsion_subchecks": {},
+        "heightened_crack_control": None,
     }
 
     flat = " ".join(

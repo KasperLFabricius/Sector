@@ -1436,15 +1436,20 @@ def _worked_case_identity(item, *, component=False):
     return True
 
 
-def _valid_worked_family_identity(family, item):
-    if not _worked_case_identity(item):
+def _valid_worked_family_identity(family, item, *, directional=False):
+    if not _worked_case_identity(item, component=True):
         return False
     if family in {"minimum_reinforcement", "transverse_reinforcement"}:
         return set(item) == {"case_id"}
-    return (
-        set(item) == {"case_id", "component"}
-        and item.get("component") in _WORKED_DIRECTION_COMPONENTS
+    if set(item) != {"case_id", "component"}:
+        return False
+    component = item.get("component")
+    allowed = (
+        _WORKED_DIRECTION_COMPONENTS
+        if directional or family in {"shear", "combined"}
+        else {None}
     )
+    return component in allowed
 
 
 _WORKED_CRACK_EXAMPLE_SHAPES = frozenset({
@@ -1497,7 +1502,7 @@ def validated_worked_example_selection(inp, out):
     retained = (out or {}).get("worked_example_selection")
     if (
         not isinstance(retained, Mapping)
-        or not set(retained).issubset(_WORKED_SELECTION_KEYS)
+        or set(retained) != _WORKED_SELECTION_KEYS
         or type(retained.get("schema")) is not int
         or retained.get("schema") != 1
     ):
@@ -1518,6 +1523,7 @@ def validated_worked_example_selection(inp, out):
     if comparison is not None and (
         not _worked_case_identity(comparison)
         or set(comparison) != {"case_id", "duration"}
+        or type(comparison.get("duration")) is not str
         or comparison.get("duration") not in {"long_term", "short_term"}
     ):
         return {}
@@ -1532,7 +1538,7 @@ def validated_worked_example_selection(inp, out):
         not isinstance(torsion_subchecks, Mapping)
         or not set(torsion_subchecks).issubset(_WORKED_TORSION_SUBCHECK_KEYS)
         or not all(
-            _valid_worked_family_identity("torsion", item)
+            _valid_worked_family_identity("torsion", item, directional=True)
             for item in torsion_subchecks.values()
         )
     ):
