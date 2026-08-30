@@ -940,6 +940,433 @@ def longitudinal_chord_assessment(
     }
 
 
+def _combined_longitudinal_utilisation(value: object) -> float | None:
+    """Return one strict non-negative utilisation, retaining positive infinity."""
+
+    if value is None or _is_boolean_scalar(value) or isinstance(
+        value, (str, bytes)
+    ):
+        return None
+    try:
+        utilisation = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if math.isnan(utilisation) or utilisation < 0.0:
+        return None
+    return utilisation
+
+
+def _combined_longitudinal_candidate(
+    value: object,
+    *,
+    expected_utilisation: float | None = None,
+) -> Mapping[str, Any] | None:
+    """Validate one retained conditional chord result without reconstructing it."""
+
+    if not isinstance(value, Mapping) or value.get("valid") is not True:
+        return None
+    if value.get("conditional", True) is not True:
+        return None
+    utilisation = _combined_longitudinal_utilisation(value.get("util"))
+    if utilisation is None:
+        return None
+    expected_status = "PASS" if utilisation <= 1.0 + 1.0e-9 else "FAIL"
+    if value.get("status", expected_status) != expected_status:
+        return None
+    if value.get("ok", expected_status == "PASS") is not (
+        expected_status == "PASS"
+    ):
+        return None
+    if value.get("off_not_evaluated", None) is not None:
+        return None
+    if expected_utilisation is not None and not (
+        utilisation == expected_utilisation
+        or (
+            math.isfinite(utilisation)
+            and math.isfinite(expected_utilisation)
+            and math.isclose(
+                utilisation,
+                expected_utilisation,
+                rel_tol=1.0e-12,
+                abs_tol=0.0,
+            )
+        )
+    ):
+        return None
+    return value
+
+
+def _combined_longitudinal_chord_state(
+    combined: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Normalise the retained chord assessment, including schema-27 payloads."""
+
+    direct = combined.get("longitudinal")
+    direct = direct if isinstance(direct, Mapping) else None
+    retained = combined.get("longitudinal_assessment", _MISSING)
+    if retained is not _MISSING:
+        if not isinstance(retained, Mapping):
+            return {
+                "status": "NOT ASSESSED",
+                "util": None,
+                "reason": "combined_longitudinal_evidence_inconsistent",
+                "coverage_complete": False,
+                "governing": None,
+                "retained": None,
+            }
+        status = retained.get("status")
+        coverage_complete = retained.get("coverage_complete")
+        ok = retained.get("ok", _MISSING)
+        utilisation = _combined_longitudinal_utilisation(retained.get("util"))
+        governing = retained.get("governing")
+        if not isinstance(governing, Mapping):
+            governing = direct
+        if status in {"PASS", "FAIL"}:
+            expected_status = (
+                "PASS"
+                if utilisation is not None
+                and math.isfinite(utilisation)
+                and utilisation <= 1.0 + 1.0e-9
+                else "FAIL"
+                if utilisation is not None
+                else None
+            )
+            expected_ok = status == "PASS"
+            candidate = _combined_longitudinal_candidate(
+                governing,
+                expected_utilisation=utilisation,
+            )
+            valid = bool(
+                expected_status == status
+                and (ok is _MISSING or ok is expected_ok)
+                and type(coverage_complete) is bool
+                and (status != "PASS" or coverage_complete is True)
+                and candidate is not None
+            )
+            if valid:
+                return {
+                    "status": status,
+                    "util": utilisation,
+                    "reason": retained.get("reason") or (
+                        "required_longitudinal_chords_satisfied"
+                        if status == "PASS"
+                        else "required_longitudinal_chord_failed"
+                    ),
+                    "coverage_complete": coverage_complete,
+                    "governing": candidate,
+                    "retained": retained,
+                }
+        elif status in {"NOT ASSESSED", "NOT APPLICABLE"}:
+            if (
+                (ok is _MISSING or ok is None)
+                and utilisation is None
+                and type(coverage_complete) is bool
+                and (status != "NOT APPLICABLE" or coverage_complete is True)
+            ):
+                return {
+                    "status": status,
+                    "util": None,
+                    "reason": retained.get("reason") or (
+                        "no_longitudinal_chord_action"
+                        if status == "NOT APPLICABLE"
+                        else "required_longitudinal_chord_coverage_incomplete"
+                    ),
+                    "coverage_complete": coverage_complete,
+                    "governing": (
+                        governing if isinstance(governing, Mapping) else None
+                    ),
+                    "retained": retained,
+                }
+        return {
+            "status": "NOT ASSESSED",
+            "util": None,
+            "reason": "combined_longitudinal_evidence_inconsistent",
+            "coverage_complete": False,
+            "governing": None,
+            "retained": retained,
+        }
+
+    # Compatibility boundary for complete schema-27 payloads created before the
+    # retained chord assessment existed. A single, conditional pure-axis result
+    # is complete evidence even when its optional governing alias is absent.
+    alias = combined.get("governing_longitudinal", _MISSING)
+    if alias is _MISSING:
+        governing = direct
+    elif isinstance(alias, Mapping):
+        governing = alias
+    else:
+        governing = None
+    candidate = _combined_longitudinal_candidate(governing)
+    candidates = combined.get("longitudinal_candidates", _MISSING)
+    fallback = combined.get("longitudinal_fallback")
+    direct_is_complete = bool(
+        candidate is not None
+        and direct is not None
+        and direct.get("valid") is True
+        and direct.get("conditional", True) is True
+        and direct.get("biaxial", False) is False
+        and direct.get("off_not_evaluated", None) is None
+        and fallback is None
+        and (
+            candidates is _MISSING
+            or (
+                isinstance(candidates, (list, tuple))
+                and len(candidates) == 1
+            )
+        )
+        and combined.get("longitudinal_all_conditional", True) is True
+    )
+    if not direct_is_complete:
+        reason = "required_longitudinal_chord_coverage_incomplete"
+        if fallback is not None:
+            reason = "combined_longitudinal_pure_axis_substitute"
+        elif direct is None:
+            reason = "combined_longitudinal_shear_axis_unavailable"
+        elif direct.get("off_not_evaluated") == "not_solved":
+            reason = "combined_longitudinal_chord_not_solved"
+        elif direct.get("off_not_evaluated") == "subdivided":
+            reason = "combined_longitudinal_subdivided_coverage"
+        return {
+            "status": "NOT ASSESSED",
+            "util": None,
+            "reason": reason,
+            "coverage_complete": False,
+            "governing": candidate,
+            "retained": None,
+        }
+    utilisation = _combined_longitudinal_utilisation(candidate.get("util"))
+    status = (
+        "PASS"
+        if utilisation is not None
+        and math.isfinite(utilisation)
+        and utilisation <= 1.0 + 1.0e-9
+        else "FAIL"
+    )
+    return {
+        "status": status,
+        "util": utilisation,
+        "reason": (
+            "required_longitudinal_chords_satisfied"
+            if status == "PASS"
+            else "required_longitudinal_chord_failed"
+        ),
+        "coverage_complete": True,
+        "governing": candidate,
+        "retained": None,
+    }
+
+
+def _combined_longitudinal_torsion_state(
+    combined: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Normalise the independent Formula (6.28) reinforcement assessment."""
+
+    retained = combined.get("torsion_longitudinal_assessment")
+    if not isinstance(retained, Mapping):
+        return {
+            "status": "NOT ASSESSED",
+            "util": None,
+            "reason": "longitudinal_torsion_reinforcement_evidence_unavailable",
+            "retained": None,
+        }
+    status = retained.get("status")
+    ok = retained.get("ok", _MISSING)
+    utilisation = _combined_longitudinal_utilisation(
+        retained.get("demand_ratio")
+    )
+    if status == "FAIL":
+        valid = bool(
+            utilisation is not None
+            and (not math.isfinite(utilisation) or utilisation > 1.0 + 1.0e-9)
+            and (ok is _MISSING or ok is False)
+            and retained.get("reason")
+            == "longitudinal_torsion_reinforcement_insufficient"
+        )
+    elif status == "PASS":
+        # A gross-area comparison below unity does not establish distribution,
+        # bending reserve or anchorage. The existing supported PASS is zero demand.
+        valid = bool(
+            utilisation == 0.0
+            and retained.get("reason") == "no_longitudinal_torsion_demand"
+            and (ok is _MISSING or ok is True)
+        )
+    elif status == "NOT ASSESSED":
+        valid = bool(
+            (ok is _MISSING or ok is None)
+            and retained.get("reason") in {
+                "longitudinal_torsion_reinforcement_evidence_unavailable",
+                "longitudinal_torsion_reinforcement_not_verified",
+            }
+        )
+    else:
+        valid = False
+    if not valid:
+        return {
+            "status": "NOT ASSESSED",
+            "util": None,
+            "reason": "combined_longitudinal_evidence_inconsistent",
+            "retained": retained,
+        }
+    return {
+        "status": status,
+        "util": utilisation if status in {"PASS", "FAIL"} else None,
+        "reason": retained.get("reason") or (
+            "longitudinal_torsion_reinforcement_not_verified"
+            if status == "NOT ASSESSED"
+            else "longitudinal_torsion_reinforcement_insufficient"
+            if status == "FAIL"
+            else "no_longitudinal_torsion_demand"
+        ),
+        "retained": retained,
+    }
+
+
+def _derive_combined_longitudinal_assessment(
+    combined: Mapping[str, Any],
+) -> dict[str, Any]:
+    chord = _combined_longitudinal_chord_state(combined)
+    torsion = _combined_longitudinal_torsion_state(combined)
+    failures = []
+    if chord["status"] == "FAIL":
+        failures.append((chord["util"], "combined_chord", chord))
+    if torsion["status"] == "FAIL":
+        failures.append((torsion["util"], "torsion_formula_6_28", torsion))
+    if failures:
+        utilisation, source, governing_state = max(
+            failures,
+            key=lambda item: float(item[0]),
+        )
+        status = "FAIL"
+        ok = False
+        reason = governing_state["reason"]
+    elif chord["status"] == torsion["status"] == "PASS":
+        utilisation, source, governing_state = max(
+            (
+                (chord["util"], "combined_chord", chord),
+                (torsion["util"], "torsion_formula_6_28", torsion),
+            ),
+            key=lambda item: float(item[0]),
+        )
+        status = "PASS"
+        ok = True
+        reason = governing_state["reason"]
+    else:
+        utilisation = None
+        source = None
+        governing_state = None
+        status = "NOT ASSESSED"
+        ok = None
+        reason = (
+            chord["reason"]
+            if chord["status"] not in {"PASS", "NOT APPLICABLE"}
+            else torsion["reason"]
+        )
+    return {
+        "status": status,
+        "ok": ok,
+        "util": utilisation,
+        "reason": reason,
+        "coverage_complete": bool(
+            chord["coverage_complete"]
+            and chord["status"] in {"PASS", "FAIL"}
+            and torsion["status"] in {"PASS", "FAIL"}
+        ),
+        "governing_source": source,
+        "governing_mechanism": (
+            "combined M + V + T tension chord"
+            if source == "combined_chord"
+            else "Formula (6.28) longitudinal torsion reinforcement"
+            if source == "torsion_formula_6_28"
+            else None
+        ),
+        "governing": (
+            governing_state.get("governing")
+            if source == "combined_chord" and governing_state is not None
+            else governing_state.get("retained")
+            if governing_state is not None
+            else None
+        ),
+        "chord_status": chord["status"],
+        "chord_util": (
+            chord["util"] if chord["status"] in {"PASS", "FAIL"} else None
+        ),
+        "chord_reason": chord["reason"],
+        "chord_coverage_complete": chord["coverage_complete"],
+        "chord_governing": chord["governing"],
+        "chord_assessment": chord["retained"],
+        "torsion_status": torsion["status"],
+        "torsion_util": (
+            torsion["util"]
+            if torsion["status"] in {"PASS", "FAIL"}
+            else None
+        ),
+        "torsion_reason": torsion["reason"],
+        "torsion_assessment": torsion["retained"],
+    }
+
+
+def _combined_longitudinal_evidence_equal(
+    left: object,
+    right: object,
+) -> bool:
+    """Compare retained canonical evidence without Boolean/numeric coercion."""
+
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, Mapping):
+        if not isinstance(right, Mapping):
+            return False
+        if left.keys() != right.keys():
+            return False
+        return all(
+            _combined_longitudinal_evidence_equal(left[key], right[key])
+            for key in left
+        )
+    if isinstance(left, (list, tuple)):
+        if not isinstance(right, (list, tuple)):
+            return False
+        return len(left) == len(right) and all(
+            _combined_longitudinal_evidence_equal(a, b)
+            for a, b in zip(left, right)
+        )
+    return bool(left == right)
+
+
+def combined_longitudinal_assessment(
+    combined: object,
+) -> Mapping[str, Any]:
+    """Return the canonical overall M-V-T longitudinal assessment.
+
+    New calculations retain this exact object in the combined result. Older
+    schema-27 result payloads are resolved through the same conservative boundary.
+    A retained canonical object is reused only when it exactly reconciles with its
+    child evidence; contradictory or malformed state fails closed.
+    """
+
+    if not isinstance(combined, Mapping):
+        combined = {}
+    derived = _derive_combined_longitudinal_assessment(combined)
+    retained = combined.get("overall_longitudinal_assessment", _MISSING)
+    if retained is _MISSING:
+        return derived
+    if isinstance(retained, Mapping) and _combined_longitudinal_evidence_equal(
+        retained,
+        derived,
+    ):
+        return retained
+    return {
+        **derived,
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "util": None,
+        "reason": "combined_longitudinal_evidence_inconsistent",
+        "coverage_complete": False,
+        "governing_source": None,
+        "governing_mechanism": None,
+        "governing": None,
+    }
+
+
 def _rings_are_equivalent(left: object, right: object) -> bool:
     """Compare one polygon ring modulo benign serialization differences."""
 
@@ -3346,6 +3773,10 @@ def finalize_combined(inp, out):
         ):
             if retained_key in links:
                 payload[retained_key] = links[retained_key]
+
+    payload["overall_longitudinal_assessment"] = (
+        combined_longitudinal_assessment(payload)
+    )
 
     if (
         links is not None

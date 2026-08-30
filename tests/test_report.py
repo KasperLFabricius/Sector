@@ -7357,6 +7357,12 @@ def _base_en_scheduler_combined_case(action, util, *, component):
         util=chord_util,
         coverage_complete=True,
     )
+    result["torsion_longitudinal_assessment"] = {
+        "status": "PASS",
+        "ok": True,
+        "reason": "no_longitudinal_torsion_demand",
+        "demand_ratio": 0.0,
+    }
     result["governing_longitudinal"] = chord
     result["longitudinal_candidates"] = [chord]
     result.update(
@@ -7401,6 +7407,84 @@ def test_report_base_en_publishes_physical_checks_without_dkna_artifacts(profile
         assert "Supported Base-EN physical interactions" in text
         assert "Concrete compression strut (6.29)" in text
         assert "Shared closed stirrup: shear + torsion" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_pub_h01_exact_longitudinal_failure_is_consistent(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = _base_en_combined_out()
+    direct = {
+        **combined["longitudinal"],
+        "valid": True,
+        "status": "FAIL",
+        "ok": False,
+        "axis": "x",
+        "tension_low": True,
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "m_ed": 80.0,
+        "mv": 4.213620,
+        "mt": 39.711696,
+        "m_total": 123.925316,
+        "m_rd": 100.0,
+        "ftd_v": 17.34,
+        "ftd_t": 326.8452380952381,
+        "z": 0.243,
+        "util": 1.2392531643,
+        "capped": False,
+    }
+    combined["longitudinal"] = direct
+    for key in (
+        "governing_longitudinal",
+        "longitudinal_assessment",
+        "longitudinal_candidates",
+    ):
+        combined.pop(key, None)
+    combined["torsion_longitudinal_assessment"] = {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+        "demand_ratio": 0.50,
+    }
+    combined["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined)
+    )
+    out = {"plastic": _out()["plastic"], "combined": combined}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    if profile == "Brief":
+        assert re.search(
+            r"Combined longitudinal reinforcement\s+PL-TEST\s+"
+            r"FAIL\s+123[.,]9\s*%",
+            text,
+        )
+    else:
+        assert re.search(r"123[.,]9\s*%\s*FAIL", text)
+    assert "Longitudinal reinforcement inf" not in text
+    assert "Longitudinal reinforcement - NOT ASSESSED" not in text
+    assert "No valid longitudinal chord check" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "80.000 kNm" in text
+        assert "4.214 kNm" in text
+        assert "39.712 kNm" in text
+        assert "123.925 kNm" in text
+        assert "100.000 kNm" in text
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
@@ -8625,8 +8709,9 @@ def test_report_combined_longitudinal_biaxial_fallback_warns():
     _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
-    assert "required x-axis negative face" in txt
-    assert "pure-axis substitute" in txt
+    folded = " ".join(txt.casefold().split())
+    assert "required x-axis negative face" in folded
+    assert "pure-axis substitute" in folded
 
 
 def test_report_withholds_verdict_for_preserved_non_governing_fallback():

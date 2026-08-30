@@ -1032,6 +1032,186 @@ def test_2023_longitudinal_chord_assessment_fails_closed_for_every_required_face
     assert retained_failure["coverage_complete"] is False
 
 
+def _pub_h01_longitudinal_fixture(utilisation=1.2392531643):
+    return {
+        "valid": True,
+        "status": "PASS" if utilisation <= 1.0 + 1.0e-9 else "FAIL",
+        "ok": utilisation <= 1.0 + 1.0e-9,
+        "axis": "x",
+        "tension_low": True,
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "m_ed": 80.0,
+        "mv": 4.213620,
+        "mt": 39.711696,
+        "m_total": 123.925316,
+        "m_rd": 100.0,
+        "ftd_v": 17.34,
+        "ftd_t": 326.8452380952381,
+        "z": 0.243,
+        "util": utilisation,
+        "capped": False,
+    }
+
+
+def _unverified_formula_628(ratio=0.50):
+    return {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+        "demand_ratio": ratio,
+    }
+
+
+def test_combined_longitudinal_assessment_retains_alias_free_exact_failure():
+    direct = _pub_h01_longitudinal_fixture()
+    combined = {
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "FAIL"
+    assert assessment["ok"] is False
+    assert assessment["util"] == pytest.approx(1.2392531643)
+    assert assessment["governing_source"] == "combined_chord"
+    assert assessment["governing"] is direct
+    assert assessment["chord_governing"] is direct
+    assert assessment["torsion_status"] == "NOT ASSESSED"
+
+    combined["overall_longitudinal_assessment"] = assessment
+    assert capacity.combined_longitudinal_assessment(combined) is assessment
+
+
+def test_combined_longitudinal_definite_failure_governs_incomplete_child():
+    direct = _pub_h01_longitudinal_fixture()
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "FAIL",
+            "ok": False,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_failed",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "FAIL"
+    assert assessment["util"] == pytest.approx(1.2392531643)
+    assert assessment["coverage_complete"] is False
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        {"biaxial": True},
+        {"conditional": False},
+        {"off_not_evaluated": "not_solved"},
+        {"util": True},
+        {"util": "1.2392531643"},
+        {"util": math.nan},
+        {"util": -math.inf},
+        {"util": -0.1},
+        {"status": "PASS"},
+        {"ok": True},
+    ),
+)
+def test_combined_longitudinal_legacy_fallback_fails_closed(mutation):
+    direct = _pub_h01_longitudinal_fixture()
+    direct.update(mutation)
+    combined = {
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+
+
+def test_combined_longitudinal_does_not_promote_apparent_formula_628_pass():
+    direct = _pub_h01_longitudinal_fixture(0.80)
+    combined = {
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+            "demand_ratio": 0.50,
+        },
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["util"] is None
+    assert assessment["torsion_status"] == "NOT ASSESSED"
+
+
+def test_combined_longitudinal_positive_infinity_is_explicit_failure():
+    direct = _pub_h01_longitudinal_fixture(math.inf)
+    assessment = capacity.combined_longitudinal_assessment({
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    })
+
+    assert assessment["status"] == "FAIL"
+    assert assessment["ok"] is False
+    assert assessment["util"] == math.inf
+
+
+def test_combined_longitudinal_retained_canonical_requires_exact_scalar_types():
+    direct = _pub_h01_longitudinal_fixture(1.0)
+    combined = {
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "reason": "no_longitudinal_torsion_demand",
+            "demand_ratio": 0.0,
+        },
+    }
+    retained = dict(capacity.combined_longitudinal_assessment(combined))
+    retained["util"] = True
+    combined["overall_longitudinal_assessment"] = retained
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
+def test_combined_longitudinal_unassessed_chord_rejects_finite_verdict_value():
+    direct = _pub_h01_longitudinal_fixture(0.50)
+    assessment = capacity.combined_longitudinal_assessment({
+        "longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": 0.50,
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    })
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["util"] is None
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
 @pytest.mark.parametrize(
     ("index", "field", "value"),
     (

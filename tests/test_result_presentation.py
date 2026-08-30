@@ -1235,6 +1235,15 @@ def test_stale_summary_retains_last_status_as_evidence():
     assert presentation.overall_summary_status(rows) == "STALE"
 
 
+def _zero_formula_628_assessment():
+    return {
+        "status": "PASS",
+        "ok": True,
+        "reason": "no_longitudinal_torsion_demand",
+        "demand_ratio": 0.0,
+    }
+
+
 def test_combined_summary_cannot_hide_subordinate_failure():
     theta_deg = math.degrees(math.atan2(1.0, 1.5))
     combined = {
@@ -1259,6 +1268,7 @@ def test_combined_summary_cannot_hide_subordinate_failure():
             "valid": True, "util": 0.65, "axis": "x", "biaxial": False,
         },
         "longitudinal_all_conditional": True,
+        "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -1450,6 +1460,7 @@ def test_separate_mv_assumption_preserves_conservative_overall_state(
         "longitudinal": longitudinal,
         "governing_longitudinal": longitudinal,
         "longitudinal_all_conditional": longitudinal is not None,
+        "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -1571,6 +1582,7 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
             "off_not_evaluated": "not_solved",
         },
         "longitudinal_all_conditional": True,
+        "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -1603,6 +1615,7 @@ def test_combined_physical_components_uses_the_governing_longitudinal_face():
         "chord_off": governing,
         "governing_longitudinal": governing,
         "longitudinal_all_conditional": True,
+        "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     })
 
     assert [item["label"] for item in components] == [
@@ -1639,7 +1652,7 @@ def test_combined_components_withhold_verdict_for_non_governing_fallback():
     })
 
     longitudinal = components[2]
-    assert longitudinal["util"] == pytest.approx(0.85)
+    assert longitudinal["util"] is None
     assert longitudinal["status"] == "NOT ASSESSED"
     assert "pure-axis substitute" in longitudinal["note"]
     assert "x-axis negative face" in longitudinal["note"]
@@ -1668,7 +1681,7 @@ def test_combined_components_preserve_non_governing_face_fallback():
     })
 
     longitudinal = components[2]
-    assert longitudinal["util"] == pytest.approx(0.85)
+    assert longitudinal["util"] is None
     assert longitudinal["status"] == "NOT ASSESSED"
     assert "x-axis negative face" in longitudinal["note"]
 
@@ -1682,7 +1695,8 @@ def test_combined_physical_components_tolerates_missing_candidate_utilisation():
         "governing_longitudinal": governing,
         "longitudinal_all_conditional": True,
     })
-    assert components[2]["util"] == pytest.approx(0.75)
+    assert components[2]["status"] == "NOT ASSESSED"
+    assert components[2]["util"] is None
 
 
 def test_combined_physical_components_withholds_off_axis_only_verdict():
@@ -1812,7 +1826,7 @@ def test_combined_components_fail_closed_without_retained_governing_chord():
 def test_combined_component_formatter_does_not_reselect_governing_chords():
     source = inspect.getsource(presentation.combined_physical_components)
 
-    assert "governing_longitudinal" in source
+    assert "capacity.combined_longitudinal_assessment" in source
     assert "max(" not in source
     assert "candidate_util" not in source
 
@@ -2468,6 +2482,65 @@ def test_combined_longitudinal_component_publishes_governing_ratio():
     assert component["util"] == pytest.approx(1.25)
 
 
+def test_pub_h01_exact_longitudinal_failure_feeds_component_and_overview():
+    direct = {
+        "valid": True,
+        "status": "FAIL",
+        "ok": False,
+        "axis": "x",
+        "tension_low": True,
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "m_ed": 80.0,
+        "mv": 4.213620,
+        "mt": 39.711696,
+        "m_total": 123.925316,
+        "m_rd": 100.0,
+        "ftd_v": 17.34,
+        "ftd_t": 326.8452380952381,
+        "z": 0.243,
+        "util": 1.2392531643,
+        "capped": False,
+    }
+    combined = {
+        "valid": True,
+        "method": codes.EC2_2005.label,
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+            "demand_ratio": 0.50,
+        },
+    }
+    canonical = capacity.combined_longitudinal_assessment(combined)
+    combined["overall_longitudinal_assessment"] = canonical
+
+    component = next(
+        item
+        for item in presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
+    )
+    rows = presentation.result_summary_rows(
+        {"combined_on": True, "combined_method": codes.EC2_2005.label},
+        {"combined": combined},
+    )
+    row = next(
+        item for item in rows
+        if item["check"] == "Combined longitudinal reinforcement"
+    )
+
+    assert component["assessment"] is canonical
+    assert component["governing"] is direct
+    assert component["status"] == "FAIL"
+    assert component["util"] == pytest.approx(1.2392531643)
+    assert row["status"] == "FAIL"
+    assert row["util"] == pytest.approx(1.2392531643)
+    assert row["result"] == "123.9 %"
+
+
 def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
     torsion = {
         **_applicable_torsion_evidence(),
@@ -2725,6 +2798,9 @@ def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
                 "util": util - 0.05,
                 "coverage_complete": longitudinal_status in {"PASS", "FAIL"},
             },
+            "torsion_longitudinal_assessment": (
+                _zero_formula_628_assessment()
+            ),
         }
 
     mixed_biaxial = {
