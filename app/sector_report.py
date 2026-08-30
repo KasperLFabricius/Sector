@@ -3275,8 +3275,11 @@ class ReportBuilder:
             if inp.get("torsion_on"):
                 resistance_rows.extend([
                     ["Torsion method", _html_escape(str(inp.get("torsion_method") or "-"))],
+                    [
+                        "Torsion wall thickness t<sub>ef</sub>",
+                        self._brief_auto_dimension(inp.get("torsion_tef")),
+                    ],
                     *_torsion_case_authority_rows(inp),
-                    ["Torsion wall thickness t<sub>ef</sub>", self._brief_auto_dimension(inp.get("torsion_tef"))],
                     ["Concrete tensile factor gamma<sub>ct</sub>", _fmt(inp.get("torsion_gamma_ct"), 3)],
                     [
                         "Requested nu<sub>t</sub> = nu<sub>v</sub> detailing allowance",
