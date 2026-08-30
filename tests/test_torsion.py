@@ -1416,6 +1416,13 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
         assert "999" not in poisoned_visible
         assert "PASS" not in poisoned_visible
 
+    applicable = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+        },
+        40.0,
+    )
     for applicability_evidence, retained_blocker in (
         (open_applicability, False),
         (None, None),
@@ -1436,6 +1443,18 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
             },
             None,
         ),
+        (dict(applicable), True),
+        (dict(applicable), "False"),
+        ({**applicable, "status": "applicable"}, False),
+        (
+            {
+                key: value
+                for key, value in applicable.items()
+                if key != "full_resistance_route_entered"
+            },
+            False,
+        ),
+        ({**applicable, "route": "compatibility residual full resistance"}, False),
     ):
         if applicability_evidence is None:
             open_member.pop("applicability", None)

@@ -1880,6 +1880,12 @@ def torsion_applicability_note(torsion):
             )
     if status == "NOT APPLICABLE":
         return "No torsion resistance assessment is required for TEd = 0"
+    if applicability.get("status") != "NOT ASSESSED":
+        return (
+            "The torsion design basis, member scope and full-resistance route "
+            "are not mutually consistent; confirm the selections and calculate "
+            "again"
+        )
     return result_reason(
         applicability.get("reason")
         or torsion.get("assessment_reason")
@@ -1889,21 +1895,35 @@ def torsion_applicability_note(torsion):
     )
 
 
+def torsion_publication_t_ed(torsion):
+    """Return the only applied torsion value safe for public display."""
+
+    torsion = torsion or {}
+    t_ed = _publication_metric(torsion.get("t_ed"))
+    if t_ed is None or t_ed < 0.0:
+        return None
+    return t_ed
+
+
 def torsion_applicability_publication_status(torsion):
     """Return the only applicability status safe for result publication."""
 
     torsion = torsion or {}
+    if (
+        "applicability_blocked" in torsion
+        and torsion.get("applicability_blocked") is not False
+    ):
+        return "NOT ASSESSED"
     applicability = torsion.get("applicability")
     if not isinstance(applicability, Mapping):
         return "NOT ASSESSED"
     status = applicability.get("status")
     if type(status) is not str:
         return "NOT ASSESSED"
-    status = status.upper()
     if status not in {"APPLICABLE", "NOT APPLICABLE", "NOT ASSESSED"}:
         return "NOT ASSESSED"
-    t_ed = _publication_metric(torsion.get("t_ed"))
-    if t_ed is None or t_ed < 0.0:
+    t_ed = torsion_publication_t_ed(torsion)
+    if t_ed is None:
         return "NOT ASSESSED"
     design_basis = applicability.get("design_basis")
     member_scope = applicability.get("member_scope")
@@ -1915,16 +1935,22 @@ def torsion_applicability_publication_status(torsion):
         return "NOT APPLICABLE" if t_ed == 0.0 else "NOT ASSESSED"
     if status != "APPLICABLE":
         return "NOT ASSESSED"
+    expected_route = {
+        capacity.TORSION_DESIGN_EQUILIBRIUM: "equilibrium full resistance",
+        capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL: (
+            "compatibility residual full resistance"
+        ),
+    }.get(design_basis)
     if (
         t_ed == 0.0
         or applicability.get("design_basis_valid") is not True
         or applicability.get("member_scope_valid") is not True
-        or design_basis
-        not in {
-            capacity.TORSION_DESIGN_EQUILIBRIUM,
-            capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL,
-        }
+        or expected_route is None
         or member_scope != capacity.TORSION_MEMBER_CLOSED
+        or applicability.get("full_resistance_route_entered") is not True
+        or applicability.get("route") != expected_route
+        or applicability.get("reason") is not None
+        or applicability.get("guidance") is not None
     ):
         return "NOT ASSESSED"
     return "APPLICABLE"

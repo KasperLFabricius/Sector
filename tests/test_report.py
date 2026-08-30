@@ -5888,6 +5888,112 @@ def test_report_profiles_fail_closed_for_untrusted_torsion_applicability(
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize(
+    "authority_case",
+    (
+        "stale-blocker",
+        "malformed-blocker",
+        "lowercase-status",
+        "missing-route-entry",
+        "wrong-route",
+        "stale-reason",
+        "text-ted",
+        "boolean-ted",
+        "nonfinite-ted",
+    ),
+)
+def test_report_profiles_require_exact_coherent_torsion_authority(
+    profile, authority_case
+):
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+        },
+        40.0,
+    )
+    torsion = {
+        "applicability": dict(applicability),
+        "applicability_blocked": False,
+        "t_ed": 40.0,
+        "method": codes.EC2_2005_DKNA.label,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "full_resistance_assessed": True,
+        "closed_links_present": True,
+        "valid": True,
+        "trd": 999.0,
+        "util": 0.001,
+        "cot": 2.0,
+        "theta_deg": 26.565,
+        "asl_req": 999.0,
+        "resistance_status": "PASS",
+        "assessment_status": "PASS",
+    }
+    if authority_case == "stale-blocker":
+        torsion["applicability_blocked"] = True
+    elif authority_case == "malformed-blocker":
+        torsion["applicability_blocked"] = "False"
+    elif authority_case == "lowercase-status":
+        torsion["applicability"]["status"] = "applicable"
+    elif authority_case == "missing-route-entry":
+        torsion["applicability"].pop("full_resistance_route_entered")
+    elif authority_case == "wrong-route":
+        torsion["applicability"]["route"] = "compatibility residual full resistance"
+    elif authority_case == "stale-reason":
+        torsion["applicability"]["reason"] = (
+            "open or warping-sensitive torsion requires member analysis"
+        )
+    elif authority_case == "text-ted":
+        torsion["t_ed"] = "40"
+    elif authority_case == "boolean-ted":
+        torsion["t_ed"] = True
+    else:
+        torsion["t_ed"] = math.nan
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        combined_on=True,
+        torsion_T=40.0,
+        torsion_design_basis=capacity.TORSION_DESIGN_EQUILIBRIUM,
+        torsion_member_scope=capacity.TORSION_MEMBER_CLOSED,
+        shear_links=True,
+    )
+    pdf = sector_report.build_report(
+        {},
+        inp,
+        {
+            "torsion": torsion,
+            "combined": {
+                "valid": True,
+                "method": codes.EC2_2005_DKNA.label,
+                "dkna_valid": True,
+                "dkna_sum": 0.01,
+                "dkna_status": "PASS",
+                "dkna_ok": True,
+            },
+        },
+        figures=False,
+        profile=profile,
+    )
+    text = " ".join(_pdf_text(pdf).split())
+
+    assert "Torsion applicability" in text
+    assert "NOT ASSESSED" in text
+    assert "999" not in text
+    assert "PASS" not in text
+    assert "FAIL" not in text
+    if authority_case in {"text-ted", "boolean-ted", "nonfinite-ted"}:
+        assert "inf kN" not in text
+        if profile in {"Standard", "Audit"}:
+            assert re.search(
+                r"T\s*Ed\s+T\s*Rd\s+Utilisation\s+Overall status\s+"
+                r"-\s+-\s+-\s+NOT ASSESSED",
+                text,
+            )
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
 def test_report_profiles_identify_each_plastic_case_torsion_authority(profile):
     inp = _inp()
     inp.update(

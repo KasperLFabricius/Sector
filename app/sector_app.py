@@ -15036,7 +15036,7 @@ def torsion_view(inp, results):
             + ". Resistance, utilisation, governing angle, longitudinal "
             "demand and dependent interaction verdicts are withheld.",
         )
-        t_ed = viz.utilisation_value(t.get("t_ed"))
+        t_ed = presentation.torsion_publication_t_ed(t)
         m1, m2, m3 = st.columns(3)
         m1.metric(
             r"Applied $T_{Ed}$",

@@ -1943,6 +1943,99 @@ def test_torsion_applicability_blocker_outranks_poisoned_publication_values(
     assert all(row["util"] is None for row in combined_rows)
 
 
+@pytest.mark.parametrize(
+    "authority_case",
+    (
+        "stale-blocker",
+        "malformed-blocker",
+        "lowercase-status",
+        "missing-route-entry",
+        "wrong-route",
+        "stale-reason",
+        "text-ted",
+        "boolean-ted",
+        "nonfinite-ted",
+    ),
+)
+def test_torsion_publication_authority_requires_exact_coherent_route(
+    authority_case,
+):
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+        },
+        40.0,
+    )
+    torsion = {
+        "applicability": dict(applicability),
+        "applicability_blocked": False,
+        "t_ed": 40.0,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "full_resistance_assessed": True,
+        "closed_links_present": True,
+        "valid": True,
+        "trd": 999.0,
+        "util": 0.01,
+        "resistance_status": "PASS",
+        "assessment_status": "PASS",
+    }
+    if authority_case == "stale-blocker":
+        torsion["applicability_blocked"] = True
+    elif authority_case == "malformed-blocker":
+        torsion["applicability_blocked"] = "False"
+    elif authority_case == "lowercase-status":
+        torsion["applicability"]["status"] = "applicable"
+    elif authority_case == "missing-route-entry":
+        torsion["applicability"].pop("full_resistance_route_entered")
+    elif authority_case == "wrong-route":
+        torsion["applicability"]["route"] = "compatibility residual full resistance"
+    elif authority_case == "stale-reason":
+        torsion["applicability"]["reason"] = (
+            "open or warping-sensitive torsion requires member analysis"
+        )
+    elif authority_case == "text-ted":
+        torsion["t_ed"] = "40"
+    elif authority_case == "boolean-ted":
+        torsion["t_ed"] = True
+    else:
+        torsion["t_ed"] = math.nan
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            torsion_on=True,
+            combined_on=True,
+            shear_links=True,
+        ),
+        {
+            "plastic": _plastic(),
+            "torsion": torsion,
+            "combined": {
+                "valid": True,
+                "dkna_valid": True,
+                "dkna_sum": 0.01,
+                "dkna_ok": True,
+            },
+        },
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert presentation.torsion_applicability_publication_status(torsion) == (
+        "NOT ASSESSED"
+    )
+    assert by_check["Torsion applicability"]["status"] == "NOT ASSESSED"
+    assert "not mutually consistent" in by_check["Torsion applicability"]["note"]
+    assert by_check["Torsion"]["status"] == "NOT ASSESSED"
+    assert by_check["Torsion"]["result"] == "-"
+    assert by_check["Torsion"]["util"] is None
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    assert combined_rows
+    assert all(row["status"] == "NOT ASSESSED" for row in combined_rows)
+    assert all(row["util"] is None for row in combined_rows)
+
+
 def test_2023_axial_compression_guidance_governs_the_links_overview_note():
     reason = (
         "2023 axial-compression applicability conditions were not demonstrated"

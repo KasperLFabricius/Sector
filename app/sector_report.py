@@ -9193,6 +9193,7 @@ class ReportBuilder:
         ):
             self._small(_html_escape(limitation))
         if applicability_status != "APPLICABLE":
+            t_ed = presentation.torsion_publication_t_ed(t)
             self._p(
                 f"<b>{applicability_status}:</b> "
                 + _html_escape(presentation.torsion_applicability_note(t))
@@ -9208,7 +9209,7 @@ class ReportBuilder:
                         "Overall status",
                     ],
                     [
-                        f"{_fmt(t.get('t_ed'), 3)} kN&#183;m",
+                        "-" if t_ed is None else f"{_fmt(t_ed, 3)} kN&#183;m",
                         "-",
                         "-",
                         applicability_status,
