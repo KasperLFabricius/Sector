@@ -224,6 +224,38 @@ def test_permitted_torsion_applicability_routes_retain_baseline_and_signed_actio
     assert results[0]["util"] == pytest.approx(results[1]["util"])
 
 
+@pytest.mark.parametrize(
+    ("canonical_action", "signed_hint", "expected_signed"),
+    (
+        (80.0, 40.0, 80.0),
+        (80.0, -40.0, -80.0),
+        (-80.0, 40.0, 80.0),
+    ),
+)
+def test_torsion_context_uses_canonical_demand_and_signed_hint_only_for_sense(
+    canonical_action,
+    signed_hint,
+    expected_signed,
+):
+    context = capacity.build_torsion_context(
+        _torsion_input(
+            torsion_on=True,
+            torsion_T=canonical_action,
+            torsion_T_signed=signed_hint,
+            shear_links=True,
+        ),
+        0.0,
+    )
+    result = capacity.tube_torsion(
+        context["tube"], context["t_ed"], **context["_tk"]
+    )
+
+    assert context["t_ed"] == pytest.approx(80.0)
+    assert context["t_ed_signed"] == pytest.approx(expected_signed)
+    assert result["trd"] == pytest.approx(78.81358728136769)
+    assert result["util"] == pytest.approx(80.0 / result["trd"])
+
+
 def test_zero_torsion_action_does_not_require_member_scope_classification():
     zero = capacity.torsion_applicability({}, 0.0)
     smallest_nonzero = capacity.torsion_applicability(

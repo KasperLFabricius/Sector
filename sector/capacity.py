@@ -2305,11 +2305,20 @@ def build_torsion_context(inp, n_ed_comp):
     """Return the angle-independent context for the active torsion check."""
     if not inp.get("torsion_on"):
         return None
-    t_ed_signed = _finite_solver_result(
-        inp.get("torsion_T_signed", inp.get("torsion_T")),
+    t_ed_entered = _finite_solver_result(
+        inp.get("torsion_T"),
         "entered torsion action",
     )
-    t_ed = abs(t_ed_signed)
+    signed_hint = _finite_solver_result(
+        inp.get("torsion_T_signed", t_ed_entered),
+        "entered torsion action sense",
+    )
+    t_ed = abs(t_ed_entered)
+    # ``torsion_T`` remains the canonical demand for public/headless callers.
+    # Case-table adapters retain its original sense separately after converting
+    # that canonical action to a magnitude. Never let stale metadata change the
+    # numerical demand: the signed field supplies direction only.
+    t_ed_signed = math.copysign(t_ed, signed_hint)
     applicability = torsion_applicability(inp, t_ed)
     if applicability["status"] == "NOT ASSESSED":
         return {
