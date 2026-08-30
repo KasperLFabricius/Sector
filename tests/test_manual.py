@@ -509,6 +509,9 @@ def test_manual_distinguishes_torsion_basis_and_member_scope_limitations():
     assert "Sector does not establish redistribution, restraints or member response" in text
     assert "resistance, utilisation, governing angle, longitudinal demand" in text
     assert "dependent M-V-T verdicts are shown as **NOT ASSESSED**" in text
+    assert "Classify every Plastic case separately" in text
+    assert "new or renamed case starts as Not established" in text
+    assert "remain attached to the named case when rows are reordered" in text
 
 
 def test_manual_pdf_starts_combined_mvt_after_the_torsion_applicability_page():

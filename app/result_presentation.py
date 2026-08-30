@@ -3243,6 +3243,9 @@ def result_summary_rows(inp, results, *, stale=False):
             applicability_status = str(
                 applicability.get("status") or "NOT ASSESSED"
             ).upper()
+            applicability_case = (
+                action_set(inp, "plastic")["id"] or "Unnamed case"
+            )
             rows.append(_summary_row(
                 "Torsion applicability",
                 "plastic",
@@ -3253,7 +3256,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 "Torsion",
                 torsion_applicability_note(torsion),
                 inp,
-                overview_key="torsion:applicability",
+                overview_key=f"torsion:applicability:{applicability_case}",
                 overview_parent="torsion",
             ))
         torsion_tube_valid = (

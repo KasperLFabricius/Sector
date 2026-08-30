@@ -401,6 +401,57 @@ def _html_escape(value, quote=True):
     ))
 
 
+def _torsion_case_authority_rows(inp):
+    """Return report-table rows for each Plastic case's torsion authority."""
+
+    if inp.get("plastic_cases") is not None:
+        rows = []
+        authorities = inp.get(capacity.TORSION_CASE_AUTHORITIES_KEY)
+        for record in case_analysis.case_records(inp, "plastic"):
+            case_name = record.get("name") or "Unnamed case"
+            authority = capacity.torsion_case_authority(
+                authorities,
+                record.get("name"),
+            )
+            rows.extend([
+                [
+                    "Torsion design basis - " + _html_escape(case_name),
+                    _html_escape(
+                        authority[capacity.TORSION_CASE_DESIGN_BASIS_KEY]
+                    ),
+                ],
+                [
+                    "Torsion member scope - " + _html_escape(case_name),
+                    _html_escape(
+                        authority[capacity.TORSION_CASE_MEMBER_SCOPE_KEY]
+                    ),
+                ],
+            ])
+        return rows
+    direct_case = inp.get("plastic_case")
+    case_name = (
+        str(direct_case.get("id") or "Current action")
+        if isinstance(direct_case, Mapping)
+        else "Current action"
+    )
+    return [
+        [
+            "Torsion design basis - " + _html_escape(case_name),
+            _html_escape(
+                inp.get("torsion_design_basis")
+                or capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        ],
+        [
+            "Torsion member scope - " + _html_escape(case_name),
+            _html_escape(
+                inp.get("torsion_member_scope")
+                or capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        ],
+    ]
+
+
 def _result_reason(value, family, context):
     """Resolve one retained diagnostic before placing it in report markup."""
 
@@ -3224,14 +3275,7 @@ class ReportBuilder:
             if inp.get("torsion_on"):
                 resistance_rows.extend([
                     ["Torsion method", _html_escape(str(inp.get("torsion_method") or "-"))],
-                    [
-                        "Torsion design basis",
-                        _html_escape(str(inp.get("torsion_design_basis") or capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED)),
-                    ],
-                    [
-                        "Torsion member scope",
-                        _html_escape(str(inp.get("torsion_member_scope") or capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED)),
-                    ],
+                    *_torsion_case_authority_rows(inp),
                     ["Torsion wall thickness t<sub>ef</sub>", self._brief_auto_dimension(inp.get("torsion_tef"))],
                     ["Concrete tensile factor gamma<sub>ct</sub>", _fmt(inp.get("torsion_gamma_ct"), 3)],
                     [
@@ -4734,20 +4778,7 @@ class ReportBuilder:
             torsion_result = torsion_results[0]
             rows.extend([
                 ["Torsion method", str(torsion_result.get("method") or "-")],
-                [
-                    "Torsion design basis",
-                    str(
-                        inp.get("torsion_design_basis")
-                        or capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
-                    ),
-                ],
-                [
-                    "Torsion member scope",
-                    str(
-                        inp.get("torsion_member_scope")
-                        or capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
-                    ),
-                ],
+                *_torsion_case_authority_rows(inp),
                 [
                     "Concrete tensile factor gamma<sub>ct</sub>",
                     _fmt(

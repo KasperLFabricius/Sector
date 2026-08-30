@@ -1175,13 +1175,16 @@ def manual_blocks() -> list:
        "$T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd,c}$, $T_{Ed}/T_{Rd}$ and the required "
        "longitudinal steel $\\sum A_{sl}$. The utilisation is the transverse/strut "
        "resistance component, not by itself an overall torsion verdict.")
-    md("**Applicability and member scope.** For every non-zero $T_{Ed}$, select "
-       "whether the action is equilibrium torsion, deliberately retained residual "
-       "compatibility torsion, or compatibility torsion requiring a member/system "
-       "assessment. Also confirm whether the section is closed or solid with "
-       "warping torsion not governing. Missing evidence, compatibility torsion "
-       "requiring member assessment, and open thin-walled or warping-sensitive "
-       "members are **NOT ASSESSED** before the sectional torsion calculation.")
+    md("**Applicability and member scope.** Classify every Plastic case "
+       "separately. For each non-zero $T_{Ed}$, select whether the action is "
+       "equilibrium torsion, deliberately retained residual compatibility "
+       "torsion, or compatibility torsion requiring a member/system assessment. "
+       "Also confirm whether the section is closed or solid with warping torsion "
+       "not governing. The choices remain attached to the named case when rows "
+       "are reordered; a new or renamed case starts as Not established. Missing "
+       "evidence, compatibility torsion requiring member assessment, and open "
+       "thin-walled or warping-sensitive members are **NOT ASSESSED** before the "
+       "sectional torsion calculation.")
     call("limit", "Compatibility torsion may normally be omitted at ULS only when "
          "the applicable statically indeterminate system, stability independence "
          "and minimum-reinforcement conditions are established. Sector does not "

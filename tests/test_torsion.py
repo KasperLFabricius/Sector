@@ -1127,6 +1127,14 @@ from app_case_inputs import (  # noqa: E402
 def _fresh():
     from streamlit.testing.v1 import AppTest
     at = AppTest.from_file(APP, default_timeout=90)
+    at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+        "PL-01": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_EQUILIBRIUM
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        }
+    }
     at.session_state["torsion_design_basis"] = (
         capacity.TORSION_DESIGN_EQUILIBRIUM
     )
@@ -1203,6 +1211,26 @@ def _replace_bar_points(at, points_mm):
     return at
 
 
+def _replace_plastic_cases(at, rows):
+    import load_cases
+
+    _goto_page(at, "Inputs")
+    at.session_state[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table(
+        rows,
+        load_cases.PLASTIC_TABLE_KEY,
+    )
+    for key in (
+        "plastic_cases_editor",
+        f"_{load_cases.PLASTIC_TABLE_KEY}_editor_seed",
+    ):
+        try:
+            del at.session_state[key]
+        except KeyError:
+            pass
+    at.run()
+    return at
+
+
 def _apply_t_section(at, bf=1000.0, hf=200.0, bw=300.0, hw=600.0):
     at.session_state["_qs_open"] = True
     at.run()
@@ -1267,10 +1295,10 @@ def _enable_shared_links(at):
 def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
     at = _fresh_unclassified()
     at.run()
-    assert at.selectbox(key="torsion_design_basis").value == (
+    assert at.selectbox(key="_torsion_case_design_basis::PL-01").value == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
-    assert at.selectbox(key="torsion_member_scope").value == (
+    assert at.selectbox(key="_torsion_case_member_scope::PL-01").value == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
 
@@ -1308,12 +1336,12 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
         "calculate",
         (
             "selectbox",
-            "torsion_design_basis",
+            "_torsion_case_design_basis::PL-01",
             capacity.TORSION_DESIGN_EQUILIBRIUM,
         ),
         (
             "selectbox",
-            "torsion_member_scope",
+            "_torsion_case_member_scope::PL-01",
             capacity.TORSION_MEMBER_CLOSED,
         ),
     )
@@ -1333,7 +1361,7 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
         "calculate",
         (
             "selectbox",
-            "torsion_design_basis",
+            "_torsion_case_design_basis::PL-01",
             capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL,
         ),
     )
@@ -1348,7 +1376,7 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
         "calculate",
         (
             "selectbox",
-            "torsion_member_scope",
+            "_torsion_case_member_scope::PL-01",
             capacity.TORSION_MEMBER_OPEN,
         ),
     )
@@ -1357,6 +1385,117 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
     assert open_member["trd"] is None
     assert open_member["util"] is None
     assert open_member["asl_req"] is None
+
+
+def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle():
+    rows = [
+        {
+            "name": "EQ-01",
+            "description": "Equilibrium torsion",
+            "vy_ed_kn": 30.0,
+            "t_ed_knm": 40.0,
+        },
+        {
+            "name": "COMP-01",
+            "description": "Member assessment required",
+            "vy_ed_kn": 30.0,
+            "t_ed_knm": -40.0,
+        },
+    ]
+    at = _fresh_unclassified()
+    at.run()
+    _replace_plastic_cases(at, rows)
+    _set(
+        at,
+        (
+            "selectbox",
+            "_torsion_case_design_basis::EQ-01",
+            capacity.TORSION_DESIGN_EQUILIBRIUM,
+        ),
+        (
+            "selectbox",
+            "_torsion_case_member_scope::EQ-01",
+            capacity.TORSION_MEMBER_CLOSED,
+        ),
+        (
+            "selectbox",
+            "_torsion_case_design_basis::COMP-01",
+            capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER,
+        ),
+        (
+            "selectbox",
+            "_torsion_case_member_scope::COMP-01",
+            capacity.TORSION_MEMBER_CLOSED,
+        ),
+    )
+    _set_and_click(
+        at,
+        "calculate",
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("checkbox", "shear_links", True),
+    )
+
+    eq_entry, comp_entry = at.session_state["results"]["plastic_cases"]
+    eq_torsion = eq_entry["results"]["torsion"]
+    comp_torsion = comp_entry["results"]["torsion"]
+    assert eq_torsion["applicability"]["status"] == "APPLICABLE"
+    assert eq_torsion["trd"] is not None
+    assert comp_torsion["assessment_status"] == "NOT ASSESSED"
+    assert comp_torsion["trd"] is None
+    assert comp_entry["results"]["combined"]["valid"] is False
+    assert comp_entry["results"]["combined"][
+        "torsion_assessment_status"
+    ] == "NOT ASSESSED"
+
+    _select_view(at, "Results Overview")
+    overview = "\n".join(
+        frame.value.to_string(index=False) for frame in at.table
+    )
+    assert "EQ-01" in overview
+    assert "COMP-01" in overview
+
+    _set_and_click(
+        at,
+        "calculate",
+        (
+            "selectbox",
+            "_torsion_case_design_basis::EQ-01",
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+        ),
+    )
+    changed = at.session_state["results"]["plastic_cases"]
+    assert changed[0]["reused"] is False
+    assert changed[0]["results"]["torsion"] is not eq_torsion
+    assert changed[0]["results"]["torsion"]["assessment_status"] == (
+        "NOT ASSESSED"
+    )
+
+    renamed_rows = [
+        {**rows[0], "name": "EQ-RENAMED"},
+        rows[1],
+    ]
+    _replace_plastic_cases(at, renamed_rows)
+    mapping = at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY]
+    assert set(mapping) == {"EQ-RENAMED", "COMP-01"}
+    assert mapping["EQ-RENAMED"] == {
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        ),
+        capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        ),
+    }
+    assert mapping["COMP-01"][capacity.TORSION_CASE_DESIGN_BASIS_KEY] == (
+        capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+    )
+
+    _replace_plastic_cases(at, [rows[1]])
+    assert set(at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY]) == {
+        "COMP-01"
+    }
+    assert not at.exception
 
 
 def test_app_torsion_without_current_closed_links_is_not_assessed():
@@ -2104,7 +2243,7 @@ def test_mvt_m05_contract_discards_poisoned_torsion_and_combined_results():
 
     latest = at.session_state["_latest_inputs"]
     token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
-    marker = "torsion-applicability-v1"
+    marker = "torsion-case-applicability-v1"
     assert marker in token
     pre_applicability_token = tuple(item for item in token if item != marker)
 
@@ -2165,6 +2304,134 @@ def test_mvt_m05_contract_discards_poisoned_torsion_and_combined_results():
         "result_plastic_case_context_sig",
     ):
         assert tuple(at.session_state[key]).count(token) == 1
+
+
+def test_pre_m05_capacity_and_buffered_report_are_hidden_until_recalculated():
+    import io
+
+    import pypdf
+    import sector_app
+
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("radio", "mode", "Both"),
+        ("checkbox", "shear_on", True),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "combined_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 50.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    current_inputs = at.session_state["_latest_inputs"]
+    current_token = sector_app._CAPACITY_RESULT_CONTRACT_TOKEN
+    marker = "torsion-case-applicability-v1"
+    assert marker in current_token
+    old_token = tuple(item for item in current_token if item != marker)
+
+    before = at.session_state["results"]
+    plastic_before = before["plastic"]
+    elastic_before = before["elastic"]
+    torsion_before = before["torsion"]
+    combined_before = before["combined"]
+    torsion_before.update(
+        pre_mvt_m05_poison=True,
+        trd=999_000.0,
+        util=0.001,
+        assessment_status="PASS",
+    )
+    combined_before.update(
+        pre_mvt_m05_poison=True,
+        dkna_sum=0.001,
+        dkna_status="PASS",
+        dkna_ok=True,
+    )
+    for key in (
+        "result_sig",
+        "result_plastic_sig",
+        "result_plastic_case_context_sig",
+    ):
+        at.session_state[key] = tuple(
+            old_token if item == current_token else item
+            for item in at.session_state[key]
+        )
+    at.session_state[sector_app._RESULT_CAPACITY_CONTRACT_KEY] = old_token
+
+    current_report_signature = sector_app._report_signature(
+        current_inputs["signature"]
+    )
+    at.session_state["report_buffer"] = b"%PDF pre-MVT-M05 poison"
+    at.session_state["report_signature"] = current_report_signature[:3]
+    at.session_state["report_filename"] = "pre-mvt-m05.pdf"
+    at.session_state["report_generation_record"] = {
+        "capacity_result_contract": old_token,
+        "calculation_state": "older calculation",
+    }
+
+    _select_view(at, "Torsion")
+    visible = "\n".join(
+        str(item.value)
+        for element_type in ("warning", "caption", "markdown", "info", "error")
+        for item in getattr(at, element_type)
+    )
+    assert "Capacity results are hidden until they are recalculated" in visible
+    assert "999000" not in visible
+    assert not any(
+        metric.label in {r"Section resistance $T_{Rd}$", "Utilisation"}
+        for metric in at.metric
+    )
+
+    _select_view(at, "Results Overview")
+    overview = "\n".join(
+        frame.value.to_string(index=False) for frame in at.table
+    )
+    assert "999000" not in overview
+    assert "Torsion resistance" not in overview
+    assert "M-V-T" not in overview
+    assert "Plastic bending" in overview
+
+    _goto_page(at, "Report")
+    assert any("Report out of date" in item.value for item in at.warning)
+    assert not any(
+        getattr(item, "label", "") == "Download report (PDF)"
+        for item in at.get("download_button")
+    )
+    at.session_state["_report_no_figures"] = True
+    at.segmented_control(key="rep_report_content").set_value("Brief").run()
+    at.button(key="gen_report").click().run()
+    assert not at.exception
+    assert at.session_state["report_generation_record"][
+        "capacity_result_contract"
+    ] == current_token
+    assert at.session_state["report_generation_record"]["result_source"] == (
+        "recalculated-for-report"
+    )
+    assert any(
+        getattr(item, "label", "") == "Download report (PDF)"
+        for item in at.get("download_button")
+    )
+    report_text = "\n".join(
+        page.extract_text() or ""
+        for page in pypdf.PdfReader(
+            io.BytesIO(at.session_state["report_buffer"])
+        ).pages
+    )
+    assert "999000" not in report_text
+    assert "pre-MVT-M05" not in report_text
+
+    _calculate(at)
+    refreshed = at.session_state["results"]
+    assert refreshed["plastic"] is plastic_before
+    assert refreshed["elastic"] is elastic_before
+    assert refreshed["torsion"] is not torsion_before
+    assert refreshed["combined"] is not combined_before
+    assert "pre_mvt_m05_poison" not in refreshed["torsion"]
+    assert "pre_mvt_m05_poison" not in refreshed["combined"]
+    assert at.session_state[sector_app._RESULT_CAPACITY_CONTRACT_KEY] == (
+        current_token
+    )
 
 
 def test_app_incomplete_torsion_wall_evidence_blocks_dependent_mvt_and_recovers():

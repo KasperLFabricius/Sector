@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
+import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import publication_image_export  # noqa: E402
 import result_presentation  # noqa: E402
@@ -5737,6 +5738,93 @@ def test_report_profiles_fail_closed_for_unestablished_torsion_scope(profile):
         assert "6.3.1(1)-(3)" in text
         assert "6.3.3(1)-(2)" in text
         assert "Formula (6.28) demand" not in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_identify_each_plastic_case_torsion_authority(profile):
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        shear_links=True,
+        plastic_cases=load_cases.normalise_table(
+            [
+                {"name": "EQ-01", "t_ed_knm": 40.0},
+                {"name": "COMP-01", "t_ed_knm": -40.0},
+            ],
+            load_cases.PLASTIC_TABLE_KEY,
+        ),
+        torsion_case_authorities={
+            "EQ-01": {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_EQUILIBRIUM
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                    capacity.TORSION_MEMBER_CLOSED
+                ),
+            },
+            "COMP-01": {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                    capacity.TORSION_MEMBER_CLOSED
+                ),
+            },
+        },
+    )
+    records = load_cases.table_records(
+        inp["plastic_cases"], load_cases.PLASTIC_TABLE_KEY
+    )
+    blocked_applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": (
+                capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+            ),
+            "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+        },
+        40.0,
+    )
+    blocked = capacity.unassessed_torsion_applicability({
+        "applicability": blocked_applicability,
+        "t_ed": 40.0,
+        "t_ed_signed": -40.0,
+        "method": codes.EC2_2005_DKNA.label,
+    })
+    out = {
+        "plastic_cases": [
+            {
+                "name": "EQ-01",
+                "description": "",
+                "actions": records[0],
+                "evaluated": True,
+                "reused": False,
+                "results": {"torsion": _torsion_out()},
+            },
+            {
+                "name": "COMP-01",
+                "description": "",
+                "actions": records[1],
+                "evaluated": True,
+                "reused": False,
+                "results": {"torsion": blocked},
+            },
+        ]
+    }
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Torsion design basis - EQ-01" in text
+    assert "Torsion member scope - EQ-01" in text
+    assert "Torsion design basis - COMP-01" in text
+    assert capacity.TORSION_DESIGN_EQUILIBRIUM in text
+    assert capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER in text
+    assert "NOT ASSESSED" in text
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])

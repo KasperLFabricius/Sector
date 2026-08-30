@@ -729,6 +729,188 @@ def test_torsion_applicability_choices_round_trip_and_missing_defaults_safe():
     )
 
 
+def test_torsion_case_authorities_round_trip_and_follow_case_identity():
+    tables, scalars = _current_project()
+    first_name = "Only characteristic action"
+    second_name = "Compatibility action"
+    second = tables[load_cases.PLASTIC_TABLE_KEY].iloc[0].copy()
+    second["name"] = second_name
+    second["t_ed_knm"] = -7.0
+    tables[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table(
+        pd.concat(
+            [
+                tables[load_cases.PLASTIC_TABLE_KEY],
+                pd.DataFrame([second]),
+            ],
+            ignore_index=True,
+        ),
+        load_cases.PLASTIC_TABLE_KEY,
+    )
+    scalars[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+        first_name: {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_EQUILIBRIUM
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        },
+        second_name: {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_OPEN,
+        },
+        "Deleted action": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_EQUILIBRIUM
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        },
+    }
+
+    text = project_io.dump_project(tables, scalars)
+    loaded_tables, loaded = project_io.parse_project(text)
+    assert list(loaded[capacity.TORSION_CASE_AUTHORITIES_KEY]) == [
+        first_name,
+        second_name,
+    ]
+    assert loaded[capacity.TORSION_CASE_AUTHORITIES_KEY][first_name] == {
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+            capacity.TORSION_DESIGN_EQUILIBRIUM
+        ),
+        capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+    }
+    assert loaded[capacity.TORSION_CASE_AUTHORITIES_KEY][second_name][
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY
+    ] == capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+
+    changed = dict(loaded)
+    changed[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+        **loaded[capacity.TORSION_CASE_AUTHORITIES_KEY],
+        second_name: {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        },
+    }
+    changed_payload = json.loads(project_io.dump_project(loaded_tables, changed))
+    original_payload = json.loads(text)
+    assert changed_payload["provenance"]["input_sha256"] != (
+        original_payload["provenance"]["input_sha256"]
+    )
+
+    reordered = dict(loaded_tables)
+    reordered[load_cases.PLASTIC_TABLE_KEY] = (
+        loaded_tables[load_cases.PLASTIC_TABLE_KEY].iloc[::-1].reset_index(drop=True)
+    )
+    _, reordered_scalars = project_io.parse_project(
+        project_io.dump_project(reordered, loaded)
+    )
+    assert list(reordered_scalars[capacity.TORSION_CASE_AUTHORITIES_KEY]) == [
+        second_name,
+        first_name,
+    ]
+    assert reordered_scalars[capacity.TORSION_CASE_AUTHORITIES_KEY][second_name][
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY
+    ] == capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+
+    renamed = dict(loaded_tables)
+    renamed_frame = loaded_tables[load_cases.PLASTIC_TABLE_KEY].copy(deep=True)
+    renamed_frame.at[0, "name"] = "Renamed action"
+    renamed[load_cases.PLASTIC_TABLE_KEY] = renamed_frame
+    _, renamed_scalars = project_io.parse_project(
+        project_io.dump_project(renamed, loaded)
+    )
+    assert "Only characteristic action" not in renamed_scalars[
+        capacity.TORSION_CASE_AUTHORITIES_KEY
+    ]
+    assert renamed_scalars[capacity.TORSION_CASE_AUTHORITIES_KEY][
+        "Renamed action"
+    ] == {
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        ),
+        capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        ),
+    }
+
+
+def test_missing_current_torsion_case_mapping_fails_closed_for_every_case():
+    tables, scalars = _current_project()
+    text = project_io.dump_project(tables, scalars)
+    payload = json.loads(text)
+    payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY)
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+
+    _, loaded = project_io.parse_project(json.dumps(payload))
+
+    assert loaded[capacity.TORSION_CASE_AUTHORITIES_KEY] == {
+        "Only characteristic action": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        }
+    }
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    (
+        True,
+        [],
+        {"Only characteristic action": True},
+        {
+            " Only characteristic action": {
+                "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+                "member_scope": capacity.TORSION_MEMBER_CLOSED,
+            }
+        },
+        {
+            "Only characteristic action": {
+                "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            }
+        },
+        {
+            "Only characteristic action": {
+                "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+                "member_scope": True,
+            }
+        },
+        {
+            "Only characteristic action": {
+                "design_basis": "Equilibrium torsion",
+                "member_scope": capacity.TORSION_MEMBER_CLOSED,
+            }
+        },
+    ),
+)
+def test_torsion_case_authority_mapping_rejects_malformed_values(invalid):
+    tables, scalars = _current_project()
+    valid_text = project_io.dump_project(tables, scalars)
+    scalars[capacity.TORSION_CASE_AUTHORITIES_KEY] = invalid
+    with pytest.raises(project_io.ProjectInputError):
+        project_io.dump_project(tables, scalars)
+
+    payload = json.loads(valid_text)
+    payload["scalars"][capacity.TORSION_CASE_AUTHORITIES_KEY] = invalid
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    with pytest.raises(project_io.ProjectInputError) as exc_info:
+        project_io.parse_project(json.dumps(payload))
+    assert project_io.engineer_error_message(exc_info.value) == (
+        "the project file contains an invalid input value"
+    )
+
+
 @pytest.mark.parametrize("source_version", (25, 26, 27))
 def test_omitted_torsion_applicability_defaults_safe_in_supported_schemas(
     source_version,
@@ -742,6 +924,7 @@ def test_omitted_torsion_applicability_defaults_safe_in_supported_schemas(
         payload = json.loads(project_io.dump_project(tables, scalars))
     payload["scalars"].pop("torsion_design_basis", None)
     payload["scalars"].pop("torsion_member_scope", None)
+    payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY, None)
     payload["provenance"]["input_sha256"] = project_io._input_digest({
         "tables": payload["tables"],
         "scalars": payload["scalars"],
@@ -755,6 +938,16 @@ def test_omitted_torsion_applicability_defaults_safe_in_supported_schemas(
     assert loaded["torsion_member_scope"] == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
+    assert loaded[capacity.TORSION_CASE_AUTHORITIES_KEY] == {
+        "Only characteristic action": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        }
+    }
 
 
 @pytest.mark.parametrize(

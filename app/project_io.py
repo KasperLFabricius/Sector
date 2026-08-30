@@ -271,6 +271,7 @@ SCALAR_KEYS = [
     "torsion_sub_h1", "torsion_sub_b2", "torsion_sub_h2",
     "torsion_sub_b3", "torsion_sub_h3", "combined_on",
     "combined_method", "combined_mv_independent",
+    capacity.TORSION_CASE_AUTHORITIES_KEY,
     "capacity_steel_material_id", "label_scale", "label_min_gap",
     # Project/report metadata. No checker/approver sign-off fields.
     "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev",
@@ -395,6 +396,7 @@ _NESTED_SCALAR_KEYS = frozenset({
     material_catalog.PRESTRESS_CATALOG_KEY,
     fatigue_inputs.DETAIL_CATALOG_KEY,
     fatigue_inputs.BASIS_KEY,
+    capacity.TORSION_CASE_AUTHORITIES_KEY,
 })
 
 _EXACT_TEXT_OPTIONS = {
@@ -677,6 +679,46 @@ def _validate_fatigue_basis(value, key: str) -> dict:
     return basis
 
 
+def _validate_torsion_case_authorities(value, key: str) -> dict:
+    """Validate the separately persisted Plastic-case authority mapping."""
+
+    if not isinstance(value, Mapping):
+        raise _invalid_input(f"{key} must be an object")
+    validated = {}
+    expected_fields = {
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY,
+        capacity.TORSION_CASE_MEMBER_SCOPE_KEY,
+    }
+    for raw_name, raw_entry in value.items():
+        name = _strict_text(raw_name, f"{key} case name")
+        if not name.strip() or name != name.strip():
+            raise _invalid_input(f"{key} contains an invalid case name")
+        if not isinstance(raw_entry, Mapping):
+            raise _invalid_input(f"{key} {name} must be an object")
+        entry = dict(raw_entry)
+        if set(entry) != expected_fields:
+            raise _invalid_input(
+                f"{key} {name} must contain design basis and member scope"
+            )
+        design_basis = _strict_text(
+            entry[capacity.TORSION_CASE_DESIGN_BASIS_KEY],
+            f"{key} {name} design basis",
+        )
+        member_scope = _strict_text(
+            entry[capacity.TORSION_CASE_MEMBER_SCOPE_KEY],
+            f"{key} {name} member scope",
+        )
+        if design_basis not in capacity.TORSION_DESIGN_BASES:
+            raise _invalid_input(f"{key} {name} design basis is not supported")
+        if member_scope not in capacity.TORSION_MEMBER_SCOPES:
+            raise _invalid_input(f"{key} {name} member scope is not supported")
+        validated[name] = {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: design_basis,
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: member_scope,
+        }
+    return validated
+
+
 def _validate_nested_scalar(value, key: str):
     if key == material_catalog.MILD_CATALOG_KEY:
         return _validate_material_catalog(value, "mild", key)
@@ -686,6 +728,8 @@ def _validate_nested_scalar(value, key: str):
         return _validate_fatigue_catalog(value, key)
     if key == fatigue_inputs.BASIS_KEY:
         return _validate_fatigue_basis(value, key)
+    if key == capacity.TORSION_CASE_AUTHORITIES_KEY:
+        return _validate_torsion_case_authorities(value, key)
     raise RuntimeError(f"unhandled nested project scalar {key}")
 
 
@@ -1096,6 +1140,26 @@ def _canonical_scalars(
         "torsion_member_scope",
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
     )
+    raw_case_authorities = payload.setdefault(
+        capacity.TORSION_CASE_AUTHORITIES_KEY,
+        {},
+    )
+    plastic_cases = load_cases.active_table(
+        tables.get(load_cases.PLASTIC_TABLE_KEY),
+        load_cases.PLASTIC_TABLE_KEY,
+    )
+    case_names = tuple(
+        str(name).strip()
+        for name in plastic_cases[load_cases.NAME].tolist()
+        if str(name).strip()
+    )
+    # Project files from before this bounded contract have no per-case mapping.
+    # Give every current Plastic row an explicit fail-closed entry, while pruning
+    # renamed/deleted/orphaned names so old authority cannot silently reappear.
+    payload[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+        name: capacity.torsion_case_authority(raw_case_authorities, name)
+        for name in case_names
+    }
     try:
         plastic.plastic_sweep_angles(
             payload.get("v_min", 0.0),
@@ -2074,6 +2138,7 @@ def parse_project_with_info(text: str):
                 SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
                 HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
                 "shear_gamma_v",
+                capacity.TORSION_CASE_AUTHORITIES_KEY,
             }
             | {LEGACY_SHARED_CRACK_WIDTH_KEY}
             | LEGACY_HEIGHTENED_OPERAND_KEYS
@@ -2131,7 +2196,10 @@ def parse_project_with_info(text: str):
             migrate_gamma_v=True,
         )
     elif source_version == MIGRATABLE_VERSION:
-        allowed_schema26_scalars = set(SCALAR_KEYS) - {"shear_gamma_v"}
+        allowed_schema26_scalars = set(SCALAR_KEYS) - {
+            "shear_gamma_v",
+            capacity.TORSION_CASE_AUTHORITIES_KEY,
+        }
         unknown_scalars = (
             set(raw_scalars)
             - allowed_schema26_scalars

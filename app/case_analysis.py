@@ -18,6 +18,7 @@ import numpy as np
 from deferred_import import deferred_module
 
 from app.engineer_messages import EngineerValidationError
+from sector import capacity
 from sector.engineer_message import EngineerMessage
 
 sls_core = deferred_module("sector.sls")
@@ -117,6 +118,15 @@ def case_signature(
                 sls_core.HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
             )
         )
+    elif key == load_cases.PLASTIC_TABLE_KEY:
+        authority = capacity.torsion_case_authority(
+            (context or {}).get(capacity.TORSION_CASE_AUTHORITIES_KEY),
+            record.get(load_cases.NAME),
+        )
+        signature += (
+            authority[capacity.TORSION_CASE_DESIGN_BASIS_KEY],
+            authority[capacity.TORSION_CASE_MEMBER_SCOPE_KEY],
+        )
     return signature
 
 
@@ -150,6 +160,10 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
     vx_face = str(record.get("vx_face", load_cases.FACE_AUTO))
     vy_face = str(record.get("vy_face", load_cases.FACE_AUTO))
     t_ed = float(record["t_ed_knm"])
+    torsion_authority = capacity.torsion_case_authority(
+        base.get(capacity.TORSION_CASE_AUTHORITIES_KEY),
+        record.get(load_cases.NAME),
+    )
     vx_live = bool(base.get("shear_on")) and abs(vx_ed) > 0.0
     vy_live = bool(base.get("shear_on")) and abs(vy_ed) > 0.0
     shear_live = vx_live or vy_live
@@ -196,6 +210,12 @@ def plastic_case_input(base: Mapping, record: Mapping) -> dict:
         },
         torsion_T=abs(t_ed),
         torsion_T_signed=t_ed,
+        torsion_design_basis=torsion_authority[
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY
+        ],
+        torsion_member_scope=torsion_authority[
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY
+        ],
         shear_requested=bool(base.get("shear_on")),
         torsion_requested=bool(base.get("torsion_on")),
         combined_requested=bool(base.get("combined_on")),

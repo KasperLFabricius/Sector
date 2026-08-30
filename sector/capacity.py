@@ -52,6 +52,9 @@ TORSION_MEMBER_SCOPES = (
     TORSION_MEMBER_OPEN,
     TORSION_APPLICABILITY_NOT_ESTABLISHED,
 )
+TORSION_CASE_AUTHORITIES_KEY = "torsion_case_authorities"
+TORSION_CASE_DESIGN_BASIS_KEY = "design_basis"
+TORSION_CASE_MEMBER_SCOPE_KEY = "member_scope"
 TORSION_APPLICABILITY_CLAUSES = (
     "EN 1992-1-1:2004, 6.3.1(1)-(3)",
     "EN 1992-1-1:2004, 6.3.3(1)-(2)",
@@ -77,6 +80,51 @@ _SHEAR_LINK_LEGS_INPUT = EngineerMessage(
     "SHEAR-LINK-LEGS",
     "Enter a positive finite number of effective link legs for each active shear direction",
 )
+
+
+def torsion_case_authority(value: object, case_name: object) -> dict[str, str]:
+    """Return one fail-closed Plastic-case torsion authority.
+
+    Project persistence validates the complete mapping strictly. This runtime
+    boundary remains defensive because programmatic callers and hot-reloaded
+    sessions can supply incomplete or malformed in-memory values. A case never
+    inherits a permissive project-wide choice merely because its own entry is
+    absent or unusable.
+    """
+
+    fallback = {
+        TORSION_CASE_DESIGN_BASIS_KEY: TORSION_APPLICABILITY_NOT_ESTABLISHED,
+        TORSION_CASE_MEMBER_SCOPE_KEY: TORSION_APPLICABILITY_NOT_ESTABLISHED,
+    }
+    if (
+        type(case_name) is not str
+        or not case_name.strip()
+        or case_name != case_name.strip()
+    ):
+        return fallback
+    if not isinstance(value, Mapping):
+        return fallback
+    entry = value.get(case_name)
+    if not isinstance(entry, Mapping):
+        return fallback
+    if set(entry) != {
+        TORSION_CASE_DESIGN_BASIS_KEY,
+        TORSION_CASE_MEMBER_SCOPE_KEY,
+    }:
+        return fallback
+    design_basis = entry.get(TORSION_CASE_DESIGN_BASIS_KEY)
+    member_scope = entry.get(TORSION_CASE_MEMBER_SCOPE_KEY)
+    if not (
+        type(design_basis) is str
+        and design_basis in TORSION_DESIGN_BASES
+        and type(member_scope) is str
+        and member_scope in TORSION_MEMBER_SCOPES
+    ):
+        return fallback
+    return {
+        TORSION_CASE_DESIGN_BASIS_KEY: design_basis,
+        TORSION_CASE_MEMBER_SCOPE_KEY: member_scope,
+    }
 
 
 def _module(name: str):

@@ -1351,6 +1351,14 @@ def test_gross_area_centroid_rect_and_hole():
 def _fresh():
     from streamlit.testing.v1 import AppTest
     at = AppTest.from_file(APP, default_timeout=90)
+    at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+        "PL-01": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_EQUILIBRIUM
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        }
+    }
     at.session_state["torsion_design_basis"] = (
         capacity.TORSION_DESIGN_EQUILIBRIUM
     )

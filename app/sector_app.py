@@ -2616,6 +2616,105 @@ def _load_case_editors(box):
     }
 
 
+def _torsion_case_authority_controls(box, plastic_cases, *, disabled):
+    """Render and commit one torsion-applicability choice per Plastic case.
+
+    The separately persisted mapping is authoritative. Widget keys are merely
+    transient controls: on project replacement, case rename or reorder they are
+    reseeded from the matching case entry, while a genuine pending widget event
+    is replayed before the completed Inputs build commits the new mapping.
+    """
+
+    cases = load_cases.active_table(
+        plastic_cases,
+        load_cases.PLASTIC_TABLE_KEY,
+    )
+    names = tuple(
+        str(name).strip()
+        for name in cases[load_cases.NAME].tolist()
+        if str(name).strip()
+    )
+    raw_mapping = st.session_state.get(capacity.TORSION_CASE_AUTHORITIES_KEY)
+    pending = st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {})
+    selected = {}
+    if names:
+        box.markdown("**Torsion applicability by Plastic case**")
+        box.caption(
+            "Classify every Plastic case separately. Sector performs the "
+            "section check; establish any compatibility redistribution and "
+            "member or system conditions outside this calculation."
+        )
+    for name in names:
+        authority = capacity.torsion_case_authority(raw_mapping, name)
+        design_key = f"_torsion_case_design_basis::{name}"
+        member_key = f"_torsion_case_member_scope::{name}"
+        if design_key not in pending:
+            st.session_state[design_key] = authority[
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY
+            ]
+        if member_key not in pending:
+            st.session_state[member_key] = authority[
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY
+            ]
+        case_box = box.container(border=True)
+        case_box.caption(f"Plastic case: {name}")
+        design_basis = _seeded_selectbox(
+            case_box,
+            "Torsion design basis",
+            list(capacity.TORSION_DESIGN_BASES),
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+            key=design_key,
+            disabled=disabled,
+            help=(
+                "Equilibrium torsion must be resisted in full. Compatibility "
+                "torsion may be omitted at ULS only when the member and system "
+                "conditions, including applicable minimum reinforcement, are "
+                "established outside this section calculation. Choose the "
+                "residual-action route only when TEd deliberately retains the "
+                "compatibility torsion to be resisted."
+            ),
+        )
+        member_scope = _seeded_selectbox(
+            case_box,
+            "Torsion member scope",
+            list(capacity.TORSION_MEMBER_SCOPES),
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+            key=member_key,
+            disabled=disabled,
+            help=(
+                "Sector performs a sectional thin-walled-tube check. Open "
+                "thin-walled or warping-sensitive members may require a "
+                "separate warping-torsion and member assessment."
+            ),
+        )
+        selected[name] = {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: design_basis,
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: member_scope,
+        }
+    first = next(
+        iter(selected.values()),
+        {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        },
+    )
+    # These historical aliases remain available to direct single-case callers,
+    # but are never widget authority. In particular, a pre-mapping project must
+    # not turn a permissive legacy value into a case classification.
+    st.session_state["torsion_design_basis"] = first[
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY
+    ]
+    st.session_state["torsion_member_scope"] = first[
+        capacity.TORSION_CASE_MEMBER_SCOPE_KEY
+    ]
+    st.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] = selected
+    return selected
+
+
 _FATIGUE_EDITOR_KEY = "fatigue_spectrum_editor"
 _NON_REPLAYABLE_INPUT_EVENT_KEYS = frozenset({
     *_CASE_EDITOR_KEYS.values(),
@@ -4122,7 +4221,12 @@ def _report_signature(
         str(APP_VERSION if product_version is None else product_version),
         str(revision),
     )
-    return repr(input_signature), document_values, product_identity
+    return (
+        repr(input_signature),
+        document_values,
+        product_identity,
+        _CAPACITY_RESULT_CONTRACT_TOKEN,
+    )
 
 
 def _safe_filename_part(value, fallback):
@@ -4309,6 +4413,7 @@ def _generate_report(inp):
             "input_sha256": engineering_input_sha256,
             "engineering_input_sha256": engineering_input_sha256,
             "project_state_sha256": project_state_sha256,
+            "capacity_result_contract": _CAPACITY_RESULT_CONTRACT_TOKEN,
             "result_sha256": result_sha256,
             "sector_version": APP_VERSION,
             "source_revision": current_revision,
@@ -5913,7 +6018,7 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "nominal-shear-resistance-route-v1",
     "combined-edition-scope-v1",
     "compression-strut-applicability-v1",
-    "torsion-applicability-v1",
+    "torsion-case-applicability-v1",
 )
 _FATIGUE_RESULT_CONTRACT_TOKEN = (
     "fatigue-result-contract",
@@ -5950,7 +6055,8 @@ _SHEAR_SIG_KEYS = (
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max",
     "torsion_on", "torsion_method", "torsion_design_basis",
-    "torsion_member_scope", "torsion_T", "torsion_tef", "torsion_nu_v",
+    "torsion_member_scope", capacity.TORSION_CASE_AUTHORITIES_KEY,
+    "torsion_T", "torsion_tef", "torsion_nu_v",
     "torsion_gamma_ct",
     "torsion_subdivide", "torsion_nsub",
     "torsion_sub_x0", "torsion_sub_y0", "torsion_sub_x1", "torsion_sub_y1",
@@ -7154,34 +7260,30 @@ def build_inputs(host=st):
              "shear-torsion crushing check. The overall status also considers "
              "longitudinal reinforcement. Without links, only concrete resistance "
              "and reinforcement demand are reported.")
-    torsion_design_basis = _seeded_selectbox(
+    torsion_case_authorities = _torsion_case_authority_controls(
         sts,
-        "Torsion design basis",
-        list(capacity.TORSION_DESIGN_BASES),
-        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
-        key="torsion_design_basis",
+        case_frames[load_cases.PLASTIC_TABLE_KEY],
         disabled=not torsion_on,
-        help=(
-            "Equilibrium torsion must be resisted in full. Compatibility torsion "
-            "may be omitted at ULS only when the member and system conditions, "
-            "including applicable minimum reinforcement, are established outside "
-            "this section calculation. Choose the residual-action route only when "
-            "TEd deliberately retains the compatibility torsion to be resisted."
-        ),
     )
-    torsion_member_scope = _seeded_selectbox(
-        sts,
-        "Torsion member scope",
-        list(capacity.TORSION_MEMBER_SCOPES),
-        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
-        key="torsion_member_scope",
-        disabled=not torsion_on,
-        help=(
-            "Sector performs a sectional thin-walled-tube check. Open thin-walled "
-            "or warping-sensitive members may require a separate warping-torsion "
-            "and member assessment."
-        ),
+    first_torsion_authority = next(
+        iter(torsion_case_authorities.values()),
+        {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        },
     )
+    # Retain the historical scalar aliases for direct single-case callers. The
+    # case table always resolves from the separately persisted mapping above.
+    torsion_design_basis = first_torsion_authority[
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY
+    ]
+    torsion_member_scope = first_torsion_authority[
+        capacity.TORSION_CASE_MEMBER_SCOPE_KEY
+    ]
     if torsion_on:
         sts.caption(
             "Sector does not determine compatibility-torsion redistribution, "
@@ -8389,6 +8491,7 @@ def build_inputs(host=st):
                 torsion_method=(combined_method if combined_on else torsion_method),
                 torsion_design_basis=torsion_design_basis,
                 torsion_member_scope=torsion_member_scope,
+                torsion_case_authorities=torsion_case_authorities,
                 torsion_T=torsion_T, torsion_T_signed=torsion_T,
                 torsion_tef=torsion_tef,
                 torsion_nu_v=torsion_nu_v,
@@ -16577,6 +16680,61 @@ def _calculation_failure_message(error: Exception) -> str:
     return "Calculation blocked: " + detail + "."
 
 
+_CAPACITY_RESULT_KEYS = frozenset({
+    "shear",
+    "torsion",
+    "combined",
+    "minimum_reinforcement",
+    "transverse_reinforcement",
+})
+_CAPACITY_RESULT_VIEWS = frozenset({
+    "Detailing",
+    "Shear",
+    "Torsion",
+    "M-V-T Combined",
+})
+
+
+def _non_capacity_inputs_stale(inp):
+    """Whether retained bending, elastic or fatigue evidence changed."""
+
+    retained_plastic_sig = st.session_state.get("result_plastic_sig")
+    current_plastic_sig = inp.get("plastic_sig")
+    plastic_table_changed = not (
+        isinstance(retained_plastic_sig, tuple)
+        and isinstance(current_plastic_sig, tuple)
+        and retained_plastic_sig[-1:] == current_plastic_sig[-1:]
+    )
+    return (
+        st.session_state.get("result_plastic_bending_context_sig")
+        != inp.get("plastic_bending_context_sig")
+        or plastic_table_changed
+        or st.session_state.get("result_elastic_sig") != inp.get("elastic_sig")
+        or st.session_state.get("result_fatigue_sig") != inp.get("fatigue_sig")
+    )
+
+
+def _without_capacity_results(results):
+    """Copy a result payload while withholding every capacity result family."""
+
+    if not isinstance(results, Mapping):
+        return {}
+    safe = copy.deepcopy(dict(results))
+    for key in _CAPACITY_RESULT_KEYS:
+        safe.pop(key, None)
+    entries = safe.get("plastic_cases")
+    if isinstance(entries, (list, tuple)):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            case_results = entry.get("results")
+            if not isinstance(case_results, dict):
+                continue
+            for key in _CAPACITY_RESULT_KEYS:
+                case_results.pop(key, None)
+    return safe
+
+
 @st.fragment
 def _analysis_workspace(inp):
     """Render and operate the main analysis workspace independently.
@@ -16714,22 +16872,35 @@ def _analysis_workspace(inp):
     # An invalid section (a void that disconnects the concrete, steel outside the
     # outline) makes run_analysis return {}. Treat that like no result so the badge
     # does not read green "up to date" for a calculation that produced nothing.
-    stale = bool(results) and (
-        st.session_state.get("result_sig") != inp["signature"]
-        or st.session_state.get(_RESULT_CAPACITY_CONTRACT_KEY)
+    capacity_contract_stale = bool(results) and (
+        st.session_state.get(_RESULT_CAPACITY_CONTRACT_KEY)
         != _CAPACITY_RESULT_CONTRACT_TOKEN
+    )
+    input_stale = bool(results) and (
+        _non_capacity_inputs_stale(inp)
+        if capacity_contract_stale
+        else st.session_state.get("result_sig") != inp["signature"]
     )
     if not results:
         c_calc.caption("Not calculated yet")
-    elif stale:
+    elif capacity_contract_stale:
+        c_calc.caption(":orange[Capacity results require recalculation]")
+    elif input_stale:
         c_calc.caption(":orange[Inputs changed -- recalculate]")
     else:
         c_calc.caption(":green[Results up to date]")
-    if stale and view in _RESULT_VIEWS:
+    if input_stale and view in _RESULT_VIEWS:
         _manual_warning(
             st,
             "results-stale",
             "Inputs changed since the last calculation - press Calculate to update.",
+        )
+    if capacity_contract_stale and view in _RESULT_VIEWS:
+        _manual_warning(
+            st,
+            "results-stale",
+            "Capacity results are hidden until they are recalculated. Press "
+            "Calculate to update them.",
         )
     visible_input_issues = list(section_input_issues)
     if st.session_state.get(_SHOW_INPUT_ISSUES_KEY):
@@ -16739,7 +16910,7 @@ def _analysis_workspace(inp):
         key_prefix="analysis-input-issue",
     )
     result_snapshot = st.session_state.get("result_input_snapshot")
-    if stale and view in _RESULT_VIEWS and result_snapshot is None:
+    if input_stale and view in _RESULT_VIEWS and result_snapshot is None:
         # Sessions can survive a Streamlit hot reload. A result payload without
         # its matching input snapshot cannot be rendered against edited inputs
         # without creating internally inconsistent evidence. Keep it hidden until
@@ -16784,7 +16955,15 @@ def _analysis_workspace(inp):
     # A stale result must be rendered wholly against the inputs that produced it.
     # Apply this before selecting a case or deciding which checks were enabled so
     # every result view receives one internally consistent input/result pair.
-    result_inp = result_snapshot if stale else inp
+    result_inp = result_snapshot if input_stale else inp
+    visible_results = (
+        _without_capacity_results(results)
+        if capacity_contract_stale
+        else results
+    )
+    if capacity_contract_stale and view in _CAPACITY_RESULT_VIEWS:
+        app_run_probe.close_fragment_run(st.session_state)
+        return
     family = (
         "elastic" if view == "Elastic Results"
         else "plastic" if (
@@ -16800,22 +16979,22 @@ def _analysis_workspace(inp):
         }
         else None
     )
-    view_inp, view_results = result_inp, results
+    view_inp, view_results = result_inp, visible_results
     if family:
         view_inp, view_results, _entry = _selected_case_context(
-            result_inp, results, family
+            result_inp, visible_results, family
         )
 
     if view == "Results Overview":
-        results_overview_view(result_inp, results, stale=stale)
+        results_overview_view(result_inp, visible_results, stale=input_stale)
     elif view == "Plastic Results":
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":
         interaction_view(view_inp, view_results)
     elif view == "Fatigue Results":
-        fatigue_view(result_inp, results, stale=stale)
+        fatigue_view(result_inp, visible_results, stale=input_stale)
     elif view == "Detailing":
-        detailing_view(view_inp, view_results, global_results=results)
+        detailing_view(view_inp, view_results, global_results=visible_results)
     elif view == "Shear":
         shear_view(view_inp, view_results)
     elif view == "Torsion":
@@ -16823,7 +17002,7 @@ def _analysis_workspace(inp):
     elif view == "M-V-T Combined":
         combined_view(view_inp, view_results)
     else:
-        elastic_view(view_inp, view_results, global_results=results)
+        elastic_view(view_inp, view_results, global_results=visible_results)
     app_run_probe.close_fragment_run(st.session_state)
 
 
