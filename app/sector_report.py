@@ -1210,7 +1210,10 @@ class ReportBuilder:
         self._publication_subsection_title = None
         selection = self._base_out.get("worked_example_selection")
         self._worked_example_selection = (
-            selection
+            presentation.validated_worked_example_selection(
+                self._base_inp,
+                self._base_out,
+            )
             if isinstance(selection, Mapping) and selection.get("schema") == 1
             else {}
         )

@@ -8025,9 +8025,18 @@ def test_report_main_torsion_worked_example_requires_applicable_case(profile):
             },
         ]
     }
-    out["worked_example_selection"] = (
-        result_presentation.worked_example_selection(inp, out)
-    )
+    # Retain a structurally valid but stale pre-publication selection.  The
+    # report must validate it against the complete current named-case payload,
+    # not merely accept that the selected row still exists.
+    out["worked_example_selection"] = {
+        "schema": 1,
+        "families": {
+            "torsion": {"case_id": "PL-BLOCKED", "component": None},
+        },
+        "crack_examples": [],
+        "cracking_threshold": None,
+        "torsion_subchecks": {},
+    }
 
     flat = " ".join(
         _pdf_text(

@@ -264,6 +264,7 @@ def _schema25_payload(
     payload = json.loads(project_io.dump_project(tables, current_scalars))
     payload["version"] = project_io.LEGACY_MIGRATABLE_VERSION
     payload["scalars"].pop("shear_gamma_v", None)
+    payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY, None)
     for key in (
         "sls_long_term_permitted_crack_width_mm",
         "sls_short_term_permitted_crack_width_mm",
@@ -293,6 +294,7 @@ def _legacy_heightened_schema25_payload(tables=None) -> dict:
     payload["version"] = project_io.LEGACY_MIGRATABLE_VERSION
     persisted = payload["scalars"]
     persisted.pop("shear_gamma_v", None)
+    persisted.pop(capacity.TORSION_CASE_AUTHORITIES_KEY, None)
     heightened_width = persisted.pop(
         "sls_heightened_permitted_crack_width_mm"
     )
@@ -326,6 +328,7 @@ def _schema26_payload(tables=None, scalars=None) -> dict:
     payload = json.loads(project_io.dump_project(tables, current_scalars))
     payload["version"] = project_io.MIGRATABLE_VERSION
     payload["scalars"].pop("shear_gamma_v", None)
+    payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY, None)
     payload["provenance"]["input_sha256"] = project_io._input_digest({
         "tables": payload["tables"],
         "scalars": payload["scalars"],
@@ -858,6 +861,53 @@ def test_missing_current_torsion_case_mapping_fails_closed_for_every_case():
             ),
         }
     }
+
+
+@pytest.mark.parametrize("identity", ("duplicate", "casefold", "cross-table", "blank"))
+def test_hash_valid_project_rejects_ambiguous_case_identities_before_authority(
+    identity,
+):
+    tables, scalars = _current_project()
+    payload = json.loads(project_io.dump_project(tables, scalars))
+    plastic = payload["tables"][load_cases.PLASTIC_TABLE_KEY]
+    elastic = payload["tables"][load_cases.ELASTIC_TABLE_KEY]
+    name_index = plastic["columns"].index(load_cases.NAME)
+
+    if identity in {"duplicate", "casefold"}:
+        duplicate = copy.deepcopy(plastic["rows"][0])
+        duplicate[name_index] = (
+            "ONLY CHARACTERISTIC ACTION"
+            if identity == "casefold"
+            else "Only characteristic action"
+        )
+        plastic["rows"].append(duplicate)
+    elif identity == "cross-table":
+        elastic_name_index = elastic["columns"].index(load_cases.NAME)
+        elastic["rows"][0][elastic_name_index] = "Only characteristic action"
+    else:
+        plastic["rows"][0][name_index] = ""
+
+    payload["scalars"][capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+        "Only characteristic action": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_EQUILIBRIUM
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                capacity.TORSION_MEMBER_CLOSED
+            ),
+        }
+    }
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+
+    with pytest.raises(project_io.ProjectInputError) as caught:
+        project_io.parse_project(json.dumps(payload))
+
+    assert project_io.engineer_error_message(caught.value) == (
+        "the project file contains an invalid input value"
+    )
 
 
 @pytest.mark.parametrize(

@@ -269,6 +269,43 @@ def test_torsion_worked_family_ignores_blocked_higher_utilisation():
     }
 
 
+def test_retained_worked_family_is_reconciled_without_mutating_completed_state():
+    blocked = {
+        **_applicable_torsion_evidence(),
+        "applicability_blocked": True,
+        "valid": True,
+        "util": 9.0,
+    }
+    applicable = {
+        **_applicable_torsion_evidence(),
+        "valid": True,
+        "util": 0.8,
+    }
+    retained = {
+        "schema": 1,
+        "families": {
+            "torsion": {"case_id": "PL-BLOCKED", "component": None},
+        },
+        "crack_examples": [],
+    }
+    out = {
+        "plastic_cases": [
+            {"name": "PL-BLOCKED", "results": {"torsion": blocked}},
+            {"name": "PL-APPLICABLE", "results": {"torsion": applicable}},
+        ],
+        "worked_example_selection": retained,
+    }
+
+    reconciled = presentation.validated_worked_example_selection({}, out)
+
+    assert reconciled["families"]["torsion"] == {
+        "case_id": "PL-APPLICABLE",
+        "component": None,
+    }
+    assert retained["families"]["torsion"]["case_id"] == "PL-BLOCKED"
+    assert presentation.validated_worked_example_selection({}, {}) == {}
+
+
 @pytest.mark.parametrize(
     ("check", "status", "note"),
     [

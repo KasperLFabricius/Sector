@@ -1398,6 +1398,59 @@ def worked_example_selection(inp, out):
     }
 
 
+_WORKED_FAMILY_KEYS = frozenset({
+    "plastic",
+    "elastic",
+    "shear",
+    "torsion",
+    "combined",
+    "minimum_reinforcement",
+    "transverse_reinforcement",
+})
+
+
+def validated_worked_example_selection(inp, out):
+    """Validate retained family identities against the complete current result.
+
+    Report generation still fails closed when the completed calculation has no
+    selection contract.  When a structurally valid contract is present, each
+    retained family is checked against the current result collection so a stale
+    identity cannot hide the actual governing worked calculation.
+    """
+
+    retained = (out or {}).get("worked_example_selection")
+    if not isinstance(retained, Mapping) or retained.get("schema") != 1:
+        return {}
+    families = retained.get("families")
+    if not isinstance(families, Mapping):
+        return {}
+    for family, item in families.items():
+        if family not in _WORKED_FAMILY_KEYS or not isinstance(item, Mapping):
+            return {}
+        case_id = item.get("case_id")
+        component = item.get("component")
+        if (
+            type(case_id) is not str
+            or not case_id.strip()
+            or component is not None
+            and type(component) is not str
+        ):
+            return {}
+
+    current = worked_example_selection(inp, out)
+    current_families = current.get("families") or {}
+    reconciled_families = dict(families)
+    for family in tuple(reconciled_families):
+        current_item = current_families.get(family)
+        if current_item is None:
+            reconciled_families.pop(family, None)
+        else:
+            reconciled_families[family] = current_item
+    reconciled = dict(retained)
+    reconciled["families"] = reconciled_families
+    return reconciled
+
+
 def plastic_action_assessment(pl):
     """Return the semantic status for a plastic M-M applied-action result.
 

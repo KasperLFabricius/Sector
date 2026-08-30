@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -1373,6 +1374,60 @@ def test_real_upload_without_case_authority_ignores_permissive_global_aliases():
     assert result["assessment_status"] == "NOT ASSESSED"
     assert result["trd"] is None
     assert result["util"] is None
+    assert not at.exception
+
+
+def test_hash_valid_duplicate_case_project_is_rejected_before_delete_can_transfer_authority():
+    at = _fresh()
+    valid = _replacement_bytes(at, 41.0)
+
+    def applicable_case(data: dict) -> None:
+        table = data["tables"][load_cases.PLASTIC_TABLE_KEY]
+        name_index = table["columns"].index(load_cases.NAME)
+        torsion_index = table["columns"].index("t_ed_knm")
+        name = table["rows"][0][name_index]
+        table["rows"][0][torsion_index] = 40.0
+        data["scalars"]["torsion_on"] = True
+        data["scalars"][capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+            name: {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_EQUILIBRIUM
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                    capacity.TORSION_MEMBER_CLOSED
+                ),
+            }
+        }
+
+    valid = _mutated_project(valid, applicable_case)
+    _goto_project(at)
+    _upload(at, valid)
+    before_project = _project_signature(at)
+    before_identity = at.session_state["_project_upload_content_identity"]
+    before_results = _completed_result_evidence(at)
+
+    def duplicate_case(data: dict) -> None:
+        applicable_case(data)
+        table = data["tables"][load_cases.PLASTIC_TABLE_KEY]
+        torsion_index = table["columns"].index("t_ed_knm")
+        duplicate = copy.deepcopy(table["rows"][0])
+        duplicate[torsion_index] = 80.0
+        table["rows"].append(duplicate)
+
+    hostile = _mutated_project(valid, duplicate_case)
+    _upload(at, hostile)
+
+    assert _project_signature(at) == before_project
+    assert at.session_state["_project_upload_content_identity"] == before_identity
+    _assert_result_evidence(at, before_results)
+    assert len(at.session_state[load_cases.PLASTIC_TABLE_KEY]) == 1
+    visible = "\n".join(str(item.value) for item in at.error)
+    assert "New file was not applied" in visible
+    assert "Select an intact, compatible Sector project file" in visible
+    assert not any(
+        token in visible.casefold()
+        for token in ("duplicate", "payload", "schema", "hash", "traceback")
+    )
     assert not at.exception
 
 

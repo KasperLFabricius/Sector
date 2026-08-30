@@ -1028,6 +1028,20 @@ def _obj_to_table(value, key: str) -> pd.DataFrame:
     return canonical
 
 
+def _validate_project_case_identities(tables: Mapping) -> None:
+    """Reject ambiguous action identities before scalar authority is rebuilt."""
+
+    errors = load_cases.validation_errors(
+        tables.get(load_cases.PLASTIC_TABLE_KEY),
+        tables.get(load_cases.ELASTIC_TABLE_KEY),
+    )
+    if errors:
+        raise _invalid_input(
+            "invalid project action identities: "
+            + "; ".join(dict.fromkeys(error.text for error in errors))
+        )
+
+
 def _geometry_points(frame: pd.DataFrame, label: str) -> list[tuple[float, float]]:
     if not all(column in frame.columns for column in _GEOMETRY_COLUMNS):
         raise ValueError(
@@ -2130,6 +2144,11 @@ def parse_project_with_info(text: str):
         key: _obj_to_table(data["tables"][key], key)
         for key in PROJECT_TABLE_KEYS
     }
+    # Case-scoped engineering authority is keyed by the practising engineer's
+    # action name.  Establish one unambiguous global identity set before any
+    # authority mapping is canonicalised; otherwise a duplicate survivor could
+    # inherit the other row's evidence after an edit or deletion.
+    _validate_project_case_identities(tables)
     if source_version == LEGACY_MIGRATABLE_VERSION:
         allowed_schema25_scalars = (
             set(SCALAR_KEYS)
