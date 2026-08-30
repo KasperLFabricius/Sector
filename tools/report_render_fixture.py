@@ -255,6 +255,17 @@ def _inputs() -> dict:
     return {
         "mode": "Both",
         "plastic_cases": plastic_cases,
+        capacity.TORSION_CASE_AUTHORITIES_KEY: {
+            record["name"]: {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_EQUILIBRIUM
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                    capacity.TORSION_MEMBER_CLOSED
+                ),
+            }
+            for record in plastic_cases
+        },
         "elastic_cases": elastic_cases,
         "fatigue_on": True,
         "fatigue_edition": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
@@ -282,6 +293,8 @@ def _inputs() -> dict:
         "shear_fywk": 500.0,
         "torsion_on": True,
         "torsion_method": codes.EC2_2005_DKNA.label,
+        "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+        "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
         "torsion_gamma_ct": codes.EC2_2005_DKNA.gamma_ct,
         "combined_on": True,
         "combined_method": codes.EC2_2005_DKNA.label,
@@ -933,6 +946,9 @@ def _results(inp: dict | None = None) -> dict:
         "util": primary_torsion["util"],
         "asl_req": primary_torsion["asl_req"],
         "t_ed": 25.0,
+        "t_ed_signed": 25.0,
+        "applicability_blocked": False,
+        "applicability": capacity.torsion_applicability(inp, 25.0),
         "fcd": fcd,
         "fywd": fywd,
         "fyd_long": fyd_long,
@@ -1282,7 +1298,7 @@ def _results(inp: dict | None = None) -> dict:
         "plastic_cases": [
             {"name": "PL-QA-1", "actions": plastic_rows[0], "evaluated": True,
              "signature": case_analysis.case_signature(
-                 plastic_rows[0], load_cases.PLASTIC_TABLE_KEY),
+                 plastic_rows[0], load_cases.PLASTIC_TABLE_KEY, inp),
              "results": {
                  "plastic": plastic, "shear": shear_payload,
                  "torsion": torsion_payload,
@@ -1292,7 +1308,7 @@ def _results(inp: dict | None = None) -> dict:
              }},
             {"name": "PL-QA-2", "actions": plastic_rows[1], "evaluated": True,
              "signature": case_analysis.case_signature(
-                 plastic_rows[1], load_cases.PLASTIC_TABLE_KEY),
+                 plastic_rows[1], load_cases.PLASTIC_TABLE_KEY, inp),
              "results": {"plastic": plastic_2}},
         ],
         "elastic_cases": [

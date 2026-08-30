@@ -18,7 +18,7 @@ sys.path.insert(0, str(ROOT / "app"))
 import result_presentation as presentation  # noqa: E402
 
 from app import modelled_direction  # noqa: E402
-from sector import codes, combined as combined_core  # noqa: E402
+from sector import capacity, codes, combined as combined_core  # noqa: E402
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
 
 
@@ -200,6 +200,7 @@ def test_torsion_subcheck_selection_accepts_positive_infinity_and_first_tie():
     out = {"plastic_cases": [{
         "name": "PL-INF",
         "results": {"torsion": {
+            **_applicable_torsion_evidence(),
             "valid": True,
             "util": 0.5,
             "directional_interactions": {
@@ -221,6 +222,185 @@ def test_torsion_subcheck_selection_accepts_positive_infinity_and_first_tie():
     assert selected["minimum_reinforcement"] == {
         "case_id": "PL-INF", "component": "vx",
     }
+
+
+def test_torsion_subchecks_require_applicable_publication_authority():
+    out = {"plastic_cases": [{
+        "name": "PL-BLOCKED",
+        "results": {"torsion": {
+            **_applicable_torsion_evidence(),
+            "applicability_blocked": True,
+            "interaction": {"valid": True, "value": 987.654},
+            "min_reinf": {"applicable": True, "value": 876.543},
+        }},
+    }]}
+
+    selected = presentation.worked_example_selection({}, out)[
+        "torsion_subchecks"
+    ]
+
+    assert selected == {}
+
+
+def test_torsion_worked_family_ignores_blocked_higher_utilisation():
+    blocked = {
+        **_applicable_torsion_evidence(),
+        "applicability_blocked": True,
+        "valid": True,
+        "util": 9.0,
+    }
+    applicable = {
+        **_applicable_torsion_evidence(),
+        "valid": True,
+        "util": 0.8,
+    }
+    out = {
+        "plastic_cases": [
+            {"name": "PL-BLOCKED", "results": {"torsion": blocked}},
+            {"name": "PL-APPLICABLE", "results": {"torsion": applicable}},
+        ]
+    }
+
+    selected = presentation.worked_example_selection({}, out)["families"]
+
+    assert selected["torsion"] == {
+        "case_id": "PL-APPLICABLE",
+        "component": None,
+    }
+
+
+def test_retained_worked_family_is_reconciled_without_mutating_completed_state():
+    blocked = {
+        **_applicable_torsion_evidence(),
+        "applicability_blocked": True,
+        "valid": True,
+        "util": 9.0,
+    }
+    applicable = {
+        **_applicable_torsion_evidence(),
+        "valid": True,
+        "util": 0.8,
+    }
+    retained = {
+        "schema": 1,
+        "families": {
+            "torsion": {"case_id": "PL-BLOCKED", "component": None},
+        },
+        "crack_examples": [],
+        "crack_comparison": None,
+        "cracking_threshold": None,
+        "torsion_subchecks": {},
+        "heightened_crack_control": None,
+    }
+    out = {
+        "plastic_cases": [
+            {"name": "PL-BLOCKED", "results": {"torsion": blocked}},
+            {"name": "PL-APPLICABLE", "results": {"torsion": applicable}},
+        ],
+        "worked_example_selection": retained,
+    }
+
+    reconciled = presentation.validated_worked_example_selection({}, out)
+
+    assert reconciled["families"]["torsion"] == {
+        "case_id": "PL-APPLICABLE",
+        "component": None,
+    }
+    assert retained["families"]["torsion"]["case_id"] == "PL-BLOCKED"
+    out["worked_example_selection"] = {
+        "schema": 1,
+        "families": {},
+        "crack_examples": [],
+        "crack_comparison": None,
+        "cracking_threshold": None,
+        "torsion_subchecks": {},
+        "heightened_crack_control": None,
+    }
+    assert presentation.validated_worked_example_selection({}, out)[
+        "families"
+    ]["torsion"] == {
+        "case_id": "PL-APPLICABLE",
+        "component": None,
+    }
+    out["worked_example_selection"] = {"schema": True, "families": {}}
+    assert presentation.validated_worked_example_selection({}, out) == {}
+    out["worked_example_selection"] = {
+        "schema": 1,
+        "families": {},
+        "crack_examples": [{
+            "case_id": "__single__",
+            "system": "governing",
+            "branch": [],
+            "label": "long-term",
+        }],
+        "crack_comparison": None,
+        "cracking_threshold": None,
+        "torsion_subchecks": {},
+        "heightened_crack_control": None,
+    }
+    assert presentation.validated_worked_example_selection({}, out) == {}
+    valid_fine_coarse = [
+        {
+            "case_id": "EL-FINE",
+            "system": "fine",
+            "branch": "crack",
+            "label": "long-term (fine)",
+        },
+        {
+            "case_id": "EL-COARSE",
+            "system": "coarse",
+            "branch": "crack_coarse",
+            "label": "long-term (coarse)",
+        },
+    ]
+    assert presentation._valid_worked_crack_examples(valid_fine_coarse) is True
+    assert presentation._valid_worked_crack_examples([
+        valid_fine_coarse[0], {**valid_fine_coarse[0], "case_id": "EL-OTHER"},
+    ]) is False
+    assert presentation._valid_worked_crack_examples([
+        {
+            "case_id": "EL-GOVERNING",
+            "system": "governing",
+            "branch": "crack",
+            "label": "long-term",
+        },
+        valid_fine_coarse[1],
+    ]) is False
+    complete = presentation.worked_example_selection({}, out)
+    out["worked_example_selection"] = complete
+    assert presentation.validated_worked_example_selection({}, out)
+
+    incomplete = copy.deepcopy(complete)
+    incomplete.pop("crack_examples")
+    impossible_family = copy.deepcopy(complete)
+    impossible_family["families"]["plastic"] = {
+        "case_id": "PL-IMPOSSIBLE",
+        "component": "vx",
+    }
+    unhashable_family = copy.deepcopy(complete)
+    unhashable_family["families"]["shear"] = {
+        "case_id": "PL-SHEAR",
+        "component": [],
+    }
+    unhashable_subcheck = copy.deepcopy(complete)
+    unhashable_subcheck["torsion_subchecks"] = {
+        "interaction": {"case_id": "PL-T", "component": {}},
+    }
+    unhashable_duration = copy.deepcopy(complete)
+    unhashable_duration["crack_comparison"] = {
+        "case_id": "EL-C",
+        "duration": [],
+    }
+    for malformed in (
+        incomplete,
+        impossible_family,
+        unhashable_family,
+        unhashable_subcheck,
+        unhashable_duration,
+    ):
+        out["worked_example_selection"] = malformed
+        assert presentation.validated_worked_example_selection({}, out) == {}
+    assert presentation.validated_worked_example_selection({}, {}) == {}
 
 
 @pytest.mark.parametrize(
@@ -277,6 +457,7 @@ def test_formula_631_scope_row_remains_in_the_governing_overview():
         "plastic_case": {"id": "PL-631", "type": "ULS", "source": "C1"},
     }
     torsion = {
+        **_applicable_torsion_evidence(15.0),
         "valid": True,
         "tube_valid": True,
         "transverse_resistance_assessed": True,
@@ -375,6 +556,7 @@ def test_formula_631_overview_keeps_dkna_combined_requirement(
         "plastic_case": {"id": "PL-DK", "type": "ULS", "source": "C1"},
     }
     torsion = {
+        **_applicable_torsion_evidence(15.0),
         "valid": True,
         "tube_valid": True,
         "transverse_resistance_assessed": True,
@@ -432,6 +614,7 @@ def test_formula_631_condition_and_detailing_matrix_remain_separate(
         "plastic_case": {"id": "PL-631", "type": "ULS", "source": "C1"},
     }
     torsion = {
+        **_applicable_torsion_evidence(),
         "valid": True,
         "tube_valid": True,
         "transverse_resistance_assessed": True,
@@ -700,6 +883,20 @@ def _inp(**updates):
     }
     inp.update(updates)
     return inp
+
+
+def _applicable_torsion_evidence(t_ed=40.0):
+    return {
+        "t_ed": t_ed,
+        "applicability_blocked": False,
+        "applicability": capacity.torsion_applicability(
+            {
+                "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+                "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+            },
+            t_ed,
+        ),
+    }
 
 
 @pytest.mark.parametrize(
@@ -1782,6 +1979,7 @@ def test_out_of_range_links_keep_angle_free_concrete_route_and_no_link_verdict()
 def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
     reason = "selected strut-angle range is outside the permitted method range"
     torsion = {
+        **_applicable_torsion_evidence(),
         "tube_valid": True,
         "closed_links_present": True,
         "transverse_resistance_assessed": False,
@@ -1826,6 +2024,194 @@ def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
     assert torsion_row["result"] == "-"
     assert torsion_row["util"] is None
     assert "outside the permitted range" in torsion_row["note"]
+    assert combined_rows
+    assert all(row["status"] == "NOT ASSESSED" for row in combined_rows)
+    assert all(row["util"] is None for row in combined_rows)
+
+
+@pytest.mark.parametrize(
+    "retained_blocker",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param(False, id="explicit-false"),
+    ],
+)
+@pytest.mark.parametrize(
+    "applicability_evidence",
+    (
+        "canonical-blocked",
+        "missing",
+        "non-mapping",
+        "contradictory-applicable",
+        "incomplete-applicable",
+    ),
+)
+def test_torsion_applicability_blocker_outranks_poisoned_publication_values(
+    retained_blocker, applicability_evidence,
+):
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "torsion_member_scope": capacity.TORSION_MEMBER_OPEN,
+        },
+        40.0,
+    )
+    torsion = capacity.unassessed_torsion_applicability(
+        {
+            "applicability": applicability,
+            "t_ed": 40.0,
+            "t_ed_signed": -40.0,
+            "method": codes.EC2_2005_DKNA.label,
+        }
+    )
+    torsion.update(
+        tube_valid=True,
+        transverse_resistance_assessed=True,
+        full_resistance_assessed=True,
+        valid=True,
+        trd=999.0,
+        util=0.01,
+        resistance_status="PASS",
+    )
+    if applicability_evidence == "missing":
+        torsion.pop("applicability", None)
+    elif applicability_evidence == "non-mapping":
+        torsion["applicability"] = []
+    elif applicability_evidence == "contradictory-applicable":
+        torsion["applicability"] = dict(
+            applicability,
+            status="APPLICABLE",
+            reason=None,
+        )
+    elif applicability_evidence == "incomplete-applicable":
+        torsion["applicability"] = {
+            "status": "APPLICABLE",
+            "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "member_scope": capacity.TORSION_MEMBER_CLOSED,
+        }
+    if retained_blocker is None:
+        torsion.pop("applicability_blocked", None)
+    else:
+        torsion["applicability_blocked"] = retained_blocker
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            torsion_on=True,
+            combined_on=True,
+            shear_links=True,
+        ),
+        {
+            "plastic": _plastic(),
+            "torsion": torsion,
+            "combined": {
+                "valid": True,
+                "dkna_valid": True,
+                "dkna_sum": 0.01,
+                "dkna_ok": True,
+            },
+        },
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Torsion applicability"]["status"] == "NOT ASSESSED"
+    assert by_check["Torsion"]["status"] == "NOT ASSESSED"
+    assert by_check["Torsion"]["result"] == "-"
+    assert by_check["Torsion"]["util"] is None
+    assert "Torsion transverse/strut resistance" not in by_check
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    assert combined_rows
+    assert all(row["status"] == "NOT ASSESSED" for row in combined_rows)
+    assert all(row["util"] is None for row in combined_rows)
+
+
+@pytest.mark.parametrize(
+    "authority_case",
+    (
+        "stale-blocker",
+        "malformed-blocker",
+        "lowercase-status",
+        "missing-route-entry",
+        "wrong-route",
+        "stale-reason",
+        "text-ted",
+        "boolean-ted",
+        "nonfinite-ted",
+    ),
+)
+def test_torsion_publication_authority_requires_exact_coherent_route(
+    authority_case,
+):
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+        },
+        40.0,
+    )
+    torsion = {
+        "applicability": dict(applicability),
+        "applicability_blocked": False,
+        "t_ed": 40.0,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "full_resistance_assessed": True,
+        "closed_links_present": True,
+        "valid": True,
+        "trd": 999.0,
+        "util": 0.01,
+        "resistance_status": "PASS",
+        "assessment_status": "PASS",
+    }
+    if authority_case == "stale-blocker":
+        torsion["applicability_blocked"] = True
+    elif authority_case == "malformed-blocker":
+        torsion["applicability_blocked"] = "False"
+    elif authority_case == "lowercase-status":
+        torsion["applicability"]["status"] = "applicable"
+    elif authority_case == "missing-route-entry":
+        torsion["applicability"].pop("full_resistance_route_entered")
+    elif authority_case == "wrong-route":
+        torsion["applicability"]["route"] = "compatibility residual full resistance"
+    elif authority_case == "stale-reason":
+        torsion["applicability"]["reason"] = (
+            "open or warping-sensitive torsion requires member analysis"
+        )
+    elif authority_case == "text-ted":
+        torsion["t_ed"] = "40"
+    elif authority_case == "boolean-ted":
+        torsion["t_ed"] = True
+    else:
+        torsion["t_ed"] = math.nan
+
+    rows = presentation.result_summary_rows(
+        _inp(
+            mode="Plastic",
+            torsion_on=True,
+            combined_on=True,
+            shear_links=True,
+        ),
+        {
+            "plastic": _plastic(),
+            "torsion": torsion,
+            "combined": {
+                "valid": True,
+                "dkna_valid": True,
+                "dkna_sum": 0.01,
+                "dkna_ok": True,
+            },
+        },
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert presentation.torsion_applicability_publication_status(torsion) == (
+        "NOT ASSESSED"
+    )
+    assert by_check["Torsion applicability"]["status"] == "NOT ASSESSED"
+    assert "not mutually consistent" in by_check["Torsion applicability"]["note"]
+    assert by_check["Torsion"]["status"] == "NOT ASSESSED"
+    assert by_check["Torsion"]["result"] == "-"
+    assert by_check["Torsion"]["util"] is None
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
     assert combined_rows
     assert all(row["status"] == "NOT ASSESSED" for row in combined_rows)
     assert all(row["util"] is None for row in combined_rows)
@@ -1887,6 +2273,7 @@ def test_shear_without_links_retains_concrete_screening_verdict():
 
 def test_torsion_without_full_resistance_is_not_assessed_on_every_summary():
     torsion = {
+        **_applicable_torsion_evidence(),
         "tube_valid": True,
         "closed_links_present": False,
         "full_resistance_assessed": False,
@@ -1935,6 +2322,7 @@ def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
         else "longitudinal_torsion_reinforcement_not_verified"
     )
     return {
+        **_applicable_torsion_evidence(),
         "tube_valid": True,
         "closed_links_present": True,
         "transverse_resistance_assessed": True,
@@ -2082,6 +2470,7 @@ def test_combined_longitudinal_component_publishes_governing_ratio():
 
 def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
     torsion = {
+        **_applicable_torsion_evidence(),
         "tube_valid": True,
         "closed_links_present": False,
         "full_resistance_assessed": True,
@@ -2132,6 +2521,7 @@ def test_torsion_geometry_failure_remains_distinct_from_missing_links():
         {
             "plastic": _plastic(),
             "torsion": {
+                **_applicable_torsion_evidence(),
                 "tube_valid": False,
                 "closed_links_present": True,
                 "full_resistance_assessed": True,
@@ -2156,6 +2546,7 @@ def test_torsion_wall_evidence_failure_is_not_assessed_without_stale_value():
         {
             "plastic": _plastic(),
             "torsion": {
+                **_applicable_torsion_evidence(),
                 "tube_valid": False,
                 "closed_links_present": True,
                 "transverse_resistance_assessed": False,

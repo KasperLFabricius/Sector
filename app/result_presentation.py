@@ -280,6 +280,22 @@ _SHEAR_REASON_MESSAGES = {
     ),
 }
 _TORSION_REASON_MESSAGES = {
+    "torsion design basis not established": EngineerMessage(
+        "TORSION-BASIS-NOT-ESTABLISHED",
+        "Select whether the entered torsion is equilibrium torsion or a deliberately retained compatibility-torsion design action",
+    ),
+    "compatibility torsion requires member or system assessment": EngineerMessage(
+        "TORSION-COMPATIBILITY-MEMBER-ASSESSMENT",
+        "Compatibility torsion requires a separate member or system assessment before a sectional resistance verdict can be given",
+    ),
+    "torsion member scope not established": EngineerMessage(
+        "TORSION-MEMBER-SCOPE-NOT-ESTABLISHED",
+        "Confirm that the section is closed or solid and that warping torsion does not govern, or use an applicable member assessment",
+    ),
+    "open or warping-sensitive torsion requires member analysis": EngineerMessage(
+        "TORSION-WARPING-MEMBER-ASSESSMENT",
+        "Open thin-walled or warping-sensitive sections require a separate member assessment before a sectional resistance verdict can be given",
+    ),
     "selected strut-angle range is outside the permitted method range": EngineerMessage(
         "TORSION-STRUT-ANGLE-RANGE",
         "The entered compression-strut range is outside the permitted range for "
@@ -410,7 +426,12 @@ _TORSION_WALL_APPLICABILITY_REASONS = frozenset(
     reason
     for reason in _TORSION_REASON_MESSAGES
     if reason.startswith("torsion sub-tube reinforcement")
-)
+) | frozenset({
+    "torsion design basis not established",
+    "compatibility torsion requires member or system assessment",
+    "torsion member scope not established",
+    "open or warping-sensitive torsion requires member analysis",
+})
 _COMBINED_REASON_MESSAGES = {
     "selected strut-angle range is outside the permitted method range": EngineerMessage(
         "COMBINED-STRUT-ANGLE-RANGE",
@@ -661,6 +682,20 @@ def combined_bending_assessment_blocker(results):
     results = results or {}
     combined = results.get("combined")
     torsion = results.get("torsion")
+    if (
+        combined is not None
+        and isinstance(torsion, Mapping)
+        and (
+            applicability_status := torsion_applicability_publication_status(
+                torsion
+            )
+        ) is not None
+        and applicability_status != "APPLICABLE"
+    ):
+        return (
+            "Torsion prerequisite is not assessed: "
+            + torsion_applicability_note(torsion)
+        )
     if (
         combined is not None
         and isinstance(torsion, Mapping)
@@ -1133,6 +1168,11 @@ def _worked_family_selection(out, family):
         result = case_out.get(family)
         if not result:
             continue
+        if (
+            family == "torsion"
+            and torsion_applicability_publication_status(result) != "APPLICABLE"
+        ):
+            continue
         direction = None
         if family == "plastic":
             if not result.get("converged"):
@@ -1301,6 +1341,8 @@ def _torsion_subcheck_selection(out):
     selected = {}
     for case_order, (case_id, case_out) in enumerate(_publication_cases(out, "plastic")):
         torsion = case_out.get("torsion") or {}
+        if torsion_applicability_publication_status(torsion) != "APPLICABLE":
+            continue
         directional = torsion.get("directional_interactions") or {}
         items = [(key, directional[key]) for key in ("vx", "vy") if key in directional]
         if not items:
@@ -1354,6 +1396,162 @@ def worked_example_selection(inp, out):
             else None
         ),
     }
+
+
+_WORKED_FAMILY_KEYS = frozenset({
+    "plastic",
+    "elastic",
+    "shear",
+    "torsion",
+    "combined",
+    "minimum_reinforcement",
+    "transverse_reinforcement",
+})
+_WORKED_SELECTION_KEYS = frozenset({
+    "schema",
+    "families",
+    "crack_examples",
+    "crack_comparison",
+    "cracking_threshold",
+    "torsion_subchecks",
+    "heightened_crack_control",
+})
+_WORKED_DIRECTION_COMPONENTS = frozenset({None, "vx", "vy"})
+_WORKED_TORSION_SUBCHECK_KEYS = frozenset({
+    "interaction",
+    "minimum_reinforcement",
+})
+
+
+def _worked_case_identity(item, *, component=False):
+    if not isinstance(item, Mapping):
+        return False
+    case_id = item.get("case_id")
+    if type(case_id) is not str or not case_id.strip():
+        return False
+    if component:
+        direction = item.get("component")
+        if direction is not None and type(direction) is not str:
+            return False
+    return True
+
+
+def _valid_worked_family_identity(family, item, *, directional=False):
+    if not _worked_case_identity(item, component=True):
+        return False
+    if family in {"minimum_reinforcement", "transverse_reinforcement"}:
+        return set(item) == {"case_id"}
+    if set(item) != {"case_id", "component"}:
+        return False
+    component = item.get("component")
+    allowed = (
+        _WORKED_DIRECTION_COMPONENTS
+        if directional or family in {"shear", "combined"}
+        else {None}
+    )
+    return component in allowed
+
+
+_WORKED_CRACK_EXAMPLE_SHAPES = frozenset({
+    ("governing", "crack", "long-term"),
+    ("governing", "crack_short", "short-term"),
+    ("fine", "crack", "long-term (fine)"),
+    ("fine", "crack_short", "short-term (fine)"),
+    ("coarse", "crack_coarse", "long-term (coarse)"),
+    ("coarse", "crack_short_coarse", "short-term (coarse)"),
+})
+
+
+def _valid_worked_crack_example(item):
+    """Return whether a retained crack selection has the complete schema-1 shape."""
+
+    if not _worked_case_identity(item):
+        return False
+    if set(item) != {"case_id", "system", "branch", "label"}:
+        return False
+    values = (item.get("system"), item.get("branch"), item.get("label"))
+    if not all(type(value) is str for value in values):
+        return False
+    return values in _WORKED_CRACK_EXAMPLE_SHAPES
+
+
+def _valid_worked_crack_examples(items):
+    if not isinstance(items, (list, tuple)):
+        return False
+    if not all(_valid_worked_crack_example(item) for item in items):
+        return False
+    systems = tuple(item["system"] for item in items)
+    return systems in {
+        (),
+        ("governing",),
+        ("fine",),
+        ("coarse",),
+        ("fine", "coarse"),
+    }
+
+
+def validated_worked_example_selection(inp, out):
+    """Validate retained family identities against the complete current result.
+
+    Report generation still fails closed when the completed calculation has no
+    selection contract.  When a structurally valid contract is present, each
+    retained family is checked against the current result collection so a stale
+    identity cannot hide the actual governing worked calculation.
+    """
+
+    retained = (out or {}).get("worked_example_selection")
+    if (
+        not isinstance(retained, Mapping)
+        or set(retained) != _WORKED_SELECTION_KEYS
+        or type(retained.get("schema")) is not int
+        or retained.get("schema") != 1
+    ):
+        return {}
+    families = retained.get("families")
+    if not isinstance(families, Mapping):
+        return {}
+    for family, item in families.items():
+        if (
+            family not in _WORKED_FAMILY_KEYS
+            or not _valid_worked_family_identity(family, item)
+        ):
+            return {}
+    crack_examples = retained.get("crack_examples", ())
+    if not _valid_worked_crack_examples(crack_examples):
+        return {}
+    comparison = retained.get("crack_comparison")
+    if comparison is not None and (
+        not _worked_case_identity(comparison)
+        or set(comparison) != {"case_id", "duration"}
+        or type(comparison.get("duration")) is not str
+        or comparison.get("duration") not in {"long_term", "short_term"}
+    ):
+        return {}
+    threshold = retained.get("cracking_threshold")
+    if threshold is not None and (
+        not _worked_case_identity(threshold)
+        or set(threshold) != {"case_id"}
+    ):
+        return {}
+    torsion_subchecks = retained.get("torsion_subchecks", {})
+    if (
+        not isinstance(torsion_subchecks, Mapping)
+        or not set(torsion_subchecks).issubset(_WORKED_TORSION_SUBCHECK_KEYS)
+        or not all(
+            _valid_worked_family_identity("torsion", item, directional=True)
+            for item in torsion_subchecks.values()
+        )
+    ):
+        return {}
+    heightened = retained.get("heightened_crack_control")
+    if heightened is not None and (
+        not isinstance(heightened, Mapping)
+        or set(heightened) != {"result_key"}
+        or heightened.get("result_key") != "heightened_crack_control"
+    ):
+        return {}
+
+    return worked_example_selection(inp, out)
 
 
 def plastic_action_assessment(pl):
@@ -1818,6 +2016,107 @@ def torsion_assessment_note(torsion):
         "torsion",
         context="torsion overall assessment reason",
     )
+
+
+def torsion_applicability_note(torsion):
+    """Return safe member-scope guidance for a retained torsion result."""
+
+    torsion = torsion or {}
+    applicability = torsion.get("applicability")
+    if not isinstance(applicability, Mapping):
+        return (
+            "The torsion design basis and member scope have not been established"
+        )
+    status = torsion_applicability_publication_status(torsion)
+    if status == "APPLICABLE":
+        basis = applicability.get("design_basis")
+        if basis == capacity.TORSION_DESIGN_EQUILIBRIUM:
+            return (
+                "Equilibrium torsion is selected; the entered TEd must be resisted "
+                "by the section"
+            )
+        if basis == capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL:
+            return (
+                "Compatibility torsion is retained as a deliberately entered "
+                "residual design action; Sector checks that TEd in full but does "
+                "not establish redistribution or member/system conditions"
+            )
+    if status == "NOT APPLICABLE":
+        return "No torsion resistance assessment is required for TEd = 0"
+    if applicability.get("status") != "NOT ASSESSED":
+        return (
+            "The torsion design basis, member scope and full-resistance route "
+            "are not mutually consistent; confirm the selections and calculate "
+            "again"
+        )
+    return result_reason(
+        applicability.get("reason")
+        or torsion.get("assessment_reason")
+        or "torsion design basis not established",
+        "torsion",
+        context="torsion applicability reason",
+    )
+
+
+def torsion_publication_t_ed(torsion):
+    """Return the only applied torsion value safe for public display."""
+
+    torsion = torsion or {}
+    t_ed = _publication_metric(torsion.get("t_ed"))
+    if t_ed is None or t_ed < 0.0:
+        return None
+    return t_ed
+
+
+def torsion_applicability_publication_status(torsion):
+    """Return the only applicability status safe for result publication."""
+
+    torsion = torsion or {}
+    if (
+        "applicability_blocked" in torsion
+        and torsion.get("applicability_blocked") is not False
+    ):
+        return "NOT ASSESSED"
+    applicability = torsion.get("applicability")
+    if not isinstance(applicability, Mapping):
+        return "NOT ASSESSED"
+    status = applicability.get("status")
+    if type(status) is not str:
+        return "NOT ASSESSED"
+    if status not in {"APPLICABLE", "NOT APPLICABLE", "NOT ASSESSED"}:
+        return "NOT ASSESSED"
+    t_ed = torsion_publication_t_ed(torsion)
+    if t_ed is None:
+        return "NOT ASSESSED"
+    design_basis = applicability.get("design_basis")
+    member_scope = applicability.get("member_scope")
+    if design_basis not in capacity.TORSION_DESIGN_BASES:
+        return "NOT ASSESSED"
+    if member_scope not in capacity.TORSION_MEMBER_SCOPES:
+        return "NOT ASSESSED"
+    if status == "NOT APPLICABLE":
+        return "NOT APPLICABLE" if t_ed == 0.0 else "NOT ASSESSED"
+    if status != "APPLICABLE":
+        return "NOT ASSESSED"
+    expected_route = {
+        capacity.TORSION_DESIGN_EQUILIBRIUM: "equilibrium full resistance",
+        capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL: (
+            "compatibility residual full resistance"
+        ),
+    }.get(design_basis)
+    if (
+        t_ed == 0.0
+        or applicability.get("design_basis_valid") is not True
+        or applicability.get("member_scope_valid") is not True
+        or expected_route is None
+        or member_scope != capacity.TORSION_MEMBER_CLOSED
+        or applicability.get("full_resistance_route_entered") is not True
+        or applicability.get("route") != expected_route
+        or applicability.get("reason") is not None
+        or applicability.get("guidance") is not None
+    ):
+        return "NOT ASSESSED"
+    return "APPLICABLE"
 
 
 _MINIMUM_REINFORCEMENT_SCREEN_NOTES = {
@@ -3176,6 +3475,8 @@ def result_summary_rows(inp, results, *, stale=False):
     torsion = results.get("torsion")
     torsion_tube_valid = False
     torsion_transverse_resistance_assessed = False
+    torsion_applicability_status = None
+    torsion_applicability_blocks = False
     if torsion is None and inp.get("torsion_on"):
         rows.append(_summary_row(
             "Torsion", "plastic", "NOT RUN",
@@ -3183,6 +3484,30 @@ def result_summary_rows(inp, results, *, stale=False):
             overview_key="torsion",
         ))
     elif torsion is not None and inp.get("torsion_on"):
+        torsion_applicability_status = torsion_applicability_publication_status(
+            torsion
+        )
+        torsion_applicability_blocks = (
+            torsion_applicability_status is not None
+            and torsion_applicability_status != "APPLICABLE"
+        ) or torsion.get("applicability_blocked") is True
+        if torsion_applicability_status is not None:
+            applicability_case = (
+                action_set(inp, "plastic")["id"] or "Unnamed case"
+            )
+            rows.append(_summary_row(
+                "Torsion applicability",
+                "plastic",
+                torsion_applicability_status,
+                torsion_applicability_status,
+                "Design basis and member scope",
+                None,
+                "Torsion",
+                torsion_applicability_note(torsion),
+                inp,
+                overview_key=f"torsion:applicability:{applicability_case}",
+                overview_parent="torsion",
+            ))
         torsion_tube_valid = (
             torsion.get("tube_valid") is True
             if "tube_valid" in torsion
@@ -3195,18 +3520,34 @@ def result_summary_rows(inp, results, *, stale=False):
             if "full_resistance_assessed" in torsion
             else torsion.get("valid") is True
         )
+        if torsion_applicability_blocks:
+            torsion_tube_valid = False
+            torsion_transverse_resistance_assessed = False
         if (
             "closed_links_present" in torsion
             and torsion.get("closed_links_present") is not True
         ):
             torsion_transverse_resistance_assessed = False
         if not torsion_tube_valid:
-            tube_reason = str(torsion.get("reason") or "")
-            tube_status = (
-                "NOT ASSESSED"
-                if tube_reason in _TORSION_WALL_APPLICABILITY_REASONS
-                else "INVALID"
-            )
+            if torsion_applicability_blocks:
+                tube_status = (
+                    "NOT APPLICABLE"
+                    if torsion_applicability_status == "NOT APPLICABLE"
+                    else "NOT ASSESSED"
+                )
+                tube_note = torsion_applicability_note(torsion)
+            else:
+                tube_reason = str(torsion.get("reason") or "")
+                tube_status = (
+                    "NOT ASSESSED"
+                    if tube_reason in _TORSION_WALL_APPLICABILITY_REASONS
+                    else "INVALID"
+                )
+                tube_note = result_reason(
+                    torsion.get("reason") or "torsion tube evidence is invalid",
+                    "torsion",
+                    context="torsion summary geometry reason",
+                )
             rows.append(_summary_row(
                 "Torsion",
                 "plastic",
@@ -3215,11 +3556,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 "-",
                 None,
                 "Torsion",
-                result_reason(
-                    torsion.get("reason") or "torsion tube evidence is invalid",
-                    "torsion",
-                    context="torsion summary geometry reason",
-                ),
+                tube_note,
                 inp,
                 overview_key="torsion",
             ))
@@ -3370,20 +3707,21 @@ def result_summary_rows(inp, results, *, stale=False):
             detailing_row["overview_scope_in_result_table"] = True
             rows.append(detailing_row)
 
-        directional_screens = torsion.get("directional_interactions") or {}
-        if directional_screens:
-            for component, label in (
-                ("vx", "Vx+T Formula (6.31) minimum-reinforcement screen"),
-                ("vy", "Vy+T Formula (6.31) minimum-reinforcement screen"),
-            ):
-                item = directional_screens.get(component) or {}
-                append_minimum_reinforcement_screen(
-                    item.get("min_reinf"),
-                    label=label,
-                    overview_key=f"torsion:minimum_reinforcement:{component}",
-                )
-        else:
-            append_minimum_reinforcement_screen(torsion.get("min_reinf"))
+        if not torsion_applicability_blocks:
+            directional_screens = torsion.get("directional_interactions") or {}
+            if directional_screens:
+                for component, label in (
+                    ("vx", "Vx+T Formula (6.31) minimum-reinforcement screen"),
+                    ("vy", "Vy+T Formula (6.31) minimum-reinforcement screen"),
+                ):
+                    item = directional_screens.get(component) or {}
+                    append_minimum_reinforcement_screen(
+                        item.get("min_reinf"),
+                        label=label,
+                        overview_key=f"torsion:minimum_reinforcement:{component}",
+                    )
+            else:
+                append_minimum_reinforcement_screen(torsion.get("min_reinf"))
 
     combined = results.get("combined")
     if combined is None and inp.get("combined_on"):
@@ -3392,8 +3730,13 @@ def result_summary_rows(inp, results, *, stale=False):
         )
         torsion_not_assessed = (
             torsion is not None
-            and torsion_tube_valid
-            and not torsion_transverse_resistance_assessed
+            and (
+                torsion_applicability_blocks
+                or (
+                    torsion_tube_valid
+                    and not torsion_transverse_resistance_assessed
+                )
+            )
         )
         rows.append(_summary_row(
             (

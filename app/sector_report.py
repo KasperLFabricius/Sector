@@ -55,6 +55,7 @@ import report_equation_contract
 import viz
 import result_presentation as presentation
 from app import engineer_messages
+from sector import capacity
 from sector import codes as ec2_codes
 from sector import detailing
 from sector import fatigue as fatigue_core
@@ -398,6 +399,57 @@ def _html_escape(value, quote=True):
         ),
         escaped,
     ))
+
+
+def _torsion_case_authority_rows(inp):
+    """Return report-table rows for each Plastic case's torsion authority."""
+
+    if inp.get("plastic_cases") is not None:
+        rows = []
+        authorities = inp.get(capacity.TORSION_CASE_AUTHORITIES_KEY)
+        for record in case_analysis.case_records(inp, "plastic"):
+            case_name = record.get("name") or "Unnamed case"
+            authority = capacity.torsion_case_authority(
+                authorities,
+                record.get("name"),
+            )
+            rows.extend([
+                [
+                    "Torsion design basis - " + _html_escape(case_name),
+                    _html_escape(
+                        authority[capacity.TORSION_CASE_DESIGN_BASIS_KEY]
+                    ),
+                ],
+                [
+                    "Torsion member scope - " + _html_escape(case_name),
+                    _html_escape(
+                        authority[capacity.TORSION_CASE_MEMBER_SCOPE_KEY]
+                    ),
+                ],
+            ])
+        return rows
+    direct_case = inp.get("plastic_case")
+    case_name = (
+        str(direct_case.get("id") or "Current action")
+        if isinstance(direct_case, Mapping)
+        else "Current action"
+    )
+    return [
+        [
+            "Torsion design basis - " + _html_escape(case_name),
+            _html_escape(
+                inp.get("torsion_design_basis")
+                or capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        ],
+        [
+            "Torsion member scope - " + _html_escape(case_name),
+            _html_escape(
+                inp.get("torsion_member_scope")
+                or capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        ],
+    ]
 
 
 def _result_reason(value, family, context):
@@ -1158,8 +1210,15 @@ class ReportBuilder:
         self._publication_subsection_title = None
         selection = self._base_out.get("worked_example_selection")
         self._worked_example_selection = (
-            selection
-            if isinstance(selection, Mapping) and selection.get("schema") == 1
+            presentation.validated_worked_example_selection(
+                self._base_inp,
+                self._base_out,
+            )
+            if (
+                isinstance(selection, Mapping)
+                and type(selection.get("schema")) is int
+                and selection.get("schema") == 1
+            )
             else {}
         )
         families = self._worked_example_selection.get("families")
@@ -2439,6 +2498,13 @@ class ReportBuilder:
             for case_inp, case_out in plastic_contexts:
                 if self._case_id(case_inp, "plastic") != selection.get("case_id"):
                     continue
+                if (
+                    presentation.torsion_applicability_publication_status(
+                        case_out.get("torsion") or {}
+                    )
+                    != "APPLICABLE"
+                ):
+                    continue
                 case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
                 jobs.append((
                     case_inp,
@@ -3223,7 +3289,11 @@ class ReportBuilder:
             if inp.get("torsion_on"):
                 resistance_rows.extend([
                     ["Torsion method", _html_escape(str(inp.get("torsion_method") or "-"))],
-                    ["Torsion wall thickness t<sub>ef</sub>", self._brief_auto_dimension(inp.get("torsion_tef"))],
+                    [
+                        "Torsion wall thickness t<sub>ef</sub>",
+                        self._brief_auto_dimension(inp.get("torsion_tef")),
+                    ],
+                    *_torsion_case_authority_rows(inp),
                     ["Concrete tensile factor gamma<sub>ct</sub>", _fmt(inp.get("torsion_gamma_ct"), 3)],
                     [
                         "Requested nu<sub>t</sub> = nu<sub>v</sub> detailing allowance",
@@ -4725,6 +4795,7 @@ class ReportBuilder:
             torsion_result = torsion_results[0]
             rows.extend([
                 ["Torsion method", str(torsion_result.get("method") or "-")],
+                *_torsion_case_authority_rows(inp),
                 [
                     "Concrete tensile factor gamma<sub>ct</sub>",
                     _fmt(
@@ -5082,7 +5153,11 @@ class ReportBuilder:
         if family in {"plastic", "elastic"}:
             return result.get("converged") is False
         if family == "torsion":
-            return result.get("valid") is False
+            return (
+                result.get("valid") is False
+                or presentation.torsion_applicability_publication_status(result)
+                == "NOT ASSESSED"
+            )
         if family in {"minimum_reinforcement", "transverse_reinforcement"}:
             checks = tuple(result.get("checks") or ())
             if not checks:
@@ -8918,6 +8993,13 @@ class ReportBuilder:
         ):
             return None, None
         torsion_result = self.out.get("torsion") or {}
+        if (
+            presentation.torsion_applicability_publication_status(
+                torsion_result
+            )
+            != "APPLICABLE"
+        ):
+            return None, None
         component = selection.get("component")
         if component is None:
             item = torsion_result
@@ -9097,8 +9179,71 @@ class ReportBuilder:
 
     def _torsion(self):
         t = self.out["torsion"]
-        tube = t["tube"]
         critical = self._selected_family("torsion", self.inp) is not None
+        self._case_heading("Torsion (thin-walled tube)", "plastic")
+        applicability = t.get("applicability")
+        if not isinstance(applicability, Mapping):
+            applicability = {}
+        design_basis = applicability.get("design_basis")
+        if design_basis not in capacity.TORSION_DESIGN_BASES:
+            design_basis = capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        member_scope = applicability.get("member_scope")
+        if member_scope not in capacity.TORSION_MEMBER_SCOPES:
+            member_scope = capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        applicability_status = (
+            presentation.torsion_applicability_publication_status(t)
+        )
+        self._h2("Torsion applicability and member scope")
+        self._table(
+            [
+                ["Design basis", "Member scope", "Applicability"],
+                [design_basis, member_scope, applicability_status],
+            ],
+            [70 * mm, 70 * mm, 40 * mm],
+            font=6.5,
+        )
+        clauses = applicability.get("clauses") or ()
+        applicability_note = _html_escape(
+            presentation.torsion_applicability_note(t)
+        )
+        if clauses:
+            applicability_note += ". Clauses: " + "; ".join(
+                _html_escape(str(clause)) for clause in clauses
+            )
+        self._small(applicability_note + ".")
+        limitation = applicability.get("limitation")
+        if (
+            design_basis == capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL
+            and isinstance(limitation, str)
+        ):
+            self._small(_html_escape(limitation))
+        if applicability_status != "APPLICABLE":
+            t_ed = presentation.torsion_publication_t_ed(t)
+            self._p(
+                f"<b>{applicability_status}:</b> "
+                + _html_escape(presentation.torsion_applicability_note(t))
+                + ". Resistance, utilisation, governing angle, longitudinal "
+                "demand and dependent interaction verdicts are withheld."
+            )
+            self._table(
+                [
+                    [
+                        "T<sub>Ed</sub>",
+                        "T<sub>Rd</sub>",
+                        "Utilisation",
+                        "Overall status",
+                    ],
+                    [
+                        "-" if t_ed is None else f"{_fmt(t_ed, 3)} kN&#183;m",
+                        "-",
+                        "-",
+                        applicability_status,
+                    ],
+                ],
+                [45 * mm, 45 * mm, 45 * mm, 45 * mm],
+            )
+            return
+        tube = t["tube"]
         tube_valid = (
             t.get("tube_valid") is True
             if "tube_valid" in t
@@ -9121,7 +9266,6 @@ class ReportBuilder:
             )
             and t.get("valid") is True
         )
-        self._case_heading("Torsion (thin-walled tube)", "plastic")
         if transverse_resistance_available:
             self._p(
                 "The transverse-steel and concrete-strut resistance components "

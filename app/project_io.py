@@ -261,7 +261,8 @@ SCALAR_KEYS = [
     "shear_vy_transverse_leg_spacing", "strut_cot_min",
     "strut_cot_max",
     # Torsion and combined resistance.
-    "torsion_on", "torsion_method", "torsion_T", "torsion_tef",
+    "torsion_on", "torsion_method", "torsion_design_basis",
+    "torsion_member_scope", "torsion_T", "torsion_tef",
     "torsion_nu_v", "torsion_gamma_ct", "torsion_subdivide",
     "torsion_nsub", "torsion_sub_x0", "torsion_sub_y0",
     "torsion_sub_x1", "torsion_sub_y1", "torsion_sub_x2",
@@ -270,6 +271,7 @@ SCALAR_KEYS = [
     "torsion_sub_h1", "torsion_sub_b2", "torsion_sub_h2",
     "torsion_sub_b3", "torsion_sub_h3", "combined_on",
     "combined_method", "combined_mv_independent",
+    capacity.TORSION_CASE_AUTHORITIES_KEY,
     "capacity_steel_material_id", "label_scale", "label_min_gap",
     # Project/report metadata. No checker/approver sign-off fields.
     "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev",
@@ -377,6 +379,8 @@ _TEXT_SCALAR_KEYS = frozenset({
     "shear_section_form",
     "shear_duct_case",
     "torsion_method",
+    "torsion_design_basis",
+    "torsion_member_scope",
     "combined_method",
     "capacity_steel_material_id",
     "rep_proj_no",
@@ -392,6 +396,7 @@ _NESTED_SCALAR_KEYS = frozenset({
     material_catalog.PRESTRESS_CATALOG_KEY,
     fatigue_inputs.DETAIL_CATALOG_KEY,
     fatigue_inputs.BASIS_KEY,
+    capacity.TORSION_CASE_AUTHORITIES_KEY,
 })
 
 _EXACT_TEXT_OPTIONS = {
@@ -411,6 +416,8 @@ _EXACT_TEXT_OPTIONS = {
     "qsv_qs_rebar_mode": frozenset({"By number", "By spacing"}),
     "shear_section_form": frozenset(shear.SHEAR_SECTION_FORMS),
     "shear_duct_case": frozenset(shear.SHEAR_DUCT_CASES),
+    "torsion_design_basis": frozenset(capacity.TORSION_DESIGN_BASES),
+    "torsion_member_scope": frozenset(capacity.TORSION_MEMBER_SCOPES),
     "conc_preset": frozenset(material_presets.CONCRETE_PRESETS),
     "mild_preset": frozenset({
         *material_catalog.presets("mild"),
@@ -672,6 +679,46 @@ def _validate_fatigue_basis(value, key: str) -> dict:
     return basis
 
 
+def _validate_torsion_case_authorities(value, key: str) -> dict:
+    """Validate the separately persisted Plastic-case authority mapping."""
+
+    if not isinstance(value, Mapping):
+        raise _invalid_input(f"{key} must be an object")
+    validated = {}
+    expected_fields = {
+        capacity.TORSION_CASE_DESIGN_BASIS_KEY,
+        capacity.TORSION_CASE_MEMBER_SCOPE_KEY,
+    }
+    for raw_name, raw_entry in value.items():
+        name = _strict_text(raw_name, f"{key} case name")
+        if not name.strip() or name != name.strip():
+            raise _invalid_input(f"{key} contains an invalid case name")
+        if not isinstance(raw_entry, Mapping):
+            raise _invalid_input(f"{key} {name} must be an object")
+        entry = dict(raw_entry)
+        if set(entry) != expected_fields:
+            raise _invalid_input(
+                f"{key} {name} must contain design basis and member scope"
+            )
+        design_basis = _strict_text(
+            entry[capacity.TORSION_CASE_DESIGN_BASIS_KEY],
+            f"{key} {name} design basis",
+        )
+        member_scope = _strict_text(
+            entry[capacity.TORSION_CASE_MEMBER_SCOPE_KEY],
+            f"{key} {name} member scope",
+        )
+        if design_basis not in capacity.TORSION_DESIGN_BASES:
+            raise _invalid_input(f"{key} {name} design basis is not supported")
+        if member_scope not in capacity.TORSION_MEMBER_SCOPES:
+            raise _invalid_input(f"{key} {name} member scope is not supported")
+        validated[name] = {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: design_basis,
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: member_scope,
+        }
+    return validated
+
+
 def _validate_nested_scalar(value, key: str):
     if key == material_catalog.MILD_CATALOG_KEY:
         return _validate_material_catalog(value, "mild", key)
@@ -681,6 +728,8 @@ def _validate_nested_scalar(value, key: str):
         return _validate_fatigue_catalog(value, key)
     if key == fatigue_inputs.BASIS_KEY:
         return _validate_fatigue_basis(value, key)
+    if key == capacity.TORSION_CASE_AUTHORITIES_KEY:
+        return _validate_torsion_case_authorities(value, key)
     raise RuntimeError(f"unhandled nested project scalar {key}")
 
 
@@ -979,6 +1028,20 @@ def _obj_to_table(value, key: str) -> pd.DataFrame:
     return canonical
 
 
+def _validate_project_case_identities(tables: Mapping) -> None:
+    """Reject ambiguous action identities before scalar authority is rebuilt."""
+
+    errors = load_cases.validation_errors(
+        tables.get(load_cases.PLASTIC_TABLE_KEY),
+        tables.get(load_cases.ELASTIC_TABLE_KEY),
+    )
+    if errors:
+        raise _invalid_input(
+            "invalid project action identities: "
+            + "; ".join(dict.fromkeys(error.text for error in errors))
+        )
+
+
 def _geometry_points(frame: pd.DataFrame, label: str) -> list[tuple[float, float]]:
     if not all(column in frame.columns for column in _GEOMETRY_COLUMNS):
         raise ValueError(
@@ -1083,6 +1146,34 @@ def _canonical_scalars(
     migrate_gamma_v: bool = False,
 ) -> dict:
     payload = _validated_scalar_payload(scalars)
+    payload.setdefault(
+        "torsion_design_basis",
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+    )
+    payload.setdefault(
+        "torsion_member_scope",
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+    )
+    raw_case_authorities = payload.setdefault(
+        capacity.TORSION_CASE_AUTHORITIES_KEY,
+        {},
+    )
+    plastic_cases = load_cases.active_table(
+        tables.get(load_cases.PLASTIC_TABLE_KEY),
+        load_cases.PLASTIC_TABLE_KEY,
+    )
+    case_names = tuple(
+        str(name).strip()
+        for name in plastic_cases[load_cases.NAME].tolist()
+        if str(name).strip()
+    )
+    # Project files from before this bounded contract have no per-case mapping.
+    # Give every current Plastic row an explicit fail-closed entry, while pruning
+    # renamed/deleted/orphaned names so old authority cannot silently reappear.
+    payload[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+        name: capacity.torsion_case_authority(raw_case_authorities, name)
+        for name in case_names
+    }
     try:
         plastic.plastic_sweep_angles(
             payload.get("v_min", 0.0),
@@ -2053,6 +2144,11 @@ def parse_project_with_info(text: str):
         key: _obj_to_table(data["tables"][key], key)
         for key in PROJECT_TABLE_KEYS
     }
+    # Case-scoped engineering authority is keyed by the practising engineer's
+    # action name.  Establish one unambiguous global identity set before any
+    # authority mapping is canonicalised; otherwise a duplicate survivor could
+    # inherit the other row's evidence after an edit or deletion.
+    _validate_project_case_identities(tables)
     if source_version == LEGACY_MIGRATABLE_VERSION:
         allowed_schema25_scalars = (
             set(SCALAR_KEYS)
@@ -2061,6 +2157,7 @@ def parse_project_with_info(text: str):
                 SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
                 HEIGHTENED_PERMITTED_CRACK_WIDTH_KEY,
                 "shear_gamma_v",
+                capacity.TORSION_CASE_AUTHORITIES_KEY,
             }
             | {LEGACY_SHARED_CRACK_WIDTH_KEY}
             | LEGACY_HEIGHTENED_OPERAND_KEYS
@@ -2118,7 +2215,10 @@ def parse_project_with_info(text: str):
             migrate_gamma_v=True,
         )
     elif source_version == MIGRATABLE_VERSION:
-        allowed_schema26_scalars = set(SCALAR_KEYS) - {"shear_gamma_v"}
+        allowed_schema26_scalars = set(SCALAR_KEYS) - {
+            "shear_gamma_v",
+            capacity.TORSION_CASE_AUTHORITIES_KEY,
+        }
         unknown_scalars = (
             set(raw_scalars)
             - allowed_schema26_scalars

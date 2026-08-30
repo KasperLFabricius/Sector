@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -22,6 +23,7 @@ import material_catalog  # noqa: E402
 import project_io  # noqa: E402
 import reinforcement_table as rebar_table  # noqa: E402
 import viz  # noqa: E402
+from sector import capacity  # noqa: E402
 
 
 _RESULT_KEYS = (
@@ -1228,6 +1230,25 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
         _mutated_project(valid_a, scalar("qsv_b_mm", "400")),
         _mutated_project(valid_a, scalar("mode", {"value": "Both"})),
         _mutated_project(valid_a, scalar("shear_method", True)),
+        _mutated_project(valid_a, scalar("torsion_design_basis", True)),
+        _mutated_project(
+            valid_a,
+            scalar("torsion_member_scope", "Closed section"),
+        ),
+        _mutated_project(
+            valid_a,
+            scalar(
+                capacity.TORSION_CASE_AUTHORITIES_KEY,
+                {
+                    "PL-01": {
+                        capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                            capacity.TORSION_DESIGN_EQUILIBRIUM
+                        ),
+                        capacity.TORSION_CASE_MEMBER_SCOPE_KEY: True,
+                    }
+                },
+            ),
+        ),
         _mutated_project(valid_a, scalar("sls_code", {})),
         _mutated_project(valid_a, wrong_rows),
         _mutated_project(valid_a, negative_bar_area),
@@ -1243,6 +1264,8 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
         "conc_fck",
         "qsv_b_mm",
         "shear_method",
+        "torsion_design_basis",
+        "torsion_member_scope",
         "sls_code",
         "plastic_cases_base",
         "bars_base",
@@ -1289,6 +1312,123 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
     assert not at.exception
     for key in _RESULT_KEYS:
         assert key not in at.session_state
+
+
+def test_real_upload_without_case_authority_ignores_permissive_global_aliases():
+    at = _fresh()
+    source = _replacement_bytes(at, 41.0)
+
+    def remove_mapping_but_keep_old_aliases(data: dict) -> None:
+        data["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY, None)
+        data["scalars"]["torsion_design_basis"] = (
+            capacity.TORSION_DESIGN_EQUILIBRIUM
+        )
+        data["scalars"]["torsion_member_scope"] = (
+            capacity.TORSION_MEMBER_CLOSED
+        )
+
+    candidate_era = _mutated_project(source, remove_mapping_but_keep_old_aliases)
+    _goto_project(at)
+    _upload(at, candidate_era)
+
+    mapping = at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY]
+    assert mapping == {
+        "PL-01": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        }
+    }
+    _goto_page(at, "Inputs")
+    at.session_state["_input_tab"] = f"1 {chr(0x00B7)} Analysis settings"
+    at.run()
+    assert at.selectbox(key="_torsion_case_design_basis::0::PL-01").value == (
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+    assert at.selectbox(key="_torsion_case_member_scope::0::PL-01").value == (
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+
+    cases = at.session_state[load_cases.PLASTIC_TABLE_KEY].copy(deep=True)
+    cases.at[0, "t_ed_knm"] = 40.0
+    at.session_state[load_cases.PLASTIC_TABLE_KEY] = load_cases.normalise_table(
+        cases,
+        load_cases.PLASTIC_TABLE_KEY,
+    )
+    for key in (
+        "plastic_cases_editor",
+        f"_{load_cases.PLASTIC_TABLE_KEY}_editor_seed",
+    ):
+        try:
+            del at.session_state[key]
+        except KeyError:
+            pass
+    at.checkbox(key="torsion_on").set_value(True).run()
+    _calculate(at)
+    result = at.session_state["results"]["plastic_cases"][0]["results"][
+        "torsion"
+    ]
+    assert result["assessment_status"] == "NOT ASSESSED"
+    assert result["trd"] is None
+    assert result["util"] is None
+    assert not at.exception
+
+
+def test_hash_valid_duplicate_case_project_is_rejected_before_delete_can_transfer_authority():
+    at = _fresh()
+    valid = _replacement_bytes(at, 41.0)
+
+    def applicable_case(data: dict) -> None:
+        table = data["tables"][load_cases.PLASTIC_TABLE_KEY]
+        name_index = table["columns"].index(load_cases.NAME)
+        torsion_index = table["columns"].index("t_ed_knm")
+        name = table["rows"][0][name_index]
+        table["rows"][0][torsion_index] = 40.0
+        data["scalars"]["torsion_on"] = True
+        data["scalars"][capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+            name: {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_EQUILIBRIUM
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                    capacity.TORSION_MEMBER_CLOSED
+                ),
+            }
+        }
+
+    valid = _mutated_project(valid, applicable_case)
+    _goto_project(at)
+    _upload(at, valid)
+    before_project = _project_signature(at)
+    before_identity = at.session_state["_project_upload_content_identity"]
+    before_results = _completed_result_evidence(at)
+
+    def duplicate_case(data: dict) -> None:
+        applicable_case(data)
+        table = data["tables"][load_cases.PLASTIC_TABLE_KEY]
+        torsion_index = table["columns"].index("t_ed_knm")
+        duplicate = copy.deepcopy(table["rows"][0])
+        duplicate[torsion_index] = 80.0
+        table["rows"].append(duplicate)
+
+    hostile = _mutated_project(valid, duplicate_case)
+    _upload(at, hostile)
+
+    assert _project_signature(at) == before_project
+    assert at.session_state["_project_upload_content_identity"] == before_identity
+    _assert_result_evidence(at, before_results)
+    assert len(at.session_state[load_cases.PLASTIC_TABLE_KEY]) == 1
+    visible = "\n".join(str(item.value) for item in at.error)
+    assert "New file was not applied" in visible
+    assert "Select an intact, compatible Sector project file" in visible
+    assert not any(
+        token in visible.casefold()
+        for token in ("duplicate", "payload", "schema", "hash", "traceback")
+    )
+    assert not at.exception
 
 
 def test_real_upload_rejects_invalid_material_domain_transactionally() -> None:

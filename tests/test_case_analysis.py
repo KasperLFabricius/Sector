@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import case_analysis  # noqa: E402
 import load_cases  # noqa: E402
+from sector import capacity  # noqa: E402
 
 
 def _plastic(rows):
@@ -125,6 +126,114 @@ def test_maps_signed_cases_flags_and_zero_capacity_actions():
     assert el_crack["sls_cw"] is True
     assert result["plastic"]["id"] == "PL-A"
     assert result["elastic"]["id"] == "EL-STRESS"
+
+
+def test_plastic_cases_keep_separate_torsion_authority_by_case_name():
+    mapping = {
+        "PL-A": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_EQUILIBRIUM
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        },
+        "PL-B": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_OPEN,
+        },
+    }
+    base = _base(**{capacity.TORSION_CASE_AUTHORITIES_KEY: mapping})
+    records = case_analysis.case_records(base, "plastic")
+    first, second = (
+        case_analysis.plastic_case_input(base, record) for record in records
+    )
+
+    assert first["torsion_design_basis"] == capacity.TORSION_DESIGN_EQUILIBRIUM
+    assert first["torsion_member_scope"] == capacity.TORSION_MEMBER_CLOSED
+    assert second["torsion_design_basis"] == (
+        capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+    )
+    assert second["torsion_member_scope"] == capacity.TORSION_MEMBER_OPEN
+
+    reordered = list(reversed(records))
+    assert case_analysis.plastic_case_input(
+        base, reordered[0]
+    )["torsion_design_basis"] == capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+    assert case_analysis.case_signature(
+        records[0], load_cases.PLASTIC_TABLE_KEY, base
+    ) != case_analysis.case_signature(
+        records[1], load_cases.PLASTIC_TABLE_KEY, base
+    )
+    changed_mapping = {
+        **mapping,
+        "PL-A": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        },
+    }
+    changed_base = {
+        **base,
+        capacity.TORSION_CASE_AUTHORITIES_KEY: changed_mapping,
+    }
+    assert case_analysis.case_signature(
+        records[0], load_cases.PLASTIC_TABLE_KEY, base
+    ) != case_analysis.case_signature(
+        records[0], load_cases.PLASTIC_TABLE_KEY, changed_base
+    )
+    assert case_analysis.case_signature(
+        records[1], load_cases.PLASTIC_TABLE_KEY, base
+    ) == case_analysis.case_signature(
+        records[1], load_cases.PLASTIC_TABLE_KEY, changed_base
+    )
+
+
+@pytest.mark.parametrize(
+    "authorities",
+    (
+        None,
+        True,
+        {"PL-B": True},
+        {
+            "PL-B": {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_EQUILIBRIUM
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: True,
+            }
+        },
+        {
+            "PL-B": {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_EQUILIBRIUM
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                    capacity.TORSION_MEMBER_CLOSED
+                ),
+                "extra": "ignored",
+            }
+        },
+    ),
+)
+def test_missing_or_malformed_case_authority_never_uses_global_fallback(
+    authorities,
+):
+    base = _base(
+        torsion_design_basis=capacity.TORSION_DESIGN_EQUILIBRIUM,
+        torsion_member_scope=capacity.TORSION_MEMBER_CLOSED,
+        **{capacity.TORSION_CASE_AUTHORITIES_KEY: authorities},
+    )
+    record = case_analysis.case_records(base, "plastic")[1]
+    mapped = case_analysis.plastic_case_input(base, record)
+
+    assert mapped["torsion_design_basis"] == (
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
+    assert mapped["torsion_member_scope"] == (
+        capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+    )
 
 
 def test_capacity_only_zero_action_case_is_recorded_but_not_run():

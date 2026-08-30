@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
+import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import publication_image_export  # noqa: E402
 import result_presentation  # noqa: E402
@@ -97,6 +98,8 @@ def _inp():
         "sls_fctm": 2.9, "sls_cw": True, "conc_Ec": 33.0,
         "shear_gamma_v": 1.40,
         "torsion_gamma_ct": 1.70,
+        "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+        "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
         "v_min": 0.0, "v_max": 360.0, "v_inc": 90.0,
     }
 
@@ -3323,6 +3326,7 @@ def test_report_fails_closed_when_worked_example_selection_is_absent():
 @pytest.mark.parametrize(
     "selection",
     (
+        {"schema": True, "families": {}},
         {"schema": 99, "families": {"plastic": {"case_id": "__single__"}}},
         {"schema": 1, "families": ["plastic"], "crack_examples": "crack"},
         {
@@ -3343,6 +3347,114 @@ def test_report_fails_closed_when_worked_example_selection_is_absent():
             }],
             "cracking_threshold": None,
             "torsion_subchecks": {"interaction": ["__single__"]},
+        },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [{
+                "case_id": "__single__",
+                "system": "governing",
+                "branch": [],
+                "label": "long-term",
+            }],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {
+                "plastic": {"case_id": "PL-TEST", "component": "vx"},
+            },
+            "crack_examples": [],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {
+                "shear": {"case_id": "PL-TEST", "component": []},
+            },
+            "crack_examples": [],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {
+                "interaction": {"case_id": "PL-T", "component": {}},
+            },
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [],
+            "crack_comparison": {"case_id": "EL-C", "duration": []},
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [
+                {
+                    "case_id": "EL-FIRST",
+                    "system": "governing",
+                    "branch": "crack",
+                    "label": "long-term",
+                },
+                {
+                    "case_id": "EL-SECOND",
+                    "system": "governing",
+                    "branch": "crack_short",
+                    "label": "short-term",
+                },
+            ],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
+        },
+        {
+            "schema": 1,
+            "families": {},
+            "crack_examples": [
+                {
+                    "case_id": "EL-GOVERNING",
+                    "system": "governing",
+                    "branch": "crack",
+                    "label": "long-term",
+                },
+                {
+                    "case_id": "EL-COARSE",
+                    "system": "coarse",
+                    "branch": "crack_coarse",
+                    "label": "long-term (coarse)",
+                },
+            ],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
         },
     ),
 )
@@ -3481,10 +3593,12 @@ def test_infinite_torsion_subcheck_with_partial_operands_is_unavailable(
             "schema": 1,
             "families": {},
             "crack_examples": [],
+            "crack_comparison": None,
             "cracking_threshold": None,
             "torsion_subchecks": {
                 selection_key: {"case_id": "__single__", "component": None},
             },
+            "heightened_crack_control": None,
         },
     }
     builder = sector_report.ReportBuilder(
@@ -5317,6 +5431,10 @@ def test_brief_governing_depth_does_not_publish_worked_selection_register():
                 "shear": {"case_id": "PL-CURRENT", "component": None},
             },
             "crack_examples": [],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {},
+            "heightened_crack_control": None,
         },
     }
     selection_before = copy.deepcopy(out["worked_example_selection"])
@@ -5602,6 +5720,15 @@ def _torsion_out(interaction=False):
            "resistance_status": "PASS",
            "assessment_status": "NOT ASSESSED", "assessment_ok": None,
            "overall_reason": "longitudinal_torsion_reinforcement_not_verified",
+           "t_ed_signed": 40.0,
+           "applicability_blocked": False,
+           "applicability": capacity.torsion_applicability(
+               {
+                   "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+                   "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+               },
+               40.0,
+           ),
            "longitudinal_assessment": {
                "status": "NOT ASSESSED",
                "reason": "longitudinal_torsion_reinforcement_not_verified",
@@ -5666,6 +5793,491 @@ def test_report_includes_torsion_section():
     assert not any(
         token in txt for token in ("sqrt", "Cfrac", "Big", "sincos", "sum A", "kN.m")
     )
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize(
+    "retained_blocker",
+    [
+        pytest.param(None, id="missing"),
+        pytest.param(False, id="explicit-false"),
+    ],
+)
+def test_report_profiles_fail_closed_for_unestablished_torsion_scope(
+    profile, retained_blocker
+):
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": (
+                capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+            ),
+            "torsion_member_scope": capacity.TORSION_MEMBER_OPEN,
+        },
+        40.0,
+    )
+    torsion = capacity.unassessed_torsion_applicability({
+        "applicability": applicability,
+        "t_ed": 40.0,
+        "t_ed_signed": -40.0,
+        "method": codes.EC2_2005_DKNA.label,
+    })
+    torsion.update(
+        tube_valid=True,
+        transverse_resistance_assessed=True,
+        full_resistance_assessed=True,
+        valid=True,
+        trd=999.0,
+        util=0.001,
+        cot=2.0,
+        theta_deg=26.565,
+        asl_req=999.0,
+        resistance_status="PASS",
+    )
+    if retained_blocker is None:
+        torsion.pop("applicability_blocked", None)
+    else:
+        torsion["applicability_blocked"] = retained_blocker
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        combined_on=True,
+        torsion_T=40.0,
+        torsion_design_basis=capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER,
+        torsion_member_scope=capacity.TORSION_MEMBER_OPEN,
+        shear_links=True,
+    )
+
+    pdf = sector_report.build_report(
+        {},
+        inp,
+        {
+            "torsion": torsion,
+            "combined": {
+                "valid": True,
+                "method": codes.EC2_2005_DKNA.label,
+                "dkna_valid": True,
+                "dkna_sum": 0.01,
+                "dkna_status": "PASS",
+                "dkna_ok": True,
+            },
+        },
+        figures=False,
+        profile=profile,
+    )
+    text = " ".join(_pdf_text(pdf).split())
+
+    assert "Torsion design basis" in text
+    assert "Compatibility torsion" in text
+    assert "Torsion member scope" in text
+    assert "Open thin-walled or warping-sensitive section" in text
+    assert "NOT ASSESSED" in text
+    assert "separate member or system assessment" in text
+    assert "Combined" in text
+    assert "999" not in text
+    assert "PASS" not in text
+    assert "FAIL" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Torsion applicability and member scope" in text
+        assert "Resistance, utilisation, governing angle" in text
+        assert "6.3.1(1)-(3)" in text
+        assert "6.3.3(1)-(2)" in text
+        assert "Formula (6.28) demand" not in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize(
+    "retained_blocker",
+    [
+        pytest.param(None, id="missing-flag"),
+        pytest.param(False, id="explicit-false-flag"),
+    ],
+)
+@pytest.mark.parametrize(
+    "applicability_evidence",
+    (
+        "missing",
+        "non-mapping",
+        "contradictory-applicable",
+        "incomplete-applicable",
+    ),
+)
+def test_report_profiles_fail_closed_for_untrusted_torsion_applicability(
+    profile, retained_blocker, applicability_evidence
+):
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+            "torsion_member_scope": (
+                capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+            ),
+        },
+        40.0,
+    )
+    torsion = capacity.unassessed_torsion_applicability(
+        {
+            "applicability": applicability,
+            "t_ed": 40.0,
+            "t_ed_signed": 40.0,
+            "method": codes.EC2_2005_DKNA.label,
+        }
+    )
+    torsion.update(
+        tube_valid=True,
+        transverse_resistance_assessed=True,
+        full_resistance_assessed=True,
+        closed_links_present=True,
+        valid=True,
+        trd=999.0,
+        util=0.001,
+        cot=2.0,
+        theta_deg=26.565,
+        asl_req=999.0,
+        resistance_status="PASS",
+        assessment_status="PASS",
+    )
+    if applicability_evidence == "missing":
+        torsion.pop("applicability", None)
+    elif applicability_evidence == "non-mapping":
+        torsion["applicability"] = []
+    elif applicability_evidence == "contradictory-applicable":
+        torsion["applicability"] = {
+            **applicability,
+            "status": "APPLICABLE",
+            "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "member_scope": capacity.TORSION_MEMBER_OPEN,
+            "design_basis_valid": True,
+            "member_scope_valid": True,
+            "reason": None,
+        }
+    else:
+        torsion["applicability"] = {
+            "status": "APPLICABLE",
+            "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "member_scope": capacity.TORSION_MEMBER_CLOSED,
+        }
+    if retained_blocker is None:
+        torsion.pop("applicability_blocked", None)
+    else:
+        torsion["applicability_blocked"] = retained_blocker
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        combined_on=True,
+        torsion_T=40.0,
+        torsion_design_basis=(
+            capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
+        ),
+        torsion_member_scope=capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
+        shear_links=True,
+    )
+    pdf = sector_report.build_report(
+        {},
+        inp,
+        {
+            "torsion": torsion,
+            "combined": {
+                "valid": True,
+                "method": codes.EC2_2005_DKNA.label,
+                "dkna_valid": True,
+                "dkna_sum": 0.01,
+                "dkna_status": "PASS",
+                "dkna_ok": True,
+            },
+        },
+        figures=False,
+        profile=profile,
+    )
+    text = " ".join(_pdf_text(pdf).split())
+
+    assert "Torsion applicability" in text
+    assert "NOT ASSESSED" in text
+    assert "Combined" in text
+    assert "999" not in text
+    assert "PASS" not in text
+    assert "FAIL" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Resistance, utilisation, governing angle" in text
+        assert "Formula (6.28) demand" not in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize(
+    "authority_case",
+    (
+        "stale-blocker",
+        "malformed-blocker",
+        "lowercase-status",
+        "missing-route-entry",
+        "wrong-route",
+        "stale-reason",
+        "text-ted",
+        "boolean-ted",
+        "nonfinite-ted",
+    ),
+)
+def test_report_profiles_require_exact_coherent_torsion_authority(
+    profile, authority_case
+):
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+        },
+        40.0,
+    )
+    torsion = {
+        "applicability": dict(applicability),
+        "applicability_blocked": False,
+        "t_ed": 40.0,
+        "method": codes.EC2_2005_DKNA.label,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "full_resistance_assessed": True,
+        "closed_links_present": True,
+        "valid": True,
+        "trd": 999.0,
+        "util": 0.001,
+        "cot": 2.0,
+        "theta_deg": 26.565,
+        "asl_req": 999.0,
+        "resistance_status": "PASS",
+        "assessment_status": "PASS",
+    }
+    if authority_case == "stale-blocker":
+        torsion["applicability_blocked"] = True
+    elif authority_case == "malformed-blocker":
+        torsion["applicability_blocked"] = "False"
+    elif authority_case == "lowercase-status":
+        torsion["applicability"]["status"] = "applicable"
+    elif authority_case == "missing-route-entry":
+        torsion["applicability"].pop("full_resistance_route_entered")
+    elif authority_case == "wrong-route":
+        torsion["applicability"]["route"] = "compatibility residual full resistance"
+    elif authority_case == "stale-reason":
+        torsion["applicability"]["reason"] = (
+            "open or warping-sensitive torsion requires member analysis"
+        )
+    elif authority_case == "text-ted":
+        torsion["t_ed"] = "40"
+    elif authority_case == "boolean-ted":
+        torsion["t_ed"] = True
+    else:
+        torsion["t_ed"] = math.nan
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        combined_on=True,
+        torsion_T=40.0,
+        torsion_design_basis=capacity.TORSION_DESIGN_EQUILIBRIUM,
+        torsion_member_scope=capacity.TORSION_MEMBER_CLOSED,
+        shear_links=True,
+    )
+    pdf = sector_report.build_report(
+        {},
+        inp,
+        {
+            "torsion": torsion,
+            "combined": {
+                "valid": True,
+                "method": codes.EC2_2005_DKNA.label,
+                "dkna_valid": True,
+                "dkna_sum": 0.01,
+                "dkna_status": "PASS",
+                "dkna_ok": True,
+            },
+        },
+        figures=False,
+        profile=profile,
+    )
+    text = " ".join(_pdf_text(pdf).split())
+
+    assert "Torsion applicability" in text
+    assert "NOT ASSESSED" in text
+    assert "999" not in text
+    assert "PASS" not in text
+    assert "FAIL" not in text
+    if authority_case in {"text-ted", "boolean-ted", "nonfinite-ted"}:
+        assert "inf kN" not in text
+        if profile in {"Standard", "Audit"}:
+            assert re.search(
+                r"T\s*Ed\s+T\s*Rd\s+Utilisation\s+Overall status\s+"
+                r"-\s+-\s+-\s+NOT ASSESSED",
+                text,
+            )
+
+
+def test_audit_drops_stale_torsion_subchecks_when_applicability_is_blocked():
+    applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+            "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+        },
+        40.0,
+    )
+    torsion = {
+        "applicability": applicability,
+        "applicability_blocked": True,
+        "t_ed": 40.0,
+        "valid": True,
+        "tube_valid": True,
+        "transverse_resistance_assessed": True,
+        "full_resistance_assessed": True,
+        "closed_links_present": True,
+        "trd": 999.0,
+        "util": 0.001,
+        "assessment_status": "PASS",
+        "interaction": {
+            "valid": True,
+            "value": 987.654,
+            "t_ed": 40.0,
+            "trd_max": 100.0,
+            "v_ed": 50.0,
+            "vrd_max": 150.0,
+            "cot": 2.0,
+            "theta_deg": 26.565,
+        },
+        "min_reinf": {
+            "applicable": True,
+            "value": 876.543,
+            "ok": True,
+            "t_ed": 40.0,
+            "trd_c": 100.0,
+            "v_ed": 50.0,
+            "vrd_c": 150.0,
+            "solid": True,
+        },
+    }
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        torsion_T=40.0,
+        torsion_design_basis=capacity.TORSION_DESIGN_EQUILIBRIUM,
+        torsion_member_scope=capacity.TORSION_MEMBER_CLOSED,
+    )
+    out = {
+        "torsion": torsion,
+        "worked_example_selection": {
+            "schema": 1,
+            "families": {
+                "torsion": {"case_id": "__single__", "component": None},
+            },
+            "crack_examples": [],
+            "crack_comparison": None,
+            "cracking_threshold": None,
+            "torsion_subchecks": {
+                "interaction": {
+                    "case_id": "__single__",
+                    "component": None,
+                },
+                "minimum_reinforcement": {
+                    "case_id": "__single__",
+                    "component": None,
+                },
+            },
+            "heightened_crack_control": None,
+        },
+    }
+
+    text = " ".join(_pdf_text(sector_report.build_report(
+        {}, inp, out, figures=False, profile="Audit",
+    )).split())
+
+    assert "NOT ASSESSED" in text
+    assert "987.654" not in text
+    assert "876.543" not in text
+    assert "Governing shear + torsion concrete-strut interaction" not in text
+    assert "Governing shear + torsion minimum-reinforcement screen" not in text
+    assert "All calculated V+T screens remain" not in text
+    assert "All calculated Formula 6.31 screens remain" not in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_identify_each_plastic_case_torsion_authority(profile):
+    inp = _inp()
+    inp.update(
+        torsion_on=True,
+        shear_links=True,
+        plastic_cases=load_cases.normalise_table(
+            [
+                {"name": "EQ-01", "t_ed_knm": 40.0},
+                {"name": "COMP-01", "t_ed_knm": -40.0},
+            ],
+            load_cases.PLASTIC_TABLE_KEY,
+        ),
+        torsion_case_authorities={
+            "EQ-01": {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_EQUILIBRIUM
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                    capacity.TORSION_MEMBER_CLOSED
+                ),
+            },
+            "COMP-01": {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                    capacity.TORSION_MEMBER_CLOSED
+                ),
+            },
+        },
+    )
+    records = load_cases.table_records(
+        inp["plastic_cases"], load_cases.PLASTIC_TABLE_KEY
+    )
+    blocked_applicability = capacity.torsion_applicability(
+        {
+            "torsion_design_basis": (
+                capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER
+            ),
+            "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+        },
+        40.0,
+    )
+    blocked = capacity.unassessed_torsion_applicability({
+        "applicability": blocked_applicability,
+        "t_ed": 40.0,
+        "t_ed_signed": -40.0,
+        "method": codes.EC2_2005_DKNA.label,
+    })
+    out = {
+        "plastic_cases": [
+            {
+                "name": "EQ-01",
+                "description": "",
+                "actions": records[0],
+                "evaluated": True,
+                "reused": False,
+                "results": {"torsion": _torsion_out()},
+            },
+            {
+                "name": "COMP-01",
+                "description": "",
+                "actions": records[1],
+                "evaluated": True,
+                "reused": False,
+                "results": {"torsion": blocked},
+            },
+        ]
+    }
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Torsion design basis - EQ-01" in text
+    assert "Torsion member scope - EQ-01" in text
+    assert "Torsion design basis - COMP-01" in text
+    assert capacity.TORSION_DESIGN_EQUILIBRIUM in text
+    assert capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER in text
+    assert "NOT ASSESSED" in text
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
@@ -7437,6 +8049,7 @@ def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
             "links": {"res": {"valid": True}, "util": 0.40},
         },
         "torsion": {
+            **_torsion_out(),
             "valid": True, "util": 0.40,
             "min_reinf": {"applicable": True, "value": 9.0},
             "interaction": {"valid": True, "value": 8.0},
@@ -7451,7 +8064,7 @@ def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
             "res": {"valid": True}, "util": 0.85,
             "links": {"res": {"valid": True}, "util": 0.80},
         },
-        "torsion": {"valid": True, "util": 0.75},
+        "torsion": {**_torsion_out(), "valid": True, "util": 0.75},
         "combined": {"valid": True, "dkna_sum": 0.90},
     }
     invalid = {
@@ -7479,6 +8092,84 @@ def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
     assert selected["torsion_subchecks"]["minimum_reinforcement"][
         "case_id"
     ] == "PL-A"
+
+
+@pytest.mark.parametrize("profile", ["Standard", "Audit"])
+def test_report_main_torsion_worked_example_requires_applicable_case(profile):
+    inp = _inp()
+    actions = [
+        {
+            "name": "PL-BLOCKED",
+            "description": "Blocked retained result",
+            "n_ed_kn": 0.0,
+            "mx_ed_knm": 0.0,
+            "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0,
+            "vy_ed_kn": 0.0,
+            "vx_face": "auto",
+            "vy_face": "auto",
+            "t_ed_knm": 40.0,
+        },
+        {
+            "name": "PL-APPLICABLE",
+            "description": "Applicable governing result",
+            "n_ed_kn": 0.0,
+            "mx_ed_knm": 0.0,
+            "my_ed_knm": 0.0,
+            "vx_ed_kn": 0.0,
+            "vy_ed_kn": 0.0,
+            "vx_face": "auto",
+            "vy_face": "auto",
+            "t_ed_knm": 40.0,
+        },
+    ]
+    inp["plastic_cases"] = actions
+    blocked = _torsion_out()
+    blocked.update(applicability_blocked=True, valid=True, util=9.0)
+    applicable = _torsion_out()
+    applicable.update(valid=True, util=0.8)
+    out = {
+        "plastic_cases": [
+            {
+                "name": actions[0]["name"],
+                "actions": actions[0],
+                "evaluated": True,
+                "results": {"torsion": blocked},
+            },
+            {
+                "name": actions[1]["name"],
+                "actions": actions[1],
+                "evaluated": True,
+                "results": {"torsion": applicable},
+            },
+        ]
+    }
+    # Retain a structurally valid but stale pre-publication selection.  The
+    # report must validate it against the complete current named-case payload,
+    # not merely accept that the selected row still exists.
+    out["worked_example_selection"] = {
+        "schema": 1,
+        "families": {
+            "torsion": {"case_id": "PL-BLOCKED", "component": None},
+        },
+        "crack_examples": [],
+        "crack_comparison": None,
+        "cracking_threshold": None,
+        "torsion_subchecks": {},
+        "heightened_crack_control": None,
+    }
+
+    flat = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, profile=profile, figures=False,
+            )
+        ).split()
+    )
+
+    assert "Torsion (thin-walled tube) - PL-APPLICABLE" in flat
+    assert "Torsion (thin-walled tube) - PL-BLOCKED" in flat
+    assert "900.0 %" not in flat
 
 
 def test_report_includes_combined_section():
