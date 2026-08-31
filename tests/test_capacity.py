@@ -1702,7 +1702,10 @@ def test_torsion_longitudinal_publication_authority_rejects_boolean_tube_area():
             "t_ed": 40.0,
             "asl_req": 500.0,
             "subdivided": True,
-            "subtubes": ({"asl_req": 1.0}, {"asl_req": 499.0}),
+            "subtubes": (
+                {"asl_req": 1.0, "t_ed": 10.0},
+                {"asl_req": 499.0, "t_ed": 30.0},
+            ),
         },
     )
 
@@ -1722,7 +1725,34 @@ def test_torsion_longitudinal_publication_authority_rejects_subtube_total_confli
             "t_ed": 0.0,
             "asl_req": 0.0,
             "subdivided": True,
-            "subtubes": ({"asl_req": 10.0}, {"asl_req": 20.0}),
+            "subtubes": (
+                {"asl_req": 10.0, "t_ed": 0.0},
+                {"asl_req": 20.0, "t_ed": 0.0},
+            ),
+        },
+    )
+
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert sanitized["required_asl_mm2"] is None
+    assert sanitized["required_by_tube_mm2"] is None
+
+
+def test_torsion_longitudinal_publication_authority_rejects_subtube_torque_conflict():
+    retained = _unverified_formula_628(0.0)
+    retained["required_by_tube_mm2"] = (0.0, 0.0)
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner={
+            "valid": True,
+            "t_ed": 0.0,
+            "asl_req": 0.0,
+            "subdivided": True,
+            "subtubes": (
+                {"asl_req": 0.0, "t_ed": 10.0},
+                {"asl_req": 0.0, "t_ed": 30.0},
+            ),
         },
     )
 
@@ -1766,10 +1796,17 @@ def test_torsion_longitudinal_publication_authority_rejects_malformed_subdivisio
 
 
 @pytest.mark.parametrize(
-    ("ratio", "t_ed", "total", "parts", "expected_status"),
+    ("ratio", "t_ed", "total", "parts", "torque_parts", "expected_status"),
     [
-        (0.0, 0.0, 0.0, (0.0, 0.0), "PASS"),
-        (0.50, 40.0, 500.0, (200.0, 300.0), "NOT ASSESSED"),
+        (0.0, 0.0, 0.0, (0.0, 0.0), (0.0, 0.0), "PASS"),
+        (
+            0.50,
+            40.0,
+            500.0,
+            (200.0, 300.0),
+            (16.0, 24.0),
+            "NOT ASSESSED",
+        ),
     ],
 )
 def test_torsion_longitudinal_publication_authority_accepts_reconciled_subtubes(
@@ -1777,6 +1814,7 @@ def test_torsion_longitudinal_publication_authority_accepts_reconciled_subtubes(
     t_ed,
     total,
     parts,
+    torque_parts,
     expected_status,
 ):
     retained = _unverified_formula_628(ratio)
@@ -1789,7 +1827,10 @@ def test_torsion_longitudinal_publication_authority_accepts_reconciled_subtubes(
             "t_ed": t_ed,
             "asl_req": total,
             "subdivided": True,
-            "subtubes": tuple({"asl_req": value} for value in parts),
+            "subtubes": tuple(
+                {"asl_req": area, "t_ed": torque}
+                for area, torque in zip(parts, torque_parts, strict=True)
+            ),
         },
     )
 

@@ -2463,7 +2463,10 @@ def test_torsion_summary_rebuilds_formula_628_before_publishing_pass():
         t_ed=0.0,
         asl_req=0.0,
         subdivided=True,
-        subtubes=({"asl_req": 10.0}, {"asl_req": 20.0}),
+        subtubes=(
+            {"asl_req": 10.0, "t_ed": 0.0},
+            {"asl_req": 20.0, "t_ed": 0.0},
+        ),
         applicability=_applicable_torsion_evidence(0.0)["applicability"],
         assessment_status="PASS",
         assessment_ok=True,

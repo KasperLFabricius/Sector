@@ -1856,11 +1856,20 @@ def validated_torsion_longitudinal_assessment(
                     else None
                     for item in subtubes
                 )
+                expected_torque_by_tube = tuple(
+                    mapping_finite_nonnegative(item, "t_ed")
+                    if isinstance(item, Mapping)
+                    else None
+                    for item in subtubes
+                )
                 owner_consistent = bool(
                     owner_consistent
                     and required_by_tube_present
                     and required_by_tube_valid
                     and all(value is not None for value in expected_by_tube)
+                    and all(
+                        value is not None for value in expected_torque_by_tube
+                    )
                     and len(parsed_required_by_tube) == len(expected_by_tube)
                     and all(
                         expected is not None
@@ -1887,6 +1896,15 @@ def validated_torsion_longitudinal_assessment(
                     and _combined_longitudinal_close(
                         math.fsum(parsed_required_by_tube),
                         required_asl,
+                    )
+                    and owner_torsion is not None
+                    and _combined_longitudinal_close(
+                        math.fsum(
+                            value
+                            for value in expected_torque_by_tube
+                            if value is not None
+                        ),
+                        owner_torsion,
                     )
                 )
         else:
@@ -4496,7 +4514,10 @@ def finalize_combined(inp, out):
         "torsion_subdivided": torsion_out.get("subdivided"),
         "torsion_subtubes": (
             tuple(
-                {"asl_req": item.get("asl_req")}
+                {
+                    "asl_req": item.get("asl_req"),
+                    "t_ed": item.get("t_ed"),
+                }
                 if isinstance(item, Mapping)
                 else {}
                 for item in (torsion_out.get("subtubes") or ())
