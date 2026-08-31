@@ -8,6 +8,7 @@ cot(theta) = 1.751 the stirrups and the struts meet at TRd ~ 76.4 kN.m.
 
 from __future__ import annotations
 
+import copy
 import math
 from types import SimpleNamespace
 
@@ -1881,6 +1882,77 @@ def test_app_reference_torsion_never_promotes_component_pass_to_overall_pass():
     warnings = " ".join(item.value for item in at.warning)
     assert "Overall torsion assessment: FAIL" in warnings
     assert "below the Formula (6.28) longitudinal torsion demand" in warnings
+
+
+def test_app_stale_formula_628_pass_is_not_published_in_torsion_views():
+    at = _fresh()
+    at.run()
+    _apply_rectangle(at, bar_dia=20.0)
+    _set(
+        at,
+        ("number_input", "mild_fytk", 500.0),
+        ("number_input", "mild_gamma_y", 1.2),
+        ("checkbox", "torsion_on", True),
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_fywk", 500.0),
+        ("number_input", "shear_link_dia", 10.0),
+        ("number_input", "shear_link_s", 150.0),
+        ("number_input", "torsion_T", 40.0),
+    )
+    _calculate(at)
+    assert not at.exception
+
+    retained = copy.deepcopy(at.session_state["results"])
+    torsion_result = retained["torsion"]
+    torsion_result.update(
+        assessment_status="PASS",
+        assessment_ok=True,
+        overall_reason="no_longitudinal_torsion_demand",
+    )
+    torsion_result["longitudinal_assessment"].update(
+        status="PASS",
+        ok=True,
+        reason="no_longitudinal_torsion_demand",
+        required_asl_mm2=500.0,
+        required_design_force_kn=200.0,
+        provided_design_force_kn=100.0,
+        provided_gross_area_mm2=250.0,
+        provided_equivalent_area_mm2=250.0,
+        demand_ratio=0.0,
+        area_sufficient=False,
+    )
+    at.session_state["results"] = retained
+
+    _select_view(at, "Torsion")
+    assert not at.exception
+    warnings = " ".join(item.value for item in at.warning)
+    assert "Overall torsion assessment: NOT ASSESSED" in warnings
+    formula_table = next(
+        frame.value
+        for frame in at.dataframe
+        if "Quantity" in frame.value.columns
+        and "Longitudinal assessment" in set(frame.value["Quantity"])
+    )
+    formula_values = dict(zip(formula_table["Quantity"], formula_table["Value"]))
+    assert formula_values["Required longitudinal area"] == "-"
+    assert formula_values["All modelled passive bars - gross area"] == "-"
+    assert (
+        formula_values[
+            "All modelled passive bars - equivalent area at selected fyd"
+        ]
+        == "-"
+    )
+    assert formula_values["Longitudinal assessment"] == "NOT ASSESSED"
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    torsion_row = overview.loc[overview["Check"] == "Torsion"].iloc[0]
+    assert torsion_row["Status"] == "NOT ASSESSED"
+    longitudinal_row = overview.loc[
+        overview["Check"] == "Torsion longitudinal reinforcement"
+    ].iloc[0]
+    assert longitudinal_row["Status"] == "NOT ASSESSED"
+    assert longitudinal_row["Result"] == "-"
 
 
 def test_app_combined_without_links_withholds_torsion_dependent_verdicts():

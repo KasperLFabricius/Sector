@@ -2361,6 +2361,11 @@ def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
         if status == "FAIL"
         else "longitudinal_torsion_reinforcement_not_verified"
     )
+    required_asl = 1176.672
+    reference_fyd = 416.67
+    provided_equivalent_area = required_asl / ratio
+    required_force = required_asl * reference_fyd / 1000.0
+    provided_force = provided_equivalent_area * reference_fyd / 1000.0
     return {
         **_applicable_torsion_evidence(),
         "tube_valid": True,
@@ -2377,13 +2382,17 @@ def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
         "overall_reason": reason,
         "longitudinal_assessment": {
             "status": status,
+            "ok": False if status == "FAIL" else None,
             "reason": reason,
-            "required_asl_mm2": 1176.672,
-            "provided_gross_area_mm2": 1000.0 if status == "FAIL" else 2513.274,
-            "provided_equivalent_area_mm2": (
-                1000.0 if status == "FAIL" else 2513.274
-            ),
+            "required_asl_mm2": required_asl,
+            "required_by_tube_mm2": (required_asl,),
+            "required_design_force_kn": required_force,
+            "provided_gross_area_mm2": provided_equivalent_area,
+            "provided_design_force_kn": provided_force,
+            "provided_equivalent_area_mm2": provided_equivalent_area,
+            "reference_fyd_mpa": reference_fyd,
             "demand_ratio": ratio,
+            "area_sufficient": status != "FAIL",
         },
     }
 
@@ -2417,6 +2426,41 @@ def test_torsion_summary_separates_component_and_longitudinal_status(
     assert longitudinal["util"] == pytest.approx(ratio)
     assert "1177 /" in longitudinal["result"]
     assert presentation.overall_summary_status(rows) == status
+
+
+def test_torsion_summary_rebuilds_formula_628_before_publishing_pass():
+    torsion = _torsion_longitudinal_result(status="NOT ASSESSED", ratio=0.50)
+    torsion.update(
+        assessment_status="PASS",
+        assessment_ok=True,
+        overall_reason="no_longitudinal_torsion_demand",
+    )
+    torsion["longitudinal_assessment"].update(
+        status="PASS",
+        ok=True,
+        reason="no_longitudinal_torsion_demand",
+        required_asl_mm2=500.0,
+        required_design_force_kn=200.0,
+        provided_design_force_kn=100.0,
+        provided_gross_area_mm2=250.0,
+        provided_equivalent_area_mm2=250.0,
+        demand_ratio=0.0,
+        area_sufficient=False,
+    )
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", torsion_on=True, shear_links=True),
+        {"plastic": _plastic(), "torsion": torsion},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert presentation.torsion_assessment_status(torsion) == "NOT ASSESSED"
+    assert by_check["Torsion"]["status"] == "NOT ASSESSED"
+    longitudinal = by_check["Torsion longitudinal reinforcement"]
+    assert longitudinal["status"] == "NOT ASSESSED"
+    assert longitudinal["result"] == "-"
+    assert longitudinal["util"] is None
+    assert "500 / 250" not in longitudinal["result"]
 
 
 @pytest.mark.parametrize("status", ["NOT ASSESSED", "FAIL"])

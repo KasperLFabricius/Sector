@@ -15581,8 +15581,9 @@ def torsion_view(inp, results):
             "calculation-warning",
             f"Overall torsion assessment: {overall_status}. {overall_note}.",
         )
-    longitudinal = t.get("longitudinal_assessment") or {}
-    if longitudinal:
+    retained_longitudinal = t.get("longitudinal_assessment")
+    longitudinal = presentation.torsion_longitudinal_assessment(t)
+    if isinstance(retained_longitudinal, dict):
         def _area_text(value):
             return "-" if value is None else f"{float(value):.0f} mm2"
 

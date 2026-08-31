@@ -5738,7 +5738,7 @@ def _torsion_out(interaction=False):
                    longitudinal.asl_required_mm2 * 416.67 / 1000.0
                ),
                "provided_gross_area_mm2": 2513.274,
-               "provided_design_force_kn": 1047.198,
+               "provided_design_force_kn": 2513.274 * 416.67 / 1000.0,
                "provided_equivalent_area_mm2": 2513.274,
                "reference_fyd_mpa": 416.67,
                "demand_ratio": longitudinal.asl_required_mm2 / 2513.274,
@@ -6439,6 +6439,59 @@ def test_report_profiles_share_longitudinal_torsion_status(
     else:
         assert "every torsion-tube side" in text
         assert "anchored along the member" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
+    out = _out()
+    torsion = _torsion_out()
+    torsion.update(
+        assessment_status="PASS",
+        assessment_ok=True,
+        overall_reason="no_longitudinal_torsion_demand",
+    )
+    torsion["longitudinal_assessment"].update(
+        status="PASS",
+        ok=True,
+        reason="no_longitudinal_torsion_demand",
+        required_asl_mm2=500.0,
+        required_by_tube_mm2=(500.0,),
+        required_design_force_kn=200.0,
+        provided_gross_area_mm2=250.0,
+        provided_design_force_kn=100.0,
+        provided_equivalent_area_mm2=250.0,
+        reference_fyd_mpa=400.0,
+        demand_ratio=0.0,
+        area_sufficient=False,
+    )
+    out["torsion"] = torsion
+    inp = _inp()
+    inp.update(torsion_on=True, shear_links=True)
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "Torsion" in text
+    assert "NOT ASSESSED" in text
+    assert "Torsion longitudinal reinforcement" in text
+    assert "500 / 250 mm2" not in text
+    assert (
+        "Recalculate the longitudinal torsion reinforcement assessment before "
+        "relying on its status"
+    ) in text
+    if profile != "Brief":
+        formula_section = text.rsplit(
+            "Longitudinal torsion reinforcement (Formula 6.28)", 1
+        )[1]
+        assert "Required longitudinal area - mm" in formula_section
+        assert "gross area - mm" in formula_section
+        assert "equivalent area at selected" in formula_section
+        assert formula_section.count("- mm") >= 3
 
 
 def test_report_withholds_full_torsion_verdict_without_current_closed_links():

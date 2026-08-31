@@ -9631,8 +9631,11 @@ class ReportBuilder:
                 self._small("Warning: the tube could not be formed (a degenerate or "
                             "too-thin section).")
             return
-        longitudinal_assessment = t.get("longitudinal_assessment") or {}
-        if longitudinal_assessment:
+        retained_longitudinal_assessment = t.get("longitudinal_assessment")
+        longitudinal_assessment = (
+            presentation.torsion_longitudinal_assessment(t)
+        )
+        if isinstance(retained_longitudinal_assessment, Mapping):
             self._h2("Longitudinal torsion reinforcement (Formula 6.28)")
             self._table(
                 [

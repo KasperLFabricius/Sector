@@ -338,6 +338,10 @@ _TORSION_REASON_MESSAGES = {
         "TORSION-LONGITUDINAL-EVIDENCE",
         "Complete the torsion resistance calculation and the passive-bar material assignments before assessing the longitudinal reinforcement",
     ),
+    "combined_longitudinal_evidence_inconsistent": EngineerMessage(
+        "TORSION-LONGITUDINAL-RECALCULATE",
+        "Recalculate the longitudinal torsion reinforcement assessment before relying on its status",
+    ),
     "longitudinal_torsion_reinforcement_insufficient": EngineerMessage(
         "TORSION-LONGITUDINAL-INSUFFICIENT",
         "The total design tensile resistance of the modelled passive bars is below the Formula (6.28) longitudinal torsion demand",
@@ -2011,11 +2015,18 @@ def torsion_assessment_status(torsion):
     """Return the canonical overall torsion state, including Formula (6.28)."""
 
     torsion = torsion or {}
-    retained = str(torsion.get("assessment_status") or "").upper()
-    if retained in {"PASS", "FAIL", "NOT ASSESSED"}:
-        return retained
     if torsion.get("valid") is not True:
         return "NOT ASSESSED"
+    longitudinal = torsion_longitudinal_assessment(torsion)
+    if isinstance(torsion.get("longitudinal_assessment"), Mapping):
+        resistance_status = _util_summary_status(
+            torsion.get("util"),
+            valid=torsion.get("valid") is True,
+        )
+        return capacity.aggregate_assessment_status((
+            resistance_status,
+            longitudinal["status"],
+        ))
     # Older retained results have no longitudinal-verification state. They must
     # not regain an overall PASS merely because the resistance component exists.
     t_ed = _publication_metric(torsion.get("t_ed"))
@@ -2024,10 +2035,34 @@ def torsion_assessment_status(torsion):
     return _util_summary_status(torsion.get("util"), valid=True)
 
 
+def torsion_longitudinal_assessment(torsion):
+    """Return sanitized Formula (6.28) evidence for every public surface."""
+
+    torsion = torsion or {}
+    return capacity.validated_torsion_longitudinal_assessment(
+        torsion.get("longitudinal_assessment")
+    )
+
+
 def torsion_assessment_note(torsion):
     """Return authored engineer guidance for the canonical torsion state."""
 
     torsion = torsion or {}
+    longitudinal = torsion_longitudinal_assessment(torsion)
+    if (
+        isinstance(torsion.get("longitudinal_assessment"), Mapping)
+        and longitudinal["status"] != "PASS"
+        and _util_summary_status(
+            torsion.get("util"),
+            valid=torsion.get("valid") is True,
+        )
+        == "PASS"
+    ):
+        return result_reason(
+            longitudinal["reason"],
+            "torsion",
+            context="torsion longitudinal assessment reason",
+        )
     return result_reason(
         torsion.get("overall_reason")
         or torsion.get("assessment_reason")
@@ -3592,8 +3627,8 @@ def result_summary_rows(inp, results, *, stale=False):
                 overview_key="torsion:resistance",
                 overview_parent="torsion",
             ))
-            longitudinal = torsion.get("longitudinal_assessment")
-            if isinstance(longitudinal, Mapping):
+            longitudinal = torsion_longitudinal_assessment(torsion)
+            if isinstance(torsion.get("longitudinal_assessment"), Mapping):
                 required = longitudinal.get("required_asl_mm2")
                 provided = longitudinal.get("provided_equivalent_area_mm2")
                 result_text = (
