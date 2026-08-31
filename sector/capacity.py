@@ -956,6 +956,17 @@ def _combined_longitudinal_utilisation(value: object) -> float | None:
     return utilisation
 
 
+def _combined_longitudinal_close(left: float, right: float) -> bool:
+    """Compare retained six-decimal operands without hiding material drift."""
+
+    return left == right or math.isclose(
+        left,
+        right,
+        rel_tol=2.0e-8,
+        abs_tol=5.0e-7,
+    )
+
+
 def _combined_longitudinal_candidate(
     value: object,
     *,
@@ -966,7 +977,9 @@ def _combined_longitudinal_candidate(
     if not isinstance(value, Mapping) or value.get("valid") is not True:
         return None
     role = value.get("role", _MISSING)
-    if role is not _MISSING and role not in {"shear_axis", "off_axis"}:
+    if role is not _MISSING and (
+        type(role) is not str or role not in {"shear_axis", "off_axis"}
+    ):
         return None
     biaxial = value.get("biaxial", _MISSING)
     off_not_evaluated = value.get("off_not_evaluated", _MISSING)
@@ -991,7 +1004,8 @@ def _combined_longitudinal_candidate(
     if utilisation is None:
         return None
     expected_status = "PASS" if utilisation <= 1.0 + 1.0e-9 else "FAIL"
-    if value.get("status", _MISSING) != expected_status:
+    status = value.get("status", _MISSING)
+    if type(status) is not str or status != expected_status:
         return None
     if value.get("ok", _MISSING) is not (
         expected_status == "PASS"
@@ -1020,6 +1034,39 @@ def _combined_longitudinal_candidate(
             return None
         operands[key] = number
     if operands["z"] <= 0.0:
+        return None
+    expected_mv = operands["ftd_v"] * operands["z"]
+    expected_mt = operands["ftd_t"] * operands["z"] / 2.0
+    if value.get("capped") is True:
+        expected_mv = min(
+            expected_mv,
+            max(operands["m_rd"] - operands["m_ed"], 0.0),
+        )
+    if not (
+        _combined_longitudinal_close(operands["mv"], expected_mv)
+        and _combined_longitudinal_close(operands["mt"], expected_mt)
+    ):
+        return None
+    chord_formula = value.get("chord_formula", _MISSING)
+    if chord_formula is not _MISSING and (
+        type(chord_formula) is not str
+        or chord_formula not in {"8.51", "8.52"}
+    ):
+        return None
+    if chord_formula in {"8.51", "8.52"}:
+        face_m_ed = value.get("face_m_ed_signed", _MISSING)
+        if _is_boolean_scalar(face_m_ed) or isinstance(face_m_ed, (str, bytes)):
+            return None
+        try:
+            face_m_ed_number = float(face_m_ed)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        if not math.isfinite(face_m_ed_number):
+            return None
+        expected_total = max(face_m_ed_number + operands["mv"], 0.0) + operands["mt"]
+    else:
+        expected_total = operands["m_ed"] + operands["mv"] + operands["mt"]
+    if not _combined_longitudinal_close(operands["m_total"], expected_total):
         return None
     expected_ratio = (
         operands["m_total"] / operands["m_rd"]
@@ -1061,6 +1108,53 @@ def _combined_longitudinal_candidate(
     return value
 
 
+def _combined_longitudinal_child_candidate(
+    combined: Mapping[str, Any],
+) -> tuple[Mapping[str, Any] | None, bool]:
+    """Return the validated governing child candidate and evidence consistency."""
+
+    direct_value = combined.get("longitudinal", _MISSING)
+    direct = (
+        _combined_longitudinal_candidate(direct_value)
+        if direct_value is not _MISSING
+        else None
+    )
+    if direct_value is not _MISSING and direct is None:
+        return None, False
+
+    candidates_value = combined.get("longitudinal_candidates", _MISSING)
+    candidate = direct
+    if candidates_value is not _MISSING:
+        if not isinstance(candidates_value, (list, tuple)) or not candidates_value:
+            return None, False
+        validated = [
+            _combined_longitudinal_candidate(item) for item in candidates_value
+        ]
+        if any(item is None for item in validated):
+            return None, False
+        retained_candidates = [item for item in validated if item is not None]
+        if direct is not None and not any(
+            _combined_longitudinal_evidence_equal(item, direct_value)
+            for item in candidates_value
+        ):
+            return None, False
+        candidate = max(
+            retained_candidates,
+            key=lambda item: float(item["util"]),
+        )
+
+    alias = combined.get("governing_longitudinal", _MISSING)
+    if alias is not _MISSING:
+        alias_candidate = _combined_longitudinal_candidate(alias)
+        if (
+            alias_candidate is None
+            or candidate is None
+            or not _combined_longitudinal_evidence_equal(alias, candidate)
+        ):
+            return None, False
+    return candidate, True
+
+
 def _combined_longitudinal_chord_state(
     combined: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1079,14 +1173,57 @@ def _combined_longitudinal_chord_state(
                 "governing": None,
                 "retained": None,
             }
+        child_candidate, child_consistent = (
+            _combined_longitudinal_child_candidate(combined)
+        )
+        if not child_consistent:
+            return {
+                "status": "NOT ASSESSED",
+                "util": None,
+                "reason": "combined_longitudinal_evidence_inconsistent",
+                "coverage_complete": False,
+                "governing": None,
+                "retained": retained,
+            }
         status = retained.get("status")
         coverage_complete = retained.get("coverage_complete")
         ok = retained.get("ok", _MISSING)
-        utilisation = _combined_longitudinal_utilisation(retained.get("util"))
-        governing = retained.get("governing")
-        if not isinstance(governing, Mapping):
-            governing = direct
-        if status in {"PASS", "FAIL"}:
+        retained_utilisation = retained.get("util", _MISSING)
+        utilisation = _combined_longitudinal_utilisation(retained_utilisation)
+        if (
+            retained_utilisation is not _MISSING
+            and retained_utilisation is not None
+            and utilisation is None
+        ):
+            return {
+                "status": "NOT ASSESSED",
+                "util": None,
+                "reason": "combined_longitudinal_evidence_inconsistent",
+                "coverage_complete": False,
+                "governing": None,
+                "retained": retained,
+            }
+        governing_value = retained.get("governing", _MISSING)
+        if governing_value is _MISSING:
+            candidate = child_candidate
+        elif isinstance(governing_value, Mapping):
+            candidate = _combined_longitudinal_candidate(governing_value)
+        elif governing_value is None and child_candidate is None:
+            candidate = None
+        else:
+            candidate = None
+        governing_consistent = bool(
+            candidate is child_candidate
+            or (
+                candidate is not None
+                and child_candidate is not None
+                and _combined_longitudinal_evidence_equal(
+                    candidate,
+                    child_candidate,
+                )
+            )
+        )
+        if type(status) is str and status in {"PASS", "FAIL"}:
             expected_status = (
                 "PASS"
                 if utilisation is not None
@@ -1097,16 +1234,18 @@ def _combined_longitudinal_chord_state(
                 else None
             )
             expected_ok = status == "PASS"
-            candidate = _combined_longitudinal_candidate(
-                governing,
-                expected_utilisation=utilisation,
-            )
             valid = bool(
                 expected_status == status
                 and (ok is _MISSING or ok is expected_ok)
                 and type(coverage_complete) is bool
                 and (status != "PASS" or coverage_complete is True)
                 and candidate is not None
+                and governing_consistent
+                and _combined_longitudinal_candidate(
+                    candidate,
+                    expected_utilisation=utilisation,
+                )
+                is not None
             )
             if valid:
                 return {
@@ -1121,14 +1260,31 @@ def _combined_longitudinal_chord_state(
                     "governing": candidate,
                     "retained": retained,
                 }
-        elif status in {"NOT ASSESSED", "NOT APPLICABLE"}:
+        elif type(status) is str and status in {
+            "NOT ASSESSED",
+            "NOT APPLICABLE",
+        }:
+            utilisation_consistent = bool(
+                utilisation is None
+                and candidate is None
+                or utilisation is not None
+                and candidate is not None
+                and _combined_longitudinal_candidate(
+                    candidate,
+                    expected_utilisation=utilisation,
+                )
+                is not None
+            )
             if (
                 (ok is _MISSING or ok is None)
-                and utilisation is None
                 and type(coverage_complete) is bool
-                and (status != "NOT APPLICABLE" or coverage_complete is True)
+                and governing_consistent
+                and utilisation_consistent
+                and (
+                    status != "NOT APPLICABLE"
+                    or (coverage_complete is True and candidate is None)
+                )
             ):
-                candidate = _combined_longitudinal_candidate(governing)
                 return {
                     "status": status,
                     "util": None,
@@ -1268,30 +1424,32 @@ def _combined_longitudinal_torsion_state(
             "retained": None,
         }
     status = retained.get("status")
+    reason = retained.get("reason")
     ok = retained.get("ok", _MISSING)
     utilisation = _combined_longitudinal_utilisation(
         retained.get("demand_ratio")
     )
-    if status == "FAIL":
+    if type(status) is not str or type(reason) is not str:
+        valid = False
+    elif status == "FAIL":
         valid = bool(
             utilisation is not None
             and (not math.isfinite(utilisation) or utilisation > 1.0 + 1.0e-9)
             and (ok is _MISSING or ok is False)
-            and retained.get("reason")
-            == "longitudinal_torsion_reinforcement_insufficient"
+            and reason == "longitudinal_torsion_reinforcement_insufficient"
         )
     elif status == "PASS":
         # A gross-area comparison below unity does not establish distribution,
         # bending reserve or anchorage. The existing supported PASS is zero demand.
         valid = bool(
             utilisation == 0.0
-            and retained.get("reason") == "no_longitudinal_torsion_demand"
+            and reason == "no_longitudinal_torsion_demand"
             and (ok is _MISSING or ok is True)
         )
     elif status == "NOT ASSESSED":
         valid = bool(
             (ok is _MISSING or ok is None)
-            and retained.get("reason") in {
+            and reason in {
                 "longitudinal_torsion_reinforcement_evidence_unavailable",
                 "longitudinal_torsion_reinforcement_not_verified",
             }
@@ -1308,7 +1466,7 @@ def _combined_longitudinal_torsion_state(
     return {
         "status": status,
         "util": utilisation if status in {"PASS", "FAIL"} else None,
-        "reason": retained.get("reason") or (
+        "reason": reason or (
             "longitudinal_torsion_reinforcement_not_verified"
             if status == "NOT ASSESSED"
             else "longitudinal_torsion_reinforcement_insufficient"

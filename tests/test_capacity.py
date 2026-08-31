@@ -1118,6 +1118,65 @@ def test_combined_longitudinal_stale_governing_alias_cannot_replace_direct_failu
     assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
 
 
+def test_combined_longitudinal_stale_retained_assessment_cannot_replace_child_failure():
+    direct = _pub_h01_longitudinal_fixture()
+    stale = {
+        **direct,
+        "status": "PASS",
+        "ok": True,
+        "m_ed": 0.0,
+        "mv": 10.0,
+        "mt": 40.0,
+        "m_total": 50.0,
+        "ftd_v": 10.0 / direct["z"],
+        "ftd_t": 80.0 / direct["z"],
+        "util": 0.50,
+    }
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "util": 0.50,
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": stale,
+        },
+        "torsion_longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "reason": "no_longitudinal_torsion_demand",
+            "demand_ratio": 0.0,
+        },
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
+def test_combined_longitudinal_candidate_recomputes_total_from_operands():
+    direct = {
+        **_pub_h01_longitudinal_fixture(),
+        "status": "PASS",
+        "ok": True,
+        "m_total": 50.0,
+        "util": 0.50,
+    }
+    assessment = capacity.combined_longitudinal_assessment({
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    })
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["reason"] == "required_longitudinal_chord_coverage_incomplete"
+
+
 def test_combined_longitudinal_definite_failure_governs_incomplete_child():
     direct = _pub_h01_longitudinal_fixture()
     combined = {
@@ -1154,6 +1213,9 @@ def test_combined_longitudinal_definite_failure_governs_incomplete_child():
         {"status": "PASS"},
         {"ok": True},
         {"axis": ["x"]},
+        {"role": ["shear_axis"]},
+        {"status": ["FAIL"]},
+        {"chord_formula": ["8.51"]},
         {"m_ed": True},
         {"m_total": math.nan},
         {"m_rd": math.inf},
@@ -1230,24 +1292,38 @@ def test_combined_longitudinal_retained_canonical_requires_exact_scalar_types():
     assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
 
 
-def test_combined_longitudinal_unassessed_chord_rejects_finite_verdict_value():
-    direct = _pub_h01_longitudinal_fixture(0.50)
+def test_combined_longitudinal_unassessed_chord_retains_valid_partial_evidence():
+    direct = {
+        **_pub_h01_longitudinal_fixture(),
+        "status": "PASS",
+        "ok": True,
+        "m_ed": 0.0,
+        "mv": 10.0,
+        "mt": 40.0,
+        "m_total": 50.0,
+        "ftd_v": 10.0 / 0.243,
+        "ftd_t": 80.0 / 0.243,
+        "util": 0.50,
+    }
+    retained = {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "util": 0.50,
+        "reason": "required_longitudinal_chord_coverage_incomplete",
+        "coverage_complete": False,
+        "governing": direct,
+    }
     assessment = capacity.combined_longitudinal_assessment({
         "longitudinal": direct,
-        "longitudinal_assessment": {
-            "status": "NOT ASSESSED",
-            "ok": None,
-            "util": 0.50,
-            "reason": "required_longitudinal_chord_coverage_incomplete",
-            "coverage_complete": False,
-            "governing": direct,
-        },
+        "longitudinal_assessment": retained,
         "torsion_longitudinal_assessment": _unverified_formula_628(),
     })
 
     assert assessment["status"] == "NOT ASSESSED"
     assert assessment["util"] is None
-    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+    assert assessment["reason"] == "required_longitudinal_chord_coverage_incomplete"
+    assert assessment["chord_governing"] is direct
+    assert assessment["chord_assessment"] is retained
 
 
 def test_combined_longitudinal_unassessed_chord_drops_malformed_governing():
@@ -1280,6 +1356,26 @@ def test_combined_longitudinal_retained_array_cannot_crash_reconciliation():
     retained = dict(capacity.combined_longitudinal_assessment(combined))
     retained["governing"] = {**direct, "axis": np.array(["x"])}
     combined["overall_longitudinal_assessment"] = retained
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["util"] is None
+
+
+def test_combined_longitudinal_retained_status_array_cannot_crash_reconciliation():
+    direct = _pub_h01_longitudinal_fixture()
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": np.array(["FAIL"]),
+            "ok": False,
+            "util": direct["util"],
+            "coverage_complete": True,
+            "governing": direct,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    }
 
     assessment = capacity.combined_longitudinal_assessment(combined)
 
