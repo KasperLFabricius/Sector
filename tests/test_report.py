@@ -7852,7 +7852,7 @@ def test_report_stale_2023_single_face_pass_is_not_assessed(profile):
         )
 
 
-def _pub_h01_report_combined():
+def _pub_h01_report_combined(parent_state="stale_mapping"):
     combined = _base_en_combined_out()
     direct = {
         **combined["longitudinal"],
@@ -7904,14 +7904,18 @@ def _pub_h01_report_combined():
         "m_rd": direct["m_total"] / 0.80,
         "util": 0.80,
     }
-    combined["longitudinal_assessment"] = {
-        "status": "NOT ASSESSED",
-        "ok": None,
-        "util": 0.80,
-        "reason": "required_longitudinal_chord_coverage_incomplete",
-        "coverage_complete": False,
-        "governing": stale_governing,
-    }
+    combined["longitudinal_assessment"] = (
+        {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": 0.80,
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": stale_governing,
+        }
+        if parent_state == "stale_mapping"
+        else []
+    )
     combined["asl_torsion"] = 500.0
     combined["torsion_longitudinal_assessment"] = {
         "status": "NOT ASSESSED",
@@ -8342,7 +8346,11 @@ def test_report_pub_h01_missing_off_axis_torsion_never_publishes_chord_pass(
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_pub_h01_exact_longitudinal_failure_is_consistent(profile):
+@pytest.mark.parametrize("parent_state", ["stale_mapping", "non_mapping"])
+def test_report_pub_h01_exact_longitudinal_failure_is_consistent(
+    profile,
+    parent_state,
+):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -8395,14 +8403,18 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(profile):
         "longitudinal_candidates",
     ):
         combined.pop(key, None)
-    combined["longitudinal_assessment"] = {
-        "status": "NOT ASSESSED",
-        "ok": None,
-        "util": direct["util"],
-        "reason": "required_longitudinal_chord_coverage_incomplete",
-        "coverage_complete": True,
-        "governing": direct,
-    }
+    combined["longitudinal_assessment"] = (
+        {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": True,
+            "governing": direct,
+        }
+        if parent_state == "stale_mapping"
+        else []
+    )
     combined["asl_torsion"] = 500.0
     combined["torsion_longitudinal_assessment"] = {
         "status": "NOT ASSESSED",

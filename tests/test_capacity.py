@@ -2203,6 +2203,117 @@ def test_combined_longitudinal_stale_parent_governing_cannot_mask_child_failure(
     assert assessment["chord_governing"] is direct
 
 
+@pytest.mark.parametrize(
+    ("utilisation", "expected_status"),
+    ((1.2392531643, "FAIL"), (0.80, "NOT ASSESSED")),
+)
+def test_combined_longitudinal_non_mapping_parent_preserves_only_child_failure(
+    utilisation,
+    expected_status,
+):
+    direct = _pub_h01_longitudinal_fixture(utilisation)
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_assessment": [],
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+        "overall_longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": None,
+        },
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == expected_status
+    if expected_status == "FAIL":
+        assert assessment["ok"] is False
+        assert assessment["util"] == pytest.approx(1.2392531643)
+        assert assessment["chord_governing"] is direct
+    else:
+        assert assessment["ok"] is None
+        assert assessment["util"] is None
+
+
+@pytest.mark.parametrize("child_fails", (True, False))
+def test_combined_longitudinal_malformed_parent_coverage_preserves_only_child_failure(
+    child_fails,
+):
+    candidates = _pub_h01_2005_torsion_candidates()
+    direct = candidates[0]
+    if child_fails:
+        direct.update(
+            status="FAIL",
+            ok=False,
+            m_rd=100.0,
+            util=1.2392531643,
+            shear_headroom=20.0,
+        )
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_candidates": candidates,
+        "governing_longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": "malformed",
+            "governing": direct,
+        },
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    if child_fails:
+        assert assessment["status"] == "FAIL"
+        assert assessment["ok"] is False
+        assert assessment["util"] == pytest.approx(1.2392531643)
+        assert assessment["chord_governing"] is direct
+    else:
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["ok"] is None
+        assert assessment["util"] is None
+
+
+@pytest.mark.parametrize("child_fails", (True, False))
+def test_combined_longitudinal_malformed_parent_util_preserves_only_child_failure(
+    child_fails,
+):
+    direct = _pub_h01_longitudinal_fixture(
+        1.2392531643 if child_fails else 0.80
+    )
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": 10**1000,
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    if child_fails:
+        assert assessment["status"] == "FAIL"
+        assert assessment["ok"] is False
+        assert assessment["util"] == pytest.approx(1.2392531643)
+        assert assessment["chord_governing"] is direct
+    else:
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["ok"] is None
+        assert assessment["util"] is None
+
+
 @pytest.mark.parametrize("target", ("chord", "formula_628"))
 def test_pub_h01_overflowing_real_scalar_fails_closed(target):
     direct = _pub_h01_longitudinal_fixture(0.50)

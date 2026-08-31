@@ -3414,7 +3414,10 @@ def _pub_h01_formula_628_assessment(ratio):
     }
 
 
-def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
+@pytest.mark.parametrize("parent_state", ("stale_mapping", "non_mapping"))
+def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview(
+    parent_state,
+):
     at = _fresh()
     at.run()
     _enable_all(at)
@@ -3475,14 +3478,18 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
         "m_rd": direct["m_total"] / 0.80,
         "util": 0.80,
     }
-    combined_result["longitudinal_assessment"] = {
-        "status": "NOT ASSESSED",
-        "ok": None,
-        "util": 0.80,
-        "reason": "required_longitudinal_chord_coverage_incomplete",
-        "coverage_complete": False,
-        "governing": stale_governing,
-    }
+    combined_result["longitudinal_assessment"] = (
+        {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": 0.80,
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": stale_governing,
+        }
+        if parent_state == "stale_mapping"
+        else []
+    )
     combined_result["torsion_longitudinal_assessment"] = (
         _pub_h01_formula_628_assessment(0.50)
     )

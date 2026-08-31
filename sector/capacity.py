@@ -1249,6 +1249,8 @@ def _combined_longitudinal_candidate(
 
 def _combined_longitudinal_child_candidate(
     combined: Mapping[str, Any],
+    *,
+    ignore_retained_parent: bool = False,
 ) -> tuple[Mapping[str, Any] | None, bool]:
     """Return the validated governing child candidate and evidence consistency."""
 
@@ -1313,7 +1315,11 @@ def _combined_longitudinal_child_candidate(
             torsion_states = [
                 item.get("has_torsion", _MISSING) for item in shear_candidates
             ]
-            retained_assessment = combined.get("longitudinal_assessment")
+            retained_assessment = (
+                None
+                if ignore_retained_parent
+                else combined.get("longitudinal_assessment")
+            )
             retained_coverage = (
                 retained_assessment.get("coverage_complete", _MISSING)
                 if isinstance(retained_assessment, Mapping)
@@ -1328,7 +1334,10 @@ def _combined_longitudinal_child_candidate(
                 or len(set(shear_axes)) != 1
                 or not all(type(value) is bool for value in torsion_states)
                 or len(set(torsion_states)) != 1
-                or type(retained_coverage) is not bool
+                or (
+                    isinstance(retained_assessment, Mapping)
+                    and type(retained_coverage) is not bool
+                )
             ):
                 return None, False
             torsion_live = any(
@@ -1403,7 +1412,10 @@ def _combined_longitudinal_child_candidate(
                     for item in shear_candidates
                 ),
             )
-            if retained_coverage is not complete:
+            if (
+                retained_coverage is not _MISSING
+                and retained_coverage is not complete
+            ):
                 return None, False
         candidate = max(
             retained_candidates,
@@ -1431,7 +1443,40 @@ def _combined_longitudinal_chord_state(
     direct = direct if isinstance(direct, Mapping) else None
     retained = combined.get("longitudinal_assessment", _MISSING)
     if retained is not _MISSING:
+        child_candidate, child_consistent = (
+            _combined_longitudinal_child_candidate(combined)
+        )
+        failure_candidate = child_candidate
+        failure_consistent = child_consistent
+        if not child_consistent:
+            failure_candidate, failure_consistent = (
+                _combined_longitudinal_child_candidate(
+                    combined,
+                    ignore_retained_parent=True,
+                )
+            )
+        child_utilisation = (
+            _combined_longitudinal_utilisation(failure_candidate.get("util"))
+            if failure_candidate is not None
+            else None
+        )
+        child_definite_failure = bool(
+            failure_consistent
+            and failure_candidate is not None
+            and failure_candidate.get("status") == "FAIL"
+            and child_utilisation is not None
+            and child_utilisation > 1.0 + 1.0e-9
+        )
         if not isinstance(retained, Mapping):
+            if child_definite_failure:
+                return {
+                    "status": "FAIL",
+                    "util": child_utilisation,
+                    "reason": "required_longitudinal_chord_failed",
+                    "coverage_complete": False,
+                    "governing": failure_candidate,
+                    "retained": None,
+                }
             return {
                 "status": "NOT ASSESSED",
                 "util": None,
@@ -1440,10 +1485,16 @@ def _combined_longitudinal_chord_state(
                 "governing": None,
                 "retained": None,
             }
-        child_candidate, child_consistent = (
-            _combined_longitudinal_child_candidate(combined)
-        )
         if not child_consistent:
+            if child_definite_failure:
+                return {
+                    "status": "FAIL",
+                    "util": child_utilisation,
+                    "reason": "required_longitudinal_chord_failed",
+                    "coverage_complete": False,
+                    "governing": failure_candidate,
+                    "retained": None,
+                }
             return {
                 "status": "NOT ASSESSED",
                 "util": None,
@@ -1470,6 +1521,15 @@ def _combined_longitudinal_chord_state(
             and retained_utilisation is not None
             and utilisation is None
         ):
+            if child_definite_failure:
+                return {
+                    "status": "FAIL",
+                    "util": child_utilisation,
+                    "reason": "required_longitudinal_chord_failed",
+                    "coverage_complete": False,
+                    "governing": failure_candidate,
+                    "retained": None,
+                }
             return {
                 "status": "NOT ASSESSED",
                 "util": None,
@@ -1497,17 +1557,6 @@ def _combined_longitudinal_chord_state(
                     child_candidate,
                 )
             )
-        )
-        child_utilisation = (
-            _combined_longitudinal_utilisation(child_candidate.get("util"))
-            if child_candidate is not None
-            else None
-        )
-        child_definite_failure = bool(
-            child_candidate is not None
-            and child_candidate.get("status") == "FAIL"
-            and child_utilisation is not None
-            and child_utilisation > 1.0 + 1.0e-9
         )
         if type(status) is str and status in {"PASS", "FAIL"}:
             expected_status = (
