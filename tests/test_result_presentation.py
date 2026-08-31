@@ -1235,6 +1235,52 @@ def test_stale_summary_retains_last_status_as_evidence():
     assert presentation.overall_summary_status(rows) == "STALE"
 
 
+def _zero_formula_628_assessment():
+    return {
+        "status": "PASS",
+        "ok": True,
+        "reason": "no_longitudinal_torsion_demand",
+        "required_asl_mm2": 0.0,
+        "required_design_force_kn": 0.0,
+        "provided_design_force_kn": 400.0,
+        "reference_fyd_mpa": 400.0,
+        "demand_ratio": 0.0,
+        "area_sufficient": True,
+    }
+
+
+def _complete_longitudinal_candidate(
+    utilisation,
+    *,
+    axis="x",
+    tension_low=True,
+    conditional=True,
+    biaxial=False,
+):
+    total = float(utilisation) * 100.0
+    return {
+        "valid": True,
+        "status": "PASS" if utilisation <= 1.0 + 1.0e-9 else "FAIL",
+        "ok": utilisation <= 1.0 + 1.0e-9,
+        "axis": axis,
+        "tension_low": tension_low,
+        "conditional": conditional,
+        "biaxial": biaxial,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "m_ed": total,
+        "mv": 0.0,
+        "mt": 0.0,
+        "m_total": total,
+        "m_rd": 100.0,
+        "ftd_v": 0.0,
+        "ftd_t": 0.0,
+        "z": 0.25,
+        "util": utilisation,
+        "capped": False,
+    }
+
+
 def test_combined_summary_cannot_hide_subordinate_failure():
     theta_deg = math.degrees(math.atan2(1.0, 1.5))
     combined = {
@@ -1251,14 +1297,15 @@ def test_combined_summary_cannot_hide_subordinate_failure():
             "shear_fraction": 0.30, "torsion_fraction": 0.45,
             "governing": 1.10, "governs": "crushing",
         },
-        "longitudinal": {
-            "valid": True, "util": 0.65, "axis": "x", "biaxial": False,
-        },
-        "chord_off": {"valid": True, "util": 0.55, "axis": "y"},
-        "governing_longitudinal": {
-            "valid": True, "util": 0.65, "axis": "x", "biaxial": False,
-        },
+        "longitudinal": _complete_longitudinal_candidate(0.65),
+        "chord_off": _complete_longitudinal_candidate(0.55, axis="y"),
+        "governing_longitudinal": _complete_longitudinal_candidate(0.65),
         "longitudinal_all_conditional": True,
+        "t_ed": 0.0,
+        "asl_torsion": 0.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
+        "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -1419,13 +1466,7 @@ def test_separate_mv_assumption_preserves_conservative_overall_state(
     longitudinal = (
         None
         if longitudinal_util is None
-        else {
-            "valid": True,
-            "util": longitudinal_util,
-            "axis": "x",
-            "biaxial": False,
-            "tension_low": True,
-        }
+        else _complete_longitudinal_candidate(longitudinal_util)
     )
     combined = {
         "valid": True,
@@ -1450,6 +1491,11 @@ def test_separate_mv_assumption_preserves_conservative_overall_state(
         "longitudinal": longitudinal,
         "governing_longitudinal": longitudinal,
         "longitudinal_all_conditional": longitudinal is not None,
+        "t_ed": 0.0,
+        "asl_torsion": 0.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
+        "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -1571,6 +1617,7 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
             "off_not_evaluated": "not_solved",
         },
         "longitudinal_all_conditional": True,
+        "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Plastic", combined_on=True),
@@ -1585,14 +1632,19 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
 
 
 def test_combined_physical_components_uses_the_governing_longitudinal_face():
-    shear_axis = {
-        "valid": True, "util": 0.60, "axis": "x",
-        "tension_low": True, "biaxial": False, "conditional": True,
-    }
-    governing = {
-        "valid": True, "util": 0.85, "axis": "y",
-        "tension_low": False, "biaxial": True, "conditional": True,
-    }
+    shear_axis = _complete_longitudinal_candidate(0.60)
+    shear_axis.update(
+        role="shear_axis",
+        has_torsion=False,
+        gets_shift=False,
+    )
+    governing = _complete_longitudinal_candidate(
+        0.85,
+        axis="y",
+        tension_low=False,
+        biaxial=True,
+    )
+    governing["role"] = "off_axis"
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True, "cot": 1.6,
@@ -1602,7 +1654,21 @@ def test_combined_physical_components_uses_the_governing_longitudinal_face():
         "longitudinal": shear_axis,
         "chord_off": governing,
         "governing_longitudinal": governing,
+        "longitudinal_candidates": [shear_axis, governing],
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "util": 0.85,
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": governing,
+        },
         "longitudinal_all_conditional": True,
+        "t_ed": 0.0,
+        "asl_torsion": 0.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
+        "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     })
 
     assert [item["label"] for item in components] == [
@@ -1617,14 +1683,13 @@ def test_combined_physical_components_uses_the_governing_longitudinal_face():
 
 
 def test_combined_components_withhold_verdict_for_non_governing_fallback():
-    fallback = {
-        "valid": True, "util": 0.60, "axis": "x",
-        "tension_low": True, "biaxial": False, "conditional": False,
-    }
-    governing = {
-        "valid": True, "util": 0.85, "axis": "y",
-        "tension_low": False, "biaxial": True, "conditional": True,
-    }
+    fallback = _complete_longitudinal_candidate(0.60, conditional=False)
+    governing = _complete_longitudinal_candidate(
+        0.85,
+        axis="y",
+        tension_low=False,
+        biaxial=True,
+    )
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True, "cot": 1.6,
@@ -1639,21 +1704,21 @@ def test_combined_components_withhold_verdict_for_non_governing_fallback():
     })
 
     longitudinal = components[2]
-    assert longitudinal["util"] == pytest.approx(0.85)
+    assert longitudinal["util"] is None
     assert longitudinal["status"] == "NOT ASSESSED"
     assert "pure-axis substitute" in longitudinal["note"]
     assert "x-axis negative face" in longitudinal["note"]
 
 
 def test_combined_components_preserve_non_governing_face_fallback():
-    exact_governing = {
-        "valid": True, "util": 0.85, "axis": "x",
-        "tension_low": False, "conditional": True,
-    }
-    fallback_face = {
-        "valid": True, "util": 0.60, "axis": "x",
-        "tension_low": True, "conditional": False,
-    }
+    exact_governing = _complete_longitudinal_candidate(
+        0.85,
+        tension_low=False,
+    )
+    fallback_face = _complete_longitudinal_candidate(
+        0.60,
+        conditional=False,
+    )
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True, "cot": 1.6,
@@ -1668,7 +1733,7 @@ def test_combined_components_preserve_non_governing_face_fallback():
     })
 
     longitudinal = components[2]
-    assert longitudinal["util"] == pytest.approx(0.85)
+    assert longitudinal["util"] is None
     assert longitudinal["status"] == "NOT ASSESSED"
     assert "x-axis negative face" in longitudinal["note"]
 
@@ -1682,11 +1747,12 @@ def test_combined_physical_components_tolerates_missing_candidate_utilisation():
         "governing_longitudinal": governing,
         "longitudinal_all_conditional": True,
     })
-    assert components[2]["util"] == pytest.approx(0.75)
+    assert components[2]["status"] == "NOT ASSESSED"
+    assert components[2]["util"] is None
 
 
 def test_combined_physical_components_withholds_off_axis_only_verdict():
-    governing = {"valid": True, "util": 0.75, "axis": "y"}
+    governing = _complete_longitudinal_candidate(0.75, axis="y")
     components = presentation.combined_physical_components({
         "transverse": None,
         "longitudinal": None,
@@ -1812,7 +1878,7 @@ def test_combined_components_fail_closed_without_retained_governing_chord():
 def test_combined_component_formatter_does_not_reselect_governing_chords():
     source = inspect.getsource(presentation.combined_physical_components)
 
-    assert "governing_longitudinal" in source
+    assert "capacity.combined_longitudinal_assessment" in source
     assert "max(" not in source
     assert "candidate_util" not in source
 
@@ -2321,6 +2387,11 @@ def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
         if status == "FAIL"
         else "longitudinal_torsion_reinforcement_not_verified"
     )
+    required_asl = 1176.672
+    reference_fyd = 416.67
+    provided_equivalent_area = required_asl / ratio
+    required_force = required_asl * reference_fyd / 1000.0
+    provided_force = provided_equivalent_area * reference_fyd / 1000.0
     return {
         **_applicable_torsion_evidence(),
         "tube_valid": True,
@@ -2329,6 +2400,9 @@ def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
         "full_resistance_assessed": True,
         "valid": True,
         "t_ed": 40.0,
+        "asl_req": required_asl,
+        "subdivided": False,
+        "subtubes": None,
         "trd": 76.402,
         "util": 0.523548,
         "governs": "stirrups (TRd,s)",
@@ -2337,13 +2411,17 @@ def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
         "overall_reason": reason,
         "longitudinal_assessment": {
             "status": status,
+            "ok": False if status == "FAIL" else None,
             "reason": reason,
-            "required_asl_mm2": 1176.672,
-            "provided_gross_area_mm2": 1000.0 if status == "FAIL" else 2513.274,
-            "provided_equivalent_area_mm2": (
-                1000.0 if status == "FAIL" else 2513.274
-            ),
+            "required_asl_mm2": required_asl,
+            "required_by_tube_mm2": (required_asl,),
+            "required_design_force_kn": required_force,
+            "provided_gross_area_mm2": provided_equivalent_area,
+            "provided_design_force_kn": provided_force,
+            "provided_equivalent_area_mm2": provided_equivalent_area,
+            "reference_fyd_mpa": reference_fyd,
             "demand_ratio": ratio,
+            "area_sufficient": status != "FAIL",
         },
     }
 
@@ -2377,6 +2455,50 @@ def test_torsion_summary_separates_component_and_longitudinal_status(
     assert longitudinal["util"] == pytest.approx(ratio)
     assert "1177 /" in longitudinal["result"]
     assert presentation.overall_summary_status(rows) == status
+
+
+def test_torsion_summary_rebuilds_formula_628_before_publishing_pass():
+    torsion = _torsion_longitudinal_result(status="NOT ASSESSED", ratio=0.50)
+    torsion.update(
+        t_ed=0.0,
+        asl_req=0.0,
+        subdivided=True,
+        subtubes=(
+            {"asl_req": 0.0, "t_ed": 10.0},
+            {"asl_req": 0.0, "t_ed": 20.0},
+        ),
+        applicability=_applicable_torsion_evidence(0.0)["applicability"],
+        assessment_status="PASS",
+        assessment_ok=True,
+        overall_reason="no_longitudinal_torsion_demand",
+    )
+    torsion["longitudinal_assessment"].update(
+        status="PASS",
+        ok=True,
+        reason="no_longitudinal_torsion_demand",
+        required_asl_mm2=0.0,
+        required_by_tube_mm2=(0.0, 0.0),
+        required_design_force_kn=0.0,
+        provided_design_force_kn=100.0,
+        provided_gross_area_mm2=250.0,
+        provided_equivalent_area_mm2=250.0,
+        reference_fyd_mpa=400.0,
+        demand_ratio=0.0,
+        area_sufficient=True,
+    )
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", torsion_on=True, shear_links=True),
+        {"plastic": _plastic(), "torsion": torsion},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert presentation.torsion_assessment_status(torsion) == "NOT ASSESSED"
+    sanitized = presentation.torsion_longitudinal_assessment(torsion)
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert by_check["Torsion"]["status"] == "NOT APPLICABLE"
+    assert "Torsion longitudinal reinforcement" not in by_check
 
 
 @pytest.mark.parametrize("status", ["NOT ASSESSED", "FAIL"])
@@ -2440,15 +2562,43 @@ def test_combined_longitudinal_component_publishes_governing_ratio():
     combined = {
         "longitudinal": {
             "valid": True,
+            "status": "FAIL",
+            "ok": False,
             "util": 1.25,
             "axis": "x",
             "tension_low": True,
+            "conditional": True,
+            "biaxial": False,
+            "off_not_evaluated": None,
+            "m_ed": 80.0,
+            "mv": 5.0,
+            "mt": 40.0,
+            "m_total": 125.0,
+            "m_rd": 100.0,
+            "ftd_v": 20.0,
+            "ftd_t": 320.0,
+            "z": 0.25,
+            "capped": False,
         },
         "governing_longitudinal": {
             "valid": True,
+            "status": "FAIL",
+            "ok": False,
             "util": 1.25,
             "axis": "x",
             "tension_low": True,
+            "conditional": True,
+            "biaxial": False,
+            "off_not_evaluated": None,
+            "m_ed": 80.0,
+            "mv": 5.0,
+            "mt": 40.0,
+            "m_total": 125.0,
+            "m_rd": 100.0,
+            "ftd_v": 20.0,
+            "ftd_t": 320.0,
+            "z": 0.25,
+            "capped": False,
         },
         "longitudinal_all_conditional": True,
         "torsion_longitudinal_assessment": {
@@ -2466,6 +2616,65 @@ def test_combined_longitudinal_component_publishes_governing_ratio():
 
     assert component["status"] == "FAIL"
     assert component["util"] == pytest.approx(1.25)
+
+
+def test_pub_h01_exact_longitudinal_failure_feeds_component_and_overview():
+    direct = {
+        "valid": True,
+        "status": "FAIL",
+        "ok": False,
+        "axis": "x",
+        "tension_low": True,
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "m_ed": 80.0,
+        "mv": 4.213620,
+        "mt": 39.711696,
+        "m_total": 123.925316,
+        "m_rd": 100.0,
+        "ftd_v": 17.34,
+        "ftd_t": 326.8452380952381,
+        "z": 0.243,
+        "util": 1.2392531643,
+        "capped": False,
+    }
+    combined = {
+        "valid": True,
+        "method": codes.EC2_2005.label,
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+            "demand_ratio": 0.50,
+        },
+    }
+    canonical = capacity.combined_longitudinal_assessment(combined)
+    combined["overall_longitudinal_assessment"] = canonical
+
+    component = next(
+        item
+        for item in presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
+    )
+    rows = presentation.result_summary_rows(
+        {"combined_on": True, "combined_method": codes.EC2_2005.label},
+        {"combined": combined},
+    )
+    row = next(
+        item for item in rows
+        if item["check"] == "Combined longitudinal reinforcement"
+    )
+
+    assert component["assessment"] is canonical
+    assert component["governing"] is direct
+    assert component["status"] == "FAIL"
+    assert component["util"] == pytest.approx(1.2392531643)
+    assert row["status"] == "FAIL"
+    assert row["util"] == pytest.approx(1.2392531643)
+    assert row["result"] == "123.9 %"
 
 
 def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
@@ -2636,6 +2845,7 @@ def test_biaxial_combined_summary_reports_directions_without_three_way_verdict()
 
 def test_base_en_combined_summary_publishes_only_supported_physical_checks():
     def direction(concrete, stirrup, longitudinal):
+        candidate = _complete_longitudinal_candidate(longitudinal)
         return {
             "valid": True,
             "method": codes.EC2_2005.label,
@@ -2647,24 +2857,17 @@ def test_base_en_combined_summary_publishes_only_supported_physical_checks():
                 "shear_fraction": 0.2,
                 "torsion_fraction": stirrup - 0.2,
             },
-            "longitudinal": {
-                "valid": True,
-                "util": longitudinal,
-                "axis": "x",
-                "tension_low": True,
-            },
-            "governing_longitudinal": {
-                "valid": True,
-                "util": longitudinal,
-                "axis": "x",
-                "tension_low": True,
-            },
+            "longitudinal": candidate,
+            "governing_longitudinal": candidate,
             "longitudinal_all_conditional": True,
             "longitudinal_assessment": {
                 "status": "PASS" if longitudinal <= 1.0 else "FAIL",
+                "ok": longitudinal <= 1.0,
                 "util": longitudinal,
                 "coverage_complete": True,
+                "governing": candidate,
             },
+            "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
         }
 
     combined = {
@@ -2700,12 +2903,8 @@ def test_base_en_combined_summary_publishes_only_supported_physical_checks():
 
 def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
     def combined_result(util, longitudinal_status):
-        longitudinal = {
-            "valid": True,
-            "util": util - 0.05,
-            "axis": "x",
-            "tension_low": True,
-        }
+        longitudinal = _complete_longitudinal_candidate(util - 0.05)
+        assessed = longitudinal_status in {"PASS", "FAIL"}
         return {
             "valid": True,
             "method": codes.EC2_2005.label,
@@ -2722,9 +2921,18 @@ def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
             "longitudinal_all_conditional": True,
             "longitudinal_assessment": {
                 "status": longitudinal_status,
-                "util": util - 0.05,
-                "coverage_complete": longitudinal_status in {"PASS", "FAIL"},
+                "ok": (longitudinal_status == "PASS") if assessed else None,
+                "util": (util - 0.05) if assessed else None,
+                "coverage_complete": assessed,
+                "governing": longitudinal,
             },
+            "t_ed": 0.0,
+            "asl_torsion": 0.0,
+            "torsion_subdivided": False,
+            "torsion_subtubes": None,
+            "torsion_longitudinal_assessment": (
+                _zero_formula_628_assessment()
+            ),
         }
 
     mixed_biaxial = {

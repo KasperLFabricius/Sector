@@ -8019,24 +8019,28 @@ class ReportBuilder:
                 "NOT ASSESSED: complete the shared closed-stirrup calculation "
                 "and recalculate."
             )
-        lg = c.get("longitudinal")
         longitudinal = next(
             component
             for component in physical_components
             if component["key"] == "longitudinal"
         )
+        lg = longitudinal.get("governing")
         self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
         if isinstance(lg, Mapping) and lg.get("valid"):
             self._table(
                 [
-                    ["MEd", "Shear shift", "Torsion share", "MEd,total", "MRd", "Status"],
+                    [
+                        "MEd", "Shear shift", "Torsion share", "MEd,total",
+                        "MRd", "Chord utilisation",
+                    ],
                     [
                         f"{_fmt(lg.get('m_ed'), 3)} kNm",
                         f"{_fmt(lg.get('mv'), 3)} kNm",
                         f"{_fmt(lg.get('mt'), 3)} kNm",
                         f"{_fmt(lg.get('m_total'), 3)} kNm",
                         f"{_fmt(lg.get('m_rd'), 3)} kNm",
-                        longitudinal["status"],
+                        f"{_pct(longitudinal['chord_util'])} "
+                        f"{longitudinal['chord_status']}",
                     ],
                 ],
                 [27 * mm, 27 * mm, 27 * mm, 29 * mm, 27 * mm, 23 * mm],
@@ -8046,6 +8050,12 @@ class ReportBuilder:
                 lg.get("theta_mode"),
                 angle_valid=concrete.get("angle_valid") is True,
             ))
+            self._small(
+                "Overall longitudinal reinforcement assessment: "
+                f"{_pct(longitudinal['util'])} {longitudinal['status']}. "
+                "Governing check: "
+                f"{_html_escape(str(longitudinal.get('governing_mechanism') or '-'))}."
+            )
         else:
             self._small(
                 "Longitudinal chord assessment: "
@@ -8544,10 +8554,10 @@ class ReportBuilder:
                             "(6.3.2(2)), selected to minimise the governing "
                             "utilisation.")
                 self._keep_measured_calculation_from(stirrup_start)
-        lg = c.get("longitudinal")
-        if lg is not None and lg["valid"]:
+        longitudinal = physical_by_key["longitudinal"]
+        lg = longitudinal.get("governing")
+        if isinstance(lg, Mapping) and lg.get("valid"):
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
-            longitudinal = physical_by_key["longitudinal"]
             chord_status = longitudinal["chord_status"]
             chord_util = longitudinal["chord_util"]
             coverage = lg.get("off_not_evaluated")
@@ -8645,6 +8655,14 @@ class ReportBuilder:
                 references=("combined.chord.demand",),
                 subst=f"{_fmt(lg['m_total'], 1)} / {_fmt(lg['m_rd'], 1)}",
                 result=f"utilisation = {_pct(chord_util)}{verdict_suffix}")
+            self._small(
+                "Overall longitudinal reinforcement assessment: "
+                f"{_pct(longitudinal['util'])} {longitudinal['status']}. "
+                "Governing check: "
+                f"{_html_escape(str(longitudinal.get('governing_mechanism') or '-'))}. "
+                "The chord comparison and the independent Formula (6.28) "
+                "reinforcement evidence remain separately identified."
+            )
             if fell_back:
                 fallback_axis = fallback.get("axis", "?")
                 fallback_face = (
@@ -9613,8 +9631,11 @@ class ReportBuilder:
                 self._small("Warning: the tube could not be formed (a degenerate or "
                             "too-thin section).")
             return
-        longitudinal_assessment = t.get("longitudinal_assessment") or {}
-        if longitudinal_assessment:
+        retained_longitudinal_assessment = t.get("longitudinal_assessment")
+        longitudinal_assessment = (
+            presentation.torsion_longitudinal_assessment(t)
+        )
+        if isinstance(retained_longitudinal_assessment, Mapping):
             self._h2("Longitudinal torsion reinforcement (Formula 6.28)")
             self._table(
                 [

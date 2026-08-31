@@ -338,6 +338,10 @@ _TORSION_REASON_MESSAGES = {
         "TORSION-LONGITUDINAL-EVIDENCE",
         "Complete the torsion resistance calculation and the passive-bar material assignments before assessing the longitudinal reinforcement",
     ),
+    "combined_longitudinal_evidence_inconsistent": EngineerMessage(
+        "TORSION-LONGITUDINAL-RECALCULATE",
+        "Recalculate the longitudinal torsion reinforcement assessment before relying on its status",
+    ),
     "longitudinal_torsion_reinforcement_insufficient": EngineerMessage(
         "TORSION-LONGITUDINAL-INSUFFICIENT",
         "The total design tensile resistance of the modelled passive bars is below the Formula (6.28) longitudinal torsion demand",
@@ -450,6 +454,26 @@ _COMBINED_REASON_MESSAGES = {
     "Combined calculation is invalid": EngineerMessage(
         "COMBINED-INVALID",
         "The combined M-V-T calculation is invalid; review its prerequisites",
+    ),
+    "combined_longitudinal_evidence_inconsistent": EngineerMessage(
+        "COMBINED-LONGITUDINAL-EVIDENCE",
+        "Recalculate the combined longitudinal reinforcement assessment before relying on its status",
+    ),
+    "combined_longitudinal_pure_axis_substitute": EngineerMessage(
+        "COMBINED-LONGITUDINAL-SUBSTITUTE",
+        "A required chord face uses a pure-axis substitute; complete its conditional resistance calculation before relying on the longitudinal assessment",
+    ),
+    "combined_longitudinal_shear_axis_unavailable": EngineerMessage(
+        "COMBINED-LONGITUDINAL-SHEAR-AXIS",
+        "No valid shear-axis longitudinal chord check is available; complete the required face calculations and recalculate",
+    ),
+    "combined_longitudinal_chord_not_solved": EngineerMessage(
+        "COMBINED-LONGITUDINAL-NOT-SOLVED",
+        "One or more torsion-tensioned longitudinal chord faces were not solved; complete every required face calculation and recalculate",
+    ),
+    "combined_longitudinal_subdivided_coverage": EngineerMessage(
+        "COMBINED-LONGITUDINAL-SUBDIVIDED",
+        "The subdivided section does not have complete longitudinal chord coverage; complete the required tube-wall assessment before relying on the result",
     ),
 }
 _CRACK_REASON_MESSAGES = {
@@ -1991,11 +2015,18 @@ def torsion_assessment_status(torsion):
     """Return the canonical overall torsion state, including Formula (6.28)."""
 
     torsion = torsion or {}
-    retained = str(torsion.get("assessment_status") or "").upper()
-    if retained in {"PASS", "FAIL", "NOT ASSESSED"}:
-        return retained
     if torsion.get("valid") is not True:
         return "NOT ASSESSED"
+    longitudinal = torsion_longitudinal_assessment(torsion)
+    if isinstance(torsion.get("longitudinal_assessment"), Mapping):
+        resistance_status = _util_summary_status(
+            torsion.get("util"),
+            valid=torsion.get("valid") is True,
+        )
+        return capacity.aggregate_assessment_status((
+            resistance_status,
+            longitudinal["status"],
+        ))
     # Older retained results have no longitudinal-verification state. They must
     # not regain an overall PASS merely because the resistance component exists.
     t_ed = _publication_metric(torsion.get("t_ed"))
@@ -2004,10 +2035,35 @@ def torsion_assessment_status(torsion):
     return _util_summary_status(torsion.get("util"), valid=True)
 
 
+def torsion_longitudinal_assessment(torsion):
+    """Return sanitized Formula (6.28) evidence for every public surface."""
+
+    torsion = torsion or {}
+    return capacity.validated_torsion_longitudinal_assessment(
+        torsion.get("longitudinal_assessment"),
+        owner=torsion,
+    )
+
+
 def torsion_assessment_note(torsion):
     """Return authored engineer guidance for the canonical torsion state."""
 
     torsion = torsion or {}
+    longitudinal = torsion_longitudinal_assessment(torsion)
+    if (
+        isinstance(torsion.get("longitudinal_assessment"), Mapping)
+        and longitudinal["status"] != "PASS"
+        and _util_summary_status(
+            torsion.get("util"),
+            valid=torsion.get("valid") is True,
+        )
+        == "PASS"
+    ):
+        return result_reason(
+            longitudinal["reason"],
+            "torsion",
+            context="torsion longitudinal assessment reason",
+        )
     return result_reason(
         torsion.get("overall_reason")
         or torsion.get("assessment_reason")
@@ -2482,152 +2538,109 @@ def combined_physical_components(combined):
             ),
         }
 
-    longitudinal = combined.get("longitudinal")
-    if not isinstance(longitudinal, Mapping):
-        longitudinal = None
-    chord_off = combined.get("chord_off")
+    assessment = capacity.combined_longitudinal_assessment(combined)
+    overall_status = str(assessment.get("status") or "NOT ASSESSED").upper()
+    overall_util = _publication_utilisation(
+        assessment.get("util"), allow_positive_infinity=True
+    )
+    if overall_status in {"PASS", "FAIL"}:
+        if _util_summary_status(overall_util) != overall_status:
+            overall_status = "NOT ASSESSED"
+            overall_util = None
+    elif overall_status != "NOT ASSESSED":
+        overall_status = "NOT ASSESSED"
+        overall_util = None
 
-    governing = combined.get("governing_longitudinal")
-    if not isinstance(governing, Mapping) or not governing.get("valid"):
-        governing = None
-    coverage = (
-        longitudinal.get("off_not_evaluated")
-        if longitudinal is not None else None
+    chord_status = str(
+        assessment.get("chord_status") or "NOT ASSESSED"
+    ).upper()
+    chord_util = _publication_utilisation(
+        assessment.get("chord_util"), allow_positive_infinity=True
     )
-    conditional = bool(combined.get("longitudinal_all_conditional"))
-    main_valid = bool(longitudinal is not None and longitudinal.get("valid"))
-    long_valid = governing is not None and main_valid
-    long_util = (
-        _publication_utilisation(governing.get("util"))
-        if governing is not None
-        else None
+    if chord_status in {"PASS", "FAIL"}:
+        if _util_summary_status(chord_util) != chord_status:
+            chord_status = "NOT ASSESSED"
+            chord_util = None
+    elif chord_status not in {"NOT ASSESSED", "NOT APPLICABLE"}:
+        chord_status = "NOT ASSESSED"
+        chord_util = None
+    chord_governing = assessment.get("chord_governing")
+    if not isinstance(chord_governing, Mapping):
+        chord_governing = None
+    chord_reason = assessment.get("chord_reason")
+    chord_note = result_reason(
+        chord_reason,
+        (
+            "combined"
+            if isinstance(chord_reason, str)
+            and chord_reason.startswith("combined_longitudinal_")
+            else "shear"
+        ),
+        context="combined longitudinal chord assessment",
     )
-    if not main_valid:
-        long_status = "NOT ASSESSED"
-        long_note = "No valid shear-axis longitudinal chord check"
-    elif not long_valid:
-        long_status = "NOT ASSESSED"
-        long_note = "No valid longitudinal chord check"
-    elif coverage:
-        long_status = "NOT ASSESSED"
-        long_note = (
-            "Incomplete chord coverage for a subdivided section"
-            if coverage == "subdivided"
-            else "One or more torsion-tensioned chord faces were not solved"
-        )
-    elif not conditional:
-        long_status = "NOT ASSESSED"
+    if chord_reason == "combined_longitudinal_pure_axis_substitute":
         fallback = required_chord_fallback(combined) or {}
-        face = "negative" if fallback.get("tension_low", True) else "positive"
-        long_note = (
-            f"Required {fallback.get('axis', '?')}-axis {face} face uses "
-            "a pure-axis substitute; no demand-versus-resistance verdict"
+        fallback_face = (
+            "negative" if fallback.get("tension_low", True) else "positive"
         )
-    else:
-        long_status = _util_summary_status(
-            long_util,
-            valid=long_valid,
+        chord_note = (
+            f"Required {fallback.get('axis', '?')}-axis {fallback_face} face "
+            "uses a pure-axis substitute; complete its conditional resistance "
+            "calculation before relying on the longitudinal assessment"
         )
-        face = "negative" if governing.get("tension_low", True) else "positive"
-        long_note = f"Governing {governing.get('axis', '?')}-axis {face} face"
+    torsion_status = str(
+        assessment.get("torsion_status") or "NOT ASSESSED"
+    ).upper()
+    torsion_note = result_reason(
+        assessment.get("torsion_reason")
+        or "longitudinal_torsion_reinforcement_not_verified",
+        "torsion",
+        context="combined longitudinal torsion assessment reason",
+    )
+    notes = []
+    if chord_status != "PASS":
+        notes.append(chord_note)
+    if torsion_status != "PASS":
+        notes.append(torsion_note)
+    if not notes and chord_governing is not None:
+        face = (
+            "negative"
+            if chord_governing.get("tension_low", True)
+            else "positive"
+        )
+        notes.append(
+            f"Governing {chord_governing.get('axis', '?')}-axis {face} face"
+        )
+    if assessment.get("reason") == "combined_longitudinal_evidence_inconsistent":
+        notes = [
+            result_reason(
+                assessment.get("reason"),
+                "combined",
+                context="combined longitudinal assessment",
+            )
+        ]
     longitudinal_component = {
         "key": "longitudinal",
         "label": "Longitudinal reinforcement",
-        "status": long_status,
-        "util": long_util,
-        "valid": long_status in {"PASS", "FAIL"},
-        "note": long_note,
-        "governing": governing,
-        "coverage": coverage,
+        "status": overall_status,
+        "util": overall_util,
+        "valid": overall_status in {"PASS", "FAIL"},
+        "note": "; ".join(notes),
+        "assessment": assessment,
+        "governing_source": assessment.get("governing_source"),
+        "governing_mechanism": assessment.get("governing_mechanism"),
+        "governing": chord_governing,
+        "coverage": (
+            None
+            if assessment.get("chord_coverage_complete") is True
+            else "incomplete"
+        ),
+        "chord_status": chord_status,
+        "chord_util": chord_util,
+        "chord_note": chord_note,
+        "torsion_status": torsion_status,
+        "torsion_assessment": assessment.get("torsion_assessment"),
     }
-    retained_chord_assessment = combined.get("longitudinal_assessment")
-    retained_chord_note = None
-    if isinstance(retained_chord_assessment, Mapping):
-        retained_status = str(
-            retained_chord_assessment.get("status") or "NOT ASSESSED"
-        ).upper()
-        retained_util = _publication_utilisation(
-            retained_chord_assessment.get("util")
-        )
-        if retained_status in {"PASS", "FAIL"}:
-            retained_status = _util_summary_status(retained_util)
-        retained_chord_note = result_reason(
-            retained_chord_assessment.get("reason"),
-            "shear",
-            context="combined longitudinal chord assessment",
-        )
-        longitudinal_component.update(
-            status=retained_status,
-            util=retained_util,
-            valid=retained_status in {"PASS", "FAIL"},
-            note=retained_chord_note,
-            governing=retained_chord_assessment.get("governing"),
-            coverage=(
-                None
-                if retained_chord_assessment.get("coverage_complete") is True
-                else "incomplete"
-            ),
-        )
-        long_status = retained_status
-    # Keep the selected chord's own publication state separate from the later
-    # overall longitudinal component, which may also include the independent
-    # Formula (6.28) torsion-reinforcement assessment.  Worked UI/report paths
-    # use these fields so a malformed retained chord value cannot bypass the
-    # same tri-state boundary used by the summary table.
-    longitudinal_component["chord_status"] = longitudinal_component["status"]
-    longitudinal_component["chord_util"] = longitudinal_component["util"]
-    longitudinal_component["chord_note"] = longitudinal_component["note"]
-    torsion_longitudinal = combined.get("torsion_longitudinal_assessment")
-    if isinstance(torsion_longitudinal, Mapping):
-        torsion_status = str(
-            torsion_longitudinal.get("status") or "NOT ASSESSED"
-        ).upper()
-        torsion_ratio = _publication_utilisation(
-            torsion_longitudinal.get("demand_ratio")
-        )
-        if torsion_status in {"PASS", "FAIL"}:
-            torsion_status = _util_summary_status(torsion_ratio)
-        if "FAIL" in {long_status, torsion_status}:
-            longitudinal_component["status"] = "FAIL"
-        elif "NOT ASSESSED" in {long_status, torsion_status}:
-            longitudinal_component["status"] = "NOT ASSESSED"
-        elif long_status == torsion_status == "PASS":
-            longitudinal_component["status"] = "PASS"
-        else:
-            longitudinal_component["status"] = "NOT ASSESSED"
-        if torsion_ratio is not None:
-            retained_ratio = _publication_utilisation(
-                longitudinal_component.get("util")
-            )
-            longitudinal_component["util"] = (
-                torsion_ratio
-                if retained_ratio is None
-                else (
-                    torsion_ratio
-                    if torsion_ratio >= retained_ratio
-                    else retained_ratio
-                )
-            )
-        torsion_note = result_reason(
-            torsion_longitudinal.get("reason")
-            or "longitudinal_torsion_reinforcement_not_verified",
-            "torsion",
-            context="combined longitudinal torsion assessment reason",
-        )
-        if retained_chord_note and long_status != "PASS":
-            longitudinal_component["note"] = (
-                retained_chord_note
-                if torsion_status == "PASS"
-                else retained_chord_note + "; " + torsion_note
-            )
-        elif long_status == "FAIL" and torsion_status != "FAIL":
-            longitudinal_component["note"] = long_note + "; " + torsion_note
-        else:
-            longitudinal_component["note"] = torsion_note
-        longitudinal_component["torsion_assessment"] = torsion_longitudinal
-        longitudinal_component["valid"] = (
-            longitudinal_component["status"] in {"PASS", "FAIL"}
-        )
     return [concrete, stirrup, longitudinal_component]
 
 
@@ -3615,8 +3628,8 @@ def result_summary_rows(inp, results, *, stale=False):
                 overview_key="torsion:resistance",
                 overview_parent="torsion",
             ))
-            longitudinal = torsion.get("longitudinal_assessment")
-            if isinstance(longitudinal, Mapping):
+            longitudinal = torsion_longitudinal_assessment(torsion)
+            if isinstance(torsion.get("longitudinal_assessment"), Mapping):
                 required = longitudinal.get("required_asl_mm2")
                 provided = longitudinal.get("provided_equivalent_area_mm2")
                 result_text = (
