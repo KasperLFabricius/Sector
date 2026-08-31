@@ -958,13 +958,20 @@ def _combined_longitudinal_utilisation(value: object) -> float | None:
 def _combined_longitudinal_finite_nonnegative(value: object) -> float | None:
     """Return one strict finite non-negative real scalar."""
 
+    number = _combined_longitudinal_finite(value)
+    return number if number is not None and number >= 0.0 else None
+
+
+def _combined_longitudinal_finite(value: object) -> float | None:
+    """Return one strict finite real scalar without leaking conversion errors."""
+
     if _is_boolean_scalar(value) or not isinstance(value, Real):
         return None
     try:
         number = float(value)
     except (OverflowError, TypeError, ValueError):
         return None
-    return number if math.isfinite(number) and number >= 0.0 else None
+    return number if math.isfinite(number) else None
 
 
 def _combined_longitudinal_finite_sum(
@@ -1182,10 +1189,8 @@ def _combined_longitudinal_candidate(
         return None
     if chord_formula in {"8.51", "8.52"}:
         face_m_ed = value.get("face_m_ed_signed", _MISSING)
-        if _is_boolean_scalar(face_m_ed) or not isinstance(face_m_ed, Real):
-            return None
-        face_m_ed_number = float(face_m_ed)
-        if not math.isfinite(face_m_ed_number):
+        face_m_ed_number = _combined_longitudinal_finite(face_m_ed)
+        if face_m_ed_number is None:
             return None
         expected_face_m_ed = (
             operands["m_ed"]
@@ -1925,18 +1930,15 @@ def validated_torsion_longitudinal_assessment(
     if (
         isinstance(required_by_tube_value, (list, tuple))
         and required_by_tube_value
-        and not any(
-            _is_boolean_scalar(value) or not isinstance(value, Real)
-            for value in required_by_tube_value
-        )
     ):
-        candidate_tube_values = tuple(
-            float(value) for value in required_by_tube_value
-        )
-        if candidate_tube_values and all(
-            math.isfinite(value) and value >= 0.0
-            for value in candidate_tube_values
-        ):
+        converted_tube_values: list[float] = []
+        for value in required_by_tube_value:
+            number = _combined_longitudinal_finite_nonnegative(value)
+            if number is None:
+                break
+            converted_tube_values.append(number)
+        else:
+            candidate_tube_values = tuple(converted_tube_values)
             parsed_required_by_tube = candidate_tube_values
             parsed_required_total = _combined_longitudinal_finite_sum(
                 candidate_tube_values
@@ -2312,20 +2314,8 @@ def combined_longitudinal_assessment(
         derived,
     ):
         return retained
-    if (
-        derived["status"] == "FAIL"
-        and isinstance(retained, Mapping)
-        and type(retained.get("reason")) is str
-    ):
-        retained_without_reason = dict(retained)
-        retained_without_reason.pop("reason", None)
-        derived_without_reason = dict(derived)
-        derived_without_reason.pop("reason", None)
-        if _combined_longitudinal_evidence_equal(
-            retained_without_reason,
-            derived_without_reason,
-        ):
-            return derived
+    if derived["status"] == "FAIL":
+        return derived
     return {
         **derived,
         "status": "NOT ASSESSED",

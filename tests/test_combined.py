@@ -3490,7 +3490,16 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
         capacity.combined_longitudinal_assessment(combined_result)
     )
     assert stale_overall["status"] == "FAIL"
-    stale_overall["reason"] = "stale retained summary"
+    stale_overall.update(
+        status="NOT ASSESSED",
+        ok=None,
+        util=None,
+        reason="required_longitudinal_chord_coverage_incomplete",
+        coverage_complete=False,
+        governing_source=None,
+        governing_mechanism=None,
+        governing=None,
+    )
     combined_result["overall_longitudinal_assessment"] = stale_overall
     at.session_state["results"] = retained
 
@@ -3709,6 +3718,8 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
         "owner_liveness",
         "subtube_liveness",
         "array_status",
+        "tube_overflow",
+        "face_overflow",
     ):
         retained = copy.deepcopy(base_results)
         combined_result = retained["combined"]
@@ -3726,6 +3737,7 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
             "owner_liveness",
             "subtube_liveness",
             "array_status",
+            "tube_overflow",
         }:
             direct = {
                 "valid": True,
@@ -3784,6 +3796,14 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
                     torsion_subdivided=False,
                     torsion_subtubes=None,
                 )
+            elif attack == "tube_overflow":
+                formula_628["required_by_tube_mm2"] = (10**1000,)
+                combined_result.update(
+                    t_ed=0.0,
+                    asl_torsion=0.0,
+                    torsion_subdivided=True,
+                    torsion_subtubes=({"asl_req": 0.0, "t_ed": 0.0},),
+                )
             else:
                 assert combined_result["t_ed"] > 0.0
                 assert combined_result["asl_torsion"] > 0.0
@@ -3821,10 +3841,32 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
                 "chord_role": "flexural_tension",
                 "chord_formula": "8.51",
                 "m_ed": 40.0,
-                "face_m_ed_signed": -40.0 if attack == "face_moment" else 40.0,
-                "mv": 10.0 if attack == "face_moment" else 60.0,
-                "m_total": 0.0 if attack == "face_moment" else 100.0,
-                "util": 0.0 if attack == "face_moment" else 1.0,
+                "face_m_ed_signed": (
+                    10**1000
+                    if attack == "face_overflow"
+                    else -40.0
+                    if attack == "face_moment"
+                    else 40.0
+                ),
+                "mv": (
+                    10.0
+                    if attack in {"face_moment", "face_overflow"}
+                    else 60.0
+                ),
+                "m_total": (
+                    0.0
+                    if attack == "face_moment"
+                    else 50.0
+                    if attack == "face_overflow"
+                    else 100.0
+                ),
+                "util": (
+                    0.0
+                    if attack == "face_moment"
+                    else 0.50
+                    if attack == "face_overflow"
+                    else 1.0
+                ),
                 "capped": attack == "headroom_cap",
             }
             compression_mv = ftd_v * 0.25
@@ -3879,7 +3921,12 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
         )
         assert str(overall_metric.value) == "-"
         assert str(overall_metric.delta) == ""
-        if attack not in {"formula_628", "subtube_liveness", "array_status"}:
+        if attack not in {
+            "formula_628",
+            "subtube_liveness",
+            "array_status",
+            "tube_overflow",
+        }:
             assert all(
                 not (
                     metric.label == "Chord utilisation"

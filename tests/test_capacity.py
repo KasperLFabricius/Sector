@@ -2227,6 +2227,51 @@ def test_pub_h01_overflowing_real_scalar_fails_closed(target):
     assert assessment["util"] is None
 
 
+def test_pub_h01_overflowing_2023_face_moment_fails_closed():
+    tension, compression = _pub_h01_2023_shear_only_candidates()
+    tension["face_m_ed_signed"] = 10**1000
+    combined = {
+        "longitudinal_model_2023": True,
+        "longitudinal": tension,
+        "longitudinal_candidates": [tension, compression],
+        "governing_longitudinal": tension,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "util": 0.50,
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": tension,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+
+
+def test_pub_h01_overflowing_required_tube_area_fails_closed():
+    retained = _unverified_formula_628(0.0)
+    retained["required_by_tube_mm2"] = (10**1000,)
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner={
+            "t_ed": 0.0,
+            "asl_req": 0.0,
+            "subdivided": True,
+            "subtubes": ({"asl_req": 0.0, "t_ed": 0.0},),
+        },
+    )
+
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert sanitized["required_by_tube_mm2"] is None
+
+
 @pytest.mark.parametrize(
     "coverage_marker",
     ("not_solved", "subdivided", "circular_geometry"),
@@ -2458,7 +2503,7 @@ def test_combined_longitudinal_retained_canonical_requires_exact_scalar_types():
     assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
 
 
-def test_combined_longitudinal_stale_overall_reason_cannot_hide_derived_failure():
+def test_combined_longitudinal_stale_overall_cannot_hide_derived_failure():
     direct = _pub_h01_longitudinal_fixture()
     combined = {
         "longitudinal": direct,
@@ -2467,7 +2512,16 @@ def test_combined_longitudinal_stale_overall_reason_cannot_hide_derived_failure(
     derived = dict(capacity.combined_longitudinal_assessment(combined))
     assert derived["status"] == "FAIL"
     stale = copy.deepcopy(derived)
-    stale["reason"] = "stale retained summary"
+    stale.update(
+        status="NOT ASSESSED",
+        ok=None,
+        util=None,
+        reason="required_longitudinal_chord_coverage_incomplete",
+        coverage_complete=False,
+        governing_source=None,
+        governing_mechanism=None,
+        governing=None,
+    )
     combined["overall_longitudinal_assessment"] = stale
 
     assessment = capacity.combined_longitudinal_assessment(combined)
@@ -2535,7 +2589,7 @@ def test_combined_longitudinal_unassessed_chord_drops_malformed_governing():
     assert assessment["chord_governing"] is None
 
 
-def test_combined_longitudinal_retained_array_cannot_crash_reconciliation():
+def test_combined_longitudinal_retained_array_cannot_mask_derived_failure():
     direct = _pub_h01_longitudinal_fixture()
     combined = {
         "longitudinal": direct,
@@ -2547,8 +2601,10 @@ def test_combined_longitudinal_retained_array_cannot_crash_reconciliation():
 
     assessment = capacity.combined_longitudinal_assessment(combined)
 
-    assert assessment["status"] == "NOT ASSESSED"
-    assert assessment["util"] is None
+    assert assessment["status"] == "FAIL"
+    assert assessment["ok"] is False
+    assert assessment["util"] == pytest.approx(1.2392531643)
+    assert assessment["governing"] is direct
 
 
 def test_combined_longitudinal_retained_status_array_cannot_mask_child_failure():

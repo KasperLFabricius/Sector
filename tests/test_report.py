@@ -7929,7 +7929,16 @@ def _pub_h01_report_combined():
         capacity.combined_longitudinal_assessment(combined)
     )
     assert stale_overall["status"] == "FAIL"
-    stale_overall["reason"] = "stale retained summary"
+    stale_overall.update(
+        status="NOT ASSESSED",
+        ok=None,
+        util=None,
+        reason="required_longitudinal_chord_coverage_incomplete",
+        coverage_complete=False,
+        governing_source=None,
+        governing_mechanism=None,
+        governing=None,
+    )
     combined["overall_longitudinal_assessment"] = stale_overall
     return combined
 
@@ -8055,6 +8064,8 @@ def _pub_h01_report_four_face_torsion():
         "owner_liveness",
         "subtube_liveness",
         "array_status",
+        "tube_overflow",
+        "face_overflow",
     ],
 )
 def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack):
@@ -8081,6 +8092,7 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
         "owner_liveness",
         "subtube_liveness",
         "array_status",
+        "tube_overflow",
     }:
         direct = {
             "valid": True,
@@ -8147,12 +8159,19 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
                     required_by_tube_mm2=(200.0, 300.0),
                 )
         else:
-            stale_formula["status"] = np.array(["PASS"])
+            if attack == "array_status":
+                stale_formula["status"] = np.array(["PASS"])
+            else:
+                stale_formula["required_by_tube_mm2"] = (10**1000,)
             combined.update(
                 t_ed=0.0,
                 asl_torsion=0.0,
-                torsion_subdivided=False,
-                torsion_subtubes=None,
+                torsion_subdivided=attack == "tube_overflow",
+                torsion_subtubes=(
+                    ({"asl_req": 0.0, "t_ed": 0.0},)
+                    if attack == "tube_overflow"
+                    else None
+                ),
             )
         combined.update(
             longitudinal_model_2023=False,
@@ -8161,6 +8180,7 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
             torsion_longitudinal_assessment=stale_formula,
         )
     else:
+        ftd_v = 300.0 if attack == "headroom_cap" else 40.0
         common = {
             "valid": True,
             "status": "PASS",
@@ -8172,7 +8192,7 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
             "off_util": 0.0,
             "off_not_evaluated": None,
             "m_rd": 100.0,
-            "ftd_v": 300.0,
+            "ftd_v": ftd_v,
             "ftd_t": 0.0,
             "z": 0.25,
             "mt": 0.0,
@@ -8187,12 +8207,16 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
             "chord_role": "flexural_tension",
             "chord_formula": "8.51",
             "m_ed": 40.0,
-            "face_m_ed_signed": 40.0,
-            "mv": 60.0,
-            "m_total": 100.0,
-            "util": 1.0,
-            "capped": True,
+            "face_m_ed_signed": (
+                10**1000 if attack == "face_overflow" else 40.0
+            ),
+            "mv": 60.0 if attack == "headroom_cap" else 10.0,
+            "m_total": 100.0 if attack == "headroom_cap" else 50.0,
+            "util": 1.0 if attack == "headroom_cap" else 0.50,
+            "capped": attack == "headroom_cap",
         }
+        compression_mv = ftd_v * 0.25
+        compression_total = max(-20.0 + compression_mv, 0.0)
         compression = {
             **common,
             "tension_low": False,
@@ -8200,9 +8224,9 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
             "chord_formula": "8.52",
             "m_ed": 20.0,
             "face_m_ed_signed": -20.0,
-            "mv": 75.0,
-            "m_total": 55.0,
-            "util": 0.55,
+            "mv": compression_mv,
+            "m_total": compression_total,
+            "util": compression_total / 100.0,
             "capped": False,
         }
         combined.update(
