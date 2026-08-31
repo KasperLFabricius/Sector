@@ -3468,13 +3468,20 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
     ):
         combined_result.pop(key, None)
     combined_result["longitudinal_all_conditional"] = True
+    stale_governing = {
+        **direct,
+        "status": "PASS",
+        "ok": True,
+        "m_rd": direct["m_total"] / 0.80,
+        "util": 0.80,
+    }
     combined_result["longitudinal_assessment"] = {
         "status": "NOT ASSESSED",
         "ok": None,
-        "util": direct["util"],
+        "util": 0.80,
         "reason": "required_longitudinal_chord_coverage_incomplete",
-        "coverage_complete": True,
-        "governing": direct,
+        "coverage_complete": False,
+        "governing": stale_governing,
     }
     combined_result["torsion_longitudinal_assessment"] = (
         _pub_h01_formula_628_assessment(0.50)
@@ -4143,7 +4150,9 @@ def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views():
     assert row["Result"] == "123.9 %"
 
 
-@pytest.mark.parametrize("hostile", ("malformed", "stale_alias"))
+@pytest.mark.parametrize(
+    "hostile", ("malformed", "stale_alias", "overflowing_real")
+)
 def test_pub_h01_inconsistent_longitudinal_evidence_fails_closed_in_native_views(
     hostile,
 ):
@@ -4188,6 +4197,18 @@ def test_pub_h01_inconsistent_longitudinal_evidence_fails_closed_in_native_views
     combined_result["longitudinal_all_conditional"] = True
     if hostile == "malformed":
         direct["m_ed"] = "not-a-number"
+    elif hostile == "overflowing_real":
+        for role_key in (
+            "role",
+            "has_torsion",
+            "gets_shift",
+            "chord_formula",
+            "chord_role",
+            "flexural_tension_low",
+            "face_m_ed_signed",
+        ):
+            direct.pop(role_key, None)
+        direct["m_ed"] = 10**1000
     else:
         combined_result["governing_longitudinal"] = {
             **direct,

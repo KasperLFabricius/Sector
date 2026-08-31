@@ -7897,13 +7897,20 @@ def _pub_h01_report_combined():
         "longitudinal_candidates",
     ):
         combined.pop(key, None)
+    stale_governing = {
+        **direct,
+        "status": "PASS",
+        "ok": True,
+        "m_rd": direct["m_total"] / 0.80,
+        "util": 0.80,
+    }
     combined["longitudinal_assessment"] = {
         "status": "NOT ASSESSED",
         "ok": None,
-        "util": direct["util"],
+        "util": 0.80,
         "reason": "required_longitudinal_chord_coverage_incomplete",
-        "coverage_complete": True,
-        "governing": direct,
+        "coverage_complete": False,
+        "governing": stale_governing,
     }
     combined["asl_torsion"] = 500.0
     combined["torsion_longitudinal_assessment"] = {
@@ -8421,7 +8428,9 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(profile):
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-@pytest.mark.parametrize("hostile", ["stale_alias", "non_finite_operand"])
+@pytest.mark.parametrize(
+    "hostile", ["stale_alias", "non_finite_operand", "overflowing_real"]
+)
 def test_report_pub_h01_inconsistent_longitudinal_evidence_fails_closed(
     profile,
     hostile,
@@ -8447,8 +8456,10 @@ def test_report_pub_h01_inconsistent_longitudinal_evidence_fails_closed(
             "m_total": 50.0,
             "util": 0.50,
         }
-    else:
+    elif hostile == "non_finite_operand":
         combined["longitudinal"]["m_total"] = math.nan
+    else:
+        combined["longitudinal"]["m_total"] = 10**1000
     combined["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(combined)
     )

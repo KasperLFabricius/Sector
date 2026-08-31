@@ -1255,7 +1255,7 @@ def test_combined_longitudinal_stale_governing_alias_cannot_replace_direct_failu
     assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
 
 
-def test_combined_longitudinal_stale_retained_assessment_cannot_replace_child_failure():
+def test_combined_longitudinal_stale_retained_assessment_cannot_mask_child_failure():
     direct = _pub_h01_longitudinal_fixture()
     stale = {
         **direct,
@@ -1280,6 +1280,30 @@ def test_combined_longitudinal_stale_retained_assessment_cannot_replace_child_fa
             "governing": stale,
         },
         "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "FAIL"
+    assert assessment["ok"] is False
+    assert assessment["util"] == pytest.approx(1.2392531643)
+    assert assessment["chord_governing"] is direct
+
+
+def test_combined_longitudinal_stale_parent_failure_cannot_create_failure():
+    direct = _pub_h01_longitudinal_fixture(0.80)
+    stale_failure = _pub_h01_longitudinal_fixture()
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "FAIL",
+            "ok": False,
+            "util": stale_failure["util"],
+            "reason": "required_longitudinal_chord_failed",
+            "coverage_complete": True,
+            "governing": stale_failure,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
     }
 
     assessment = capacity.combined_longitudinal_assessment(combined)
@@ -2143,18 +2167,29 @@ def test_combined_longitudinal_definite_failure_governs_incomplete_child():
     assert assessment["coverage_complete"] is False
 
 
-def test_combined_longitudinal_retained_not_assessed_cannot_mask_child_failure():
+def test_combined_longitudinal_stale_parent_governing_cannot_mask_child_failure():
     direct = _pub_h01_longitudinal_fixture()
+    stale_governing = {
+        **direct,
+        "status": "PASS",
+        "ok": True,
+        "m_rd": direct["m_total"] / 0.80,
+        "util": 0.80,
+    }
     combined = {
         "longitudinal": direct,
         "longitudinal_assessment": {
             "status": "NOT ASSESSED",
             "ok": None,
-            "util": direct["util"],
+            "util": 0.80,
             "reason": "required_longitudinal_chord_coverage_incomplete",
-            "coverage_complete": True,
-            "governing": direct,
+            "coverage_complete": False,
+            "governing": stale_governing,
         },
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
         "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
     }
 
@@ -2165,6 +2200,31 @@ def test_combined_longitudinal_retained_not_assessed_cannot_mask_child_failure()
     assert assessment["util"] == pytest.approx(1.2392531643)
     assert assessment["chord_status"] == "FAIL"
     assert assessment["chord_reason"] == "required_longitudinal_chord_failed"
+    assert assessment["chord_governing"] is direct
+
+
+@pytest.mark.parametrize("target", ("chord", "formula_628"))
+def test_pub_h01_overflowing_real_scalar_fails_closed(target):
+    direct = _pub_h01_longitudinal_fixture(0.50)
+    formula_628 = _unverified_formula_628(0.50)
+    combined = {
+        "longitudinal": direct,
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
+        "torsion_longitudinal_assessment": formula_628,
+    }
+    if target == "chord":
+        direct["m_ed"] = 10**1000
+    else:
+        formula_628["required_design_force_kn"] = 10**1000
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
 
 
 @pytest.mark.parametrize(
@@ -2491,7 +2551,7 @@ def test_combined_longitudinal_retained_array_cannot_crash_reconciliation():
     assert assessment["util"] is None
 
 
-def test_combined_longitudinal_retained_status_array_cannot_crash_reconciliation():
+def test_combined_longitudinal_retained_status_array_cannot_mask_child_failure():
     direct = _pub_h01_longitudinal_fixture()
     combined = {
         "longitudinal": direct,
@@ -2507,8 +2567,10 @@ def test_combined_longitudinal_retained_status_array_cannot_crash_reconciliation
 
     assessment = capacity.combined_longitudinal_assessment(combined)
 
-    assert assessment["status"] == "NOT ASSESSED"
-    assert assessment["util"] is None
+    assert assessment["status"] == "FAIL"
+    assert assessment["ok"] is False
+    assert assessment["util"] == pytest.approx(1.2392531643)
+    assert assessment["chord_governing"] is direct
 
 
 @pytest.mark.parametrize(

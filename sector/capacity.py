@@ -946,7 +946,10 @@ def _combined_longitudinal_utilisation(value: object) -> float | None:
 
     if _is_boolean_scalar(value) or not isinstance(value, Real):
         return None
-    utilisation = float(value)
+    try:
+        utilisation = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
     if math.isnan(utilisation) or utilisation < 0.0:
         return None
     return utilisation
@@ -957,7 +960,10 @@ def _combined_longitudinal_finite_nonnegative(value: object) -> float | None:
 
     if _is_boolean_scalar(value) or not isinstance(value, Real):
         return None
-    number = float(value)
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
     return number if math.isfinite(number) and number >= 0.0 else None
 
 
@@ -1497,9 +1503,6 @@ def _combined_longitudinal_chord_state(
             and child_candidate.get("status") == "FAIL"
             and child_utilisation is not None
             and child_utilisation > 1.0 + 1.0e-9
-            and governing_consistent
-            and type(status) is str
-            and status == "NOT ASSESSED"
         )
         if type(status) is str and status in {"PASS", "FAIL"}:
             expected_status = (
