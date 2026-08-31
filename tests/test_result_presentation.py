@@ -1303,6 +1303,8 @@ def test_combined_summary_cannot_hide_subordinate_failure():
         "longitudinal_all_conditional": True,
         "t_ed": 0.0,
         "asl_torsion": 0.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
         "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
     rows = presentation.result_summary_rows(
@@ -1491,6 +1493,8 @@ def test_separate_mv_assumption_preserves_conservative_overall_state(
         "longitudinal_all_conditional": longitudinal is not None,
         "t_ed": 0.0,
         "asl_torsion": 0.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
         "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
     rows = presentation.result_summary_rows(
@@ -1662,6 +1666,8 @@ def test_combined_physical_components_uses_the_governing_longitudinal_face():
         "longitudinal_all_conditional": True,
         "t_ed": 0.0,
         "asl_torsion": 0.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
         "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     })
 
@@ -2395,6 +2401,8 @@ def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
         "valid": True,
         "t_ed": 40.0,
         "asl_req": required_asl,
+        "subdivided": False,
+        "subtubes": None,
         "trd": 76.402,
         "util": 0.523548,
         "governs": "stirrups (TRd,s)",
@@ -2452,6 +2460,11 @@ def test_torsion_summary_separates_component_and_longitudinal_status(
 def test_torsion_summary_rebuilds_formula_628_before_publishing_pass():
     torsion = _torsion_longitudinal_result(status="NOT ASSESSED", ratio=0.50)
     torsion.update(
+        t_ed=0.0,
+        asl_req=0.0,
+        subdivided=True,
+        subtubes=({"asl_req": 10.0}, {"asl_req": 20.0}),
+        applicability=_applicable_torsion_evidence(0.0)["applicability"],
         assessment_status="PASS",
         assessment_ok=True,
         overall_reason="no_longitudinal_torsion_demand",
@@ -2461,7 +2474,7 @@ def test_torsion_summary_rebuilds_formula_628_before_publishing_pass():
         ok=True,
         reason="no_longitudinal_torsion_demand",
         required_asl_mm2=0.0,
-        required_by_tube_mm2=(0.0,),
+        required_by_tube_mm2=(10.0, 20.0),
         required_design_force_kn=0.0,
         provided_design_force_kn=100.0,
         provided_gross_area_mm2=250.0,
@@ -2478,12 +2491,11 @@ def test_torsion_summary_rebuilds_formula_628_before_publishing_pass():
     by_check = {row["check"]: row for row in rows}
 
     assert presentation.torsion_assessment_status(torsion) == "NOT ASSESSED"
-    assert by_check["Torsion"]["status"] == "NOT ASSESSED"
-    longitudinal = by_check["Torsion longitudinal reinforcement"]
-    assert longitudinal["status"] == "NOT ASSESSED"
-    assert longitudinal["result"] == "-"
-    assert longitudinal["util"] is None
-    assert "500 / 250" not in longitudinal["result"]
+    sanitized = presentation.torsion_longitudinal_assessment(torsion)
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert by_check["Torsion"]["status"] == "NOT APPLICABLE"
+    assert "Torsion longitudinal reinforcement" not in by_check
 
 
 @pytest.mark.parametrize("status", ["NOT ASSESSED", "FAIL"])
@@ -2913,6 +2925,8 @@ def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
             },
             "t_ed": 0.0,
             "asl_torsion": 0.0,
+            "torsion_subdivided": False,
+            "torsion_subtubes": None,
             "torsion_longitudinal_assessment": (
                 _zero_formula_628_assessment()
             ),

@@ -1801,9 +1801,12 @@ def validated_torsion_longitudinal_assessment(
             derived_ok = None
 
     required_by_tube_value = retained.get("required_by_tube_mm2", _MISSING)
+    required_by_tube_present = required_by_tube_value is not _MISSING
     parsed_required_by_tube: tuple[float, ...] = ()
+    required_by_tube_valid = False
     if (
         isinstance(required_by_tube_value, (list, tuple))
+        and required_by_tube_value
         and not any(
             _is_boolean_scalar(value) or isinstance(value, (str, bytes))
             for value in required_by_tube_value
@@ -1820,6 +1823,7 @@ def validated_torsion_longitudinal_assessment(
             for value in candidate_tube_values
         ):
             parsed_required_by_tube = candidate_tube_values
+            required_by_tube_valid = True
 
     owner_consistent = False
     if isinstance(owner, Mapping) and complete_operands:
@@ -1838,8 +1842,11 @@ def validated_torsion_longitudinal_assessment(
                 or (owner_torsion > 0.0 and owner_required > 0.0)
             )
         )
+        owner_subdivided = owner.get("subdivided", _MISSING)
         subtubes = owner.get("subtubes", _MISSING)
-        if owner.get("subdivided") is True:
+        if type(owner_subdivided) is not bool:
+            owner_consistent = False
+        elif owner_subdivided:
             if not isinstance(subtubes, (list, tuple)) or not subtubes:
                 owner_consistent = False
             else:
@@ -1851,6 +1858,8 @@ def validated_torsion_longitudinal_assessment(
                 )
                 owner_consistent = bool(
                     owner_consistent
+                    and required_by_tube_present
+                    and required_by_tube_valid
                     and all(value is not None for value in expected_by_tube)
                     and len(parsed_required_by_tube) == len(expected_by_tube)
                     and all(
@@ -1861,7 +1870,55 @@ def validated_torsion_longitudinal_assessment(
                             expected_by_tube,
                         )
                     )
+                    and owner_required is not None
+                    and required_asl is not None
+                    and _combined_longitudinal_close(
+                        math.fsum(parsed_required_by_tube),
+                        owner_required,
+                    )
+                    and _combined_longitudinal_close(
+                        math.fsum(
+                            value
+                            for value in expected_by_tube
+                            if value is not None
+                        ),
+                        owner_required,
+                    )
+                    and _combined_longitudinal_close(
+                        math.fsum(parsed_required_by_tube),
+                        required_asl,
+                    )
                 )
+        else:
+            no_subtube_collection = bool(
+                subtubes is _MISSING
+                or subtubes is None
+                or (
+                    isinstance(subtubes, (list, tuple))
+                    and not subtubes
+                )
+            )
+            retained_total_consistent = True
+            if required_by_tube_present:
+                retained_total_consistent = bool(
+                    required_by_tube_valid
+                    and len(parsed_required_by_tube) == 1
+                    and owner_required is not None
+                    and required_asl is not None
+                    and _combined_longitudinal_close(
+                        parsed_required_by_tube[0],
+                        owner_required,
+                    )
+                    and _combined_longitudinal_close(
+                        parsed_required_by_tube[0],
+                        required_asl,
+                    )
+                )
+            owner_consistent = bool(
+                owner_consistent
+                and no_subtube_collection
+                and retained_total_consistent
+            )
 
     if complete_operands:
         valid = bool(
@@ -1935,7 +1992,12 @@ def _combined_longitudinal_torsion_state(
     retained = combined.get("torsion_longitudinal_assessment")
     sanitized = validated_torsion_longitudinal_assessment(
         retained,
-        owner=combined,
+        owner={
+            "asl_req": combined.get("asl_torsion", _MISSING),
+            "t_ed": combined.get("t_ed", _MISSING),
+            "subdivided": combined.get("torsion_subdivided", _MISSING),
+            "subtubes": combined.get("torsion_subtubes", _MISSING),
+        },
     )
     return {
         "status": sanitized["status"],
@@ -4431,6 +4493,17 @@ def finalize_combined(inp, out):
         "crushing": torsion_out.get("interaction"),
         "t_ed": torsion_out.get("t_ed"),
         "asl_torsion": torsion_out["asl_req"],
+        "torsion_subdivided": torsion_out.get("subdivided"),
+        "torsion_subtubes": (
+            tuple(
+                {"asl_req": item.get("asl_req")}
+                if isinstance(item, Mapping)
+                else {}
+                for item in (torsion_out.get("subtubes") or ())
+            )
+            if torsion_out.get("subdivided") is True
+            else None
+        ),
         "delta_ftd": links["delta_ftd"] if links is not None else 0.0,
         "links": links is not None,
         "member_angle_selection": (

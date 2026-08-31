@@ -1307,6 +1307,8 @@ def test_combined_longitudinal_2023_coverage_is_rebuilt_from_retained_faces():
         },
         "t_ed": 0.0,
         "asl_torsion": 0.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
         "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
     }
 
@@ -1623,7 +1625,12 @@ def test_torsion_longitudinal_publication_authority_hides_stale_operands():
 
     sanitized = capacity.validated_torsion_longitudinal_assessment(
         stale,
-        owner={"asl_req": 500.0, "t_ed": 40.0},
+        owner={
+            "asl_req": 500.0,
+            "t_ed": 40.0,
+            "subdivided": False,
+            "subtubes": None,
+        },
     )
 
     assert sanitized["evidence_consistent"] is False
@@ -1643,16 +1650,34 @@ def test_torsion_longitudinal_publication_authority_binds_owning_demand():
 
     rejected = capacity.validated_torsion_longitudinal_assessment(
         forged_zero,
-        owner={"valid": True, "t_ed": 40.0, "asl_req": 500.0},
+        owner={
+            "valid": True,
+            "t_ed": 40.0,
+            "asl_req": 500.0,
+            "subdivided": False,
+            "subtubes": None,
+        },
     )
     accepted_zero = capacity.validated_torsion_longitudinal_assessment(
         forged_zero,
-        owner={"valid": True, "t_ed": 0.0, "asl_req": 0.0},
+        owner={
+            "valid": True,
+            "t_ed": 0.0,
+            "asl_req": 0.0,
+            "subdivided": False,
+            "subtubes": None,
+        },
     )
     live = _unverified_formula_628(0.50)
     accepted_live = capacity.validated_torsion_longitudinal_assessment(
         live,
-        owner={"valid": True, "t_ed": 40.0, "asl_req": 500.0},
+        owner={
+            "valid": True,
+            "t_ed": 40.0,
+            "asl_req": 500.0,
+            "subdivided": False,
+            "subtubes": None,
+        },
     )
 
     assert rejected["evidence_consistent"] is False
@@ -1684,6 +1709,94 @@ def test_torsion_longitudinal_publication_authority_rejects_boolean_tube_area():
     assert sanitized["evidence_consistent"] is False
     assert sanitized["status"] == "NOT ASSESSED"
     assert sanitized["required_asl_mm2"] is None
+
+
+def test_torsion_longitudinal_publication_authority_rejects_subtube_total_conflict():
+    retained = _unverified_formula_628(0.0)
+    retained["required_by_tube_mm2"] = (10.0, 20.0)
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner={
+            "valid": True,
+            "t_ed": 0.0,
+            "asl_req": 0.0,
+            "subdivided": True,
+            "subtubes": ({"asl_req": 10.0}, {"asl_req": 20.0}),
+        },
+    )
+
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert sanitized["required_asl_mm2"] is None
+    assert sanitized["required_by_tube_mm2"] is None
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [
+        {"t_ed": 0.0, "asl_req": 0.0},
+        {
+            "t_ed": 0.0,
+            "asl_req": 0.0,
+            "subdivided": False,
+            "subtubes": ({"asl_req": 0.0},),
+        },
+        {
+            "t_ed": 0.0,
+            "asl_req": 0.0,
+            "subdivided": True,
+            "subtubes": (),
+        },
+    ],
+)
+def test_torsion_longitudinal_publication_authority_rejects_malformed_subdivision(
+    owner,
+):
+    retained = _unverified_formula_628(0.0)
+    retained["required_by_tube_mm2"] = (0.0,)
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner=owner,
+    )
+
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+
+
+@pytest.mark.parametrize(
+    ("ratio", "t_ed", "total", "parts", "expected_status"),
+    [
+        (0.0, 0.0, 0.0, (0.0, 0.0), "PASS"),
+        (0.50, 40.0, 500.0, (200.0, 300.0), "NOT ASSESSED"),
+    ],
+)
+def test_torsion_longitudinal_publication_authority_accepts_reconciled_subtubes(
+    ratio,
+    t_ed,
+    total,
+    parts,
+    expected_status,
+):
+    retained = _unverified_formula_628(ratio)
+    retained["required_by_tube_mm2"] = parts
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner={
+            "valid": True,
+            "t_ed": t_ed,
+            "asl_req": total,
+            "subdivided": True,
+            "subtubes": tuple({"asl_req": value} for value in parts),
+        },
+    )
+
+    assert sanitized["evidence_consistent"] is True
+    assert sanitized["status"] == expected_status
+    assert sanitized["required_asl_mm2"] == pytest.approx(total)
+    assert sanitized["required_by_tube_mm2"] == pytest.approx(parts)
 
 
 def test_combined_longitudinal_candidate_recomputes_total_from_operands():

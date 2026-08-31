@@ -5720,6 +5720,7 @@ def _torsion_out(interaction=False):
            "resistance_status": "PASS",
            "assessment_status": "NOT ASSESSED", "assessment_ok": None,
            "overall_reason": "longitudinal_torsion_reinforcement_not_verified",
+           "subdivided": False, "subtubes": None,
            "t_ed_signed": 40.0,
            "applicability_blocked": False,
            "applicability": capacity.torsion_applicability(
@@ -6445,7 +6446,49 @@ def test_report_profiles_share_longitudinal_torsion_status(
 def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
     out = _out()
     torsion = _torsion_out()
+    subs = [
+        _subtube(
+            300, 600, 100.0, 0.10, 0.0037, 0.0, 90.0, 0.0,
+            "stirrups (TRd,s)", 0.0, -100.0,
+        ),
+        _subtube(
+            1000, 200, 91.0, 0.15, 0.0023, 0.0, 20.0, 0.0,
+            "crushing (TRd,max)", 0.0, 300.0, bar_position_start=5,
+        ),
+    ]
+    subs[0]["asl_req"] = 10.0
+    subs[1]["asl_req"] = 20.0
     torsion.update(
+        t_ed=0.0,
+        t_ed_signed=0.0,
+        asl_req=0.0,
+        applicability=capacity.torsion_applicability(
+            {
+                "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+                "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+            },
+            0.0,
+        ),
+        subdivided=True,
+        subtubes=subs,
+        primary=subs[0],
+        trd=sum(item["trd"] for item in subs),
+        util=0.0,
+        governing_sub=0,
+        torque_distribution={
+            "applied_torque": 0.0,
+            "positive_stiffness_sum": sum(item["stiffness"] for item in subs),
+            "shares": tuple(
+                {
+                    "index": index,
+                    "stiffness": item["stiffness"],
+                    "fraction": item["stiffness"]
+                    / sum(part["stiffness"] for part in subs),
+                    "torque": 0.0,
+                }
+                for index, item in enumerate(subs)
+            ),
+        },
         assessment_status="PASS",
         assessment_ok=True,
         overall_reason="no_longitudinal_torsion_demand",
@@ -6455,7 +6498,7 @@ def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
         ok=True,
         reason="no_longitudinal_torsion_demand",
         required_asl_mm2=0.0,
-        required_by_tube_mm2=(0.0,),
+        required_by_tube_mm2=(10.0, 20.0),
         required_design_force_kn=0.0,
         provided_gross_area_mm2=250.0,
         provided_design_force_kn=100.0,
@@ -6467,6 +6510,9 @@ def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
     out["torsion"] = torsion
     inp = _inp()
     inp.update(torsion_on=True, shear_links=True)
+    sanitized = result_presentation.torsion_longitudinal_assessment(torsion)
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
 
     text = " ".join(
         _pdf_text(
@@ -6477,21 +6523,8 @@ def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
     )
 
     assert "Torsion" in text
-    assert "NOT ASSESSED" in text
-    assert "Torsion longitudinal reinforcement" in text
+    assert "Torsion longitudinal reinforcement" not in text
     assert "0 / 250 mm2" not in text
-    assert (
-        "Recalculate the longitudinal torsion reinforcement assessment before "
-        "relying on its status"
-    ) in text
-    if profile != "Brief":
-        formula_section = text.rsplit(
-            "Longitudinal torsion reinforcement (Formula 6.28)", 1
-        )[1]
-        assert "Required longitudinal area - mm" in formula_section
-        assert "gross area - mm" in formula_section
-        assert "equivalent area at selected" in formula_section
-        assert formula_section.count("- mm") >= 3
 
 
 def test_report_withholds_full_torsion_verdict_without_current_closed_links():
@@ -7354,6 +7387,8 @@ def _base_en_combined_out():
     combined.update(
         t_ed=40.0,
         asl_torsion=1176.0,
+        torsion_subdivided=False,
+        torsion_subtubes=None,
         torsion_longitudinal_assessment={
             "status": "NOT ASSESSED",
             "ok": None,

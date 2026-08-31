@@ -3892,6 +3892,96 @@ def test_pub_h01_missing_off_axis_torsion_fails_closed_in_native_views():
     assert row["Result"] == "-"
 
 
+def test_pub_h01_subtube_total_forgery_fails_closed_in_torsion_and_overview():
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+
+    retained = copy.deepcopy(at.session_state["results"])
+    torsion = retained["torsion"]
+    first = copy.deepcopy(torsion["primary"])
+    second = copy.deepcopy(torsion["primary"])
+    for index, (subtube, required) in enumerate(
+        ((first, 10.0), (second, 20.0))
+    ):
+        subtube.update(
+            asl_req=required,
+            stiffness=1.0,
+            x_mm=float(index * 250),
+            y_mm=0.0,
+            b_mm=200.0,
+            h_mm=300.0,
+            t_ed=0.0,
+            util=0.0,
+        )
+    torsion.update(
+        t_ed=0.0,
+        t_ed_signed=0.0,
+        asl_req=0.0,
+        applicability=capacity.torsion_applicability(
+            {
+                "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+                "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+            },
+            0.0,
+        ),
+        subdivided=True,
+        subtubes=[first, second],
+        primary=first,
+        trd=first["trd"] + second["trd"],
+        util=0.0,
+        governing_sub=0,
+        torque_distribution={
+            "applied_torque": 0.0,
+            "positive_stiffness_sum": 2.0,
+            "shares": (
+                {"index": 0, "stiffness": 1.0, "fraction": 0.5, "torque": 0.0},
+                {"index": 1, "stiffness": 1.0, "fraction": 0.5, "torque": 0.0},
+            ),
+        },
+        assessment_status="PASS",
+        assessment_ok=True,
+        overall_reason="no_longitudinal_torsion_demand",
+    )
+    torsion["longitudinal_assessment"].update(
+        status="PASS",
+        ok=True,
+        reason="no_longitudinal_torsion_demand",
+        required_asl_mm2=0.0,
+        required_by_tube_mm2=(10.0, 20.0),
+        required_design_force_kn=0.0,
+        provided_gross_area_mm2=250.0,
+        provided_design_force_kn=100.0,
+        provided_equivalent_area_mm2=250.0,
+        reference_fyd_mpa=400.0,
+        demand_ratio=0.0,
+        area_sufficient=True,
+    )
+    at.session_state["results"] = retained
+    sanitized = result_presentation.torsion_longitudinal_assessment(torsion)
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+
+    _select_view(at, "Torsion")
+    assert not at.exception
+    assert not any(
+        "Longitudinal assessment" in set(frame.value.get("Quantity", ()))
+        for frame in at.dataframe
+    )
+    assert all(
+        str(metric.delta) != "PASS" for metric in at.metric
+    )
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    torsion_rows = overview.loc[
+        overview["Check"].astype(str).str.startswith("Torsion")
+    ]
+    assert torsion_rows.empty
+
+
 def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views():
     at = _fresh()
     at.run()
