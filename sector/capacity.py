@@ -1271,6 +1271,8 @@ def _combined_longitudinal_child_candidate(
         current_role_evidence = any(
             role is not _MISSING for role in retained_roles
         )
+        if not current_role_evidence:
+            return None, False
         if model_2023 or current_role_evidence:
             if any(
                 type(role) is not str
@@ -1309,6 +1311,41 @@ def _combined_longitudinal_child_candidate(
                 float(item["ftd_t"]) > 0.0 or float(item["mt"]) > 0.0
                 for item in retained_candidates
             )
+            owner_torsion_values: list[float] = []
+            for owner_key in ("t_ed", "asl_torsion"):
+                owner_value = combined.get(owner_key, _MISSING)
+                if _is_boolean_scalar(owner_value) or isinstance(
+                    owner_value,
+                    (str, bytes),
+                ):
+                    return None, False
+                try:
+                    owner_number = float(owner_value)
+                except (OverflowError, TypeError, ValueError):
+                    return None, False
+                if not math.isfinite(owner_number) or owner_number < 0.0:
+                    return None, False
+                owner_torsion_values.append(owner_number)
+            if any(value > 0.0 for value in owner_torsion_values) is not torsion_live:
+                return None, False
+            if torsion_live and not all(
+                value > 0.0 for value in owner_torsion_values
+            ):
+                return None, False
+            torsion_forces = tuple(
+                float(item["ftd_t"]) for item in retained_candidates
+            )
+            if torsion_live and (
+                any(force <= 0.0 for force in torsion_forces)
+                or any(
+                    not _combined_longitudinal_close(
+                        force,
+                        torsion_forces[0],
+                    )
+                    for force in torsion_forces[1:]
+                )
+            ):
+                return None, False
             if torsion_states[0] is not torsion_live:
                 return None, False
             shear_live = any(
@@ -1350,16 +1387,6 @@ def _combined_longitudinal_child_candidate(
                 ),
             )
             if retained_coverage is not complete:
-                return None, False
-            torsion_assessment = validated_torsion_longitudinal_assessment(
-                combined.get("torsion_longitudinal_assessment")
-            )
-            required_force = torsion_assessment["required_design_force_kn"]
-            if (
-                torsion_assessment["evidence_consistent"] is True
-                and required_force is not None
-                and (required_force > 0.0) is not torsion_live
-            ):
                 return None, False
         candidate = max(
             retained_candidates,
@@ -1635,6 +1662,8 @@ def _combined_longitudinal_chord_state(
 
 def validated_torsion_longitudinal_assessment(
     retained: object,
+    *,
+    owner: object,
 ) -> dict[str, Any]:
     """Return one safe Formula (6.28) publication authority.
 
@@ -1673,8 +1702,11 @@ def validated_torsion_longitudinal_assessment(
         retained.get("demand_ratio")
     )
 
-    def finite_nonnegative(key: str) -> float | None:
-        operand = retained.get(key, _MISSING)
+    def mapping_finite_nonnegative(
+        mapping: Mapping[str, Any],
+        key: str,
+    ) -> float | None:
+        operand = mapping.get(key, _MISSING)
         if (
             operand is _MISSING
             or operand is None
@@ -1687,6 +1719,10 @@ def validated_torsion_longitudinal_assessment(
         except (OverflowError, TypeError, ValueError):
             return None
         return number if math.isfinite(number) and number >= 0.0 else None
+
+    def finite_nonnegative(key: str) -> float | None:
+        assert isinstance(retained, Mapping)
+        return mapping_finite_nonnegative(retained, key)
 
     required_asl = finite_nonnegative("required_asl_mm2")
     required_force = finite_nonnegative("required_design_force_kn")
@@ -1764,9 +1800,73 @@ def validated_torsion_longitudinal_assessment(
             derived_reason = "longitudinal_torsion_reinforcement_not_verified"
             derived_ok = None
 
+    required_by_tube_value = retained.get("required_by_tube_mm2", _MISSING)
+    parsed_required_by_tube: tuple[float, ...] = ()
+    if (
+        isinstance(required_by_tube_value, (list, tuple))
+        and not any(
+            _is_boolean_scalar(value) or isinstance(value, (str, bytes))
+            for value in required_by_tube_value
+        )
+    ):
+        try:
+            candidate_tube_values = tuple(
+                float(value) for value in required_by_tube_value
+            )
+        except (OverflowError, TypeError, ValueError):
+            candidate_tube_values = ()
+        if candidate_tube_values and all(
+            math.isfinite(value) and value >= 0.0
+            for value in candidate_tube_values
+        ):
+            parsed_required_by_tube = candidate_tube_values
+
+    owner_consistent = False
+    if isinstance(owner, Mapping) and complete_operands:
+        owner_required_key = (
+            "asl_req" if "asl_req" in owner else "asl_torsion"
+        )
+        owner_required = mapping_finite_nonnegative(owner, owner_required_key)
+        owner_torsion = mapping_finite_nonnegative(owner, "t_ed")
+        owner_consistent = bool(
+            owner_required is not None
+            and required_asl is not None
+            and owner_torsion is not None
+            and _combined_longitudinal_close(owner_required, required_asl)
+            and (
+                (owner_torsion == 0.0 and owner_required == 0.0)
+                or (owner_torsion > 0.0 and owner_required > 0.0)
+            )
+        )
+        subtubes = owner.get("subtubes", _MISSING)
+        if owner.get("subdivided") is True:
+            if not isinstance(subtubes, (list, tuple)) or not subtubes:
+                owner_consistent = False
+            else:
+                expected_by_tube = tuple(
+                    mapping_finite_nonnegative(item, "asl_req")
+                    if isinstance(item, Mapping)
+                    else None
+                    for item in subtubes
+                )
+                owner_consistent = bool(
+                    owner_consistent
+                    and all(value is not None for value in expected_by_tube)
+                    and len(parsed_required_by_tube) == len(expected_by_tube)
+                    and all(
+                        expected is not None
+                        and _combined_longitudinal_close(actual, expected)
+                        for actual, expected in zip(
+                            parsed_required_by_tube,
+                            expected_by_tube,
+                        )
+                    )
+                )
+
     if complete_operands:
         valid = bool(
             operands_consistent
+            and owner_consistent
             and status == derived_status
             and reason == derived_reason
             and (ok is _MISSING or ok is derived_ok)
@@ -1792,19 +1892,15 @@ def validated_torsion_longitudinal_assessment(
     assert type(area_sufficient) is bool
 
     provided_gross_area = finite_nonnegative("provided_gross_area_mm2")
-    required_by_tube_value = retained.get("required_by_tube_mm2", _MISSING)
     required_by_tube = None
-    if isinstance(required_by_tube_value, (list, tuple)):
-        try:
-            tube_values = tuple(float(value) for value in required_by_tube_value)
-        except (OverflowError, TypeError, ValueError):
-            tube_values = ()
-        if (
-            tube_values
-            and all(math.isfinite(value) and value >= 0.0 for value in tube_values)
-            and _combined_longitudinal_close(math.fsum(tube_values), required_asl)
-        ):
-            required_by_tube = tube_values
+    if (
+        parsed_required_by_tube
+        and _combined_longitudinal_close(
+            math.fsum(parsed_required_by_tube),
+            required_asl,
+        )
+    ):
+        required_by_tube = parsed_required_by_tube
 
     return {
         "evidence_consistent": True,
@@ -1837,7 +1933,10 @@ def _combined_longitudinal_torsion_state(
     """Normalise the independent Formula (6.28) reinforcement assessment."""
 
     retained = combined.get("torsion_longitudinal_assessment")
-    sanitized = validated_torsion_longitudinal_assessment(retained)
+    sanitized = validated_torsion_longitudinal_assessment(
+        retained,
+        owner=combined,
+    )
     return {
         "status": sanitized["status"],
         "util": (
@@ -4330,6 +4429,7 @@ def finalize_combined(inp, out):
         ),
         "outside_default_range": outside_default_range,
         "crushing": torsion_out.get("interaction"),
+        "t_ed": torsion_out.get("t_ed"),
         "asl_torsion": torsion_out["asl_req"],
         "delta_ftd": links["delta_ftd"] if links is not None else 0.0,
         "links": links is not None,

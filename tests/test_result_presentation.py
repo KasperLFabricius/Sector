@@ -1301,6 +1301,8 @@ def test_combined_summary_cannot_hide_subordinate_failure():
         "chord_off": _complete_longitudinal_candidate(0.55, axis="y"),
         "governing_longitudinal": _complete_longitudinal_candidate(0.65),
         "longitudinal_all_conditional": True,
+        "t_ed": 0.0,
+        "asl_torsion": 0.0,
         "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
     rows = presentation.result_summary_rows(
@@ -1487,6 +1489,8 @@ def test_separate_mv_assumption_preserves_conservative_overall_state(
         "longitudinal": longitudinal,
         "governing_longitudinal": longitudinal,
         "longitudinal_all_conditional": longitudinal is not None,
+        "t_ed": 0.0,
+        "asl_torsion": 0.0,
         "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
     rows = presentation.result_summary_rows(
@@ -1625,12 +1629,18 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
 
 def test_combined_physical_components_uses_the_governing_longitudinal_face():
     shear_axis = _complete_longitudinal_candidate(0.60)
+    shear_axis.update(
+        role="shear_axis",
+        has_torsion=False,
+        gets_shift=False,
+    )
     governing = _complete_longitudinal_candidate(
         0.85,
         axis="y",
         tension_low=False,
         biaxial=True,
     )
+    governing["role"] = "off_axis"
     components = presentation.combined_physical_components({
         "transverse": {
             "valid": True, "cot": 1.6,
@@ -1641,7 +1651,17 @@ def test_combined_physical_components_uses_the_governing_longitudinal_face():
         "chord_off": governing,
         "governing_longitudinal": governing,
         "longitudinal_candidates": [shear_axis, governing],
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "util": 0.85,
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": governing,
+        },
         "longitudinal_all_conditional": True,
+        "t_ed": 0.0,
+        "asl_torsion": 0.0,
         "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     })
 
@@ -2374,6 +2394,7 @@ def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
         "full_resistance_assessed": True,
         "valid": True,
         "t_ed": 40.0,
+        "asl_req": required_asl,
         "trd": 76.402,
         "util": 0.523548,
         "governs": "stirrups (TRd,s)",
@@ -2439,13 +2460,15 @@ def test_torsion_summary_rebuilds_formula_628_before_publishing_pass():
         status="PASS",
         ok=True,
         reason="no_longitudinal_torsion_demand",
-        required_asl_mm2=500.0,
-        required_design_force_kn=200.0,
+        required_asl_mm2=0.0,
+        required_by_tube_mm2=(0.0,),
+        required_design_force_kn=0.0,
         provided_design_force_kn=100.0,
         provided_gross_area_mm2=250.0,
         provided_equivalent_area_mm2=250.0,
+        reference_fyd_mpa=400.0,
         demand_ratio=0.0,
-        area_sufficient=False,
+        area_sufficient=True,
     )
 
     rows = presentation.result_summary_rows(
@@ -2888,6 +2911,8 @@ def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
                 "coverage_complete": assessed,
                 "governing": longitudinal,
             },
+            "t_ed": 0.0,
+            "asl_torsion": 0.0,
             "torsion_longitudinal_assessment": (
                 _zero_formula_628_assessment()
             ),

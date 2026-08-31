@@ -6454,15 +6454,15 @@ def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
         status="PASS",
         ok=True,
         reason="no_longitudinal_torsion_demand",
-        required_asl_mm2=500.0,
-        required_by_tube_mm2=(500.0,),
-        required_design_force_kn=200.0,
+        required_asl_mm2=0.0,
+        required_by_tube_mm2=(0.0,),
+        required_design_force_kn=0.0,
         provided_gross_area_mm2=250.0,
         provided_design_force_kn=100.0,
         provided_equivalent_area_mm2=250.0,
         reference_fyd_mpa=400.0,
         demand_ratio=0.0,
-        area_sufficient=False,
+        area_sufficient=True,
     )
     out["torsion"] = torsion
     inp = _inp()
@@ -6479,7 +6479,7 @@ def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
     assert "Torsion" in text
     assert "NOT ASSESSED" in text
     assert "Torsion longitudinal reinforcement" in text
-    assert "500 / 250 mm2" not in text
+    assert "0 / 250 mm2" not in text
     assert (
         "Recalculate the longitudinal torsion reinforcement assessment before "
         "relying on its status"
@@ -7315,17 +7315,67 @@ def _base_en_combined_out():
         "ok": True,
         "capped": False,
         "theta_mode": "utilisation",
+        "role": "shear_axis",
+        "has_torsion": True,
+        "gets_shift": True,
     }
     combined["longitudinal"] = chord
+    other_shear = {
+        **chord,
+        "tension_low": False,
+        "m_ed": 0.0,
+        "mv": 0.0,
+        "m_total": 10.0,
+        "util": 10.0 / 150.0,
+        "ftd_v": 0.0,
+        "gets_shift": False,
+    }
+    off_positive = {
+        **other_shear,
+        "role": "off_axis",
+        "axis": "y",
+        "tension_low": True,
+    }
+    off_positive.pop("has_torsion")
+    off_positive.pop("gets_shift")
+    off_positive.pop("off_not_evaluated")
+    off_negative = {
+        **off_positive,
+        "tension_low": False,
+    }
     combined["longitudinal_assessment"] = {
         "status": "PASS",
         "ok": True,
         "util": 0.60,
         "coverage_complete": True,
         "governing": chord,
-        "reason": "Complete longitudinal chord coverage",
+        "reason": "required_longitudinal_chords_satisfied",
     }
-    _retain_combined_chords(combined, chord)
+    combined.update(
+        t_ed=40.0,
+        asl_torsion=1176.0,
+        torsion_longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+            "required_asl_mm2": 1176.0,
+            "required_design_force_kn": 470.4,
+            "provided_design_force_kn": 600.0,
+            "reference_fyd_mpa": 400.0,
+            "demand_ratio": 0.784,
+            "area_sufficient": True,
+        },
+    )
+    _retain_combined_chords(
+        combined,
+        chord,
+        other_shear,
+        off_positive,
+        off_negative,
+    )
+    combined["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined)
+    )
     return combined
 
 
@@ -7349,8 +7399,14 @@ def _base_en_formula_628_governing_out():
         "status": "FAIL",
         "ok": False,
         "reason": "longitudinal_torsion_reinforcement_insufficient",
+        "required_asl_mm2": 1176.0,
+        "required_design_force_kn": 470.4,
+        "provided_design_force_kn": 235.2,
+        "reference_fyd_mpa": 400.0,
         "demand_ratio": 2.0,
+        "area_sufficient": False,
     }
+    combined.pop("overall_longitudinal_assessment", None)
     combined["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(combined)
     )
@@ -7537,34 +7593,77 @@ def _base_en_scheduler_combined_case(action, util, *, component):
     chord_util = util - 0.10
     shear_shift = 0.10 * v_ed
     torsion_share = 0.50 * t_ed
+    shear_axis = "y" if component == "vx" else "x"
+    off_axis = "x" if shear_axis == "y" else "y"
+    ftd_t = 2.0 * torsion_share / float(result["longitudinal"]["z"])
     m_total = m_ed + shear_shift + torsion_share
     chord = result["longitudinal"]
     chord.update(
-        axis="y" if component == "vx" else "x",
+        axis=shear_axis,
         m_ed=m_ed,
         mv=shear_shift,
         mt=torsion_share,
         m_total=m_total,
         m_rd=m_total / chord_util,
+        ftd_v=shear_shift / float(chord["z"]),
+        ftd_t=ftd_t,
         util=chord_util,
         ok=chord_util <= 1.0,
         status="PASS" if chord_util <= 1.0 else "FAIL",
+    )
+    for candidate in result["longitudinal_candidates"]:
+        candidate["axis"] = (
+            shear_axis if candidate["role"] == "shear_axis" else off_axis
+        )
+        if candidate is chord:
+            continue
+        candidate.update(
+            ftd_t=ftd_t,
+            mt=ftd_t * float(candidate["z"]) / 2.0,
+        )
+        candidate["m_total"] = candidate["m_ed"] + candidate["mt"]
+        candidate["util"] = candidate["m_total"] / candidate["m_rd"]
+        candidate["status"] = (
+            "PASS" if candidate["util"] <= 1.0 + 1.0e-9 else "FAIL"
+        )
+        candidate["ok"] = candidate["status"] == "PASS"
+    governing_chord = max(
+        result["longitudinal_candidates"],
+        key=lambda item: item["util"],
     )
     result["longitudinal_assessment"].update(
-        status="PASS" if chord_util <= 1.0 else "FAIL",
-        ok=chord_util <= 1.0,
-        util=chord_util,
+        status=governing_chord["status"],
+        ok=governing_chord["ok"],
+        util=governing_chord["util"],
         coverage_complete=True,
-        governing=chord,
+        governing=governing_chord,
+        reason=(
+            "required_longitudinal_chords_satisfied"
+            if governing_chord["status"] == "PASS"
+            else "required_longitudinal_chord_failed"
+        ),
     )
+    required_asl = 10.0 * t_ed
+    required_force = required_asl * 400.0 / 1000.0
+    formula_ratio = 1.0 + util
     result["torsion_longitudinal_assessment"] = {
-        "status": "PASS",
-        "ok": True,
-        "reason": "no_longitudinal_torsion_demand",
-        "demand_ratio": 0.0,
+        "status": "FAIL",
+        "ok": False,
+        "reason": "longitudinal_torsion_reinforcement_insufficient",
+        "required_asl_mm2": required_asl,
+        "required_design_force_kn": required_force,
+        "provided_design_force_kn": required_force / formula_ratio,
+        "reference_fyd_mpa": 400.0,
+        "demand_ratio": formula_ratio,
+        "area_sufficient": False,
     }
-    result["governing_longitudinal"] = chord
-    result["longitudinal_candidates"] = [chord]
+    result["t_ed"] = t_ed
+    result["asl_torsion"] = required_asl
+    result["governing_longitudinal"] = governing_chord
+    result.pop("overall_longitudinal_assessment", None)
+    result["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(result)
+    )
     result.update(
         component=component,
         governing_face="negative" if component == "vx" else "positive",
@@ -7752,6 +7851,7 @@ def _pub_h01_report_combined():
         "longitudinal_candidates",
     ):
         combined.pop(key, None)
+    combined["asl_torsion"] = 500.0
     combined["torsion_longitudinal_assessment"] = {
         "status": "NOT ASSESSED",
         "ok": None,
@@ -7763,6 +7863,7 @@ def _pub_h01_report_combined():
         "demand_ratio": 0.50,
         "area_sufficient": True,
     }
+    combined.pop("overall_longitudinal_assessment", None)
     combined["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(combined)
     )
@@ -7781,6 +7882,104 @@ def _pub_h01_report_zero_formula_628():
         "demand_ratio": 0.0,
         "area_sufficient": True,
     }
+
+
+def _pub_h01_report_failed_formula_628():
+    return {
+        "status": "FAIL",
+        "ok": False,
+        "reason": "longitudinal_torsion_reinforcement_insufficient",
+        "required_asl_mm2": 1176.0,
+        "required_design_force_kn": 470.4,
+        "provided_design_force_kn": 235.2,
+        "reference_fyd_mpa": 400.0,
+        "demand_ratio": 2.0,
+        "area_sufficient": False,
+    }
+
+
+def _pub_h01_report_four_face_torsion():
+    combined = _base_en_combined_out()
+    primary = combined["longitudinal"]
+    primary.update(
+        role="shear_axis",
+        has_torsion=True,
+        gets_shift=True,
+        off_not_evaluated=None,
+    )
+
+    def torsion_face(role, axis, tension_low, *, gets_shift=None):
+        candidate = {
+            "valid": True,
+            "status": "PASS",
+            "ok": True,
+            "role": role,
+            "axis": axis,
+            "tension_low": tension_low,
+            "conditional": True,
+            "biaxial": False,
+            "off_util": 0.0,
+            "m_ed": 0.0,
+            "mv": 0.0,
+            "mt": 10.0,
+            "m_total": 10.0,
+            "m_rd": 150.0,
+            "ftd_v": 0.0,
+            "ftd_t": 40.0,
+            "z": 0.5,
+            "util": 1.0 / 15.0,
+            "capped": False,
+            "cap_shear_force": True,
+            "mv_uncapped": 0.0,
+            "shear_headroom": 150.0,
+            "shear_term_selection": "uncapped",
+        }
+        if role == "shear_axis":
+            candidate.update(
+                has_torsion=True,
+                gets_shift=gets_shift,
+                off_not_evaluated=None,
+            )
+        return candidate
+
+    candidates = [
+        primary,
+        torsion_face("shear_axis", "x", False, gets_shift=False),
+        torsion_face("off_axis", "y", True),
+        torsion_face("off_axis", "y", False),
+    ]
+    combined.update(
+        t_ed=40.0,
+        asl_torsion=1176.0,
+        longitudinal_candidates=candidates,
+        governing_longitudinal=primary,
+        longitudinal_fallback=None,
+        longitudinal_all_conditional=True,
+        longitudinal_assessment={
+            "status": "PASS",
+            "ok": True,
+            "util": primary["util"],
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": primary,
+        },
+        torsion_longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+            "required_asl_mm2": 1176.0,
+            "required_design_force_kn": 470.4,
+            "provided_design_force_kn": 600.0,
+            "reference_fyd_mpa": 400.0,
+            "demand_ratio": 0.784,
+            "area_sufficient": True,
+        },
+    )
+    combined.pop("overall_longitudinal_assessment", None)
+    combined["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined)
+    )
+    return combined
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
@@ -7940,6 +8139,67 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_pub_h01_missing_off_axis_torsion_never_publishes_chord_pass(
+    profile,
+):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = _pub_h01_report_four_face_torsion()
+    assert combined["overall_longitudinal_assessment"]["chord_status"] == "PASS"
+    for candidate in combined["longitudinal_candidates"]:
+        if candidate["role"] != "off_axis":
+            continue
+        candidate.update(
+            ftd_t=0.0,
+            mt=0.0,
+            m_total=candidate["m_ed"],
+            util=0.0,
+            status="PASS",
+            ok=True,
+        )
+    combined["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined)
+    )
+    assert combined["overall_longitudinal_assessment"]["status"] == (
+        "NOT ASSESSED"
+    )
+    assert combined["overall_longitudinal_assessment"]["chord_status"] == (
+        "NOT ASSESSED"
+    )
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {},
+                inp,
+                {"plastic": _out()["plastic"], "combined": combined},
+                figures=False,
+                profile=profile,
+            )
+        ).split()
+    )
+
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+"
+        r"NOT ASSESSED\s+-",
+        text,
+    )
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+PASS",
+        text,
+    ) is None
+    if profile in {"Standard", "Audit"}:
+        assert "Longitudinal chord assessment: NOT ASSESSED" in text
+        assert "Longitudinal chord assessment: PASS" not in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 def test_report_pub_h01_exact_longitudinal_failure_is_consistent(profile):
     inp = _inp()
     inp.update(
@@ -7983,6 +8243,7 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(profile):
         "longitudinal_candidates",
     ):
         combined.pop(key, None)
+    combined["asl_torsion"] = 500.0
     combined["torsion_longitudinal_assessment"] = {
         "status": "NOT ASSESSED",
         "ok": None,
@@ -7994,6 +8255,7 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(profile):
         "demand_ratio": 0.50,
         "area_sufficient": True,
     }
+    combined.pop("overall_longitudinal_assessment", None)
     combined["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(combined)
     )
@@ -8448,12 +8710,31 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
     incomplete_vy = _base_en_scheduler_combined_case(
         actions[2], 0.90, component="vy"
     )
+    incomplete_vy["longitudinal_candidates"].pop()
     incomplete_vy["longitudinal_assessment"].update(
         status="NOT ASSESSED",
         ok=None,
-        util=None,
+        util=incomplete_vy["longitudinal"]["util"],
         coverage_complete=False,
         reason="required_longitudinal_chord_coverage_incomplete",
+    )
+    incomplete_required_force = (
+        float(incomplete_vy["asl_torsion"]) * 400.0 / 1000.0
+    )
+    incomplete_vy["torsion_longitudinal_assessment"] = {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+        "required_asl_mm2": incomplete_vy["asl_torsion"],
+        "required_design_force_kn": incomplete_required_force,
+        "provided_design_force_kn": 2.0 * incomplete_required_force,
+        "reference_fyd_mpa": 400.0,
+        "demand_ratio": 0.5,
+        "area_sufficient": True,
+    }
+    incomplete_vy.pop("overall_longitudinal_assessment", None)
+    incomplete_vy["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(incomplete_vy)
     )
     incomplete = {
         "method": codes.EC2_2005.label,
@@ -8581,6 +8862,7 @@ def _retain_combined_chords(payload, *candidates):
     payload["longitudinal_all_conditional"] = bool(retained) and (
         payload["longitudinal_fallback"] is None
     )
+    payload.pop("overall_longitudinal_assessment", None)
     return payload
 
 
@@ -9309,15 +9591,23 @@ def test_report_combined_out_of_range_withholds_values_and_verdicts(profile):
 
 def test_report_combined_longitudinal_check():
     out = _out()
-    c = _combined_out()
-    c["longitudinal"] = dict(
-        valid=True, status="PASS", axis="x", tension_low=True,
+    c = _pub_h01_report_four_face_torsion()
+    c.update(_combined_out())
+    c["transverse"]["shear_credited"] = False
+    c["longitudinal"].update(
+        valid=True, status="PASS", ok=True, axis="x", tension_low=True,
         conditional=True, biaxial=False, off_not_evaluated=None,
         z=0.54, m_ed=100.0, m_rd=400.0, ftd_v=200.0, ftd_t=120.0,
         mv=108.0, mt=32.4, m_total=240.4, util=240.4 / 400.0,
-        ok=True, capped=False,
+        capped=False,
     )
-    _retain_combined_chords(c, c["longitudinal"])
+    for candidate in c["longitudinal_candidates"]:
+        candidate["ftd_t"] = 120.0
+        candidate["mt"] = 120.0 * candidate["z"] / 2.0
+        candidate["m_total"] = candidate["m_ed"] + candidate["mv"] + candidate["mt"]
+        candidate["util"] = candidate["m_total"] / candidate["m_rd"]
+        candidate["status"] = "PASS"
+        candidate["ok"] = True
     c["longitudinal_assessment"] = {
         "status": "PASS",
         "ok": True,
@@ -9326,10 +9616,11 @@ def test_report_combined_longitudinal_check():
         "coverage_complete": True,
         "governing": c["longitudinal"],
     }
-    c["torsion_longitudinal_assessment"] = {
-        "status": "PASS", "ok": True,
-        "reason": "no_longitudinal_torsion_demand", "demand_ratio": 0.0,
-    }
+    c["governing_longitudinal"] = c["longitudinal"]
+    c["torsion_longitudinal_assessment"] = (
+        _pub_h01_report_failed_formula_628()
+    )
+    c.pop("overall_longitudinal_assessment", None)
     c["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(c)
     )
@@ -9404,15 +9695,23 @@ def test_report_combined_longitudinal_conditional_mrd():
     # The conditional MRd states the coexisting off-axis moment it carries; no
     # biaxial warning is printed (the capacity is already honest).
     out = _out()
-    c = _combined_out()
-    c["longitudinal"] = dict(
-        valid=True, status="PASS", axis="x", z=0.5, m_ed=20.0,
+    c = _pub_h01_report_four_face_torsion()
+    c.update(_combined_out())
+    c["transverse"]["shear_credited"] = False
+    c["longitudinal"].update(
+        valid=True, status="PASS", ok=True, axis="x", z=0.5, m_ed=20.0,
         m_rd=250.0, ftd_v=120.0, ftd_t=100.0, mv=60.0, mt=25.0,
-        m_total=105.0, util=105.0 / 250.0, ok=True, capped=False,
+        m_total=105.0, util=105.0 / 250.0, capped=False,
         tension_low=True, off_util=0.4, biaxial=True, m_off=90.0,
         conditional=True, has_torsion=True, off_not_evaluated=None,
     )
-    _retain_combined_chords(c, c["longitudinal"])
+    for candidate in c["longitudinal_candidates"]:
+        candidate["ftd_t"] = 100.0
+        candidate["mt"] = 100.0 * candidate["z"] / 2.0
+        candidate["m_total"] = candidate["m_ed"] + candidate["mv"] + candidate["mt"]
+        candidate["util"] = candidate["m_total"] / candidate["m_rd"]
+        candidate["status"] = "PASS"
+        candidate["ok"] = True
     c["longitudinal_assessment"] = {
         "status": "PASS",
         "ok": True,
@@ -9421,10 +9720,11 @@ def test_report_combined_longitudinal_conditional_mrd():
         "coverage_complete": True,
         "governing": c["longitudinal"],
     }
-    c["torsion_longitudinal_assessment"] = {
-        "status": "PASS", "ok": True,
-        "reason": "no_longitudinal_torsion_demand", "demand_ratio": 0.0,
-    }
+    c["governing_longitudinal"] = c["longitudinal"]
+    c["torsion_longitudinal_assessment"] = (
+        _pub_h01_report_failed_formula_628()
+    )
+    c.pop("overall_longitudinal_assessment", None)
     c["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(c)
     )
@@ -9465,22 +9765,41 @@ def test_report_partial_torsion_face_coverage_disclosed():
     # built (not_solved), the governing chord shown may not be the critical face --
     # the report must say so, even for a uniaxial run.
     out = _out()
-    c = _combined_out()
-    c["longitudinal"] = dict(valid=True, axis="x", z=0.5, m_ed=100.0, m_rd=400.0,
-                             ftd_v=200.0, ftd_t=120.0, mv=100.0, mt=30.0, m_total=230.0,
-                             util=230.0 / 400.0, ok=True, capped=False,
-                             tension_low=True, off_util=0.0, biaxial=False,
-                             m_off=0.0, conditional=True, has_torsion=True,
-                             gets_shift=True, off_not_evaluated="not_solved")
+    c = _pub_h01_report_four_face_torsion()
+    c.update(_combined_out())
+    c["transverse"]["shear_credited"] = False
+    c["longitudinal"].update(
+        valid=True, status="PASS", axis="x", z=0.5, m_ed=100.0, m_rd=400.0,
+        ftd_v=200.0, ftd_t=120.0, mv=100.0, mt=30.0, m_total=230.0,
+        util=230.0 / 400.0, ok=True, capped=False,
+        tension_low=True, off_util=0.0, biaxial=False,
+        m_off=0.0, conditional=True, has_torsion=True,
+        gets_shift=True, off_not_evaluated="not_solved",
+    )
     _retain_combined_chords(c, c["longitudinal"])
+    c["longitudinal_assessment"] = {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "util": c["longitudinal"]["util"],
+        "reason": "required_longitudinal_chord_coverage_incomplete",
+        "coverage_complete": False,
+        "governing": c["longitudinal"],
+    }
+    c["torsion_longitudinal_assessment"] = (
+        _pub_h01_report_failed_formula_628()
+    )
+    c["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(c)
+    )
     out["combined"] = c
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
                                                         figures=False)).split())
     assert "may not be the critical face" in txt
     assert (
-        "utilisation = 57.5 % (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
+        "utilisation = - (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
         in txt
     )
+    assert "utilisation = 57.5 %" not in txt
 
 
 def test_report_off_axis_chord_block():
@@ -10223,29 +10542,75 @@ def _combined_longitudinal(theta_mode):
     total = 100.0 + shear_shift + torsion_share
     payload.setdefault("longitudinal", {}).update({
         "valid": True,
+        "status": "PASS",
         "ok": True,
+        "role": "shear_axis",
         "axis": "x",
         "tension_low": True,
+        "conditional": True,
         "m_ed": 100.0,
         "m_rd": 200.0,
         "mv": shear_shift,
         "mt": torsion_share,
-        "ftd_v": 40.0 if shear_shift else 0.0,
-        "ftd_t": 15.0 if torsion_share else 0.0,
+        "ftd_v": 80.0 if shear_shift else 0.0,
+        "ftd_t": 80.0 if torsion_share else 0.0,
         "z": 0.25,
         "m_total": total,
         "util": total / 200.0,
         "biaxial": False,
+        "off_util": 0.0,
         "capped": False,
+        "has_torsion": transverse_live,
+        "gets_shift": transverse_live,
+        "off_not_evaluated": None,
         "theta_mode": theta_mode,
     })
+    if transverse_live:
+        for candidate in payload["longitudinal_candidates"]:
+            if candidate is payload["longitudinal"]:
+                continue
+            candidate["ftd_t"] = 80.0
+            candidate["mt"] = 80.0 * candidate["z"] / 2.0
+            candidate["m_total"] = (
+                candidate["m_ed"] + candidate["mv"] + candidate["mt"]
+            )
+            candidate["util"] = candidate["m_total"] / candidate["m_rd"]
+            candidate["status"] = "PASS"
+            candidate["ok"] = True
+    else:
+        payload.update(
+            t_ed=0.0,
+            asl_torsion=0.0,
+            torsion_longitudinal_assessment={
+                "status": "PASS",
+                "ok": True,
+                "reason": "no_longitudinal_torsion_demand",
+                "required_asl_mm2": 0.0,
+                "required_design_force_kn": 0.0,
+                "provided_design_force_kn": 400.0,
+                "reference_fyd_mpa": 400.0,
+                "demand_ratio": 0.0,
+                "area_sufficient": True,
+            },
+        )
+        _retain_combined_chords(payload, payload["longitudinal"])
+    governing = max(
+        payload["longitudinal_candidates"],
+        key=lambda item: item["util"],
+    )
     payload["longitudinal_assessment"] = {
-        "status": "PASS",
-        "util": total / 200.0,
+        "status": governing["status"],
+        "ok": governing["ok"],
+        "util": governing["util"],
         "coverage_complete": True,
-        "reason": "Complete longitudinal chord coverage",
+        "reason": "required_longitudinal_chords_satisfied",
+        "governing": governing,
     }
-    _retain_combined_chords(payload, payload["longitudinal"])
+    payload["governing_longitudinal"] = governing
+    payload.pop("overall_longitudinal_assessment", None)
+    payload["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(payload)
+    )
     return {"combined": payload}
 
 

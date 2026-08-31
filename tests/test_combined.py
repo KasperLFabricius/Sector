@@ -3525,9 +3525,9 @@ def test_pub_h01_chord_and_formula_628_overall_are_published_separately():
         combined_result.pop(key, None)
     combined_result.pop("longitudinal_model_2023", None)
     combined_result["longitudinal_all_conditional"] = True
-    combined_result["torsion_longitudinal_assessment"] = (
-        _pub_h01_formula_628_assessment(2.0)
-    )
+    formula_628 = _pub_h01_formula_628_assessment(2.0)
+    combined_result["asl_torsion"] = formula_628["required_asl_mm2"]
+    combined_result["torsion_longitudinal_assessment"] = formula_628
     combined_result["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(combined_result)
     )
@@ -3703,12 +3703,8 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
                 "shear_term_selection": "uncapped",
             }
             formula_628 = _pub_h01_formula_628_assessment(0.0)
-            formula_628.update(
-                required_asl_mm2=500.0,
-                required_design_force_kn=200.0,
-                provided_design_force_kn=100.0,
-                area_sufficient=False,
-            )
+            assert combined_result["t_ed"] > 0.0
+            assert combined_result["asl_torsion"] > 0.0
             combined_result.update(
                 longitudinal_model_2023=False,
                 longitudinal=direct,
@@ -3818,6 +3814,82 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
         ].iloc[0]
         assert row["Status"] == "NOT ASSESSED"
         assert row["Result"] == "-"
+
+
+def test_pub_h01_missing_off_axis_torsion_fails_closed_in_native_views():
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+
+    retained = copy.deepcopy(at.session_state["results"])
+    combined_result = retained["combined"]
+    candidates = combined_result["longitudinal_candidates"]
+    assert len(candidates) == 4
+    assert {item["role"] for item in candidates} == {
+        "shear_axis",
+        "off_axis",
+    }
+    assert combined_result["t_ed"] > 0.0
+    common_torsion_force = {item["ftd_t"] for item in candidates}
+    assert len(common_torsion_force) == 1
+    assert next(iter(common_torsion_force)) > 0.0
+    pristine = capacity.combined_longitudinal_assessment(combined_result)
+    assert pristine["chord_status"] == "PASS"
+    assert pristine["chord_coverage_complete"] is True
+
+    for candidate in candidates:
+        if candidate["role"] != "off_axis":
+            continue
+        candidate["ftd_t"] = 0.0
+        candidate["mt"] = 0.0
+        candidate["m_total"] = candidate["m_ed"]
+        candidate["util"] = candidate["m_total"] / candidate["m_rd"]
+        candidate["status"] = "PASS"
+        candidate["ok"] = True
+    governing = max(candidates, key=lambda item: item["util"])
+    combined_result["governing_longitudinal"] = governing
+    combined_result["longitudinal_assessment"].update(
+        status="PASS",
+        ok=True,
+        util=governing["util"],
+        reason="required_longitudinal_chords_satisfied",
+        coverage_complete=True,
+        governing=governing,
+    )
+    combined_result["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined_result)
+    )
+    assert combined_result["overall_longitudinal_assessment"]["status"] == (
+        "NOT ASSESSED"
+    )
+    at.session_state["results"] = retained
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    physical = next(
+        metric
+        for metric in at.metric
+        if metric.label == "Longitudinal reinforcement"
+    )
+    assert str(physical.value) == "-"
+    assert str(physical.delta) == ""
+    assert all(
+        not (
+            metric.label == "Chord utilisation"
+            and str(metric.delta) == "PASS"
+        )
+        for metric in at.metric
+    )
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Combined longitudinal reinforcement"
+    ].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"
 
 
 def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views():

@@ -1913,13 +1913,15 @@ def test_app_stale_formula_628_pass_is_not_published_in_torsion_views():
         status="PASS",
         ok=True,
         reason="no_longitudinal_torsion_demand",
-        required_asl_mm2=500.0,
-        required_design_force_kn=200.0,
+        required_asl_mm2=0.0,
+        required_by_tube_mm2=(0.0,),
+        required_design_force_kn=0.0,
         provided_design_force_kn=100.0,
         provided_gross_area_mm2=250.0,
         provided_equivalent_area_mm2=250.0,
+        reference_fyd_mpa=400.0,
         demand_ratio=0.0,
-        area_sufficient=False,
+        area_sufficient=True,
     )
     at.session_state["results"] = retained
 

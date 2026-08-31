@@ -2040,7 +2040,8 @@ def torsion_longitudinal_assessment(torsion):
 
     torsion = torsion or {}
     return capacity.validated_torsion_longitudinal_assessment(
-        torsion.get("longitudinal_assessment")
+        torsion.get("longitudinal_assessment"),
+        owner=torsion,
     )
 
 

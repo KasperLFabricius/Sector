@@ -1305,6 +1305,8 @@ def test_combined_longitudinal_2023_coverage_is_rebuilt_from_retained_faces():
             "coverage_complete": True,
             "governing": tension,
         },
+        "t_ed": 0.0,
+        "asl_torsion": 0.0,
         "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
     }
 
@@ -1394,6 +1396,8 @@ def test_combined_longitudinal_2005_rebuilds_all_torsion_chord_faces():
             "coverage_complete": True,
             "governing": governing,
         },
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
         "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
     }
 
@@ -1411,6 +1415,73 @@ def test_combined_longitudinal_2005_rebuilds_all_torsion_chord_faces():
     assert rejected["ok"] is None
     assert rejected["util"] is None
     assert rejected["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
+def test_combined_longitudinal_2005_requires_torsion_on_every_required_face():
+    candidates = _pub_h01_2005_torsion_candidates()
+    governing = max(candidates, key=lambda item: item["util"])
+    combined = {
+        "longitudinal": candidates[0],
+        "longitudinal_candidates": candidates,
+        "governing_longitudinal": governing,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "util": governing["util"],
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": governing,
+        },
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+    }
+    for candidate in combined["longitudinal_candidates"]:
+        if candidate["role"] != "off_axis":
+            continue
+        candidate["ftd_t"] = 0.0
+        candidate["mt"] = 0.0
+        candidate["m_total"] = candidate["m_ed"]
+        candidate["util"] = candidate["m_total"] / candidate["m_rd"]
+        candidate["status"] = "PASS"
+        candidate["ok"] = True
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
+def test_combined_longitudinal_current_candidates_require_role_identity():
+    candidates = _pub_h01_2005_torsion_candidates()
+    governing = max(candidates, key=lambda item: item["util"])
+    combined = {
+        "longitudinal": candidates[0],
+        "longitudinal_candidates": candidates,
+        "governing_longitudinal": governing,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "util": governing["util"],
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": governing,
+        },
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+    }
+    for candidate in combined["longitudinal_candidates"]:
+        candidate.pop("role")
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
 
 
 @pytest.mark.parametrize(
@@ -1550,7 +1621,10 @@ def test_torsion_longitudinal_publication_authority_hides_stale_operands():
         area_sufficient=False,
     )
 
-    sanitized = capacity.validated_torsion_longitudinal_assessment(stale)
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        stale,
+        owner={"asl_req": 500.0, "t_ed": 40.0},
+    )
 
     assert sanitized["evidence_consistent"] is False
     assert sanitized["status"] == "NOT ASSESSED"
@@ -1562,6 +1636,54 @@ def test_torsion_longitudinal_publication_authority_hides_stale_operands():
     assert sanitized["provided_gross_area_mm2"] is None
     assert sanitized["provided_equivalent_area_mm2"] is None
     assert sanitized["demand_ratio"] is None
+
+
+def test_torsion_longitudinal_publication_authority_binds_owning_demand():
+    forged_zero = _unverified_formula_628(0.0)
+
+    rejected = capacity.validated_torsion_longitudinal_assessment(
+        forged_zero,
+        owner={"valid": True, "t_ed": 40.0, "asl_req": 500.0},
+    )
+    accepted_zero = capacity.validated_torsion_longitudinal_assessment(
+        forged_zero,
+        owner={"valid": True, "t_ed": 0.0, "asl_req": 0.0},
+    )
+    live = _unverified_formula_628(0.50)
+    accepted_live = capacity.validated_torsion_longitudinal_assessment(
+        live,
+        owner={"valid": True, "t_ed": 40.0, "asl_req": 500.0},
+    )
+
+    assert rejected["evidence_consistent"] is False
+    assert rejected["status"] == "NOT ASSESSED"
+    assert rejected["required_asl_mm2"] is None
+    assert accepted_zero["evidence_consistent"] is True
+    assert accepted_zero["status"] == "PASS"
+    assert accepted_zero["required_asl_mm2"] == pytest.approx(0.0)
+    assert accepted_live["evidence_consistent"] is True
+    assert accepted_live["status"] == "NOT ASSESSED"
+    assert accepted_live["required_asl_mm2"] == pytest.approx(500.0)
+
+
+def test_torsion_longitudinal_publication_authority_rejects_boolean_tube_area():
+    retained = _unverified_formula_628(0.50)
+    retained["required_by_tube_mm2"] = (True, 499.0)
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner={
+            "valid": True,
+            "t_ed": 40.0,
+            "asl_req": 500.0,
+            "subdivided": True,
+            "subtubes": ({"asl_req": 1.0}, {"asl_req": 499.0}),
+        },
+    )
+
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert sanitized["required_asl_mm2"] is None
 
 
 def test_combined_longitudinal_candidate_recomputes_total_from_operands():
@@ -1595,6 +1717,8 @@ def test_combined_longitudinal_definite_failure_governs_incomplete_child():
             "coverage_complete": False,
             "governing": direct,
         },
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
         "torsion_longitudinal_assessment": _unverified_formula_628(),
     }
 
@@ -1631,6 +1755,8 @@ def test_combined_longitudinal_definite_failure_survives_documented_missing_face
             "coverage_complete": False,
             "governing": direct,
         },
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
         "torsion_longitudinal_assessment": _unverified_formula_628(),
     }
 
