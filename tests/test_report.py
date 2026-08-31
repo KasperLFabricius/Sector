@@ -7304,6 +7304,43 @@ def _base_en_formula_628_governing_out():
     return combined
 
 
+def _base_en_incomplete_failed_chord_out():
+    combined = _base_en_combined_out()
+    chord = combined["longitudinal"]
+    chord.update(
+        status="FAIL",
+        ok=False,
+        role="shear_axis",
+        has_torsion=True,
+        gets_shift=True,
+        off_not_evaluated="not_solved",
+        m_rd=60.0,
+        util=1.50,
+    )
+    combined.update(
+        longitudinal_candidates=[chord],
+        governing_longitudinal=chord,
+        longitudinal_assessment={
+            "status": "FAIL",
+            "ok": False,
+            "util": 1.50,
+            "reason": "required_longitudinal_chord_failed",
+            "coverage_complete": False,
+            "governing": chord,
+        },
+        torsion_longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+            "demand_ratio": 0.50,
+        },
+    )
+    combined["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined)
+    )
+    return combined
+
+
 def _base_en_stale_2023_single_face_out():
     combined = _base_en_combined_out()
     common = {
@@ -7555,6 +7592,40 @@ def test_report_base_en_separates_chord_and_overall_longitudinal_utilisation(
             "Governing check: Formula (6.28) longitudinal torsion reinforcement"
             in text
         )
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_known_failed_chord_survives_incomplete_face(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    out = {
+        "plastic": _out()["plastic"],
+        "combined": _base_en_incomplete_failed_chord_out(),
+    }
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+FAIL\s+150[.,]0\s*%",
+        text,
+    )
+    if profile in {"Standard", "Audit"}:
+        assert "Chord utilisation" in text
+        assert re.search(r"150[.,]0\s*%\s*FAIL", text)
+        assert "Overall longitudinal reinforcement assessment: 150.0 % FAIL" in text
+        assert "Governing check: combined M + V + T tension chord" in text
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])

@@ -3610,6 +3610,91 @@ def test_pub_h01_stale_2023_single_face_pass_fails_closed_in_native_views():
     assert row["Result"] == "-"
 
 
+def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views():
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+
+    retained = copy.deepcopy(at.session_state["results"])
+    combined_result = retained["combined"]
+    direct = {
+        **combined_result["longitudinal"],
+        "valid": True,
+        "status": "FAIL",
+        "ok": False,
+        "role": "shear_axis",
+        "axis": "x",
+        "tension_low": True,
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": "not_solved",
+        "has_torsion": True,
+        "gets_shift": True,
+        "m_ed": 80.0,
+        "mv": 4.213620,
+        "mt": 39.711696,
+        "m_total": 123.925316,
+        "m_rd": 100.0,
+        "ftd_v": 17.34,
+        "ftd_t": 326.8452380952381,
+        "z": 0.243,
+        "util": 1.2392531643,
+        "capped": False,
+    }
+    combined_result.update(
+        longitudinal_model_2023=False,
+        longitudinal=direct,
+        longitudinal_candidates=[direct],
+        governing_longitudinal=direct,
+        longitudinal_fallback=None,
+        longitudinal_all_conditional=True,
+        longitudinal_assessment={
+            "status": "FAIL",
+            "ok": False,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_failed",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        torsion_longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "reason": "longitudinal_torsion_reinforcement_not_verified",
+            "demand_ratio": 0.50,
+        },
+    )
+    combined_result.pop("overall_longitudinal_assessment", None)
+    combined_result["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined_result)
+    )
+    assert combined_result["overall_longitudinal_assessment"]["status"] == "FAIL"
+    assert combined_result["overall_longitudinal_assessment"]["util"] == (
+        pytest.approx(1.2392531643)
+    )
+    at.session_state["results"] = retained
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    overall_metric = next(
+        metric
+        for metric in at.metric
+        if metric.label == "Longitudinal reinforcement"
+    )
+    assert str(overall_metric.value) == "123.9 %"
+    assert str(overall_metric.delta) == "FAIL"
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Combined longitudinal reinforcement"
+    ].iloc[0]
+    assert row["Status"] == "FAIL"
+    assert row["Result"] == "123.9 %"
+
+
 @pytest.mark.parametrize("hostile", ("malformed", "stale_alias"))
 def test_pub_h01_inconsistent_longitudinal_evidence_fails_closed_in_native_views(
     hostile,

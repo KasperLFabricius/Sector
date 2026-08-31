@@ -1305,6 +1305,75 @@ def test_combined_longitudinal_definite_failure_governs_incomplete_child():
 
 
 @pytest.mark.parametrize(
+    "coverage_marker",
+    ("not_solved", "subdivided", "circular_geometry"),
+)
+def test_combined_longitudinal_definite_failure_survives_documented_missing_face(
+    coverage_marker,
+):
+    direct = {
+        **_pub_h01_longitudinal_fixture(),
+        "role": "shear_axis",
+        "has_torsion": True,
+        "gets_shift": True,
+        "off_not_evaluated": coverage_marker,
+    }
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_candidates": [direct],
+        "governing_longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "FAIL",
+            "ok": False,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_failed",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "FAIL"
+    assert assessment["ok"] is False
+    assert assessment["util"] == pytest.approx(1.2392531643)
+    assert assessment["coverage_complete"] is False
+    assert assessment["governing"] is direct
+
+
+def test_combined_longitudinal_unknown_missing_face_marker_remains_invalid():
+    direct = {
+        **_pub_h01_longitudinal_fixture(),
+        "role": "shear_axis",
+        "has_torsion": True,
+        "gets_shift": True,
+        "off_not_evaluated": "unknown",
+    }
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_candidates": [direct],
+        "governing_longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "FAIL",
+            "ok": False,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_failed",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
+@pytest.mark.parametrize(
     "mutation",
     (
         {"biaxial": True},

@@ -983,6 +983,16 @@ def _combined_longitudinal_candidate(
         return None
     biaxial = value.get("biaxial", _MISSING)
     off_not_evaluated = value.get("off_not_evaluated", _MISSING)
+    documented_incomplete_coverage = bool(
+        role == "shear_axis"
+        and type(off_not_evaluated) is str
+        and off_not_evaluated in {
+            "not_solved",
+            "subdivided",
+            "circular_geometry",
+        }
+        and value.get("has_torsion", _MISSING) is True
+    )
     if (
         value.get("conditional", _MISSING) is not True
         or type(value.get("axis", _MISSING)) is not str
@@ -990,12 +1000,19 @@ def _combined_longitudinal_candidate(
         or type(value.get("tension_low", _MISSING)) is not bool
         or type(value.get("capped", _MISSING)) is not bool
         or (biaxial is not _MISSING and type(biaxial) is not bool)
-        or (off_not_evaluated is not _MISSING and off_not_evaluated is not None)
+        or (
+            off_not_evaluated is not _MISSING
+            and off_not_evaluated is not None
+            and not documented_incomplete_coverage
+        )
         or (
             role != "off_axis"
             and (
                 type(biaxial) is not bool
-                or off_not_evaluated is not None
+                or (
+                    off_not_evaluated is not None
+                    and not documented_incomplete_coverage
+                )
             )
         )
     ):
