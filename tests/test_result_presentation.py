@@ -1240,7 +1240,12 @@ def _zero_formula_628_assessment():
         "status": "PASS",
         "ok": True,
         "reason": "no_longitudinal_torsion_demand",
+        "required_asl_mm2": 0.0,
+        "required_design_force_kn": 0.0,
+        "provided_design_force_kn": 400.0,
+        "reference_fyd_mpa": 400.0,
         "demand_ratio": 0.0,
+        "area_sufficient": True,
     }
 
 

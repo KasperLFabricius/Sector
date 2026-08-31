@@ -1033,6 +1033,14 @@ def test_2023_longitudinal_chord_assessment_fails_closed_for_every_required_face
 
 
 def _pub_h01_longitudinal_fixture(utilisation=1.2392531643):
+    m_total = 123.925316
+    m_rd = (
+        m_total / utilisation
+        if math.isfinite(utilisation) and utilisation > 0.0
+        else 0.0
+        if utilisation == math.inf
+        else 100.0
+    )
     return {
         "valid": True,
         "status": "PASS" if utilisation <= 1.0 + 1.0e-9 else "FAIL",
@@ -1046,13 +1054,19 @@ def _pub_h01_longitudinal_fixture(utilisation=1.2392531643):
         "m_ed": 80.0,
         "mv": 4.213620,
         "mt": 39.711696,
-        "m_total": 123.925316,
-        "m_rd": 100.0,
+        "m_total": m_total,
+        "m_rd": m_rd,
         "ftd_v": 17.34,
         "ftd_t": 326.8452380952381,
         "z": 0.243,
         "util": utilisation,
         "capped": False,
+        "cap_shear_force": True,
+        "mv_uncapped": 4.213620,
+        "shear_headroom": max(m_rd - 80.0, 0.0),
+        "shear_term_selection": (
+            "zero-capacity uncapped demand" if m_rd <= 0.0 else "uncapped"
+        ),
     }
 
 
@@ -1074,6 +1088,7 @@ def _pub_h01_2023_shear_only_candidates():
         "ftd_t": 0.0,
         "z": 0.25,
         "capped": False,
+        "cap_shear_force": False,
         "has_torsion": False,
         "gets_shift": True,
         "flexural_tension_low": True,
@@ -1102,11 +1117,40 @@ def _pub_h01_2023_shear_only_candidates():
 
 
 def _unverified_formula_628(ratio=0.50):
+    reference_fyd = 400.0
+    provided_force = 400.0
+    required_force = ratio * provided_force
+    sufficient = bool(
+        provided_force >= required_force
+        or math.isclose(
+            provided_force,
+            required_force,
+            rel_tol=1.0e-12,
+            abs_tol=0.0,
+        )
+    )
+    if required_force == 0.0:
+        status = "PASS"
+        ok = True
+        reason = "no_longitudinal_torsion_demand"
+    elif not sufficient:
+        status = "FAIL"
+        ok = False
+        reason = "longitudinal_torsion_reinforcement_insufficient"
+    else:
+        status = "NOT ASSESSED"
+        ok = None
+        reason = "longitudinal_torsion_reinforcement_not_verified"
     return {
-        "status": "NOT ASSESSED",
-        "ok": None,
-        "reason": "longitudinal_torsion_reinforcement_not_verified",
+        "status": status,
+        "ok": ok,
+        "reason": reason,
+        "required_asl_mm2": required_force * 1000.0 / reference_fyd,
+        "required_design_force_kn": required_force,
+        "provided_design_force_kn": provided_force,
+        "reference_fyd_mpa": reference_fyd,
         "demand_ratio": ratio,
+        "area_sufficient": sufficient,
     }
 
 
@@ -1147,12 +1191,7 @@ def test_combined_longitudinal_stale_governing_alias_cannot_replace_direct_failu
         "longitudinal": direct,
         "governing_longitudinal": stale_alias,
         "longitudinal_all_conditional": True,
-        "torsion_longitudinal_assessment": {
-            "status": "PASS",
-            "ok": True,
-            "reason": "no_longitudinal_torsion_demand",
-            "demand_ratio": 0.0,
-        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
     }
 
     assessment = capacity.combined_longitudinal_assessment(combined)
@@ -1187,12 +1226,7 @@ def test_combined_longitudinal_stale_retained_assessment_cannot_replace_child_fa
             "coverage_complete": True,
             "governing": stale,
         },
-        "torsion_longitudinal_assessment": {
-            "status": "PASS",
-            "ok": True,
-            "reason": "no_longitudinal_torsion_demand",
-            "demand_ratio": 0.0,
-        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
     }
 
     assessment = capacity.combined_longitudinal_assessment(combined)
@@ -1218,12 +1252,7 @@ def test_combined_longitudinal_2023_coverage_is_rebuilt_from_retained_faces():
             "coverage_complete": True,
             "governing": tension,
         },
-        "torsion_longitudinal_assessment": {
-            "status": "PASS",
-            "ok": True,
-            "reason": "no_longitudinal_torsion_demand",
-            "demand_ratio": 0.0,
-        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
     }
 
     complete = capacity.combined_longitudinal_assessment(combined)
@@ -1261,6 +1290,132 @@ def test_combined_longitudinal_2023_coverage_is_rebuilt_from_retained_faces():
     assert unavailable["ok"] is None
     assert unavailable["util"] is None
     assert unavailable["reason"] == "required_longitudinal_chord_coverage_incomplete"
+
+
+@pytest.mark.parametrize(
+    ("face_m_ed_signed", "m_total", "util"),
+    ((-40.0, 0.0, 0.0), (5.0, 15.0, 0.15)),
+)
+def test_combined_longitudinal_2023_rejects_stale_face_moment_identity(
+    face_m_ed_signed,
+    m_total,
+    util,
+):
+    tension, compression = _pub_h01_2023_shear_only_candidates()
+    tension.update(
+        face_m_ed_signed=face_m_ed_signed,
+        m_total=m_total,
+        util=util,
+        status="PASS",
+        ok=True,
+    )
+    governing = max((tension, compression), key=lambda item: item["util"])
+    combined = {
+        "longitudinal_model_2023": True,
+        "longitudinal": tension,
+        "longitudinal_candidates": [tension, compression],
+        "governing_longitudinal": governing,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "util": governing["util"],
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": governing,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
+def test_combined_longitudinal_2023_rejects_first_generation_headroom_cap():
+    tension, compression = _pub_h01_2023_shear_only_candidates()
+    tension.update(
+        ftd_v=300.0,
+        mv=60.0,
+        m_total=100.0,
+        util=1.0,
+        capped=True,
+        cap_shear_force=False,
+        status="PASS",
+        ok=True,
+    )
+    combined = {
+        "longitudinal_model_2023": True,
+        "longitudinal": tension,
+        "longitudinal_candidates": [tension, compression],
+        "governing_longitudinal": tension,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "util": 1.0,
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": tension,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
+def test_combined_longitudinal_first_generation_reconciles_headroom_cap_state():
+    direct = {
+        **_pub_h01_longitudinal_fixture(),
+        "ftd_v": 200.0,
+        "mv": 20.0,
+        "m_total": 139.711696,
+        "util": 1.39711696,
+        "status": "FAIL",
+        "ok": False,
+        "capped": False,
+        "cap_shear_force": True,
+        "mv_uncapped": 48.6,
+        "shear_headroom": 20.0,
+        "shear_term_selection": "uncapped",
+    }
+
+    assessment = capacity.combined_longitudinal_assessment({
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    })
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+
+
+def test_combined_longitudinal_formula_628_recomputes_retained_force_ratio():
+    direct = _pub_h01_longitudinal_fixture(0.80)
+    stale = _unverified_formula_628(0.0)
+    stale.update(
+        required_asl_mm2=500.0,
+        required_design_force_kn=200.0,
+        provided_design_force_kn=100.0,
+        area_sufficient=False,
+    )
+
+    assessment = capacity.combined_longitudinal_assessment({
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": stale,
+    })
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["torsion_status"] == "NOT ASSESSED"
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
 
 
 def test_combined_longitudinal_candidate_recomputes_total_from_operands():
@@ -1340,6 +1495,42 @@ def test_combined_longitudinal_definite_failure_survives_documented_missing_face
     assert assessment["util"] == pytest.approx(1.2392531643)
     assert assessment["coverage_complete"] is False
     assert assessment["governing"] is direct
+
+
+@pytest.mark.parametrize("hostile", (None, 1, "missing"))
+def test_combined_longitudinal_documented_missing_face_requires_shift_identity(
+    hostile,
+):
+    direct = {
+        **_pub_h01_longitudinal_fixture(),
+        "role": "shear_axis",
+        "has_torsion": True,
+        "gets_shift": hostile,
+        "off_not_evaluated": "not_solved",
+    }
+    if hostile == "missing":
+        direct.pop("gets_shift")
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_candidates": [direct],
+        "governing_longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "FAIL",
+            "ok": False,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_failed",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
 
 
 def test_combined_longitudinal_unknown_missing_face_marker_remains_invalid():
@@ -1478,6 +1669,8 @@ def test_combined_longitudinal_unassessed_chord_retains_valid_partial_evidence()
         "ftd_v": 10.0 / 0.243,
         "ftd_t": 80.0 / 0.243,
         "util": 0.50,
+        "mv_uncapped": 10.0,
+        "shear_headroom": 100.0,
     }
     retained = {
         "status": "NOT ASSESSED",

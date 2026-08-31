@@ -1001,6 +1001,14 @@ def _combined_longitudinal_candidate(
         or type(value.get("capped", _MISSING)) is not bool
         or (biaxial is not _MISSING and type(biaxial) is not bool)
         or (
+            role == "shear_axis"
+            and (
+                type(value.get("has_torsion", _MISSING)) is not bool
+                or type(value.get("gets_shift", _MISSING)) is not bool
+                or off_not_evaluated is _MISSING
+            )
+        )
+        or (
             off_not_evaluated is not _MISSING
             and off_not_evaluated is not None
             and not documented_incomplete_coverage
@@ -1052,23 +1060,94 @@ def _combined_longitudinal_candidate(
         operands[key] = number
     if operands["z"] <= 0.0:
         return None
-    expected_mv = operands["ftd_v"] * operands["z"]
+    chord_formula = value.get("chord_formula", _MISSING)
+    chord_role = value.get("chord_role", _MISSING)
+    if chord_formula is not _MISSING and (
+        type(chord_formula) is not str
+        or chord_formula not in {"8.51", "8.52"}
+    ):
+        return None
+    if (chord_formula is _MISSING) is not (chord_role is _MISSING):
+        return None
+
+    mv_uncapped = operands["ftd_v"] * operands["z"]
+    shear_headroom = max(operands["m_rd"] - operands["m_ed"], 0.0)
+    cap_shear_force = value.get("cap_shear_force", _MISSING)
+    if chord_formula in {"8.51", "8.52"}:
+        flexural_tension_low = value.get("flexural_tension_low", _MISSING)
+        if (
+            type(chord_role) is not str
+            or chord_role not in {"flexural_tension", "flexural_compression"}
+            or type(flexural_tension_low) is not bool
+            or (chord_role == "flexural_tension")
+            is not (value["tension_low"] is flexural_tension_low)
+            or (chord_role == "flexural_tension")
+            is not (chord_formula == "8.51")
+            or cap_shear_force is not False
+            or value["capped"] is not False
+        ):
+            return None
+        expected_mv = mv_uncapped
+        expected_capped = False
+        expected_selection = "uncapped"
+    else:
+        if cap_shear_force is _MISSING:
+            # Current first-generation producers retain the flag. Historic
+            # schema-27 evidence is unambiguous while the raw term is inside
+            # the available headroom, where capped and uncapped values agree.
+            if operands["m_rd"] > 0.0 and mv_uncapped > shear_headroom + 1.0e-9:
+                return None
+            cap_shear_force = True
+        elif type(cap_shear_force) is not bool:
+            return None
+        if operands["m_rd"] <= 0.0:
+            expected_mv = mv_uncapped
+            expected_capped = False
+            expected_selection = "zero-capacity uncapped demand"
+        else:
+            expected_mv = (
+                min(mv_uncapped, shear_headroom)
+                if cap_shear_force
+                else mv_uncapped
+            )
+            expected_capped = bool(
+                cap_shear_force and mv_uncapped > expected_mv + 1.0e-9
+            )
+            expected_selection = (
+                "capacity headroom cap" if expected_capped else "uncapped"
+            )
+        if value["capped"] is not expected_capped:
+            return None
+
     expected_mt = operands["ftd_t"] * operands["z"] / 2.0
-    if value.get("capped") is True:
-        expected_mv = min(
-            expected_mv,
-            max(operands["m_rd"] - operands["m_ed"], 0.0),
-        )
     if not (
         _combined_longitudinal_close(operands["mv"], expected_mv)
         and _combined_longitudinal_close(operands["mt"], expected_mt)
     ):
         return None
-    chord_formula = value.get("chord_formula", _MISSING)
-    if chord_formula is not _MISSING and (
-        type(chord_formula) is not str
-        or chord_formula not in {"8.51", "8.52"}
+    for key, expected in (
+        ("mv_uncapped", mv_uncapped),
+        ("shear_headroom", shear_headroom),
     ):
+        retained_operand = value.get(key, _MISSING)
+        if retained_operand is _MISSING:
+            continue
+        if _is_boolean_scalar(retained_operand) or isinstance(
+            retained_operand, (str, bytes)
+        ):
+            return None
+        try:
+            retained_number = float(retained_operand)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        if (
+            not math.isfinite(retained_number)
+            or retained_number < 0.0
+            or not _combined_longitudinal_close(retained_number, expected)
+        ):
+            return None
+    retained_selection = value.get("shear_term_selection", _MISSING)
+    if retained_selection is not _MISSING and retained_selection != expected_selection:
         return None
     if chord_formula in {"8.51", "8.52"}:
         face_m_ed = value.get("face_m_ed_signed", _MISSING)
@@ -1079,6 +1158,16 @@ def _combined_longitudinal_candidate(
         except (OverflowError, TypeError, ValueError):
             return None
         if not math.isfinite(face_m_ed_number):
+            return None
+        expected_face_m_ed = (
+            operands["m_ed"]
+            if chord_role == "flexural_tension"
+            else -operands["m_ed"]
+        )
+        if not _combined_longitudinal_close(
+            face_m_ed_number,
+            expected_face_m_ed,
+        ):
             return None
         expected_total = max(face_m_ed_number + operands["mv"], 0.0) + operands["mt"]
     else:
@@ -1498,33 +1587,113 @@ def _combined_longitudinal_torsion_state(
     utilisation = _combined_longitudinal_utilisation(
         retained.get("demand_ratio")
     )
-    if type(status) is not str or type(reason) is not str:
-        valid = False
-    elif status == "FAIL":
-        valid = bool(
+
+    def finite_nonnegative(key: str) -> float | None:
+        operand = retained.get(key, _MISSING)
+        if (
+            operand is _MISSING
+            or operand is None
+            or _is_boolean_scalar(operand)
+            or isinstance(operand, (str, bytes))
+        ):
+            return None
+        try:
+            number = float(operand)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        return number if math.isfinite(number) and number >= 0.0 else None
+
+    required_asl = finite_nonnegative("required_asl_mm2")
+    required_force = finite_nonnegative("required_design_force_kn")
+    provided_force = finite_nonnegative("provided_design_force_kn")
+    reference_fyd = finite_nonnegative("reference_fyd_mpa")
+    area_sufficient = retained.get("area_sufficient", _MISSING)
+    complete_operands = bool(
+        required_asl is not None
+        and required_force is not None
+        and provided_force is not None
+        and reference_fyd is not None
+        and reference_fyd > 0.0
+        and type(area_sufficient) is bool
+    )
+    operands_consistent = False
+    derived_status = None
+    derived_reason = None
+    derived_ok = None
+    if complete_operands:
+        assert required_asl is not None
+        assert required_force is not None
+        assert provided_force is not None
+        assert reference_fyd is not None
+        assert type(area_sufficient) is bool
+        expected_required_force = required_asl * reference_fyd / 1000.0
+        expected_ratio = (
+            required_force / provided_force
+            if provided_force > 0.0
+            else (0.0 if required_force == 0.0 else math.inf)
+        )
+        expected_sufficient = bool(
+            provided_force >= required_force
+            or math.isclose(
+                provided_force,
+                required_force,
+                rel_tol=1.0e-12,
+                abs_tol=0.0,
+            )
+        )
+        ratio_consistent = bool(
             utilisation is not None
-            and (not math.isfinite(utilisation) or utilisation > 1.0 + 1.0e-9)
-            and (ok is _MISSING or ok is False)
-            and reason == "longitudinal_torsion_reinforcement_insufficient"
+            and (
+                utilisation == expected_ratio
+                or (
+                    math.isfinite(utilisation)
+                    and math.isfinite(expected_ratio)
+                    and math.isclose(
+                        utilisation,
+                        expected_ratio,
+                        rel_tol=2.0e-8,
+                        abs_tol=0.0,
+                    )
+                )
+            )
         )
-    elif status == "PASS":
-        # A gross-area comparison below unity does not establish distribution,
-        # bending reserve or anchorage. The existing supported PASS is zero demand.
-        valid = bool(
-            utilisation == 0.0
-            and reason == "no_longitudinal_torsion_demand"
-            and (ok is _MISSING or ok is True)
+        operands_consistent = bool(
+            math.isfinite(expected_required_force)
+            and _combined_longitudinal_close(
+                required_force,
+                expected_required_force,
+            )
+            and area_sufficient is expected_sufficient
+            and ratio_consistent
         )
-    elif status == "NOT ASSESSED":
+        if required_force == 0.0:
+            derived_status = "PASS"
+            derived_reason = "no_longitudinal_torsion_demand"
+            derived_ok = True
+        elif not expected_sufficient:
+            derived_status = "FAIL"
+            derived_reason = "longitudinal_torsion_reinforcement_insufficient"
+            derived_ok = False
+        else:
+            derived_status = "NOT ASSESSED"
+            derived_reason = "longitudinal_torsion_reinforcement_not_verified"
+            derived_ok = None
+
+    if complete_operands:
         valid = bool(
-            (ok is _MISSING or ok is None)
-            and reason in {
-                "longitudinal_torsion_reinforcement_evidence_unavailable",
-                "longitudinal_torsion_reinforcement_not_verified",
-            }
+            operands_consistent
+            and status == derived_status
+            and reason == derived_reason
+            and (ok is _MISSING or ok is derived_ok)
         )
     else:
-        valid = False
+        valid = bool(
+            status == "NOT ASSESSED"
+            and reason
+            == "longitudinal_torsion_reinforcement_evidence_unavailable"
+            and utilisation is None
+            and (ok is _MISSING or ok is None)
+        )
     if not valid:
         return {
             "status": "NOT ASSESSED",

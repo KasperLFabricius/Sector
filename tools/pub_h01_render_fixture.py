@@ -252,7 +252,12 @@ def _fixed_member_angle_results(inp: dict, source: dict) -> tuple[dict, dict, di
             "status": "NOT ASSESSED",
             "ok": None,
             "reason": "longitudinal_torsion_reinforcement_not_verified",
+            "required_asl_mm2": 500.0,
+            "required_design_force_kn": 200.0,
+            "provided_design_force_kn": 400.0,
+            "reference_fyd_mpa": 400.0,
             "demand_ratio": 0.50,
+            "area_sufficient": True,
         },
     }
     combined_payload["overall_longitudinal_assessment"] = (

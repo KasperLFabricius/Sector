@@ -3372,6 +3372,48 @@ def test_failed_2023_chord_propagates_to_retained_mvt_component_and_overview():
     assert longitudinal["result"] == "215.0 %"
 
 
+def _pub_h01_formula_628_assessment(ratio):
+    reference_fyd = 400.0
+    provided_force = 400.0
+    required_force = ratio * provided_force
+    sufficient = bool(
+        provided_force >= required_force
+        or math.isclose(
+            provided_force,
+            required_force,
+            rel_tol=1.0e-12,
+            abs_tol=0.0,
+        )
+    )
+    if required_force == 0.0:
+        status = "PASS"
+        ok = True
+        reason = "no_longitudinal_torsion_demand"
+    elif sufficient:
+        status, ok, reason = (
+            "NOT ASSESSED",
+            None,
+            "longitudinal_torsion_reinforcement_not_verified",
+        )
+    else:
+        status, ok, reason = (
+            "FAIL",
+            False,
+            "longitudinal_torsion_reinforcement_insufficient",
+        )
+    return {
+        "status": status,
+        "ok": ok,
+        "reason": reason,
+        "required_asl_mm2": required_force * 1000.0 / reference_fyd,
+        "required_design_force_kn": required_force,
+        "provided_design_force_kn": provided_force,
+        "reference_fyd_mpa": reference_fyd,
+        "demand_ratio": ratio,
+        "area_sufficient": sufficient,
+    }
+
+
 def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
     at = _fresh()
     at.run()
@@ -3401,6 +3443,10 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
+        "cap_shear_force": True,
+        "mv_uncapped": 4.213620,
+        "shear_headroom": 20.0,
+        "shear_term_selection": "uncapped",
     }
     combined_result["longitudinal"] = direct
     for key in (
@@ -3412,12 +3458,9 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
     ):
         combined_result.pop(key, None)
     combined_result["longitudinal_all_conditional"] = True
-    combined_result["torsion_longitudinal_assessment"] = {
-        "status": "NOT ASSESSED",
-        "ok": None,
-        "reason": "longitudinal_torsion_reinforcement_not_verified",
-        "demand_ratio": 0.50,
-    }
+    combined_result["torsion_longitudinal_assessment"] = (
+        _pub_h01_formula_628_assessment(0.50)
+    )
     combined_result["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(combined_result)
     )
@@ -3465,6 +3508,13 @@ def test_pub_h01_chord_and_formula_628_overall_are_published_separately():
         m_rd=float(chord["m_total"]) / 0.50,
         util=0.50,
     )
+    chord.update(
+        cap_shear_force=True,
+        mv_uncapped=float(chord["ftd_v"]) * float(chord["z"]),
+        shear_headroom=max(float(chord["m_rd"]) - float(chord["m_ed"]), 0.0),
+        shear_term_selection="uncapped",
+        capped=False,
+    )
     for key in (
         "governing_longitudinal",
         "longitudinal_assessment",
@@ -3475,12 +3525,9 @@ def test_pub_h01_chord_and_formula_628_overall_are_published_separately():
         combined_result.pop(key, None)
     combined_result.pop("longitudinal_model_2023", None)
     combined_result["longitudinal_all_conditional"] = True
-    combined_result["torsion_longitudinal_assessment"] = {
-        "status": "FAIL",
-        "ok": False,
-        "reason": "longitudinal_torsion_reinforcement_insufficient",
-        "demand_ratio": 2.0,
-    }
+    combined_result["torsion_longitudinal_assessment"] = (
+        _pub_h01_formula_628_assessment(2.0)
+    )
     combined_result["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(combined_result)
     )
@@ -3610,6 +3657,169 @@ def test_pub_h01_stale_2023_single_face_pass_fails_closed_in_native_views():
     assert row["Result"] == "-"
 
 
+def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+    base_results = copy.deepcopy(at.session_state["results"])
+
+    for attack in ("face_moment", "headroom_cap", "formula_628"):
+        retained = copy.deepcopy(base_results)
+        combined_result = retained["combined"]
+        for key in (
+            "governing_longitudinal",
+            "longitudinal_assessment",
+            "longitudinal_candidates",
+            "longitudinal_fallback",
+            "overall_longitudinal_assessment",
+        ):
+            combined_result.pop(key, None)
+
+        if attack == "formula_628":
+            direct = {
+                "valid": True,
+                "status": "PASS",
+                "ok": True,
+                "axis": "x",
+                "tension_low": True,
+                "conditional": True,
+                "biaxial": False,
+                "off_util": 0.0,
+                "off_not_evaluated": None,
+                "m_ed": 40.0,
+                "mv": 10.0,
+                "mt": 0.0,
+                "m_total": 50.0,
+                "m_rd": 100.0,
+                "ftd_v": 40.0,
+                "ftd_t": 0.0,
+                "z": 0.25,
+                "util": 0.50,
+                "capped": False,
+                "cap_shear_force": True,
+                "mv_uncapped": 10.0,
+                "shear_headroom": 60.0,
+                "shear_term_selection": "uncapped",
+            }
+            formula_628 = _pub_h01_formula_628_assessment(0.0)
+            formula_628.update(
+                required_asl_mm2=500.0,
+                required_design_force_kn=200.0,
+                provided_design_force_kn=100.0,
+                area_sufficient=False,
+            )
+            combined_result.update(
+                longitudinal_model_2023=False,
+                longitudinal=direct,
+                longitudinal_all_conditional=True,
+                torsion_longitudinal_assessment=formula_628,
+            )
+        else:
+            ftd_v = 300.0 if attack == "headroom_cap" else 40.0
+            common = {
+                "valid": True,
+                "status": "PASS",
+                "ok": True,
+                "role": "shear_axis",
+                "axis": "x",
+                "conditional": True,
+                "biaxial": False,
+                "off_util": 0.0,
+                "off_not_evaluated": None,
+                "m_rd": 100.0,
+                "ftd_v": ftd_v,
+                "ftd_t": 0.0,
+                "z": 0.25,
+                "mt": 0.0,
+                "cap_shear_force": False,
+                "has_torsion": False,
+                "gets_shift": True,
+                "flexural_tension_low": True,
+            }
+            tension = {
+                **common,
+                "tension_low": True,
+                "chord_role": "flexural_tension",
+                "chord_formula": "8.51",
+                "m_ed": 40.0,
+                "face_m_ed_signed": -40.0 if attack == "face_moment" else 40.0,
+                "mv": 10.0 if attack == "face_moment" else 60.0,
+                "m_total": 0.0 if attack == "face_moment" else 100.0,
+                "util": 0.0 if attack == "face_moment" else 1.0,
+                "capped": attack == "headroom_cap",
+            }
+            compression_mv = ftd_v * 0.25
+            compression_total = max(-20.0 + compression_mv, 0.0)
+            compression = {
+                **common,
+                "tension_low": False,
+                "chord_role": "flexural_compression",
+                "chord_formula": "8.52",
+                "m_ed": 20.0,
+                "face_m_ed_signed": -20.0,
+                "mv": compression_mv,
+                "m_total": compression_total,
+                "util": compression_total / 100.0,
+                "capped": False,
+            }
+            governing = max(
+                (tension, compression), key=lambda item: item["util"]
+            )
+            combined_result.update(
+                longitudinal_model_2023=True,
+                longitudinal=tension,
+                longitudinal_candidates=[tension, compression],
+                governing_longitudinal=governing,
+                longitudinal_assessment={
+                    "status": "PASS",
+                    "ok": True,
+                    "util": governing["util"],
+                    "reason": "required_longitudinal_chords_satisfied",
+                    "coverage_complete": True,
+                    "governing": governing,
+                },
+                torsion_longitudinal_assessment=(
+                    _pub_h01_formula_628_assessment(0.0)
+                ),
+            )
+
+        combined_result["overall_longitudinal_assessment"] = (
+            capacity.combined_longitudinal_assessment(combined_result)
+        )
+        assert combined_result["overall_longitudinal_assessment"]["status"] == (
+            "NOT ASSESSED"
+        )
+        at.session_state["results"] = retained
+
+        _select_view(at, "M-V-T Combined")
+        assert not at.exception
+        overall_metric = next(
+            metric
+            for metric in at.metric
+            if metric.label == "Longitudinal reinforcement"
+        )
+        assert str(overall_metric.value) == "-"
+        assert str(overall_metric.delta) == ""
+        if attack != "formula_628":
+            assert all(
+                not (
+                    metric.label == "Chord utilisation"
+                    and str(metric.delta) == "PASS"
+                )
+                for metric in at.metric
+            )
+
+        _select_view(at, "Results Overview")
+        assert not at.exception
+        overview = at.table[0].value
+        row = overview.loc[
+            overview["Check"] == "Combined longitudinal reinforcement"
+        ].iloc[0]
+        assert row["Status"] == "NOT ASSESSED"
+        assert row["Result"] == "-"
+
+
 def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views():
     at = _fresh()
     at.run()
@@ -3642,6 +3852,10 @@ def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views():
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
+        "cap_shear_force": True,
+        "mv_uncapped": 4.213620,
+        "shear_headroom": 20.0,
+        "shear_term_selection": "uncapped",
     }
     combined_result.update(
         longitudinal_model_2023=False,
@@ -3658,12 +3872,9 @@ def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views():
             "coverage_complete": False,
             "governing": direct,
         },
-        torsion_longitudinal_assessment={
-            "status": "NOT ASSESSED",
-            "ok": None,
-            "reason": "longitudinal_torsion_reinforcement_not_verified",
-            "demand_ratio": 0.50,
-        },
+        torsion_longitudinal_assessment=(
+            _pub_h01_formula_628_assessment(0.50)
+        ),
     )
     combined_result.pop("overall_longitudinal_assessment", None)
     combined_result["overall_longitudinal_assessment"] = (
