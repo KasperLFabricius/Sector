@@ -1434,6 +1434,79 @@ def _combined_longitudinal_child_candidate(
     return candidate, True
 
 
+def _combined_longitudinal_independent_direct_failure(
+    combined: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Retain one fully validated direct failure despite incomplete siblings."""
+
+    direct_value = combined.get("longitudinal", _MISSING)
+    direct = _combined_longitudinal_candidate(direct_value)
+    if direct is None or direct.get("status") != "FAIL":
+        return None
+    utilisation = _combined_longitudinal_utilisation(direct.get("util"))
+    if utilisation is None or utilisation <= 1.0 + 1.0e-9:
+        return None
+    if (
+        direct.get("biaxial", _MISSING) is not False
+        or direct.get("conditional", _MISSING) is not True
+        or combined.get("longitudinal_fallback") is not None
+        or combined.get("longitudinal_all_conditional", True) is not True
+    ):
+        return None
+
+    alias = combined.get("governing_longitudinal", _MISSING)
+    if alias is not _MISSING and (
+        not isinstance(alias, Mapping)
+        or not _combined_longitudinal_evidence_equal(alias, direct_value)
+    ):
+        return None
+
+    candidates = combined.get("longitudinal_candidates", _MISSING)
+    if candidates is not _MISSING and (
+        not isinstance(candidates, (list, tuple))
+        or not candidates
+        or not any(
+            _combined_longitudinal_evidence_equal(item, direct_value)
+            for item in candidates
+        )
+    ):
+        return None
+
+    model_2023 = combined.get("longitudinal_model_2023", False)
+    role = direct.get("role", _MISSING)
+    chord_formula = direct.get("chord_formula", _MISSING)
+    if (
+        type(model_2023) is not bool
+        or (chord_formula in {"8.51", "8.52"}) is not model_2023
+        or (role is _MISSING and model_2023)
+    ):
+        return None
+    if role is not _MISSING:
+        owner_torsion = _combined_longitudinal_finite_nonnegative(
+            combined.get("t_ed", _MISSING)
+        )
+        owner_area = _combined_longitudinal_finite_nonnegative(
+            combined.get("asl_torsion", _MISSING)
+        )
+        if owner_torsion is None or owner_area is None:
+            return None
+        torsion_live = bool(
+            float(direct["ftd_t"]) > 0.0 or float(direct["mt"]) > 0.0
+        )
+        if (
+            any(value > 0.0 for value in (owner_torsion, owner_area))
+            is not torsion_live
+            or (
+                torsion_live
+                and not all(
+                    value > 0.0 for value in (owner_torsion, owner_area)
+                )
+            )
+        ):
+            return None
+    return direct
+
+
 def _combined_longitudinal_chord_state(
     combined: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -1455,6 +1528,11 @@ def _combined_longitudinal_chord_state(
                     ignore_retained_parent=True,
                 )
             )
+        if not failure_consistent:
+            failure_candidate = (
+                _combined_longitudinal_independent_direct_failure(combined)
+            )
+            failure_consistent = failure_candidate is not None
         child_utilisation = (
             _combined_longitudinal_utilisation(failure_candidate.get("util"))
             if failure_candidate is not None
@@ -1763,6 +1841,20 @@ def _combined_longitudinal_chord_state(
         and combined.get("longitudinal_all_conditional", True) is True
     )
     if not direct_is_complete:
+        independent_failure = (
+            _combined_longitudinal_independent_direct_failure(combined)
+        )
+        if independent_failure is not None:
+            return {
+                "status": "FAIL",
+                "util": _combined_longitudinal_utilisation(
+                    independent_failure.get("util")
+                ),
+                "reason": "required_longitudinal_chord_failed",
+                "coverage_complete": False,
+                "governing": independent_failure,
+                "retained": None,
+            }
         candidate_utilisation = (
             _combined_longitudinal_utilisation(candidate.get("util"))
             if candidate is not None

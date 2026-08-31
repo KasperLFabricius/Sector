@@ -7947,6 +7947,54 @@ def _pub_h01_report_combined(parent_state="stale_mapping"):
     return combined
 
 
+def _pub_h01_report_current_failure(child_state):
+    combined = _pub_h01_report_combined()
+    direct = combined["longitudinal"]
+    direct.update(
+        role="shear_axis",
+        has_torsion=True,
+        gets_shift=True,
+        off_not_evaluated="not_solved",
+    )
+    combined.update(
+        governing_longitudinal=direct,
+        longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        t_ed=40.0,
+        asl_torsion=500.0,
+    )
+    if child_state == "none_sibling":
+        combined["longitudinal_candidates"] = [direct, None]
+    elif child_state == "malformed_status":
+        combined["longitudinal_candidates"] = [
+            direct,
+            {**direct, "status": ["PASS"]},
+        ]
+    else:
+        combined.pop("longitudinal_candidates", None)
+    combined.pop("overall_longitudinal_assessment", None)
+    assessment = dict(capacity.combined_longitudinal_assessment(combined))
+    assert assessment["status"] == "FAIL"
+    assessment.update(
+        status="NOT ASSESSED",
+        ok=None,
+        util=None,
+        reason="required_longitudinal_chord_coverage_incomplete",
+        coverage_complete=False,
+        governing_source=None,
+        governing_mechanism=None,
+        governing=None,
+    )
+    combined["overall_longitudinal_assessment"] = assessment
+    return combined
+
+
 def _pub_h01_report_zero_formula_628():
     return {
         "status": "PASS",
@@ -8461,6 +8509,46 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(
         assert "39.712 kNm" in text
         assert "123.925 kNm" in text
         assert "100.000 kNm" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize(
+    "child_state", ["missing_list", "none_sibling", "malformed_status"]
+)
+def test_report_pub_h01_current_failure_survives_incomplete_siblings(
+    profile,
+    child_state,
+):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = _pub_h01_report_current_failure(child_state)
+    out = {"plastic": _out()["plastic"], "combined": combined}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    if profile == "Brief":
+        assert re.search(
+            r"Combined longitudinal reinforcement\s+PL-TEST\s+"
+            r"FAIL\s+123[.,]9\s*%",
+            text,
+        )
+    else:
+        assert re.search(r"123[.,]9\s*%\s*FAIL", text)
+    assert "Longitudinal reinforcement inf" not in text
+    assert "Longitudinal reinforcement - NOT ASSESSED" not in text
+    assert "No valid longitudinal chord check" not in text
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])

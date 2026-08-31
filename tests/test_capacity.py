@@ -2314,6 +2314,67 @@ def test_combined_longitudinal_malformed_parent_util_preserves_only_child_failur
         assert assessment["util"] is None
 
 
+@pytest.mark.parametrize(
+    "child_state",
+    ("missing_list", "none_sibling", "malformed_status"),
+)
+@pytest.mark.parametrize("child_fails", (True, False))
+def test_combined_longitudinal_incomplete_siblings_preserve_only_direct_failure(
+    child_state,
+    child_fails,
+):
+    candidates = _pub_h01_2005_torsion_candidates()
+    direct = candidates[0]
+    if child_fails:
+        direct.update(
+            status="FAIL",
+            ok=False,
+            m_rd=100.0,
+            util=1.2392531643,
+            shear_headroom=20.0,
+        )
+    if child_state == "none_sibling":
+        candidates[1] = None
+    elif child_state == "malformed_status":
+        candidates[1]["status"] = ["PASS"]
+    combined = {
+        "longitudinal": direct,
+        "governing_longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+        "overall_longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": None,
+        },
+    }
+    if child_state != "missing_list":
+        combined["longitudinal_candidates"] = candidates
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    if child_fails:
+        assert assessment["status"] == "FAIL"
+        assert assessment["ok"] is False
+        assert assessment["util"] == pytest.approx(1.2392531643)
+        assert assessment["chord_governing"] is direct
+    else:
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["ok"] is None
+        assert assessment["util"] is None
+
+
 @pytest.mark.parametrize("target", ("chord", "formula_628"))
 def test_pub_h01_overflowing_real_scalar_fails_closed(target):
     direct = _pub_h01_longitudinal_fixture(0.50)

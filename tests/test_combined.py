@@ -4118,7 +4118,18 @@ def test_pub_h01_subtube_total_forgery_fails_closed_in_torsion_and_overview():
     assert torsion_rows.empty
 
 
-def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views():
+@pytest.mark.parametrize(
+    "child_state",
+    (
+        "documented_incomplete",
+        "missing_list",
+        "none_sibling",
+        "malformed_status",
+    ),
+)
+def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views(
+    child_state,
+):
     at = _fresh()
     at.run()
     _enable_all(at)
@@ -4174,6 +4185,13 @@ def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views():
             _pub_h01_formula_628_assessment(0.50)
         ),
     )
+    if child_state == "missing_list":
+        combined_result.pop("longitudinal_candidates", None)
+    elif child_state == "none_sibling":
+        combined_result["longitudinal_candidates"] = [direct, None]
+    elif child_state == "malformed_status":
+        malformed = {**direct, "status": ["PASS"]}
+        combined_result["longitudinal_candidates"] = [direct, malformed]
     combined_result.pop("overall_longitudinal_assessment", None)
     combined_result["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(combined_result)
