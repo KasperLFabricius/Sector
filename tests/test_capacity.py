@@ -1486,6 +1486,91 @@ def test_combined_longitudinal_current_candidates_require_role_identity():
     assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
 
 
+def test_combined_longitudinal_role_bearing_direct_requires_candidate_list():
+    candidates = _pub_h01_2005_torsion_candidates()
+    direct = candidates[0]
+    combined = {
+        "longitudinal": direct,
+        "governing_longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": direct,
+        },
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
+def test_combined_longitudinal_legacy_roleless_torsion_reconciles_owner_liveness():
+    direct = _pub_h01_longitudinal_fixture(0.80)
+    forged_zero_owner = {
+        "longitudinal": direct,
+        "longitudinal_candidates": [direct],
+        "t_ed": 0.0,
+        "asl_torsion": 0.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
+    }
+
+    rejected = capacity.combined_longitudinal_assessment(forged_zero_owner)
+
+    assert rejected["status"] == "NOT ASSESSED"
+    assert rejected["chord_status"] == "NOT ASSESSED"
+    assert rejected["torsion_status"] == "PASS"
+    assert rejected["util"] is None
+
+    valid_live = copy.deepcopy(forged_zero_owner)
+    valid_live.update(
+        t_ed=40.0,
+        asl_torsion=500.0,
+        torsion_longitudinal_assessment=_unverified_formula_628(0.50),
+    )
+    accepted_live = capacity.combined_longitudinal_assessment(valid_live)
+
+    assert accepted_live["chord_status"] == "PASS"
+    assert accepted_live["chord_util"] == pytest.approx(0.80)
+    assert accepted_live["torsion_status"] == "NOT ASSESSED"
+
+
+def test_combined_longitudinal_legacy_zero_demand_control_remains_complete():
+    direct = _pub_h01_longitudinal_fixture(0.80)
+    direct.update(
+        ftd_t=0.0,
+        mt=0.0,
+        m_total=direct["m_ed"] + direct["mv"],
+    )
+    direct["m_rd"] = direct["m_total"] / 0.80
+    direct["shear_headroom"] = direct["m_rd"] - direct["m_ed"]
+    direct["util"] = 0.80
+    combined = {
+        "longitudinal": direct,
+        "t_ed": 0.0,
+        "asl_torsion": 0.0,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.0),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "PASS"
+    assert assessment["chord_status"] == "PASS"
+    assert assessment["torsion_status"] == "PASS"
+
+
 @pytest.mark.parametrize(
     ("face_m_ed_signed", "m_total", "util"),
     ((-40.0, 0.0, 0.0), (5.0, 15.0, 0.15)),
@@ -1801,6 +1886,117 @@ def test_torsion_longitudinal_publication_authority_rejects_malformed_subtube_to
     assert sanitized["required_asl_mm2"] is None
 
 
+def test_torsion_longitudinal_publication_authority_rejects_array_status():
+    retained = _unverified_formula_628(0.0)
+    retained["status"] = np.array(["PASS"])
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner={
+            "t_ed": 0.0,
+            "asl_req": 0.0,
+            "subdivided": False,
+            "subtubes": None,
+        },
+    )
+
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert sanitized["demand_ratio"] is None
+
+
+@pytest.mark.parametrize("hostile", [np.array([True]), 0.50 + 0.0j])
+def test_combined_longitudinal_candidate_rejects_non_real_scalar_utilisation(
+    hostile,
+):
+    direct = _pub_h01_longitudinal_fixture(0.50)
+    direct["util"] = hostile
+    combined = {
+        "longitudinal": direct,
+        "t_ed": 40.0,
+        "asl_torsion": 500.0,
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+
+
+def test_torsion_longitudinal_publication_authority_requires_per_tube_liveness():
+    retained = _unverified_formula_628(0.50)
+    retained["required_by_tube_mm2"] = (200.0, 300.0)
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner={
+            "t_ed": 40.0,
+            "asl_req": 500.0,
+            "subdivided": True,
+            "subtubes": (
+                {"asl_req": 200.0, "t_ed": 40.0},
+                {"asl_req": 300.0, "t_ed": 0.0},
+            ),
+        },
+    )
+
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert sanitized["required_by_tube_mm2"] is None
+
+
+def test_torsion_longitudinal_publication_authority_rejects_force_underflow():
+    retained = {
+        "status": "PASS",
+        "ok": True,
+        "reason": "no_longitudinal_torsion_demand",
+        "required_asl_mm2": 1.0e-200,
+        "required_design_force_kn": 0.0,
+        "provided_design_force_kn": 1.0,
+        "reference_fyd_mpa": 1.0e-200,
+        "demand_ratio": 0.0,
+        "area_sufficient": True,
+    }
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner={
+            "t_ed": 1.0,
+            "asl_req": 1.0e-200,
+            "subdivided": False,
+            "subtubes": None,
+        },
+    )
+
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert sanitized["demand_ratio"] is None
+
+
+def test_torsion_longitudinal_publication_authority_rejects_overflowing_tube_sum():
+    retained = _unverified_formula_628(0.50)
+    retained["required_by_tube_mm2"] = (1.0e308, 1.0e308)
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner={
+            "t_ed": 40.0,
+            "asl_req": 500.0,
+            "subdivided": True,
+            "subtubes": (
+                {"asl_req": 1.0e308, "t_ed": 20.0},
+                {"asl_req": 1.0e308, "t_ed": 20.0},
+            ),
+        },
+    )
+
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert sanitized["required_by_tube_mm2"] is None
+
+
 def test_combined_longitudinal_publication_rejects_subtube_torque_conflict():
     direct = _pub_h01_longitudinal_fixture(0.80)
     retained = _unverified_formula_628(0.0)
@@ -1945,6 +2141,30 @@ def test_combined_longitudinal_definite_failure_governs_incomplete_child():
     assert assessment["status"] == "FAIL"
     assert assessment["util"] == pytest.approx(1.2392531643)
     assert assessment["coverage_complete"] is False
+
+
+def test_combined_longitudinal_retained_not_assessed_cannot_mask_child_failure():
+    direct = _pub_h01_longitudinal_fixture()
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": True,
+            "governing": direct,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "FAIL"
+    assert assessment["ok"] is False
+    assert assessment["util"] == pytest.approx(1.2392531643)
+    assert assessment["chord_status"] == "FAIL"
+    assert assessment["chord_reason"] == "required_longitudinal_chord_failed"
 
 
 @pytest.mark.parametrize(
@@ -2176,6 +2396,26 @@ def test_combined_longitudinal_retained_canonical_requires_exact_scalar_types():
     assert assessment["ok"] is None
     assert assessment["util"] is None
     assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
+def test_combined_longitudinal_stale_overall_reason_cannot_hide_derived_failure():
+    direct = _pub_h01_longitudinal_fixture()
+    combined = {
+        "longitudinal": direct,
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+    }
+    derived = dict(capacity.combined_longitudinal_assessment(combined))
+    assert derived["status"] == "FAIL"
+    stale = copy.deepcopy(derived)
+    stale["reason"] = "stale retained summary"
+    combined["overall_longitudinal_assessment"] = stale
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "FAIL"
+    assert assessment["ok"] is False
+    assert assessment["util"] == pytest.approx(1.2392531643)
+    assert assessment["reason"] == "required_longitudinal_chord_failed"
 
 
 def test_combined_longitudinal_unassessed_chord_retains_valid_partial_evidence():

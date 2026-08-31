@@ -3448,6 +3448,16 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
         "shear_headroom": 20.0,
         "shear_term_selection": "uncapped",
     }
+    for legacy_only_key in (
+        "role",
+        "has_torsion",
+        "gets_shift",
+        "chord_formula",
+        "chord_role",
+        "flexural_tension_low",
+        "face_m_ed_signed",
+    ):
+        direct.pop(legacy_only_key, None)
     combined_result["longitudinal"] = direct
     for key in (
         "governing_longitudinal",
@@ -3458,12 +3468,23 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
     ):
         combined_result.pop(key, None)
     combined_result["longitudinal_all_conditional"] = True
+    combined_result["longitudinal_assessment"] = {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "util": direct["util"],
+        "reason": "required_longitudinal_chord_coverage_incomplete",
+        "coverage_complete": True,
+        "governing": direct,
+    }
     combined_result["torsion_longitudinal_assessment"] = (
         _pub_h01_formula_628_assessment(0.50)
     )
-    combined_result["overall_longitudinal_assessment"] = (
+    stale_overall = dict(
         capacity.combined_longitudinal_assessment(combined_result)
     )
+    assert stale_overall["status"] == "FAIL"
+    stale_overall["reason"] = "stale retained summary"
+    combined_result["overall_longitudinal_assessment"] = stale_overall
     at.session_state["results"] = retained
 
     _select_view(at, "M-V-T Combined")
@@ -3515,6 +3536,16 @@ def test_pub_h01_chord_and_formula_628_overall_are_published_separately():
         shear_term_selection="uncapped",
         capped=False,
     )
+    for legacy_only_key in (
+        "role",
+        "has_torsion",
+        "gets_shift",
+        "chord_formula",
+        "chord_role",
+        "flexural_tension_low",
+        "face_m_ed_signed",
+    ):
+        chord.pop(legacy_only_key, None)
     for key in (
         "governing_longitudinal",
         "longitudinal_assessment",
@@ -3664,7 +3695,14 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
     assert not at.exception
     base_results = copy.deepcopy(at.session_state["results"])
 
-    for attack in ("face_moment", "headroom_cap", "formula_628"):
+    for attack in (
+        "face_moment",
+        "headroom_cap",
+        "formula_628",
+        "owner_liveness",
+        "subtube_liveness",
+        "array_status",
+    ):
         retained = copy.deepcopy(base_results)
         combined_result = retained["combined"]
         for key in (
@@ -3676,7 +3714,12 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
         ):
             combined_result.pop(key, None)
 
-        if attack == "formula_628":
+        if attack in {
+            "formula_628",
+            "owner_liveness",
+            "subtube_liveness",
+            "array_status",
+        }:
             direct = {
                 "valid": True,
                 "status": "PASS",
@@ -3703,8 +3746,40 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
                 "shear_term_selection": "uncapped",
             }
             formula_628 = _pub_h01_formula_628_assessment(0.0)
-            assert combined_result["t_ed"] > 0.0
-            assert combined_result["asl_torsion"] > 0.0
+            if attack in {"owner_liveness", "subtube_liveness"}:
+                direct.update(
+                    ftd_t=317.693568,
+                    mt=39.711696,
+                    m_total=89.711696,
+                    util=0.89711696,
+                )
+                combined_result.update(
+                    t_ed=0.0 if attack == "owner_liveness" else 40.0,
+                    asl_torsion=0.0 if attack == "owner_liveness" else 500.0,
+                    torsion_subdivided=attack == "subtube_liveness",
+                    torsion_subtubes=(
+                        (
+                            {"asl_req": 200.0, "t_ed": 40.0},
+                            {"asl_req": 300.0, "t_ed": 0.0},
+                        )
+                        if attack == "subtube_liveness"
+                        else None
+                    ),
+                )
+                if attack == "subtube_liveness":
+                    formula_628 = _pub_h01_formula_628_assessment(0.50)
+                    formula_628["required_by_tube_mm2"] = (200.0, 300.0)
+            elif attack == "array_status":
+                formula_628["status"] = np.array(["PASS"])
+                combined_result.update(
+                    t_ed=0.0,
+                    asl_torsion=0.0,
+                    torsion_subdivided=False,
+                    torsion_subtubes=None,
+                )
+            else:
+                assert combined_result["t_ed"] > 0.0
+                assert combined_result["asl_torsion"] > 0.0
             combined_result.update(
                 longitudinal_model_2023=False,
                 longitudinal=direct,
@@ -3797,7 +3872,7 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
         )
         assert str(overall_metric.value) == "-"
         assert str(overall_metric.delta) == ""
-        if attack != "formula_628":
+        if attack not in {"formula_628", "subtube_liveness", "array_status"}:
             assert all(
                 not (
                     metric.label == "Chord utilisation"

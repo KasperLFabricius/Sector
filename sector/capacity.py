@@ -12,6 +12,7 @@ import math
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from importlib import import_module
+from numbers import Real
 from typing import Any
 
 from . import codes
@@ -943,17 +944,33 @@ def longitudinal_chord_assessment(
 def _combined_longitudinal_utilisation(value: object) -> float | None:
     """Return one strict non-negative utilisation, retaining positive infinity."""
 
-    if value is None or _is_boolean_scalar(value) or isinstance(
-        value, (str, bytes)
-    ):
+    if _is_boolean_scalar(value) or not isinstance(value, Real):
         return None
-    try:
-        utilisation = float(value)
-    except (OverflowError, TypeError, ValueError):
-        return None
+    utilisation = float(value)
     if math.isnan(utilisation) or utilisation < 0.0:
         return None
     return utilisation
+
+
+def _combined_longitudinal_finite_nonnegative(value: object) -> float | None:
+    """Return one strict finite non-negative real scalar."""
+
+    if _is_boolean_scalar(value) or not isinstance(value, Real):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number >= 0.0 else None
+
+
+def _combined_longitudinal_finite_sum(
+    values: tuple[float, ...],
+) -> float | None:
+    """Sum retained operands without allowing overflow to escape validation."""
+
+    try:
+        total = math.fsum(values)
+    except (OverflowError, ValueError):
+        return None
+    return total if math.isfinite(total) else None
 
 
 def _combined_longitudinal_close(left: float, right: float) -> bool:
@@ -1049,13 +1066,8 @@ def _combined_longitudinal_candidate(
         "z",
     ):
         operand = value.get(key, _MISSING)
-        if _is_boolean_scalar(operand) or isinstance(operand, (str, bytes)):
-            return None
-        try:
-            number = float(operand)
-        except (OverflowError, TypeError, ValueError):
-            return None
-        if not math.isfinite(number) or number < 0.0:
+        number = _combined_longitudinal_finite_nonnegative(operand)
+        if number is None:
             return None
         operands[key] = number
     if operands["z"] <= 0.0:
@@ -1148,31 +1160,25 @@ def _combined_longitudinal_candidate(
         retained_operand = value.get(key, _MISSING)
         if retained_operand is _MISSING:
             continue
-        if _is_boolean_scalar(retained_operand) or isinstance(
-            retained_operand, (str, bytes)
-        ):
-            return None
-        try:
-            retained_number = float(retained_operand)
-        except (OverflowError, TypeError, ValueError):
-            return None
+        retained_number = _combined_longitudinal_finite_nonnegative(
+            retained_operand
+        )
         if (
-            not math.isfinite(retained_number)
-            or retained_number < 0.0
+            retained_number is None
             or not _combined_longitudinal_close(retained_number, expected)
         ):
             return None
     retained_selection = value.get("shear_term_selection", _MISSING)
-    if retained_selection is not _MISSING and retained_selection != expected_selection:
+    if retained_selection is not _MISSING and (
+        type(retained_selection) is not str
+        or retained_selection != expected_selection
+    ):
         return None
     if chord_formula in {"8.51", "8.52"}:
         face_m_ed = value.get("face_m_ed_signed", _MISSING)
-        if _is_boolean_scalar(face_m_ed) or isinstance(face_m_ed, (str, bytes)):
+        if _is_boolean_scalar(face_m_ed) or not isinstance(face_m_ed, Real):
             return None
-        try:
-            face_m_ed_number = float(face_m_ed)
-        except (OverflowError, TypeError, ValueError):
-            return None
+        face_m_ed_number = float(face_m_ed)
         if not math.isfinite(face_m_ed_number):
             return None
         expected_face_m_ed = (
@@ -1249,7 +1255,14 @@ def _combined_longitudinal_child_candidate(
 
     candidates_value = combined.get("longitudinal_candidates", _MISSING)
     candidate = direct
-    if model_2023 and candidates_value is _MISSING and direct is not None:
+    direct_has_role = bool(
+        direct is not None and direct.get("role", _MISSING) is not _MISSING
+    )
+    if (
+        (model_2023 or direct_has_role)
+        and candidates_value is _MISSING
+        and direct is not None
+    ):
         return None, False
     if candidates_value is not _MISSING:
         if not isinstance(candidates_value, (list, tuple)) or not candidates_value:
@@ -1313,17 +1326,10 @@ def _combined_longitudinal_child_candidate(
             )
             owner_torsion_values: list[float] = []
             for owner_key in ("t_ed", "asl_torsion"):
-                owner_value = combined.get(owner_key, _MISSING)
-                if _is_boolean_scalar(owner_value) or isinstance(
-                    owner_value,
-                    (str, bytes),
-                ):
-                    return None, False
-                try:
-                    owner_number = float(owner_value)
-                except (OverflowError, TypeError, ValueError):
-                    return None, False
-                if not math.isfinite(owner_number) or owner_number < 0.0:
+                owner_number = _combined_longitudinal_finite_nonnegative(
+                    combined.get(owner_key, _MISSING)
+                )
+                if owner_number is None:
                     return None, False
                 owner_torsion_values.append(owner_number)
             if any(value > 0.0 for value in owner_torsion_values) is not torsion_live:
@@ -1436,6 +1442,14 @@ def _combined_longitudinal_chord_state(
                 "retained": retained,
             }
         status = retained.get("status")
+        reason_value = retained.get("reason", _MISSING)
+        reason_is_valid = bool(
+            reason_value is _MISSING
+            or (type(reason_value) is str and bool(reason_value))
+        )
+        retained_reason = (
+            reason_value if type(reason_value) is str and reason_value else None
+        )
         coverage_complete = retained.get("coverage_complete")
         ok = retained.get("ok", _MISSING)
         retained_utilisation = retained.get("util", _MISSING)
@@ -1473,6 +1487,20 @@ def _combined_longitudinal_chord_state(
                 )
             )
         )
+        child_utilisation = (
+            _combined_longitudinal_utilisation(child_candidate.get("util"))
+            if child_candidate is not None
+            else None
+        )
+        child_definite_failure = bool(
+            child_candidate is not None
+            and child_candidate.get("status") == "FAIL"
+            and child_utilisation is not None
+            and child_utilisation > 1.0 + 1.0e-9
+            and governing_consistent
+            and type(status) is str
+            and status == "NOT ASSESSED"
+        )
         if type(status) is str and status in {"PASS", "FAIL"}:
             expected_status = (
                 "PASS"
@@ -1487,6 +1515,7 @@ def _combined_longitudinal_chord_state(
             valid = bool(
                 expected_status == status
                 and (ok is _MISSING or ok is expected_ok)
+                and reason_is_valid
                 and type(coverage_complete) is bool
                 and (status != "PASS" or coverage_complete is True)
                 and candidate is not None
@@ -1501,7 +1530,7 @@ def _combined_longitudinal_chord_state(
                 return {
                     "status": status,
                     "util": utilisation,
-                    "reason": retained.get("reason") or (
+                    "reason": retained_reason or (
                         "required_longitudinal_chords_satisfied"
                         if status == "PASS"
                         else "required_longitudinal_chord_failed"
@@ -1526,7 +1555,9 @@ def _combined_longitudinal_chord_state(
                 is not None
             )
             if (
-                (ok is _MISSING or ok is None)
+                not child_definite_failure
+                and (ok is _MISSING or ok is None)
+                and reason_is_valid
                 and type(coverage_complete) is bool
                 and governing_consistent
                 and utilisation_consistent
@@ -1538,7 +1569,7 @@ def _combined_longitudinal_chord_state(
                 return {
                     "status": status,
                     "util": None,
-                    "reason": retained.get("reason") or (
+                    "reason": retained_reason or (
                         "no_longitudinal_chord_action"
                         if status == "NOT APPLICABLE"
                         else "required_longitudinal_chord_coverage_incomplete"
@@ -1547,6 +1578,19 @@ def _combined_longitudinal_chord_state(
                     "governing": candidate,
                     "retained": retained,
                 }
+        if child_definite_failure:
+            return {
+                "status": "FAIL",
+                "util": child_utilisation,
+                "reason": "required_longitudinal_chord_failed",
+                "coverage_complete": (
+                    coverage_complete
+                    if type(coverage_complete) is bool
+                    else False
+                ),
+                "governing": child_candidate,
+                "retained": None,
+            }
         return {
             "status": "NOT ASSESSED",
             "util": None,
@@ -1561,6 +1605,9 @@ def _combined_longitudinal_chord_state(
     # is complete evidence even when its optional governing alias is absent.
     direct_candidate = _combined_longitudinal_candidate(direct)
     candidate = direct_candidate
+    evidence_candidates = (
+        [direct_candidate] if direct_candidate is not None else []
+    )
     alias = combined.get("governing_longitudinal", _MISSING)
     candidates = combined.get("longitudinal_candidates", _MISSING)
     alias_consistent = False
@@ -1605,11 +1652,51 @@ def _combined_longitudinal_chord_state(
             )
             if candidates_consistent:
                 candidate = expected_governing
+                evidence_candidates = retained_candidates
+    retained_roles = [
+        item.get("role", _MISSING) for item in evidence_candidates
+    ]
+    current_role_evidence = any(
+        role is not _MISSING for role in retained_roles
+    )
+    roleless_evidence = bool(
+        evidence_candidates
+        and all(role is _MISSING for role in retained_roles)
+    )
+    torsion_live = any(
+        float(item["ftd_t"]) > 0.0 or float(item["mt"]) > 0.0
+        for item in evidence_candidates
+    )
+    owner_torsion_value = combined.get("t_ed", _MISSING)
+    owner_area_value = combined.get("asl_torsion", _MISSING)
+    owner_values_missing = bool(
+        owner_torsion_value is _MISSING and owner_area_value is _MISSING
+    )
+    owner_torsion = _combined_longitudinal_finite_nonnegative(
+        owner_torsion_value
+    )
+    owner_area = _combined_longitudinal_finite_nonnegative(owner_area_value)
+    if torsion_live:
+        owner_liveness_consistent = bool(
+            owner_torsion is not None
+            and owner_torsion > 0.0
+            and owner_area is not None
+            and owner_area > 0.0
+        )
+    elif owner_values_missing:
+        owner_liveness_consistent = True
+    else:
+        owner_liveness_consistent = bool(
+            owner_torsion == 0.0 and owner_area == 0.0
+        )
     fallback = combined.get("longitudinal_fallback")
     direct_is_complete = bool(
         candidate is not None
         and alias_consistent
         and candidates_consistent
+        and not current_role_evidence
+        and roleless_evidence
+        and owner_liveness_consistent
         and direct is not None
         and direct.get("valid") is True
         and direct.get("conditional", _MISSING) is True
@@ -1619,12 +1706,44 @@ def _combined_longitudinal_chord_state(
         and combined.get("longitudinal_all_conditional", True) is True
     )
     if not direct_is_complete:
+        candidate_utilisation = (
+            _combined_longitudinal_utilisation(candidate.get("util"))
+            if candidate is not None
+            else None
+        )
+        if (
+            candidate is not None
+            and candidate.get("status") == "FAIL"
+            and candidate_utilisation is not None
+            and candidate_utilisation > 1.0 + 1.0e-9
+            and alias_consistent
+            and candidates_consistent
+            and direct is not None
+            and direct.get("conditional", _MISSING) is True
+            and direct.get("biaxial", _MISSING) is False
+            and direct.get("off_not_evaluated", _MISSING) is None
+            and fallback is None
+            and combined.get("longitudinal_all_conditional", True) is True
+        ):
+            return {
+                "status": "FAIL",
+                "util": candidate_utilisation,
+                "reason": "required_longitudinal_chord_failed",
+                "coverage_complete": False,
+                "governing": candidate,
+                "retained": None,
+            }
         reason = "required_longitudinal_chord_coverage_incomplete"
         if fallback is not None:
             reason = "combined_longitudinal_pure_axis_substitute"
         elif direct is None:
             reason = "combined_longitudinal_shear_axis_unavailable"
-        elif not alias_consistent or not candidates_consistent:
+        elif (
+            not alias_consistent
+            or not candidates_consistent
+            or current_role_evidence
+            or not owner_liveness_consistent
+        ):
             reason = "combined_longitudinal_evidence_inconsistent"
         elif direct.get("off_not_evaluated") == "not_solved":
             reason = "combined_longitudinal_chord_not_solved"
@@ -1698,6 +1817,8 @@ def validated_torsion_longitudinal_assessment(
     status = retained.get("status")
     reason = retained.get("reason")
     ok = retained.get("ok", _MISSING)
+    status_is_text = type(status) is str
+    reason_is_text = type(reason) is str
     utilisation = _combined_longitudinal_utilisation(
         retained.get("demand_ratio")
     )
@@ -1707,18 +1828,7 @@ def validated_torsion_longitudinal_assessment(
         key: str,
     ) -> float | None:
         operand = mapping.get(key, _MISSING)
-        if (
-            operand is _MISSING
-            or operand is None
-            or _is_boolean_scalar(operand)
-            or isinstance(operand, (str, bytes))
-        ):
-            return None
-        try:
-            number = float(operand)
-        except (OverflowError, TypeError, ValueError):
-            return None
-        return number if math.isfinite(number) and number >= 0.0 else None
+        return _combined_longitudinal_finite_nonnegative(operand)
 
     def finite_nonnegative(key: str) -> float | None:
         assert isinstance(retained, Mapping)
@@ -1748,6 +1858,9 @@ def validated_torsion_longitudinal_assessment(
         assert reference_fyd is not None
         assert type(area_sufficient) is bool
         expected_required_force = required_asl * reference_fyd / 1000.0
+        required_force_liveness_consistent = bool(
+            (required_asl == 0.0) is (expected_required_force == 0.0)
+        )
         expected_ratio = (
             required_force / provided_force
             if provided_force > 0.0
@@ -1780,6 +1893,7 @@ def validated_torsion_longitudinal_assessment(
         )
         operands_consistent = bool(
             math.isfinite(expected_required_force)
+            and required_force_liveness_consistent
             and _combined_longitudinal_close(
                 required_force,
                 expected_required_force,
@@ -1787,15 +1901,15 @@ def validated_torsion_longitudinal_assessment(
             and area_sufficient is expected_sufficient
             and ratio_consistent
         )
-        if required_force == 0.0:
+        if required_force == 0.0 and required_asl == 0.0:
             derived_status = "PASS"
             derived_reason = "no_longitudinal_torsion_demand"
             derived_ok = True
-        elif not expected_sufficient:
+        elif required_force > 0.0 and not expected_sufficient:
             derived_status = "FAIL"
             derived_reason = "longitudinal_torsion_reinforcement_insufficient"
             derived_ok = False
-        else:
+        elif required_force > 0.0:
             derived_status = "NOT ASSESSED"
             derived_reason = "longitudinal_torsion_reinforcement_not_verified"
             derived_ok = None
@@ -1803,27 +1917,28 @@ def validated_torsion_longitudinal_assessment(
     required_by_tube_value = retained.get("required_by_tube_mm2", _MISSING)
     required_by_tube_present = required_by_tube_value is not _MISSING
     parsed_required_by_tube: tuple[float, ...] = ()
+    parsed_required_total: float | None = None
     required_by_tube_valid = False
     if (
         isinstance(required_by_tube_value, (list, tuple))
         and required_by_tube_value
         and not any(
-            _is_boolean_scalar(value) or isinstance(value, (str, bytes))
+            _is_boolean_scalar(value) or not isinstance(value, Real)
             for value in required_by_tube_value
         )
     ):
-        try:
-            candidate_tube_values = tuple(
-                float(value) for value in required_by_tube_value
-            )
-        except (OverflowError, TypeError, ValueError):
-            candidate_tube_values = ()
+        candidate_tube_values = tuple(
+            float(value) for value in required_by_tube_value
+        )
         if candidate_tube_values and all(
             math.isfinite(value) and value >= 0.0
             for value in candidate_tube_values
         ):
             parsed_required_by_tube = candidate_tube_values
-            required_by_tube_valid = True
+            parsed_required_total = _combined_longitudinal_finite_sum(
+                candidate_tube_values
+            )
+            required_by_tube_valid = parsed_required_total is not None
 
     owner_consistent = False
     if isinstance(owner, Mapping) and complete_operands:
@@ -1862,6 +1977,34 @@ def validated_torsion_longitudinal_assessment(
                     else None
                     for item in subtubes
                 )
+                owner_tube_areas = tuple(
+                    value for value in expected_by_tube if value is not None
+                )
+                owner_tube_torques = tuple(
+                    value
+                    for value in expected_torque_by_tube
+                    if value is not None
+                )
+                owner_area_total = _combined_longitudinal_finite_sum(
+                    owner_tube_areas
+                )
+                owner_torque_total = _combined_longitudinal_finite_sum(
+                    owner_tube_torques
+                )
+                tube_liveness_consistent = bool(
+                    len(owner_tube_areas) == len(expected_by_tube)
+                    and len(owner_tube_torques)
+                    == len(expected_torque_by_tube)
+                    and all(
+                        (torque == 0.0 and area == 0.0)
+                        or (torque > 0.0 and area > 0.0)
+                        for area, torque in zip(
+                            owner_tube_areas,
+                            owner_tube_torques,
+                            strict=True,
+                        )
+                    )
+                )
                 owner_consistent = bool(
                     owner_consistent
                     and required_by_tube_present
@@ -1879,31 +2022,27 @@ def validated_torsion_longitudinal_assessment(
                             expected_by_tube,
                         )
                     )
+                    and tube_liveness_consistent
                     and owner_required is not None
                     and required_asl is not None
+                    and parsed_required_total is not None
+                    and owner_area_total is not None
+                    and owner_torque_total is not None
                     and _combined_longitudinal_close(
-                        math.fsum(parsed_required_by_tube),
+                        parsed_required_total,
                         owner_required,
                     )
                     and _combined_longitudinal_close(
-                        math.fsum(
-                            value
-                            for value in expected_by_tube
-                            if value is not None
-                        ),
+                        owner_area_total,
                         owner_required,
                     )
                     and _combined_longitudinal_close(
-                        math.fsum(parsed_required_by_tube),
+                        parsed_required_total,
                         required_asl,
                     )
                     and owner_torsion is not None
                     and _combined_longitudinal_close(
-                        math.fsum(
-                            value
-                            for value in expected_torque_by_tube
-                            if value is not None
-                        ),
+                        owner_torque_total,
                         owner_torsion,
                     )
                 )
@@ -1921,14 +2060,15 @@ def validated_torsion_longitudinal_assessment(
                 retained_total_consistent = bool(
                     required_by_tube_valid
                     and len(parsed_required_by_tube) == 1
+                    and parsed_required_total is not None
                     and owner_required is not None
                     and required_asl is not None
                     and _combined_longitudinal_close(
-                        parsed_required_by_tube[0],
+                        parsed_required_total,
                         owner_required,
                     )
                     and _combined_longitudinal_close(
-                        parsed_required_by_tube[0],
+                        parsed_required_total,
                         required_asl,
                     )
                 )
@@ -1942,13 +2082,17 @@ def validated_torsion_longitudinal_assessment(
         valid = bool(
             operands_consistent
             and owner_consistent
+            and status_is_text
+            and reason_is_text
             and status == derived_status
             and reason == derived_reason
             and (ok is _MISSING or ok is derived_ok)
         )
     else:
         valid = bool(
-            status == "NOT ASSESSED"
+            status_is_text
+            and reason_is_text
+            and status == "NOT ASSESSED"
             and reason
             == "longitudinal_torsion_reinforcement_evidence_unavailable"
             and utilisation is None
@@ -1967,13 +2111,14 @@ def validated_torsion_longitudinal_assessment(
     assert type(area_sufficient) is bool
 
     provided_gross_area = finite_nonnegative("provided_gross_area_mm2")
+    provided_equivalent_area = provided_force * 1000.0 / reference_fyd
+    if not math.isfinite(provided_equivalent_area):
+        return unavailable(inconsistent=True)
     required_by_tube = None
     if (
         parsed_required_by_tube
-        and _combined_longitudinal_close(
-            math.fsum(parsed_required_by_tube),
-            required_asl,
-        )
+        and parsed_required_total is not None
+        and _combined_longitudinal_close(parsed_required_total, required_asl)
     ):
         required_by_tube = parsed_required_by_tube
 
@@ -1993,9 +2138,7 @@ def validated_torsion_longitudinal_assessment(
         "required_design_force_kn": required_force,
         "provided_gross_area_mm2": provided_gross_area,
         "provided_design_force_kn": provided_force,
-        "provided_equivalent_area_mm2": (
-            provided_force * 1000.0 / reference_fyd
-        ),
+        "provided_equivalent_area_mm2": provided_equivalent_area,
         "reference_fyd_mpa": reference_fyd,
         "demand_ratio": utilisation,
         "area_sufficient": area_sufficient,
@@ -2166,6 +2309,20 @@ def combined_longitudinal_assessment(
         derived,
     ):
         return retained
+    if (
+        derived["status"] == "FAIL"
+        and isinstance(retained, Mapping)
+        and type(retained.get("reason")) is str
+    ):
+        retained_without_reason = dict(retained)
+        retained_without_reason.pop("reason", None)
+        derived_without_reason = dict(derived)
+        derived_without_reason.pop("reason", None)
+        if _combined_longitudinal_evidence_equal(
+            retained_without_reason,
+            derived_without_reason,
+        ):
+            return derived
     return {
         **derived,
         "status": "NOT ASSESSED",

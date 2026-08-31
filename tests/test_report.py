@@ -14,6 +14,7 @@ import textwrap
 from dataclasses import asdict
 from types import SimpleNamespace as NS
 
+import numpy as np
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -7879,6 +7880,16 @@ def _pub_h01_report_combined():
         "shear_headroom": 20.0,
         "shear_term_selection": "uncapped",
     }
+    for legacy_only_key in (
+        "role",
+        "has_torsion",
+        "gets_shift",
+        "chord_formula",
+        "chord_role",
+        "flexural_tension_low",
+        "face_m_ed_signed",
+    ):
+        direct.pop(legacy_only_key, None)
     combined["longitudinal"] = direct
     for key in (
         "governing_longitudinal",
@@ -7886,6 +7897,14 @@ def _pub_h01_report_combined():
         "longitudinal_candidates",
     ):
         combined.pop(key, None)
+    combined["longitudinal_assessment"] = {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "util": direct["util"],
+        "reason": "required_longitudinal_chord_coverage_incomplete",
+        "coverage_complete": True,
+        "governing": direct,
+    }
     combined["asl_torsion"] = 500.0
     combined["torsion_longitudinal_assessment"] = {
         "status": "NOT ASSESSED",
@@ -7899,9 +7918,12 @@ def _pub_h01_report_combined():
         "area_sufficient": True,
     }
     combined.pop("overall_longitudinal_assessment", None)
-    combined["overall_longitudinal_assessment"] = (
+    stale_overall = dict(
         capacity.combined_longitudinal_assessment(combined)
     )
+    assert stale_overall["status"] == "FAIL"
+    stale_overall["reason"] = "stale retained summary"
+    combined["overall_longitudinal_assessment"] = stale_overall
     return combined
 
 
@@ -8018,7 +8040,16 @@ def _pub_h01_report_four_face_torsion():
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-@pytest.mark.parametrize("attack", ["headroom_cap", "formula_628"])
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "headroom_cap",
+        "formula_628",
+        "owner_liveness",
+        "subtube_liveness",
+        "array_status",
+    ],
+)
 def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack):
     inp = _inp()
     inp.update(
@@ -8038,7 +8069,12 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
     ):
         combined.pop(key, None)
 
-    if attack == "formula_628":
+    if attack in {
+        "formula_628",
+        "owner_liveness",
+        "subtube_liveness",
+        "array_status",
+    }:
         direct = {
             "valid": True,
             "status": "PASS",
@@ -8065,12 +8101,52 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
             "shear_term_selection": "uncapped",
         }
         stale_formula = _pub_h01_report_zero_formula_628()
-        stale_formula.update(
-            required_asl_mm2=500.0,
-            required_design_force_kn=200.0,
-            provided_design_force_kn=100.0,
-            area_sufficient=False,
-        )
+        if attack == "formula_628":
+            stale_formula.update(
+                required_asl_mm2=500.0,
+                required_design_force_kn=200.0,
+                provided_design_force_kn=100.0,
+                area_sufficient=False,
+            )
+        elif attack in {"owner_liveness", "subtube_liveness"}:
+            direct.update(
+                ftd_t=317.693568,
+                mt=39.711696,
+                m_total=89.711696,
+                util=0.89711696,
+            )
+            combined.update(
+                t_ed=0.0 if attack == "owner_liveness" else 40.0,
+                asl_torsion=0.0 if attack == "owner_liveness" else 500.0,
+                torsion_subdivided=attack == "subtube_liveness",
+                torsion_subtubes=(
+                    (
+                        {"asl_req": 200.0, "t_ed": 40.0},
+                        {"asl_req": 300.0, "t_ed": 0.0},
+                    )
+                    if attack == "subtube_liveness"
+                    else None
+                ),
+            )
+            if attack == "subtube_liveness":
+                stale_formula = _pub_h01_report_zero_formula_628()
+                stale_formula.update(
+                    status="NOT ASSESSED",
+                    ok=None,
+                    reason="longitudinal_torsion_reinforcement_not_verified",
+                    required_asl_mm2=500.0,
+                    required_design_force_kn=200.0,
+                    demand_ratio=0.50,
+                    required_by_tube_mm2=(200.0, 300.0),
+                )
+        else:
+            stale_formula["status"] = np.array(["PASS"])
+            combined.update(
+                t_ed=0.0,
+                asl_torsion=0.0,
+                torsion_subdivided=False,
+                torsion_subtubes=None,
+            )
         combined.update(
             longitudinal_model_2023=False,
             longitudinal=direct,
@@ -8271,6 +8347,16 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(profile):
         "shear_headroom": 20.0,
         "shear_term_selection": "uncapped",
     }
+    for legacy_only_key in (
+        "role",
+        "has_torsion",
+        "gets_shift",
+        "chord_formula",
+        "chord_role",
+        "flexural_tension_low",
+        "face_m_ed_signed",
+    ):
+        direct.pop(legacy_only_key, None)
     combined["longitudinal"] = direct
     for key in (
         "governing_longitudinal",
@@ -8278,6 +8364,14 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(profile):
         "longitudinal_candidates",
     ):
         combined.pop(key, None)
+    combined["longitudinal_assessment"] = {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "util": direct["util"],
+        "reason": "required_longitudinal_chord_coverage_incomplete",
+        "coverage_complete": True,
+        "governing": direct,
+    }
     combined["asl_torsion"] = 500.0
     combined["torsion_longitudinal_assessment"] = {
         "status": "NOT ASSESSED",
@@ -8291,9 +8385,12 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(profile):
         "area_sufficient": True,
     }
     combined.pop("overall_longitudinal_assessment", None)
-    combined["overall_longitudinal_assessment"] = (
+    stale_overall = dict(
         capacity.combined_longitudinal_assessment(combined)
     )
+    assert stale_overall["status"] == "FAIL"
+    stale_overall["reason"] = "stale retained summary"
+    combined["overall_longitudinal_assessment"] = stale_overall
     out = {"plastic": _out()["plastic"], "combined": combined}
 
     text = " ".join(
