@@ -3902,17 +3902,17 @@ def test_pub_h01_subtube_total_forgery_fails_closed_in_torsion_and_overview():
     torsion = retained["torsion"]
     first = copy.deepcopy(torsion["primary"])
     second = copy.deepcopy(torsion["primary"])
-    for index, (subtube, required) in enumerate(
+    for index, (subtube, torque) in enumerate(
         ((first, 10.0), (second, 20.0))
     ):
         subtube.update(
-            asl_req=required,
+            asl_req=0.0,
             stiffness=1.0,
             x_mm=float(index * 250),
             y_mm=0.0,
             b_mm=200.0,
             h_mm=300.0,
-            t_ed=0.0,
+            t_ed=torque,
             util=0.0,
         )
     torsion.update(
@@ -3949,7 +3949,7 @@ def test_pub_h01_subtube_total_forgery_fails_closed_in_torsion_and_overview():
         ok=True,
         reason="no_longitudinal_torsion_demand",
         required_asl_mm2=0.0,
-        required_by_tube_mm2=(10.0, 20.0),
+        required_by_tube_mm2=(0.0, 0.0),
         required_design_force_kn=0.0,
         provided_gross_area_mm2=250.0,
         provided_design_force_kn=100.0,

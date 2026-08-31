@@ -1738,20 +1738,33 @@ def test_torsion_longitudinal_publication_authority_rejects_subtube_total_confli
     assert sanitized["required_by_tube_mm2"] is None
 
 
-def test_torsion_longitudinal_publication_authority_rejects_subtube_torque_conflict():
-    retained = _unverified_formula_628(0.0)
-    retained["required_by_tube_mm2"] = (0.0, 0.0)
+@pytest.mark.parametrize(
+    ("owner_torque", "torque_parts"),
+    [
+        (0.0, (10.0, 30.0)),
+        (40.0, (10.0, 20.0)),
+    ],
+    ids=["positive-children-under-zero-owner", "unequal-live-sum"],
+)
+def test_torsion_longitudinal_publication_authority_rejects_subtube_torque_conflict(
+    owner_torque,
+    torque_parts,
+):
+    live = owner_torque > 0.0
+    retained = _unverified_formula_628(0.50 if live else 0.0)
+    area_parts = (200.0, 300.0) if live else (0.0, 0.0)
+    retained["required_by_tube_mm2"] = area_parts
 
     sanitized = capacity.validated_torsion_longitudinal_assessment(
         retained,
         owner={
             "valid": True,
-            "t_ed": 0.0,
-            "asl_req": 0.0,
+            "t_ed": owner_torque,
+            "asl_req": 500.0 if live else 0.0,
             "subdivided": True,
-            "subtubes": (
-                {"asl_req": 0.0, "t_ed": 10.0},
-                {"asl_req": 0.0, "t_ed": 30.0},
+            "subtubes": tuple(
+                {"asl_req": area, "t_ed": torque}
+                for area, torque in zip(area_parts, torque_parts, strict=True)
             ),
         },
     )
@@ -1760,6 +1773,57 @@ def test_torsion_longitudinal_publication_authority_rejects_subtube_torque_confl
     assert sanitized["status"] == "NOT ASSESSED"
     assert sanitized["required_asl_mm2"] is None
     assert sanitized["required_by_tube_mm2"] is None
+
+
+@pytest.mark.parametrize("invalid_torque", [True, math.nan, math.inf, "10"])
+def test_torsion_longitudinal_publication_authority_rejects_malformed_subtube_torque(
+    invalid_torque,
+):
+    retained = _unverified_formula_628(0.50)
+    retained["required_by_tube_mm2"] = (200.0, 300.0)
+
+    sanitized = capacity.validated_torsion_longitudinal_assessment(
+        retained,
+        owner={
+            "valid": True,
+            "t_ed": 40.0,
+            "asl_req": 500.0,
+            "subdivided": True,
+            "subtubes": (
+                {"asl_req": 200.0, "t_ed": invalid_torque},
+                {"asl_req": 300.0, "t_ed": 40.0},
+            ),
+        },
+    )
+
+    assert sanitized["evidence_consistent"] is False
+    assert sanitized["status"] == "NOT ASSESSED"
+    assert sanitized["required_asl_mm2"] is None
+
+
+def test_combined_longitudinal_publication_rejects_subtube_torque_conflict():
+    direct = _pub_h01_longitudinal_fixture(0.80)
+    retained = _unverified_formula_628(0.0)
+    retained["required_by_tube_mm2"] = (0.0, 0.0)
+    combined = {
+        "longitudinal": direct,
+        "t_ed": 0.0,
+        "asl_torsion": 0.0,
+        "torsion_subdivided": True,
+        "torsion_subtubes": (
+            {"asl_req": 0.0, "t_ed": 10.0},
+            {"asl_req": 0.0, "t_ed": 30.0},
+        ),
+        "torsion_longitudinal_assessment": retained,
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["ok"] is None
+    assert assessment["util"] is None
+    assert assessment["torsion_status"] == "NOT ASSESSED"
+    assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
 
 
 @pytest.mark.parametrize(
@@ -5300,7 +5364,13 @@ def test_finalize_combined_builds_valid_payload(monkeypatch):
             "valid": True,
             "util": 0.40,
             "interaction": None,
+            "t_ed": 40.0,
             "asl_req": 125.0,
+            "subdivided": True,
+            "subtubes": (
+                {"asl_req": 50.0, "t_ed": 15.0},
+                {"asl_req": 75.0, "t_ed": 25.0},
+            ),
             "asw_over_s": 0.0,
         },
     }
@@ -5317,6 +5387,11 @@ def test_finalize_combined_builds_valid_payload(monkeypatch):
     assert result["r_m"] == pytest.approx(0.20)
     assert result["r_v"] == pytest.approx(0.30)
     assert result["r_t"] == pytest.approx(0.40)
+    assert result["torsion_subdivided"] is True
+    assert result["torsion_subtubes"] == (
+        {"asl_req": 50.0, "t_ed": 15.0},
+        {"asl_req": 75.0, "t_ed": 25.0},
+    )
     assert result["m_v_separation_condition"]["confirmed"] is False
     assert result["m_v_separation_condition"]["declared"] is False
     assert result["m_v_separation_condition"]["mechanically_verified"] is False

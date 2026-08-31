@@ -6456,8 +6456,8 @@ def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
             "crushing (TRd,max)", 0.0, 300.0, bar_position_start=5,
         ),
     ]
-    subs[0]["asl_req"] = 10.0
-    subs[1]["asl_req"] = 20.0
+    subs[0].update(asl_req=0.0, t_ed=10.0)
+    subs[1].update(asl_req=0.0, t_ed=20.0)
     torsion.update(
         t_ed=0.0,
         t_ed_signed=0.0,
@@ -6498,7 +6498,7 @@ def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
         ok=True,
         reason="no_longitudinal_torsion_demand",
         required_asl_mm2=0.0,
-        required_by_tube_mm2=(10.0, 20.0),
+        required_by_tube_mm2=(0.0, 0.0),
         required_design_force_kn=0.0,
         provided_gross_area_mm2=250.0,
         provided_design_force_kn=100.0,
