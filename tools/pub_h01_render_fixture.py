@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 import copy
+import dataclasses
 import hashlib
 import io
+import math
 import pathlib
+import re
 import sys
 
 import pypdf
@@ -21,7 +24,7 @@ if str(ROOT) not in sys.path:
 import result_presentation
 import sector_report
 
-from sector import capacity, codes
+from sector import capacity, codes, combined, shear
 from tools import report_render_fixture
 
 
@@ -39,29 +42,173 @@ def _fixture_input() -> dict:
     return inp
 
 
-def _exact_combined_result(source: dict) -> dict:
-    combined = copy.deepcopy(source)
-    for key in (
-        "r_n",
-        "r_m",
-        "r_v",
-        "r_t",
-        "m_v_independent",
-        "dkna_sum",
-        "dkna_valid",
-        "dkna_ok",
-        "dkna_selection",
-        "action_alone",
-        "source_clause",
-        "governing_longitudinal",
-        "longitudinal_assessment",
-        "longitudinal_candidates",
-        "longitudinal_fallback",
-        "overall_longitudinal_assessment",
+def _fixed_member_angle_results(inp: dict, source: dict) -> tuple[dict, dict, dict]:
+    """Rebuild the complete first-generation state at the frozen cot(theta)."""
+
+    code = codes.EC2_2005
+    cot = 1.156
+    theta_deg = math.degrees(math.atan2(1.0, cot))
+    fck = 30.0
+    fcd = fck / 1.5
+    fywk = 500.0
+    gamma_s = 1.15
+    fywd = fywk / gamma_s
+    link_dia = 10.0
+    link_spacing = 150.0
+    link_legs = 2.0
+    link_asw = link_legs * math.pi * link_dia ** 2 / 4.0
+    link_asw_over_s = link_asw / link_spacing
+    torsion_asw = math.pi * link_dia ** 2 / 4.0
+    torsion_asw_over_s = torsion_asw / link_spacing
+    fctk_005 = 0.7 * codes.fctm(fck)
+    fctd = fctk_005 / code.gamma_ct
+    shear_result = shear.vrd_c(
+        fck,
+        code,
+        bw_mm=200.0,
+        d_mm=270.0,
+        asl_mm2=500.0,
+        n_ed_comp_kn=0.0,
+        ac_m2=0.06,
+        gamma_c=1.5,
+    )
+    link_result = shear.vrd_links(
+        fck,
+        code,
+        bw_mm=200.0,
+        d_mm=270.0,
+        asw_over_s=link_asw_over_s,
+        fywk=fywk,
+        n_ed_comp_kn=0.0,
+        ac_m2=0.06,
+        cot_min=cot,
+        cot_max=cot,
+        z_mm=243.0,
+        fcd_mpa=fcd,
+        gamma_s=gamma_s,
+    )
+    torsion_result = capacity.tube_torsion(
+        source["torsion"]["tube"],
+        25.0,
+        tcode=code,
+        fck=fck,
+        fcd=fcd,
+        alpha_cw=1.0,
+        fywd=fywd,
+        asw_over_s=torsion_asw_over_s,
+        cot_min=cot,
+        cot_max=cot,
+        nu_detail=False,
+        fctd=fctd,
+        fyd_long=fywd,
+        closed_links_present=True,
+    )
+
+    shear_payload = copy.deepcopy(source["shear"])
+    shear_payload.update(
+        res=shear_result,
+        util=30.0 / shear_result["vrd_c"],
+        method=code.label,
+        model_2023=False,
+    )
+    shear_payload["links"].update(
+        res=link_result,
+        util=30.0 / link_result["vrd"],
+        delta_ftd=0.5 * 30.0 * cot,
+        longitudinal_shear_force=0.5 * 30.0 * cot,
+        cot_min=1.0,
+        cot_max=2.5,
+    )
+
+    interaction = {
+        "valid": True,
+        "cot": cot,
+        "theta_deg": theta_deg,
+        "trd_max": torsion_result["trd_max"],
+        "vrd_max": link_result["vrd_max"],
+        "t_ed": 25.0,
+        "v_ed": 30.0,
+        "value": combined.crushing_interaction(
+            25.0,
+            torsion_result["trd_max"],
+            30.0,
+            link_result["vrd_max"],
+        ),
+    }
+    minimum_screen = dataclasses.asdict(
+        combined.minimum_reinforcement_screen_result(
+            25.0,
+            torsion_result["trd_c"],
+            30.0,
+            shear_result["vrd_c"],
+            solid_rectangle=True,
+            subdivided=False,
+            model_2023=False,
+            shear_available=True,
+            dk_na=False,
+            shear_method=code.label,
+            torsion_method=code.label,
+            n_ed=0.0,
+            mx_ed=80.0,
+            my_ed=0.0,
+        )
+    )
+    torsion_payload = copy.deepcopy(source["torsion"])
+    torsion_payload.update(
+        trd_s=torsion_result["trd_s"],
+        trd_max=torsion_result["trd_max"],
+        trd=torsion_result["trd"],
+        trd_c=torsion_result["trd_c"],
+        cot=cot,
+        theta_deg=theta_deg,
+        util=torsion_result["util"],
+        asl_req=torsion_result["asl_req"],
+        applicability=capacity.torsion_applicability(inp, 25.0),
+        fcd=fcd,
+        fywd=fywd,
+        fyd_long=fywd,
+        nu=torsion_result["nu"],
+        fctk_005=fctk_005,
+        gamma_ct=code.gamma_ct,
+        fctd=fctd,
+        asw_t=torsion_asw,
+        asw_over_s=torsion_asw_over_s,
+        method=code.label,
+        governs=torsion_result["governs"],
+        primary=torsion_result,
+        interaction=interaction,
+        min_reinf=minimum_screen,
+    )
+    for retained_name in (
+        "angle_selection",
+        "steel_resistance",
+        "strut_resistance",
+        "resistance_selection",
+        "cracking_resistance",
+        "longitudinal_reinforcement",
     ):
-        combined.pop(key, None)
+        torsion_payload[retained_name] = torsion_result[retained_name]
+
+    torsion_fraction = 25.0 / torsion_result["trd_s"]
+    crushing_value = interaction["value"]
+    transverse = {
+        "valid": True,
+        "cot": cot,
+        "theta_deg": theta_deg,
+        "u_stirrup": torsion_fraction,
+        "u_crush": crushing_value,
+        "governing": max(torsion_fraction, crushing_value),
+        "governs": (
+            "stirrups" if torsion_fraction >= crushing_value else "crushing"
+        ),
+        "ok": max(torsion_fraction, crushing_value) <= 1.0 + 1.0e-9,
+        "shear_fraction": 0.0,
+        "torsion_fraction": torsion_fraction,
+        "shear_credited": True,
+        "vrd_c": shear_result["vrd_c"],
+        "v_ed": 30.0,
+    }
     direct = {
-        **combined["longitudinal"],
         "valid": True,
         "status": "FAIL",
         "ok": False,
@@ -81,30 +228,53 @@ def _exact_combined_result(source: dict) -> dict:
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
+        "cap_shear_force": True,
+        "mv_uncapped": 4.213620,
+        "shear_headroom": 20.0,
+        "shear_term_selection": "uncapped",
+        "m_off": 0.0,
+        "has_torsion": True,
+        "gets_shift": True,
+        "theta_mode": "utilisation",
     }
-    combined.update(
-        valid=True,
-        method=codes.EC2_2005.label,
-        longitudinal=direct,
-        longitudinal_all_conditional=True,
-        torsion_longitudinal_assessment={
+    combined_payload = {
+        "valid": True,
+        "method": code.label,
+        "outside_default_range": False,
+        "crushing": interaction,
+        "transverse": transverse,
+        "longitudinal": direct,
+        "longitudinal_all_conditional": True,
+        "asl_torsion": torsion_result["asl_req"],
+        "delta_ftd": 0.5 * 30.0 * cot,
+        "links": True,
+        "torsion_longitudinal_assessment": {
             "status": "NOT ASSESSED",
             "ok": None,
             "reason": "longitudinal_torsion_reinforcement_not_verified",
             "demand_ratio": 0.50,
         },
+    }
+    combined_payload["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined_payload)
     )
-    combined["overall_longitudinal_assessment"] = (
-        capacity.combined_longitudinal_assessment(combined)
-    )
-    return combined
+    return shear_payload, torsion_payload, combined_payload
 
 
 def _fixture_output(inp: dict) -> dict:
     out = report_render_fixture._results(inp)
-    combined = _exact_combined_result(out["combined"])
+    shear_payload, torsion_payload, combined = _fixed_member_angle_results(
+        inp,
+        out,
+    )
+    out["shear"] = shear_payload
+    out["torsion"] = torsion_payload
     out["combined"] = combined
-    out["plastic_cases"][0]["results"]["combined"] = combined
+    out["plastic_cases"][0]["results"].update(
+        shear=shear_payload,
+        torsion=torsion_payload,
+        combined=combined,
+    )
     out["worked_example_selection"] = (
         result_presentation.worked_example_selection(inp, out)
     )
@@ -140,13 +310,15 @@ def _validate_report(pdf: bytes, profile: str) -> None:
     if not pdf.startswith(b"%PDF"):
         raise AssertionError(f"{profile} report is not a PDF")
     text = _flat_pdf_text(pdf)
-    for expected in (
-        "Combined longitudinal reinforcement",
-        "123.9 %",
-        "FAIL",
-    ):
-        if expected not in text:
-            raise AssertionError(f"{profile} report is missing: {expected}")
+    combined_row = re.compile(
+        r"Combined longitudinal reinforcement\s+PL-QA-1\s+"
+        r"FAIL\s+123[.,]9\s*%"
+    )
+    if combined_row.search(text) is None:
+        raise AssertionError(
+            f"{profile} report does not bind the 123.9 % failure to the "
+            "combined longitudinal row"
+        )
     for forbidden in (
         "Longitudinal reinforcement inf",
         "Combined longitudinal reinforcement PL-QA-1 NOT ASSESSED",
@@ -155,12 +327,20 @@ def _validate_report(pdf: bytes, profile: str) -> None:
         if forbidden in text:
             raise AssertionError(f"{profile} report exposes: {forbidden}")
     if profile in {"Standard", "Audit"}:
+        operand_row = re.compile(
+            r"MEd\s+Shear shift\s+Torsion share\s+MEd,total\s+MRd\s+"
+            r"Overall utilisation\s+80[.,]000 kNm\s+4[.,]214 kNm\s+"
+            r"39[.,]712 kNm\s+123[.,]925 kNm\s+100[.,]000 kNm\s+"
+            r"123[.,]9\s*%\s+FAIL"
+        )
+        if operand_row.search(text) is None:
+            raise AssertionError(
+                f"{profile} report does not retain one reconciled "
+                "combined-longitudinal operand chain"
+            )
         for expected in (
-            "80.000 kNm",
-            "4.214 kNm",
-            "39.712 kNm",
-            "123.925 kNm",
-            "100.000 kNm",
+            "Common member angle cot \u03b8 = 1.156",
+            "Strut angle \u03b8 40.9\u00b0 (cot \u03b8 = 1.156)",
         ):
             if expected not in text:
                 raise AssertionError(f"{profile} report is missing: {expected}")

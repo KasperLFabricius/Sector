@@ -3449,6 +3449,113 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
     assert str(row["Result"]).casefold() not in {"inf", "infinite", "-"}
 
 
+@pytest.mark.parametrize("hostile", ("malformed", "stale_alias"))
+def test_pub_h01_inconsistent_longitudinal_evidence_fails_closed_in_native_views(
+    hostile,
+):
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+
+    retained = copy.deepcopy(at.session_state["results"])
+    combined_result = retained["combined"]
+    direct = {
+        **combined_result["longitudinal"],
+        "valid": True,
+        "status": "FAIL",
+        "ok": False,
+        "axis": "x",
+        "tension_low": True,
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "m_ed": 80.0,
+        "mv": 4.213620,
+        "mt": 39.711696,
+        "m_total": 123.925316,
+        "m_rd": 100.0,
+        "ftd_v": 17.34,
+        "ftd_t": 326.8452380952381,
+        "z": 0.243,
+        "util": 1.2392531643,
+        "capped": False,
+    }
+    combined_result["longitudinal"] = direct
+    for key in (
+        "governing_longitudinal",
+        "longitudinal_assessment",
+        "longitudinal_candidates",
+        "longitudinal_fallback",
+        "overall_longitudinal_assessment",
+    ):
+        combined_result.pop(key, None)
+    combined_result["longitudinal_all_conditional"] = True
+    if hostile == "malformed":
+        direct["m_ed"] = "not-a-number"
+    else:
+        combined_result["governing_longitudinal"] = {
+            **direct,
+            "status": "PASS",
+            "ok": True,
+            "m_ed": 0.0,
+            "mv": 10.0,
+            "mt": 40.0,
+            "m_total": 50.0,
+            "util": 0.50,
+        }
+    combined_result["torsion_longitudinal_assessment"] = {
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "reason": "longitudinal_torsion_reinforcement_not_verified",
+        "demand_ratio": 0.50,
+    }
+    combined_result["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined_result)
+    )
+    assert combined_result["overall_longitudinal_assessment"]["status"] == (
+        "NOT ASSESSED"
+    )
+    at.session_state["results"] = retained
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    physical = next(
+        metric for metric in at.metric
+        if metric.label == "Longitudinal reinforcement"
+    )
+    assert str(physical.value) == "-"
+    visible = " ".join(
+        str(item.value)
+        for collection in (
+            at.metric,
+            at.warning,
+            at.info,
+            at.caption,
+            at.markdown,
+        )
+        for item in collection
+    )
+    assert "NOT ASSESSED" in visible
+    if hostile == "malformed":
+        assert "not-a-number" not in visible
+    assert "123.9 %" not in visible
+    assert not any(
+        str(metric.value).casefold() in {"nan", "inf", "-inf"}
+        for metric in at.metric
+    )
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Combined longitudinal reinforcement"
+    ].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"
+
+
 def test_pub_h01_contract_recomputes_capacity_and_clears_buffered_report():
     import sector_app
 

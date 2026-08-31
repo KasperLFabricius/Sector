@@ -965,19 +965,84 @@ def _combined_longitudinal_candidate(
 
     if not isinstance(value, Mapping) or value.get("valid") is not True:
         return None
-    if value.get("conditional", True) is not True:
+    role = value.get("role", _MISSING)
+    if role is not _MISSING and role not in {"shear_axis", "off_axis"}:
+        return None
+    biaxial = value.get("biaxial", _MISSING)
+    off_not_evaluated = value.get("off_not_evaluated", _MISSING)
+    if (
+        value.get("conditional", _MISSING) is not True
+        or type(value.get("axis", _MISSING)) is not str
+        or value.get("axis") not in {"x", "y"}
+        or type(value.get("tension_low", _MISSING)) is not bool
+        or type(value.get("capped", _MISSING)) is not bool
+        or (biaxial is not _MISSING and type(biaxial) is not bool)
+        or (off_not_evaluated is not _MISSING and off_not_evaluated is not None)
+        or (
+            role != "off_axis"
+            and (
+                type(biaxial) is not bool
+                or off_not_evaluated is not None
+            )
+        )
+    ):
         return None
     utilisation = _combined_longitudinal_utilisation(value.get("util"))
     if utilisation is None:
         return None
     expected_status = "PASS" if utilisation <= 1.0 + 1.0e-9 else "FAIL"
-    if value.get("status", expected_status) != expected_status:
+    if value.get("status", _MISSING) != expected_status:
         return None
-    if value.get("ok", expected_status == "PASS") is not (
+    if value.get("ok", _MISSING) is not (
         expected_status == "PASS"
     ):
         return None
-    if value.get("off_not_evaluated", None) is not None:
+
+    operands: dict[str, float] = {}
+    for key in (
+        "m_ed",
+        "mv",
+        "mt",
+        "m_total",
+        "m_rd",
+        "ftd_v",
+        "ftd_t",
+        "z",
+    ):
+        operand = value.get(key, _MISSING)
+        if _is_boolean_scalar(operand) or isinstance(operand, (str, bytes)):
+            return None
+        try:
+            number = float(operand)
+        except (OverflowError, TypeError, ValueError):
+            return None
+        if not math.isfinite(number) or number < 0.0:
+            return None
+        operands[key] = number
+    if operands["z"] <= 0.0:
+        return None
+    expected_ratio = (
+        operands["m_total"] / operands["m_rd"]
+        if operands["m_rd"] > 0.0
+        else math.inf
+        if operands["m_total"] > 0.0
+        else 0.0
+    )
+    if not (
+        utilisation == expected_ratio
+        or (
+            math.isfinite(utilisation)
+            and math.isfinite(expected_ratio)
+            and math.isclose(
+                utilisation,
+                expected_ratio,
+                # Retained report operands are rounded to six decimals while
+                # the canonical utilisation keeps additional precision.
+                rel_tol=1.0e-8,
+                abs_tol=0.0,
+            )
+        )
+    ):
         return None
     if expected_utilisation is not None and not (
         utilisation == expected_utilisation
@@ -1063,6 +1128,7 @@ def _combined_longitudinal_chord_state(
                 and type(coverage_complete) is bool
                 and (status != "NOT APPLICABLE" or coverage_complete is True)
             ):
+                candidate = _combined_longitudinal_candidate(governing)
                 return {
                     "status": status,
                     "util": None,
@@ -1072,9 +1138,7 @@ def _combined_longitudinal_chord_state(
                         else "required_longitudinal_chord_coverage_incomplete"
                     ),
                     "coverage_complete": coverage_complete,
-                    "governing": (
-                        governing if isinstance(governing, Mapping) else None
-                    ),
+                    "governing": candidate,
                     "retained": retained,
                 }
         return {
@@ -1089,31 +1153,63 @@ def _combined_longitudinal_chord_state(
     # Compatibility boundary for complete schema-27 payloads created before the
     # retained chord assessment existed. A single, conditional pure-axis result
     # is complete evidence even when its optional governing alias is absent.
+    direct_candidate = _combined_longitudinal_candidate(direct)
+    candidate = direct_candidate
     alias = combined.get("governing_longitudinal", _MISSING)
-    if alias is _MISSING:
-        governing = direct
-    elif isinstance(alias, Mapping):
-        governing = alias
-    else:
-        governing = None
-    candidate = _combined_longitudinal_candidate(governing)
     candidates = combined.get("longitudinal_candidates", _MISSING)
+    alias_consistent = False
+    candidates_consistent = candidates is _MISSING
+    if candidates is _MISSING:
+        alias_consistent = bool(
+            alias is _MISSING
+            or (
+                isinstance(alias, Mapping)
+                and direct is not None
+                and _combined_longitudinal_evidence_equal(alias, direct)
+            )
+        )
+    elif isinstance(candidates, (list, tuple)) and candidates:
+        validated = [
+            _combined_longitudinal_candidate(item) for item in candidates
+        ]
+        if all(item is not None for item in validated) and direct is not None:
+            retained_candidates = [
+                item for item in validated if item is not None
+            ]
+            direct_is_listed = any(
+                _combined_longitudinal_evidence_equal(item, direct)
+                for item in candidates
+            )
+            expected_governing = max(
+                retained_candidates,
+                key=lambda item: float(item["util"]),
+            )
+            alias_consistent = bool(
+                alias is _MISSING
+                or (
+                    isinstance(alias, Mapping)
+                    and _combined_longitudinal_evidence_equal(
+                        alias,
+                        expected_governing,
+                    )
+                )
+            )
+            candidates_consistent = bool(
+                direct_is_listed and alias_consistent
+            )
+            if candidates_consistent:
+                candidate = expected_governing
     fallback = combined.get("longitudinal_fallback")
     direct_is_complete = bool(
         candidate is not None
+        and alias_consistent
+        and candidates_consistent
         and direct is not None
         and direct.get("valid") is True
-        and direct.get("conditional", True) is True
-        and direct.get("biaxial", False) is False
-        and direct.get("off_not_evaluated", None) is None
+        and direct.get("conditional", _MISSING) is True
+        and direct.get("biaxial", _MISSING) is False
+        and direct.get("off_not_evaluated", _MISSING) is None
         and fallback is None
-        and (
-            candidates is _MISSING
-            or (
-                isinstance(candidates, (list, tuple))
-                and len(candidates) == 1
-            )
-        )
         and combined.get("longitudinal_all_conditional", True) is True
     )
     if not direct_is_complete:
@@ -1122,6 +1218,8 @@ def _combined_longitudinal_chord_state(
             reason = "combined_longitudinal_pure_axis_substitute"
         elif direct is None:
             reason = "combined_longitudinal_shear_axis_unavailable"
+        elif not alias_consistent or not candidates_consistent:
+            reason = "combined_longitudinal_evidence_inconsistent"
         elif direct.get("off_not_evaluated") == "not_solved":
             reason = "combined_longitudinal_chord_not_solved"
         elif direct.get("off_not_evaluated") == "subdivided":
@@ -1329,7 +1427,11 @@ def _combined_longitudinal_evidence_equal(
             _combined_longitudinal_evidence_equal(a, b)
             for a, b in zip(left, right)
         )
-    return bool(left == right)
+    try:
+        equal = left == right
+    except Exception:
+        return False
+    return bool(equal) if _is_boolean_scalar(equal) else False
 
 
 def combined_longitudinal_assessment(
