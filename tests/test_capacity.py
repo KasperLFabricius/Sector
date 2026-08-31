@@ -2375,6 +2375,82 @@ def test_combined_longitudinal_incomplete_siblings_preserve_only_direct_failure(
         assert assessment["util"] is None
 
 
+@pytest.mark.parametrize("child_fails", (True, False))
+@pytest.mark.parametrize("model_2023", (False, True), ids=("2005", "2023"))
+@pytest.mark.parametrize(
+    "candidate_container",
+    (None, "bad", 7, True, {}, [], ()),
+    ids=("none", "text", "integer", "boolean", "mapping", "list", "tuple"),
+)
+def test_combined_longitudinal_malformed_candidate_container_preserves_only_failure(
+    candidate_container,
+    model_2023,
+    child_fails,
+):
+    if model_2023:
+        direct, _ = _pub_h01_2023_shear_only_candidates()
+        if child_fails:
+            direct.update(
+                status="FAIL",
+                ok=False,
+                m_rd=50.0 / 1.2392531643,
+                util=1.2392531643,
+            )
+        owner_torsion = 0.0
+        owner_area = 0.0
+        formula_628 = _unverified_formula_628(0.0)
+    else:
+        direct = _pub_h01_2005_torsion_candidates()[0]
+        if child_fails:
+            direct.update(
+                status="FAIL",
+                ok=False,
+                m_rd=100.0,
+                util=1.2392531643,
+                shear_headroom=20.0,
+            )
+        owner_torsion = 40.0
+        owner_area = 500.0
+        formula_628 = _unverified_formula_628(0.50)
+    combined = {
+        "longitudinal_model_2023": model_2023,
+        "longitudinal": direct,
+        "longitudinal_candidates": candidate_container,
+        "governing_longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        "t_ed": owner_torsion,
+        "asl_torsion": owner_area,
+        "torsion_subdivided": False,
+        "torsion_subtubes": None,
+        "torsion_longitudinal_assessment": formula_628,
+        "overall_longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": None,
+        },
+    }
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    if child_fails:
+        assert assessment["status"] == "FAIL"
+        assert assessment["ok"] is False
+        assert assessment["util"] == pytest.approx(1.2392531643)
+        assert assessment["chord_governing"] is direct
+        assert assessment["chord_coverage_complete"] is False
+    else:
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["ok"] is None
+        assert assessment["util"] is None
+
+
 @pytest.mark.parametrize("target", ("chord", "formula_628"))
 def test_pub_h01_overflowing_real_scalar_fails_closed(target):
     direct = _pub_h01_longitudinal_fixture(0.50)

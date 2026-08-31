@@ -7947,15 +7947,70 @@ def _pub_h01_report_combined(parent_state="stale_mapping"):
     return combined
 
 
-def _pub_h01_report_current_failure(child_state):
+def _pub_h01_report_current_direct(
+    child_state,
+    *,
+    model_2023=False,
+    child_fails=True,
+):
     combined = _pub_h01_report_combined()
-    direct = combined["longitudinal"]
-    direct.update(
-        role="shear_axis",
-        has_torsion=True,
-        gets_shift=True,
-        off_not_evaluated="not_solved",
-    )
+    if model_2023:
+        utilisation = 1.2392531643 if child_fails else 0.80
+        direct = {
+            "valid": True,
+            "status": "FAIL" if child_fails else "PASS",
+            "ok": not child_fails,
+            "role": "shear_axis",
+            "axis": "x",
+            "tension_low": True,
+            "conditional": True,
+            "biaxial": False,
+            "off_util": 0.0,
+            "off_not_evaluated": None,
+            "m_ed": 40.0,
+            "mv": 10.0,
+            "mt": 0.0,
+            "m_total": 50.0,
+            "m_rd": 50.0 / utilisation,
+            "ftd_v": 40.0,
+            "ftd_t": 0.0,
+            "z": 0.25,
+            "util": utilisation,
+            "capped": False,
+            "cap_shear_force": False,
+            "has_torsion": False,
+            "gets_shift": True,
+            "flexural_tension_low": True,
+            "chord_role": "flexural_tension",
+            "chord_formula": "8.51",
+            "face_m_ed_signed": 40.0,
+        }
+        combined.update(
+            longitudinal=direct,
+            longitudinal_model_2023=True,
+            t_ed=0.0,
+            asl_torsion=0.0,
+            torsion_longitudinal_assessment=(
+                _pub_h01_report_zero_formula_628()
+            ),
+        )
+    else:
+        direct = combined["longitudinal"]
+        direct.update(
+            role="shear_axis",
+            has_torsion=True,
+            gets_shift=True,
+            off_not_evaluated="not_solved",
+        )
+        if not child_fails:
+            direct.update(
+                status="PASS",
+                ok=True,
+                m_rd=direct["m_total"] / 0.80,
+                util=0.80,
+                shear_headroom=direct["m_total"] / 0.80 - direct["m_ed"],
+            )
+        combined.update(t_ed=40.0, asl_torsion=500.0)
     combined.update(
         governing_longitudinal=direct,
         longitudinal_assessment={
@@ -7966,8 +8021,6 @@ def _pub_h01_report_current_failure(child_state):
             "coverage_complete": False,
             "governing": direct,
         },
-        t_ed=40.0,
-        asl_torsion=500.0,
     )
     if child_state == "none_sibling":
         combined["longitudinal_candidates"] = [direct, None]
@@ -7976,21 +8029,31 @@ def _pub_h01_report_current_failure(child_state):
             direct,
             {**direct, "status": ["PASS"]},
         ]
+    elif child_state == "none_container":
+        combined["longitudinal_candidates"] = None
+    elif child_state == "empty_list":
+        combined["longitudinal_candidates"] = []
+    elif child_state == "mapping_container":
+        combined["longitudinal_candidates"] = {}
     else:
         combined.pop("longitudinal_candidates", None)
     combined.pop("overall_longitudinal_assessment", None)
     assessment = dict(capacity.combined_longitudinal_assessment(combined))
-    assert assessment["status"] == "FAIL"
-    assessment.update(
-        status="NOT ASSESSED",
-        ok=None,
-        util=None,
-        reason="required_longitudinal_chord_coverage_incomplete",
-        coverage_complete=False,
-        governing_source=None,
-        governing_mechanism=None,
-        governing=None,
-    )
+    if child_fails:
+        assert assessment["status"] == "FAIL"
+        assessment.update(
+            status="NOT ASSESSED",
+            ok=None,
+            util=None,
+            reason="required_longitudinal_chord_coverage_incomplete",
+            coverage_complete=False,
+            governing_source=None,
+            governing_mechanism=None,
+            governing=None,
+        )
+    else:
+        assert assessment["status"] == "NOT ASSESSED"
+        assert assessment["util"] is None
     combined["overall_longitudinal_assessment"] = assessment
     return combined
 
@@ -8513,11 +8576,21 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 @pytest.mark.parametrize(
-    "child_state", ["missing_list", "none_sibling", "malformed_status"]
+    "child_state",
+    [
+        "missing_list",
+        "none_sibling",
+        "malformed_status",
+        "none_container",
+        "empty_list",
+        "mapping_container",
+    ],
 )
+@pytest.mark.parametrize("model_2023", [False, True], ids=["2005", "2023"])
 def test_report_pub_h01_current_failure_survives_incomplete_siblings(
     profile,
     child_state,
+    model_2023,
 ):
     inp = _inp()
     inp.update(
@@ -8527,7 +8600,10 @@ def test_report_pub_h01_current_failure_survives_incomplete_siblings(
         shear_on=True,
         torsion_on=True,
     )
-    combined = _pub_h01_report_current_failure(child_state)
+    combined = _pub_h01_report_current_direct(
+        child_state,
+        model_2023=model_2023,
+    )
     out = {"plastic": _out()["plastic"], "combined": combined}
 
     text = " ".join(
@@ -8549,6 +8625,47 @@ def test_report_pub_h01_current_failure_survives_incomplete_siblings(
     assert "Longitudinal reinforcement inf" not in text
     assert "Longitudinal reinforcement - NOT ASSESSED" not in text
     assert "No valid longitudinal chord check" not in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize("model_2023", [False, True], ids=["2005", "2023"])
+def test_report_pub_h01_malformed_container_never_promotes_direct_pass(
+    profile,
+    model_2023,
+):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = _pub_h01_report_current_direct(
+        "none_container",
+        model_2023=model_2023,
+        child_fails=False,
+    )
+    out = {"plastic": _out()["plastic"], "combined": combined}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+"
+        r"NOT ASSESSED\s+-",
+        text,
+    )
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+PASS",
+        text,
+    ) is None
+    assert "Longitudinal chord assessment: PASS" not in text
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])

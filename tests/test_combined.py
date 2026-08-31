@@ -4222,6 +4222,279 @@ def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views(
     assert row["Result"] == "123.9 %"
 
 
+@pytest.mark.parametrize("model_2023", (False, True), ids=("2005", "2023"))
+def test_pub_h01_malformed_candidate_containers_keep_failure_in_native_views(
+    model_2023,
+):
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+    baseline = copy.deepcopy(at.session_state["results"])
+
+    for candidate_container in (None, "bad", 7, True, {}, [], ()):
+        retained = copy.deepcopy(baseline)
+        combined_result = retained["combined"]
+        if model_2023:
+            direct = {
+                "valid": True,
+                "status": "FAIL",
+                "ok": False,
+                "role": "shear_axis",
+                "axis": "x",
+                "tension_low": True,
+                "conditional": True,
+                "biaxial": False,
+                "off_util": 0.0,
+                "off_not_evaluated": None,
+                "m_ed": 40.0,
+                "mv": 10.0,
+                "mt": 0.0,
+                "m_total": 50.0,
+                "m_rd": 50.0 / 1.2392531643,
+                "ftd_v": 40.0,
+                "ftd_t": 0.0,
+                "z": 0.25,
+                "util": 1.2392531643,
+                "capped": False,
+                "cap_shear_force": False,
+                "has_torsion": False,
+                "gets_shift": True,
+                "flexural_tension_low": True,
+                "chord_role": "flexural_tension",
+                "chord_formula": "8.51",
+                "face_m_ed_signed": 40.0,
+            }
+            owner_torsion = 0.0
+            owner_area = 0.0
+            formula_628 = _pub_h01_formula_628_assessment(0.0)
+        else:
+            direct = {
+                **combined_result["longitudinal"],
+                "valid": True,
+                "status": "FAIL",
+                "ok": False,
+                "role": "shear_axis",
+                "axis": "x",
+                "tension_low": True,
+                "conditional": True,
+                "biaxial": False,
+                "off_util": 0.0,
+                "off_not_evaluated": "not_solved",
+                "has_torsion": True,
+                "gets_shift": True,
+                "m_ed": 80.0,
+                "mv": 4.213620,
+                "mt": 39.711696,
+                "m_total": 123.925316,
+                "m_rd": 100.0,
+                "ftd_v": 17.34,
+                "ftd_t": 326.8452380952381,
+                "z": 0.243,
+                "util": 1.2392531643,
+                "capped": False,
+                "cap_shear_force": True,
+                "mv_uncapped": 4.213620,
+                "shear_headroom": 20.0,
+                "shear_term_selection": "uncapped",
+            }
+            for key in (
+                "chord_formula",
+                "chord_role",
+                "flexural_tension_low",
+                "face_m_ed_signed",
+            ):
+                direct.pop(key, None)
+            owner_torsion = 40.0
+            owner_area = 500.0
+            formula_628 = _pub_h01_formula_628_assessment(0.50)
+        combined_result.update(
+            longitudinal_model_2023=model_2023,
+            longitudinal=direct,
+            longitudinal_candidates=candidate_container,
+            governing_longitudinal=direct,
+            longitudinal_fallback=None,
+            longitudinal_all_conditional=True,
+            longitudinal_assessment={
+                "status": "NOT ASSESSED",
+                "ok": None,
+                "util": direct["util"],
+                "reason": "required_longitudinal_chord_coverage_incomplete",
+                "coverage_complete": False,
+                "governing": direct,
+            },
+            t_ed=owner_torsion,
+            asl_torsion=owner_area,
+            torsion_subdivided=False,
+            torsion_subtubes=None,
+            torsion_longitudinal_assessment=formula_628,
+            overall_longitudinal_assessment={
+                "status": "NOT ASSESSED",
+                "ok": None,
+                "util": None,
+            },
+        )
+        at.session_state["results"] = retained
+
+        _select_view(at, "M-V-T Combined")
+        assert not at.exception
+        overall_metric = next(
+            metric
+            for metric in at.metric
+            if metric.label == "Longitudinal reinforcement"
+        )
+        assert str(overall_metric.value) == "123.9 %"
+        assert str(overall_metric.delta) == "FAIL"
+
+        _select_view(at, "Results Overview")
+        assert not at.exception
+        overview = at.table[0].value
+        row = overview.loc[
+            overview["Check"] == "Combined longitudinal reinforcement"
+        ].iloc[0]
+        assert row["Status"] == "FAIL"
+        assert row["Result"] == "123.9 %"
+
+
+@pytest.mark.parametrize("model_2023", (False, True), ids=("2005", "2023"))
+def test_pub_h01_malformed_candidate_container_never_promotes_native_pass(
+    model_2023,
+):
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+
+    retained = copy.deepcopy(at.session_state["results"])
+    combined_result = retained["combined"]
+    if model_2023:
+        direct = {
+            "valid": True,
+            "status": "PASS",
+            "ok": True,
+            "role": "shear_axis",
+            "axis": "x",
+            "tension_low": True,
+            "conditional": True,
+            "biaxial": False,
+            "off_util": 0.0,
+            "off_not_evaluated": None,
+            "m_ed": 40.0,
+            "mv": 10.0,
+            "mt": 0.0,
+            "m_total": 50.0,
+            "m_rd": 62.5,
+            "ftd_v": 40.0,
+            "ftd_t": 0.0,
+            "z": 0.25,
+            "util": 0.80,
+            "capped": False,
+            "cap_shear_force": False,
+            "has_torsion": False,
+            "gets_shift": True,
+            "flexural_tension_low": True,
+            "chord_role": "flexural_tension",
+            "chord_formula": "8.51",
+            "face_m_ed_signed": 40.0,
+        }
+        owner_torsion = 0.0
+        owner_area = 0.0
+        formula_628 = _pub_h01_formula_628_assessment(0.0)
+    else:
+        direct = {
+            **combined_result["longitudinal"],
+            "valid": True,
+            "status": "PASS",
+            "ok": True,
+            "role": "shear_axis",
+            "axis": "x",
+            "tension_low": True,
+            "conditional": True,
+            "biaxial": False,
+            "off_util": 0.0,
+            "off_not_evaluated": "not_solved",
+            "has_torsion": True,
+            "gets_shift": True,
+            "m_ed": 80.0,
+            "mv": 4.213620,
+            "mt": 39.711696,
+            "m_total": 123.925316,
+            "m_rd": 123.925316 / 0.80,
+            "ftd_v": 17.34,
+            "ftd_t": 326.8452380952381,
+            "z": 0.243,
+            "util": 0.80,
+            "capped": False,
+            "cap_shear_force": True,
+            "mv_uncapped": 4.213620,
+            "shear_headroom": 123.925316 / 0.80 - 80.0,
+            "shear_term_selection": "uncapped",
+        }
+        for key in (
+            "chord_formula",
+            "chord_role",
+            "flexural_tension_low",
+            "face_m_ed_signed",
+        ):
+            direct.pop(key, None)
+        owner_torsion = 40.0
+        owner_area = 500.0
+        formula_628 = _pub_h01_formula_628_assessment(0.50)
+    combined_result.update(
+        longitudinal_model_2023=model_2023,
+        longitudinal=direct,
+        longitudinal_candidates=None,
+        governing_longitudinal=direct,
+        longitudinal_fallback=None,
+        longitudinal_all_conditional=True,
+        longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        t_ed=owner_torsion,
+        asl_torsion=owner_area,
+        torsion_subdivided=False,
+        torsion_subtubes=None,
+        torsion_longitudinal_assessment=formula_628,
+        overall_longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": None,
+        },
+    )
+    at.session_state["results"] = retained
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    overall_metric = next(
+        metric
+        for metric in at.metric
+        if metric.label == "Longitudinal reinforcement"
+    )
+    assert str(overall_metric.value) == "-"
+    assert str(overall_metric.delta) == ""
+    assert all(
+        not (
+            metric.label == "Chord utilisation"
+            and str(metric.delta) == "PASS"
+        )
+        for metric in at.metric
+    )
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Combined longitudinal reinforcement"
+    ].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"
+
+
 @pytest.mark.parametrize(
     "hostile", ("malformed", "stale_alias", "overflowing_real")
 )

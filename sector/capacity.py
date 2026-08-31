@@ -1462,10 +1462,10 @@ def _combined_longitudinal_independent_direct_failure(
         return None
 
     candidates = combined.get("longitudinal_candidates", _MISSING)
-    if candidates is not _MISSING and (
-        not isinstance(candidates, (list, tuple))
-        or not candidates
-        or not any(
+    if (
+        isinstance(candidates, (list, tuple))
+        and candidates
+        and not any(
             _combined_longitudinal_evidence_equal(item, direct_value)
             for item in candidates
         )
