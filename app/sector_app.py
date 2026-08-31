@@ -15925,21 +15925,23 @@ def _render_base_en_combined(c):
         boxes[1].metric(
             "Combined chord demand", f"{float(lg['m_total']):.3f} kNm"
         )
-        if longitudinal["status"] in {"PASS", "FAIL"}:
+        chord_status = longitudinal["chord_status"]
+        chord_util = longitudinal["chord_util"]
+        if chord_status in {"PASS", "FAIL"}:
             _verdict_metric(
                 boxes[2],
-                "Overall longitudinal utilisation",
-                _pct(longitudinal["util"]),
-                longitudinal["status"] == "PASS",
-                help=longitudinal["note"],
+                "Chord utilisation",
+                _pct(chord_util),
+                chord_status == "PASS",
+                help=longitudinal["chord_note"],
             )
         else:
             boxes[2].metric(
-                "Overall longitudinal utilisation",
-                _pct(longitudinal["util"]),
-                help=longitudinal["note"],
+                "Chord utilisation",
+                _pct(chord_util),
+                help=longitudinal["chord_note"],
             )
-            boxes[2].caption(longitudinal["status"])
+            boxes[2].caption(chord_status)
         st.caption(
             f"M_Ed,total = {float(lg['m_ed']):.3f} + "
             f"{float(lg['mv']):.3f} + {float(lg['mt']):.3f} = "
@@ -15949,6 +15951,12 @@ def _render_base_en_combined(c):
                 lg.get("theta_mode"),
                 angle_valid=concrete.get("angle_valid") is True,
             )
+        )
+        st.caption(
+            "Overall longitudinal reinforcement assessment: "
+            f"{_pct(longitudinal['util'])} ({longitudinal['status']}); "
+            "governing check: "
+            f"{longitudinal.get('governing_mechanism') or '-'}."
         )
     else:
         st.caption(
@@ -16450,23 +16458,23 @@ def combined_view(inp, results):
         g2.metric(r"$M_{Ed,\mathrm{total}}$", f"{lg['m_total']:.1f} kNm",
                   help="bending + shear shift + torsion, as an equivalent moment "
                        "on the governing chord face")
-        if longitudinal["status"] not in {"PASS", "FAIL"}:
+        if chord_status not in {"PASS", "FAIL"}:
             g3.metric(
-                "Overall longitudinal utilisation",
-                _pct(longitudinal["util"]),
+                "Chord utilisation",
+                _pct(chord_util),
                 help=(
-                    "NOT ASSESSED: complete every required longitudinal "
-                    "reinforcement check and recalculate."
+                    "NOT ASSESSED: complete every required longitudinal chord "
+                    "check and recalculate."
                 ),
             )
             g3.caption("NOT ASSESSED")
         else:
             _verdict_metric(
                 g3,
-                "Overall longitudinal utilisation",
-                _pct(longitudinal["util"]),
-                longitudinal["status"] == "PASS",
-                help=longitudinal["note"],
+                "Chord utilisation",
+                _pct(chord_util),
+                chord_status == "PASS",
+                help=longitudinal["chord_note"],
             )
         st.caption(
             f"Governing chord: {face_desc} about the {ax_lbl}-axis. "
@@ -16482,6 +16490,12 @@ def combined_view(inp, results):
                 angle_valid=concrete.get("angle_valid") is True,
             )
             + f" Chord comparison: {_pct(chord_util)} ({chord_status})."
+        )
+        st.caption(
+            "Overall longitudinal reinforcement assessment: "
+            f"{_pct(longitudinal['util'])} ({longitudinal['status']}); "
+            "governing check: "
+            f"{longitudinal.get('governing_mechanism') or '-'}."
         )
         if lg["capped"]:
             st.caption(

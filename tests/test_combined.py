@@ -3431,7 +3431,7 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
     )
     detailed = next(
         metric for metric in at.metric
-        if metric.label == "Overall longitudinal utilisation"
+        if metric.label == "Chord utilisation"
     )
     assert str(physical.value) == "123.9 %"
     assert str(physical.delta) == "FAIL"
@@ -3447,6 +3447,167 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview():
     assert row["Status"] == "FAIL"
     assert row["Result"] == "123.9 %"
     assert str(row["Result"]).casefold() not in {"inf", "infinite", "-"}
+
+
+def test_pub_h01_chord_and_formula_628_overall_are_published_separately():
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+
+    retained = copy.deepcopy(at.session_state["results"])
+    combined_result = retained["combined"]
+    combined_result["method"] = codes.EC2_2005.label
+    chord = combined_result["longitudinal"]
+    chord.update(
+        status="PASS",
+        ok=True,
+        m_rd=float(chord["m_total"]) / 0.50,
+        util=0.50,
+    )
+    for key in (
+        "governing_longitudinal",
+        "longitudinal_assessment",
+        "longitudinal_candidates",
+        "longitudinal_fallback",
+        "overall_longitudinal_assessment",
+    ):
+        combined_result.pop(key, None)
+    combined_result.pop("longitudinal_model_2023", None)
+    combined_result["longitudinal_all_conditional"] = True
+    combined_result["torsion_longitudinal_assessment"] = {
+        "status": "FAIL",
+        "ok": False,
+        "reason": "longitudinal_torsion_reinforcement_insufficient",
+        "demand_ratio": 2.0,
+    }
+    combined_result["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined_result)
+    )
+    at.session_state["results"] = retained
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    chord_metric = next(
+        metric for metric in at.metric if metric.label == "Chord utilisation"
+    )
+    overall_metric = next(
+        metric
+        for metric in at.metric
+        if metric.label == "Longitudinal reinforcement"
+    )
+    assert str(chord_metric.value) == "50.0 %"
+    assert str(chord_metric.delta) == "PASS"
+    assert str(overall_metric.value) == "200.0 %"
+    assert str(overall_metric.delta) == "FAIL"
+    visible = " ".join(str(item.value) for item in at.caption)
+    assert (
+        "Overall longitudinal reinforcement assessment: 200.0 % (FAIL)" in visible
+    )
+    assert "governing check: Formula (6.28) longitudinal torsion reinforcement" in visible
+
+
+def test_pub_h01_stale_2023_single_face_pass_fails_closed_in_native_views():
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+
+    retained = copy.deepcopy(at.session_state["results"])
+    combined_result = retained["combined"]
+    combined_result["method"] = codes.EC2_2005.label
+    common = {
+        "valid": True,
+        "status": "PASS",
+        "ok": True,
+        "role": "shear_axis",
+        "axis": "x",
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "mv": 10.0,
+        "mt": 0.0,
+        "m_rd": 100.0,
+        "ftd_v": 40.0,
+        "ftd_t": 0.0,
+        "z": 0.25,
+        "capped": False,
+        "has_torsion": False,
+        "gets_shift": True,
+        "flexural_tension_low": True,
+    }
+    tension = {
+        **common,
+        "tension_low": True,
+        "chord_role": "flexural_tension",
+        "chord_formula": "8.51",
+        "m_ed": 40.0,
+        "face_m_ed_signed": 40.0,
+        "m_total": 50.0,
+        "util": 0.50,
+    }
+    compression = {
+        **common,
+        "tension_low": False,
+        "chord_role": "flexural_compression",
+        "chord_formula": "8.52",
+        "m_ed": 20.0,
+        "face_m_ed_signed": -20.0,
+        "m_total": 0.0,
+        "util": 0.0,
+    }
+    combined_result.update(
+        longitudinal_model_2023=True,
+        longitudinal=tension,
+        longitudinal_candidates=[tension, compression],
+        governing_longitudinal=tension,
+        longitudinal_assessment={
+            "status": "PASS",
+            "ok": True,
+            "util": 0.50,
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": tension,
+        },
+        torsion_longitudinal_assessment={
+            "status": "PASS",
+            "ok": True,
+            "reason": "no_longitudinal_torsion_demand",
+            "demand_ratio": 0.0,
+        },
+    )
+    combined_result["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined_result)
+    )
+    del combined_result["longitudinal_candidates"][1]
+    at.session_state["results"] = retained
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    overall_metric = next(
+        metric
+        for metric in at.metric
+        if metric.label == "Longitudinal reinforcement"
+    )
+    assert str(overall_metric.value) == "-"
+    assert str(overall_metric.delta) == ""
+    assert any(str(caption.value) == "NOT ASSESSED" for caption in at.caption)
+    assert all(
+        not (
+            metric.label == "Chord utilisation"
+            and str(metric.delta) == "PASS"
+        )
+        for metric in at.metric
+    )
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Combined longitudinal reinforcement"
+    ].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"
 
 
 @pytest.mark.parametrize("hostile", ("malformed", "stale_alias"))

@@ -7276,6 +7276,104 @@ def _base_en_combined_out():
     return combined
 
 
+def _base_en_formula_628_governing_out():
+    combined = _base_en_combined_out()
+    chord = combined["longitudinal"]
+    chord.update(
+        status="PASS",
+        ok=True,
+        m_rd=float(chord["m_total"]) / 0.50,
+        util=0.50,
+    )
+    combined["longitudinal_assessment"].update(
+        status="PASS",
+        ok=True,
+        util=0.50,
+        coverage_complete=True,
+        governing=chord,
+    )
+    combined["torsion_longitudinal_assessment"] = {
+        "status": "FAIL",
+        "ok": False,
+        "reason": "longitudinal_torsion_reinforcement_insufficient",
+        "demand_ratio": 2.0,
+    }
+    combined["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined)
+    )
+    return combined
+
+
+def _base_en_stale_2023_single_face_out():
+    combined = _base_en_combined_out()
+    common = {
+        "valid": True,
+        "status": "PASS",
+        "ok": True,
+        "role": "shear_axis",
+        "axis": "x",
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "mv": 10.0,
+        "mt": 0.0,
+        "m_rd": 100.0,
+        "ftd_v": 40.0,
+        "ftd_t": 0.0,
+        "z": 0.25,
+        "capped": False,
+        "has_torsion": False,
+        "gets_shift": True,
+        "flexural_tension_low": True,
+    }
+    tension = {
+        **common,
+        "tension_low": True,
+        "chord_role": "flexural_tension",
+        "chord_formula": "8.51",
+        "m_ed": 40.0,
+        "face_m_ed_signed": 40.0,
+        "m_total": 50.0,
+        "util": 0.50,
+    }
+    compression = {
+        **common,
+        "tension_low": False,
+        "chord_role": "flexural_compression",
+        "chord_formula": "8.52",
+        "m_ed": 20.0,
+        "face_m_ed_signed": -20.0,
+        "m_total": 0.0,
+        "util": 0.0,
+    }
+    combined.update(
+        longitudinal_model_2023=True,
+        longitudinal=tension,
+        longitudinal_candidates=[tension, compression],
+        governing_longitudinal=tension,
+        longitudinal_assessment={
+            "status": "PASS",
+            "ok": True,
+            "util": 0.50,
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": tension,
+        },
+        torsion_longitudinal_assessment={
+            "status": "PASS",
+            "ok": True,
+            "reason": "no_longitudinal_torsion_demand",
+            "demand_ratio": 0.0,
+        },
+    )
+    combined["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined)
+    )
+    del combined["longitudinal_candidates"][1]
+    return combined
+
+
 def _dkna_complete_combined_out():
     """Return one DK fixture with the same complete physical component state."""
 
@@ -7419,6 +7517,80 @@ def test_report_base_en_publishes_physical_checks_without_dkna_artifacts(profile
         assert "Supported Base-EN physical interactions" in text
         assert "Concrete compression strut (6.29)" in text
         assert "Shared closed stirrup: shear + torsion" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_base_en_separates_chord_and_overall_longitudinal_utilisation(
+    profile,
+):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    out = {
+        "plastic": _out()["plastic"],
+        "combined": _base_en_formula_628_governing_out(),
+    }
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+FAIL\s+200[.,]0\s*%",
+        text,
+    )
+    if profile in {"Standard", "Audit"}:
+        assert "Chord utilisation" in text
+        assert re.search(r"50[.,]0\s*%\s*PASS", text)
+        assert "Overall longitudinal reinforcement assessment: 200.0 % FAIL" in text
+        assert (
+            "Governing check: Formula (6.28) longitudinal torsion reinforcement"
+            in text
+        )
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_stale_2023_single_face_pass_is_not_assessed(profile):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    out = {
+        "plastic": _out()["plastic"],
+        "combined": _base_en_stale_2023_single_face_out(),
+    }
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+"
+        r"NOT ASSESSED\s+-",
+        text,
+    )
+    if profile in {"Standard", "Audit"}:
+        assert "Longitudinal chord assessment: NOT ASSESSED" in text
+        assert (
+            "Recalculate the combined longitudinal reinforcement assessment "
+            "before relying on its status"
+            in text
+        )
 
 
 def _pub_h01_report_combined():
@@ -8834,10 +9006,21 @@ def test_report_combined_longitudinal_check():
         ok=True, capped=False,
     )
     _retain_combined_chords(c, c["longitudinal"])
+    c["longitudinal_assessment"] = {
+        "status": "PASS",
+        "ok": True,
+        "util": 240.4 / 400.0,
+        "reason": "required_longitudinal_chords_satisfied",
+        "coverage_complete": True,
+        "governing": c["longitudinal"],
+    }
     c["torsion_longitudinal_assessment"] = {
         "status": "PASS", "ok": True,
         "reason": "no_longitudinal_torsion_demand", "demand_ratio": 0.0,
     }
+    c["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(c)
+    )
     out["combined"] = c
     txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
     assert "Longitudinal reinforcement" in txt
@@ -8912,16 +9095,27 @@ def test_report_combined_longitudinal_conditional_mrd():
     c = _combined_out()
     c["longitudinal"] = dict(
         valid=True, status="PASS", axis="x", z=0.5, m_ed=20.0,
-        m_rd=250.0, ftd_v=187.5, ftd_t=100.0, mv=60.0, mt=25.0,
+        m_rd=250.0, ftd_v=120.0, ftd_t=100.0, mv=60.0, mt=25.0,
         m_total=105.0, util=105.0 / 250.0, ok=True, capped=False,
         tension_low=True, off_util=0.4, biaxial=True, m_off=90.0,
         conditional=True, has_torsion=True, off_not_evaluated=None,
     )
     _retain_combined_chords(c, c["longitudinal"])
+    c["longitudinal_assessment"] = {
+        "status": "PASS",
+        "ok": True,
+        "util": 105.0 / 250.0,
+        "reason": "required_longitudinal_chords_satisfied",
+        "coverage_complete": True,
+        "governing": c["longitudinal"],
+    }
     c["torsion_longitudinal_assessment"] = {
         "status": "PASS", "ok": True,
         "reason": "no_longitudinal_torsion_demand", "demand_ratio": 0.0,
     }
+    c["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(c)
+    )
     out["combined"] = c
     # Collapse the PDF's line wrapping so multi-word phrases can be asserted.
     txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,

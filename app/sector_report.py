@@ -8031,7 +8031,7 @@ class ReportBuilder:
                 [
                     [
                         "MEd", "Shear shift", "Torsion share", "MEd,total",
-                        "MRd", "Overall utilisation",
+                        "MRd", "Chord utilisation",
                     ],
                     [
                         f"{_fmt(lg.get('m_ed'), 3)} kNm",
@@ -8039,7 +8039,8 @@ class ReportBuilder:
                         f"{_fmt(lg.get('mt'), 3)} kNm",
                         f"{_fmt(lg.get('m_total'), 3)} kNm",
                         f"{_fmt(lg.get('m_rd'), 3)} kNm",
-                        f"{_pct(longitudinal['util'])} {longitudinal['status']}",
+                        f"{_pct(longitudinal['chord_util'])} "
+                        f"{longitudinal['chord_status']}",
                     ],
                 ],
                 [27 * mm, 27 * mm, 27 * mm, 29 * mm, 27 * mm, 23 * mm],
@@ -8049,6 +8050,12 @@ class ReportBuilder:
                 lg.get("theta_mode"),
                 angle_valid=concrete.get("angle_valid") is True,
             ))
+            self._small(
+                "Overall longitudinal reinforcement assessment: "
+                f"{_pct(longitudinal['util'])} {longitudinal['status']}. "
+                "Governing check: "
+                f"{_html_escape(str(longitudinal.get('governing_mechanism') or '-'))}."
+            )
         else:
             self._small(
                 "Longitudinal chord assessment: "
@@ -8651,6 +8658,8 @@ class ReportBuilder:
             self._small(
                 "Overall longitudinal reinforcement assessment: "
                 f"{_pct(longitudinal['util'])} {longitudinal['status']}. "
+                "Governing check: "
+                f"{_html_escape(str(longitudinal.get('governing_mechanism') or '-'))}. "
                 "The chord comparison and the independent Formula (6.28) "
                 "reinforcement evidence remain separately identified."
             )

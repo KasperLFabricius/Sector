@@ -329,7 +329,7 @@ def _validate_report(pdf: bytes, profile: str) -> None:
     if profile in {"Standard", "Audit"}:
         operand_row = re.compile(
             r"MEd\s+Shear shift\s+Torsion share\s+MEd,total\s+MRd\s+"
-            r"Overall utilisation\s+80[.,]000 kNm\s+4[.,]214 kNm\s+"
+            r"Chord utilisation\s+80[.,]000 kNm\s+4[.,]214 kNm\s+"
             r"39[.,]712 kNm\s+123[.,]925 kNm\s+100[.,]000 kNm\s+"
             r"123[.,]9\s*%\s+FAIL"
         )
@@ -337,6 +337,16 @@ def _validate_report(pdf: bytes, profile: str) -> None:
             raise AssertionError(
                 f"{profile} report does not retain one reconciled "
                 "combined-longitudinal operand chain"
+            )
+        overall_assessment = re.compile(
+            r"Overall longitudinal reinforcement assessment:\s+"
+            r"123[.,]9\s*%\s+FAIL\.\s+Governing check:\s+"
+            r"combined M \+ V \+ T tension chord\."
+        )
+        if overall_assessment.search(text) is None:
+            raise AssertionError(
+                f"{profile} report does not retain the separate governing "
+                "longitudinal assessment"
             )
         for expected in (
             "Common member angle cot \u03b8 = 1.156",

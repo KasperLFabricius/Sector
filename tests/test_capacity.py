@@ -1056,6 +1056,51 @@ def _pub_h01_longitudinal_fixture(utilisation=1.2392531643):
     }
 
 
+def _pub_h01_2023_shear_only_candidates():
+    common = {
+        "valid": True,
+        "status": "PASS",
+        "ok": True,
+        "role": "shear_axis",
+        "axis": "x",
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "mv": 10.0,
+        "mt": 0.0,
+        "m_rd": 100.0,
+        "ftd_v": 40.0,
+        "ftd_t": 0.0,
+        "z": 0.25,
+        "capped": False,
+        "has_torsion": False,
+        "gets_shift": True,
+        "flexural_tension_low": True,
+    }
+    tension = {
+        **common,
+        "tension_low": True,
+        "chord_role": "flexural_tension",
+        "chord_formula": "8.51",
+        "m_ed": 40.0,
+        "face_m_ed_signed": 40.0,
+        "m_total": 50.0,
+        "util": 0.50,
+    }
+    compression = {
+        **common,
+        "tension_low": False,
+        "chord_role": "flexural_compression",
+        "chord_formula": "8.52",
+        "m_ed": 20.0,
+        "face_m_ed_signed": -20.0,
+        "m_total": 0.0,
+        "util": 0.0,
+    }
+    return tension, compression
+
+
 def _unverified_formula_628(ratio=0.50):
     return {
         "status": "NOT ASSESSED",
@@ -1156,6 +1201,66 @@ def test_combined_longitudinal_stale_retained_assessment_cannot_replace_child_fa
     assert assessment["ok"] is None
     assert assessment["util"] is None
     assert assessment["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+
+def test_combined_longitudinal_2023_coverage_is_rebuilt_from_retained_faces():
+    tension, compression = _pub_h01_2023_shear_only_candidates()
+    combined = {
+        "longitudinal_model_2023": True,
+        "longitudinal": tension,
+        "longitudinal_candidates": [tension, compression],
+        "governing_longitudinal": tension,
+        "longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "util": 0.50,
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": tension,
+        },
+        "torsion_longitudinal_assessment": {
+            "status": "PASS",
+            "ok": True,
+            "reason": "no_longitudinal_torsion_demand",
+            "demand_ratio": 0.0,
+        },
+    }
+
+    complete = capacity.combined_longitudinal_assessment(combined)
+    assert complete["status"] == "PASS"
+    assert complete["util"] == pytest.approx(0.50)
+
+    stale_complete = copy.deepcopy(combined)
+    del stale_complete["longitudinal_candidates"][1]
+    rejected = capacity.combined_longitudinal_assessment(stale_complete)
+    assert rejected["status"] == "NOT ASSESSED"
+    assert rejected["ok"] is None
+    assert rejected["util"] is None
+    assert rejected["reason"] == "combined_longitudinal_evidence_inconsistent"
+
+    missing_list = copy.deepcopy(combined)
+    missing_list.pop("longitudinal_candidates")
+    rejected_missing_list = capacity.combined_longitudinal_assessment(missing_list)
+    assert rejected_missing_list["status"] == "NOT ASSESSED"
+    assert rejected_missing_list["ok"] is None
+    assert rejected_missing_list["util"] is None
+    assert (
+        rejected_missing_list["reason"]
+        == "combined_longitudinal_evidence_inconsistent"
+    )
+
+    honest_incomplete = copy.deepcopy(stale_complete)
+    honest_incomplete["longitudinal_assessment"].update(
+        status="NOT ASSESSED",
+        ok=None,
+        reason="required_longitudinal_chord_coverage_incomplete",
+        coverage_complete=False,
+    )
+    unavailable = capacity.combined_longitudinal_assessment(honest_incomplete)
+    assert unavailable["status"] == "NOT ASSESSED"
+    assert unavailable["ok"] is None
+    assert unavailable["util"] is None
+    assert unavailable["reason"] == "required_longitudinal_chord_coverage_incomplete"
 
 
 def test_combined_longitudinal_candidate_recomputes_total_from_operands():

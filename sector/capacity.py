@@ -1113,6 +1113,9 @@ def _combined_longitudinal_child_candidate(
 ) -> tuple[Mapping[str, Any] | None, bool]:
     """Return the validated governing child candidate and evidence consistency."""
 
+    model_2023 = combined.get("longitudinal_model_2023", False)
+    if type(model_2023) is not bool:
+        return None, False
     direct_value = combined.get("longitudinal", _MISSING)
     direct = (
         _combined_longitudinal_candidate(direct_value)
@@ -1124,6 +1127,8 @@ def _combined_longitudinal_child_candidate(
 
     candidates_value = combined.get("longitudinal_candidates", _MISSING)
     candidate = direct
+    if model_2023 and candidates_value is _MISSING and direct is not None:
+        return None, False
     if candidates_value is not _MISSING:
         if not isinstance(candidates_value, (list, tuple)) or not candidates_value:
             return None, False
@@ -1138,6 +1143,53 @@ def _combined_longitudinal_child_candidate(
             for item in candidates_value
         ):
             return None, False
+        if model_2023:
+            shear_candidates = [
+                item
+                for item in candidates_value
+                if isinstance(item, Mapping) and item.get("role") == "shear_axis"
+            ]
+            shear_axes = [item.get("axis", _MISSING) for item in shear_candidates]
+            tension_faces = [
+                item.get("flexural_tension_low", _MISSING)
+                for item in shear_candidates
+            ]
+            torsion_states = [
+                item.get("has_torsion", _MISSING) for item in shear_candidates
+            ]
+            retained_assessment = combined.get("longitudinal_assessment")
+            retained_coverage = (
+                retained_assessment.get("coverage_complete", _MISSING)
+                if isinstance(retained_assessment, Mapping)
+                else _MISSING
+            )
+            if (
+                not shear_candidates
+                or not all(
+                    type(value) is str and value in {"x", "y"}
+                    for value in shear_axes
+                )
+                or len(set(shear_axes)) != 1
+                or not all(type(value) is bool for value in tension_faces)
+                or len(set(tension_faces)) != 1
+                or not all(type(value) is bool for value in torsion_states)
+                or len(set(torsion_states)) != 1
+                or type(retained_coverage) is not bool
+            ):
+                return None, False
+            complete = combined_longitudinal_chord_evidence_is_valid(
+                {
+                    "model_2023": True,
+                    "chord_candidates": candidates_value,
+                },
+                shear_axis=shear_axes[0],
+                shear_tension_low=tension_faces[0],
+                shear_live=True,
+                torsion_live=torsion_states[0],
+                torsion_subdivided=False,
+            )
+            if retained_coverage is not complete:
+                return None, False
         candidate = max(
             retained_candidates,
             key=lambda item: float(item["util"]),
