@@ -4495,6 +4495,113 @@ def test_pub_h01_malformed_candidate_container_never_promotes_native_pass(
     assert row["Result"] == "-"
 
 
+def test_pub_h01_roleless_torsion_failure_with_zero_owner_is_not_published():
+    at = _fresh()
+    at.run()
+    _enable_all(at)
+    assert not at.exception
+
+    retained = copy.deepcopy(at.session_state["results"])
+    combined_result = retained["combined"]
+    direct = {
+        **combined_result["longitudinal"],
+        "valid": True,
+        "status": "FAIL",
+        "ok": False,
+        "axis": "x",
+        "tension_low": True,
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": "not_solved",
+        "m_ed": 80.0,
+        "mv": 4.213620,
+        "mt": 39.711696,
+        "m_total": 123.925316,
+        "m_rd": 100.0,
+        "ftd_v": 17.34,
+        "ftd_t": 326.8452380952381,
+        "z": 0.243,
+        "util": 1.2392531643,
+        "capped": False,
+        "cap_shear_force": True,
+        "mv_uncapped": 4.213620,
+        "shear_headroom": 20.0,
+        "shear_term_selection": "uncapped",
+    }
+    for role_key in (
+        "role",
+        "has_torsion",
+        "gets_shift",
+        "chord_formula",
+        "chord_role",
+        "flexural_tension_low",
+        "face_m_ed_signed",
+    ):
+        direct.pop(role_key, None)
+    combined_result.update(
+        longitudinal_model_2023=False,
+        longitudinal=direct,
+        longitudinal_candidates=None,
+        governing_longitudinal=direct,
+        longitudinal_fallback=None,
+        longitudinal_all_conditional=True,
+        longitudinal_assessment={
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        t_ed=0.0,
+        asl_torsion=0.0,
+        torsion_subdivided=False,
+        torsion_subtubes=None,
+        torsion_longitudinal_assessment=(
+            _pub_h01_formula_628_assessment(0.0)
+        ),
+    )
+    combined_result["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined_result)
+    )
+    assert combined_result["overall_longitudinal_assessment"]["status"] == (
+        "NOT ASSESSED"
+    )
+    at.session_state["results"] = retained
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    overall_metric = next(
+        metric
+        for metric in at.metric
+        if metric.label == "Longitudinal reinforcement"
+    )
+    assert str(overall_metric.value) == "-"
+    assert str(overall_metric.delta) == ""
+    visible = " ".join(
+        str(item.value)
+        for collection in (
+            at.metric,
+            at.warning,
+            at.info,
+            at.caption,
+            at.markdown,
+        )
+        for item in collection
+    )
+    assert "123.9 %" not in visible
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value
+    row = overview.loc[
+        overview["Check"] == "Combined longitudinal reinforcement"
+    ].iloc[0]
+    assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"
+
+
 @pytest.mark.parametrize(
     "hostile", ("malformed", "stale_alias", "overflowing_real")
 )

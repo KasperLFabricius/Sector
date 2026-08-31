@@ -2451,6 +2451,53 @@ def test_combined_longitudinal_malformed_candidate_container_preserves_only_fail
         assert assessment["util"] is None
 
 
+@pytest.mark.parametrize(
+    ("owner_state", "expected_status"),
+    (
+        ("missing", "FAIL"),
+        ("matching", "FAIL"),
+        ("zero", "NOT ASSESSED"),
+        ("partial", "NOT ASSESSED"),
+    ),
+)
+def test_combined_longitudinal_roleless_failure_reconciles_present_owner_liveness(
+    owner_state,
+    expected_status,
+):
+    direct = _pub_h01_longitudinal_fixture()
+    combined = {
+        "longitudinal": direct,
+        "longitudinal_candidates": None,
+        "governing_longitudinal": direct,
+        "longitudinal_assessment": {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": direct["util"],
+            "reason": "required_longitudinal_chord_coverage_incomplete",
+            "coverage_complete": False,
+            "governing": direct,
+        },
+        "torsion_longitudinal_assessment": _unverified_formula_628(0.50),
+    }
+    if owner_state == "matching":
+        combined.update(t_ed=40.0, asl_torsion=500.0)
+    elif owner_state == "zero":
+        combined.update(t_ed=0.0, asl_torsion=0.0)
+    elif owner_state == "partial":
+        combined["t_ed"] = 40.0
+
+    assessment = capacity.combined_longitudinal_assessment(combined)
+
+    assert assessment["status"] == expected_status
+    if expected_status == "FAIL":
+        assert assessment["ok"] is False
+        assert assessment["util"] == pytest.approx(1.2392531643)
+        assert assessment["chord_governing"] is direct
+    else:
+        assert assessment["ok"] is None
+        assert assessment["util"] is None
+
+
 @pytest.mark.parametrize("target", ("chord", "formula_628"))
 def test_pub_h01_overflowing_real_scalar_fails_closed(target):
     direct = _pub_h01_longitudinal_fixture(0.50)

@@ -8669,6 +8669,52 @@ def test_report_pub_h01_malformed_container_never_promotes_direct_pass(
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_pub_h01_roleless_torsion_failure_with_zero_owner_is_not_published(
+    profile,
+):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = _pub_h01_report_combined()
+    combined.update(
+        longitudinal_candidates=None,
+        t_ed=0.0,
+        asl_torsion=0.0,
+        torsion_longitudinal_assessment=(
+            _pub_h01_report_zero_formula_628()
+        ),
+    )
+    combined["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined)
+    )
+    assert combined["overall_longitudinal_assessment"]["status"] == (
+        "NOT ASSESSED"
+    )
+    out = {"plastic": _out()["plastic"], "combined": combined}
+
+    text = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+"
+        r"NOT ASSESSED\s+-",
+        text,
+    )
+    assert re.search(r"FAIL\s+123[.,]9\s*%", text) is None
+    assert re.search(r"123[.,]9\s*%\s*FAIL", text) is None
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 @pytest.mark.parametrize(
     "hostile", ["stale_alias", "non_finite_operand", "overflowing_real"]
 )

@@ -1481,12 +1481,17 @@ def _combined_longitudinal_independent_direct_failure(
         or (role is _MISSING and model_2023)
     ):
         return None
-    if role is not _MISSING:
+    owner_torsion_value = combined.get("t_ed", _MISSING)
+    owner_area_value = combined.get("asl_torsion", _MISSING)
+    owner_values_missing = bool(
+        owner_torsion_value is _MISSING and owner_area_value is _MISSING
+    )
+    if role is not _MISSING or not owner_values_missing:
         owner_torsion = _combined_longitudinal_finite_nonnegative(
-            combined.get("t_ed", _MISSING)
+            owner_torsion_value
         )
         owner_area = _combined_longitudinal_finite_nonnegative(
-            combined.get("asl_torsion", _MISSING)
+            owner_area_value
         )
         if owner_torsion is None or owner_area is None:
             return None
