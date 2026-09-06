@@ -1868,7 +1868,7 @@ def directional_shear_publication_evidence_is_current(
             if current_interaction is None:
                 if interaction is not None:
                     return False, unavailable_reason
-                torsion_status, torsion_metric = "NOT RUN", 0.0
+                torsion_status, torsion_metric = "NOT ASSESSED", 0.0
             else:
                 if not _publication_mapping_contains_current(
                     interaction,
@@ -2970,7 +2970,10 @@ def _single_torsion_publication_evidence_is_current(
         if math.isfinite(expected_util) and expected_util <= 1.0
         else "FAIL"
     )
-    if torsion_result.get("resistance_status") != expected_status:
+    if (
+        type(torsion_result.get("resistance_status")) is not str
+        or torsion_result["resistance_status"] != expected_status
+    ):
         return False, unavailable
     for key in (
         "trd_s",
@@ -3240,6 +3243,13 @@ def _single_combined_publication_evidence_is_current(
         return False, unavailable
     if not isinstance(plastic_result, Mapping):
         return False, unavailable
+    if (
+        torsion_result.get("longitudinal_assessment") is not None
+        and torsion_longitudinal_assessment(
+            torsion_result, input_payload=calculation_input,
+        )["evidence_consistent"] is not True
+    ):
+        return False, unavailable
     expected_out = {
         "plastic": plastic_result,
         "shear": shear_result,
@@ -3393,12 +3403,14 @@ def _combined_direction_source(inp, shear_result, combined_result):
         source_combined,
     ):
         return None
-    _action, candidate_input = _current_shear_calculation_input(
+    action, _reason = _current_shear_action_evidence(
         inp,
-        candidate.get("shear"),
+        shear_result,
+        "combined component evidence is unavailable",
     )
-    if candidate_input is None:
+    if action is None or expected_tension not in action["admissible_faces"]:
         return None
+    candidate_input = _current_shear_face_input(inp, action, expected_tension)
     return (
         inp,
         candidate_input,

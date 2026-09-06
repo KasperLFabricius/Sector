@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import io
 from pathlib import Path
+import pickle
 import sys
 
 from pypdf import PdfReader
@@ -29,8 +30,10 @@ pytestmark = pytest.mark.xdist_group("publication_participants")
 
 
 @pytest.fixture(scope="module", params=(
-    "torsion-only", "zero-shear", "invalid-shear", "biaxial",
-    "biaxial-no-links", "subdivided",
+    "torsion-only", "zero-shear", "invalid-shear",
+    pytest.param("biaxial", id="biaxial", marks=pytest.mark.xdist_group("biaxial")),
+    pytest.param("biaxial-no-links", id="biaxial-no-links", marks=pytest.mark.xdist_group("biaxial-no-links")),
+    "subdivided",
 ))
 def current_participants(request, tmp_path_factory):
     """Produce each control through real inputs, Calculate and native views."""
@@ -69,6 +72,9 @@ def current_participants(request, tmp_path_factory):
         assert not at.exception
         inp = copy.deepcopy(at.session_state["result_input_snapshot"])
         out = copy.deepcopy(at.session_state["results"])
+        (tmp_path_factory.getbasetemp() / f"participant-native-{name}.pickle").write_bytes(
+            pickle.dumps((inp, out)),
+        )
         out["worked_example_selection"] = presentation.worked_example_selection(inp, out)
         _select_view(at, "Torsion")
         assert not at.exception
@@ -154,6 +160,17 @@ def test_pub_m01_current_participants_retain_independent_native_evidence(
     if case["name"].startswith("biaxial"):
         assert out["shear"].get("links") is None
         assert set(t["directional_interactions"]) == {"vx", "vy"}
+        for child in out["shear"]["directions"].values():
+            assert presentation.directional_shear_publication_evidence_is_current(
+                inp, child, plastic_result=out["plastic"],
+            ) == (True, None)
+            if case["name"] == "biaxial-no-links":
+                assert all(face["torsion_status"] == "NOT ASSESSED" for face in child["face_candidates"])
+                poisoned_child = copy.deepcopy(child)
+                poisoned_child["face_candidates"][0]["torsion_status"] = "NOT RUN"
+                assert presentation.directional_shear_publication_evidence_is_current(
+                    inp, poisoned_child, plastic_result=out["plastic"],
+                )[0] is False
         shear_selection = presentation.worked_example_selection(inp, out)["families"]["shear"]
         expected_direction = max(
             ("vx", "vy"),
@@ -235,6 +252,13 @@ def test_pub_m01_current_participants_reach_actual_report_routes(
         component = selected["component"][-1]
         assert f"Governingworkedexample:V{component},Ed" in "".join(text.split())
         assert "Worked shear calculation unavailable" not in text
+        assert "Face-specific shear comparison NOT ASSESSED" not in text
+        assert "Candidate face" in text
+        child = out["shear"]["directions"][selected["component"]]
+        for face in child["face_candidates"]:
+            label = sector_report.viz.tension_face_label(face["tension_low"], child["axis"])
+            expected = f"{label}{face['shear']['res']['vrd_c']:.3f}kN"
+            assert "".join(expected.split()) in "".join(text.split())
 
 
 def test_pub_m01_participant_records_cannot_authorize_missing_or_changed_evidence(

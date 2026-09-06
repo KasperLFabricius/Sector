@@ -11197,8 +11197,13 @@ def _combined_direction_assessment(inp, candidate_out):
     Reuse the same result rows as the application summary so the directional
     results view and report cannot disagree about an invalid or failed sub-check.
     """
+    # These are raw face results on the translated magnitude/axis contract.
+    # Signed component authority belongs to the parent assembled afterwards.
+    publication_input = dict(inp)
+    for key in ("shear_Vx", "shear_Vy", "shear_components"):
+        publication_input.pop(key, None)
     rows = [
-        row for row in presentation.result_summary_rows(inp, candidate_out)
+        row for row in presentation.result_summary_rows(publication_input, candidate_out)
         if row.get("view") == "M-V-T Combined"
     ]
     status = presentation.overall_summary_status(rows)

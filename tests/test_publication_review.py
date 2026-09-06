@@ -3,25 +3,34 @@ from __future__ import annotations
 
 import copy
 import io
-from pathlib import Path
 import pickle
 import sys
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
-from pypdf import PdfReader
+import numpy as np
 import pytest
+from pypdf import PdfReader
 from streamlit.testing.v1 import AppTest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "app"), str(ROOT / "tests")]
 
-import case_analysis  # noqa: E402
-import project_io  # noqa: E402
-import result_presentation as presentation  # noqa: E402
-import sector_report  # noqa: E402
-from sector import capacity  # noqa: E402
-from test_capacity import _torsion_input, _torsion_wall_bars  # noqa: E402
-from test_torsion import _calculate, _fresh, _select_view, _set, _set_and_click  # noqa: E402
+import case_analysis
+import project_io
+import result_presentation as presentation
+import sector_report
+from test_capacity import _torsion_input, _torsion_wall_bars
+from test_torsion import (
+    _calculate,
+    _fresh,
+    _select_view,
+    _set,
+    _set_and_click,
+)
+
+from sector import capacity
 
 pytestmark = pytest.mark.xdist_group("publication_review")
 
@@ -55,14 +64,16 @@ def torsion_root():
     return inp, root
 
 
-@pytest.mark.parametrize("status", ("PASS", None, [], "missing"))
+@pytest.mark.parametrize("status", (
+    "PASS", None, [], "missing", np.array(["PASS", "FAIL"]), np.array("FAIL"),
+))
 def test_review_r1_rejects_contradictory_torsion_resistance_status(torsion_root, status):
     inp, root = torsion_root
     positive = presentation.result_summary_rows(inp, {"torsion": root})
     current = next(row for row in positive if row["overview_key"] == "torsion:resistance")
     assert current["status"] == "FAIL" and current["result"] == "126.9 %"
     changed = copy.deepcopy(root)
-    if status == "missing":
+    if type(status) is str and status == "missing":
         changed.pop("resistance_status")
     else:
         changed["resistance_status"] = status
@@ -116,7 +127,7 @@ def signed_shear_case(request, tmp_path_factory):
         patch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path_factory.mktemp("signed-shear") / "autosave"))
         at = _fresh()
         at.run()
-        _set(at, ("checkbox", "shear_on", True), ("checkbox", "torsion_on", True), ("checkbox", "shear_links", True))
+        _set(at, ("checkbox", "shear_on", True), ("checkbox", "torsion_on", True), ("checkbox", "shear_links", True), ("checkbox", "combined_on", True))
         _set_and_click(
             at, "calculate", ("number_input", "pl_Mx", 0.0),
             ("number_input", "torsion_T", 40.0),
@@ -140,6 +151,17 @@ def test_review_r5_real_signed_parent_retains_raw_faces_and_torsion(signed_shear
         inp, shear, plastic_result=out["plastic"],
     ) == (True, None)
     assert presentation.torsion_publication_evidence_is_current(inp, shear, out["torsion"]) == (True, None)
+    assert inp["combined_on"] is True and out["combined"]["dkna_valid"] is True
+    assert presentation.combined_publication_evidence_is_current(inp, out) == (True, None)
+    stale = copy.deepcopy(out)
+    stale["shear"]["signed_v_ed"] *= -1.0
+    assert presentation.directional_shear_publication_evidence_is_current(
+        inp, stale["shear"], plastic_result=out["plastic"],
+    )[0] is False
+    assert presentation.combined_publication_evidence_is_current(inp, stale)[0] is False
+    changed_input = dict(inp)
+    changed_input["shear_V" + case["component"][-1]] *= -1.0
+    assert presentation.combined_publication_evidence_is_current(changed_input, out)[0] is False
     _select_view(case["at"], "Shear")
     assert not case["at"].exception
     tables = [item.value for item in case["at"].dataframe]
@@ -148,6 +170,10 @@ def test_review_r5_real_signed_parent_retains_raw_faces_and_torsion(signed_shear
         "face-specific shear evidence is unavailable" in str(item.value)
         for item in case["at"].warning
     )
+    _select_view(case["at"], "M-V-T Combined")
+    assert not case["at"].exception
+    dkna = next(item for item in case["at"].metric if "S_{Ed}/S_{Rd}" in item.label)
+    assert "".join(str(dkna.value).split()) == f"{100.0 * out['combined']['dkna_sum']:.1f}%"
 
 
 def test_review_r5_signed_shear_reaches_actual_standard_report(signed_shear_case, tmp_path):
@@ -161,7 +187,57 @@ def test_review_r5_signed_shear_reaches_actual_standard_report(signed_shear_case
     text = " ".join(" ".join((page.extract_text() or "").split()) for page in PdfReader(io.BytesIO(pdf)).pages)
     assert "Shear resistance" in text
     assert "face-specific shear evidence is unavailable" not in text
+    assert "Face-specific shear comparison NOT ASSESSED" not in text
+    assert "Candidate face" in text
     assert f"{out['torsion']['trd']:.3f}" in text
+    assert "Combined bending + shear + torsion (M-V-T)" in text
+    assert f"{100.0 * out['combined']['dkna_sum']:.1f}%" in "".join(text.split())
+    assert "combined component evidence is unavailable" not in text
+
+
+@pytest.mark.parametrize("provision_factor", (0.1, 10.0))
+def test_review_r2_combined_rejects_coherent_provision_aliases(
+    signed_shear_case, provision_factor,
+):
+    """Assemble a coherent poison from real native combined face components."""
+    case = signed_shear_case
+    action, _reason = presentation._current_shear_action_evidence(
+        case["inp"], case["out"]["shear"], "unavailable",
+    )
+    face = case["out"]["shear"]["face_candidates"][0]
+    inp = presentation._current_shear_face_input(
+        case["inp"], action, face["tension_low"],
+    )
+    out = copy.deepcopy({
+        "plastic": case["out"]["plastic"],
+        "shear": face["shear"], "torsion": face["torsion"],
+    })
+    capacity.finalize_combined(inp, out)
+    assert presentation.combined_publication_evidence_is_current(inp, out) == (True, None)
+    root = out["torsion"]
+    current = presentation.torsion_longitudinal_assessment(root, input_payload=inp)
+    assert current["evidence_consistent"] is True
+    provided = current["provided_equivalent_area_mm2"]
+    assert provided > 0.0
+    retained = root["longitudinal_assessment"]
+    for key in ("provided_gross_area_mm2", "provided_design_force_kn", "provided_equivalent_area_mm2"):
+        retained[key] *= provision_factor
+    retained["demand_ratio"] /= provision_factor
+    retained["area_sufficient"] = retained["demand_ratio"] <= 1.0
+    if retained["area_sufficient"]:
+        retained.update(status="NOT ASSESSED", ok=None, reason="longitudinal_torsion_reinforcement_not_verified")
+    else:
+        retained.update(status="FAIL", ok=False, reason="longitudinal_torsion_reinforcement_insufficient")
+    root["assessment_status"] = presentation.torsion_assessment_status(root)
+    root["overall_reason"] = retained["reason"]
+    capacity.finalize_combined(inp, out)
+    assert out["combined"]["torsion_longitudinal_assessment"] == retained
+    assert retained["provided_equivalent_area_mm2"] == pytest.approx(provision_factor * provided)
+    assert presentation.combined_publication_evidence_is_current(inp, out)[0] is False
+    rows = presentation.result_summary_rows(inp, out)
+    combined_rows = [row for row in rows if str(row["overview_key"]).startswith("combined")]
+    assert combined_rows
+    assert all(row["status"] == "NOT ASSESSED" and row["result"] == "-" for row in combined_rows)
 
 
 @pytest.fixture(scope="module")
@@ -260,7 +336,7 @@ def test_review_r2_actual_native_longitudinal_body_withholds_changed_strength(na
     case = named_zero_shear_case
     changed = copy.deepcopy(case["case_inp"])
     changed["bar_materials"] = tuple(
-        SimpleNamespace(fytk=24.0, gamma_y=1.2) for _ in changed["bars"]
+        replace(material, fytk=24.0) for material in changed["bar_materials"]
     )
     harness = AppTest.from_string(
         "import streamlit as st\nimport sector_app\n"
@@ -293,15 +369,29 @@ def test_review_r1_r2_actual_report_withholds_poisoned_torsion(
         root["resistance_status"] = "PASS"
     else:
         inp["bar_materials"] = tuple(
-            SimpleNamespace(fytk=24.0, gamma_y=1.2) for _ in inp["bars"]
+            replace(material, fytk=24.0) for material in inp["bar_materials"]
         )
+    # Brief retains one governing row per check; an equal unassessed first case
+    # remains selected. Independently require the poisoned case's own row to
+    # withhold its values before checking each profile's published selection.
+    key = "torsion" if attack == "status" else "torsion:longitudinal"
+    local_rows = presentation.result_summary_rows(
+        case_analysis.plastic_case_input(inp, out["plastic_cases"][1]["actions"]),
+        out["plastic_cases"][1]["results"],
+    )
+    rejected = next(row for row in local_rows if row["overview_key"] == key)
+    assert rejected["status"] == "NOT ASSESSED"
+    assert rejected["result"] == "-" and rejected["util"] is None
     out["worked_example_selection"] = presentation.worked_example_selection(inp, out)
     pdf = sector_report.build_report({}, inp, out, figures=False, profile=profile)
     (tmp_path / f"torsion-{attack}-{profile}.pdf").write_bytes(pdf)
     text = " ".join(" ".join((page.extract_text() or "").split()) for page in PdfReader(io.BytesIO(pdf)).pages)
     compact = "".join(text.split())
     if attack == "status":
-        assert "TorsionPL-ZERONOTASSESSED-" in compact
+        if profile == "Brief":
+            assert "TorsionPL-SHEARNOTASSESSEDNOTASSESSED" in compact
+        else:
+            assert "TorsionPL-ZERONOTASSESSED-" in compact
         assert "Torsiontransverse/strutresistancePL-ZEROPASS" not in compact
     else:
         assert "TorsionlongitudinalreinforcementPL-ZERONOTASSESSED-" in compact
