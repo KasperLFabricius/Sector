@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import io
 import pathlib
+import re
 import sys
 
 from pypdf import PdfReader
@@ -19,7 +22,9 @@ import manual  # noqa: E402
 import project_io  # noqa: E402
 import reproducible_example  # noqa: E402
 import reference_example_oracle as oracle  # noqa: E402
+import result_presentation  # noqa: E402
 import sector_report  # noqa: E402
+from sector import capacity  # noqa: E402
 
 
 APP = str(ROOT / "app" / "sector_app.py")
@@ -28,8 +33,28 @@ EXPECTED_INPUT_SHA256 = (
 )
 
 
+def _pub_m01_pdf_text(pdf):
+    text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in PdfReader(io.BytesIO(pdf)).pages
+    )
+    # The Standard table can wrap the last character of this long case ID in
+    # extraction even though the rendered glyphs remain contiguous.
+    return re.sub(r"PL-COMPLET\s+E", "PL-COMPLETE", text)
+
+
 @pytest.fixture(scope="module")
-def calculated_example():
+def isolated_native_module(tmp_path_factory):
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(
+            "SECTOR_AUTOSAVE_DIR",
+            str(tmp_path_factory.mktemp("reproducible-module") / "autosave"),
+        )
+        yield
+
+
+@pytest.fixture(scope="module")
+def calculated_example(isolated_native_module):
     at = AppTest.from_file(APP, default_timeout=180)
     at.session_state["_pending_project"] = reproducible_example.project_json()
     at.run()
@@ -52,6 +77,52 @@ def calculated_example():
     )
     assert not at.warning
     return at
+
+
+def _build_pub_m01_example(*, shear_vy=30.0):
+    tables, scalars = project_io.parse_project(reproducible_example.project_json())
+    pub_tables = dict(tables)
+    bars = tables["bars_base"].copy(deep=True)
+    bars.loc[:, "x (mm)"] = [-70.0, 70.0, -70.0, 70.0]
+    pub_tables["bars_base"] = bars
+    plastic_cases = tables["plastic_cases_base"].copy(deep=True)
+    plastic_cases.loc[:, "vy_ed_kn"] = shear_vy
+    pub_tables["plastic_cases_base"] = plastic_cases
+    pub_scalars = dict(scalars)
+    pub_scalars["torsion_tef"] = 60.0
+    pub_scalars["strut_cot_min"] = 1.206
+    pub_scalars["strut_cot_max"] = 1.206
+    pub_scalars[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+        "PL-COMPLETE": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_EQUILIBRIUM
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        }
+    }
+    at = AppTest.from_file(APP, default_timeout=180)
+    at.session_state["_pending_project"] = project_io.dump_project(
+        pub_tables,
+        pub_scalars,
+    )
+    at.run()
+    assert not at.exception
+    assert not at.error
+    at.session_state["_main_page"] = "Analysis"
+    at.run()
+    at.button(key="calculate").click().run(timeout=300)
+    assert not at.exception
+    return at
+
+
+@pytest.fixture(scope="module")
+def pub_m01_example(isolated_native_module):
+    return _build_pub_m01_example()
+
+
+@pytest.fixture(scope="module")
+def pub_m01_required_links_example(isolated_native_module):
+    return _build_pub_m01_example(shear_vy=300.0)
 
 
 def test_reference_download_is_current_schema_complete_and_identity_stable():
@@ -270,6 +341,728 @@ def test_member_and_detailing_outputs_match_independent_equations(
     )
     assert minimum["as_min_mm2"] == pytest.approx(expected_area)
     assert results["minimum_reinforcement"]["status"] == "PASS"
+
+
+def test_pub_m01_provided_links_publish_their_own_pass_in_native_views(
+    pub_m01_example,
+):
+    results = pub_m01_example.session_state.filtered_state["results"]
+    inputs = pub_m01_example.session_state.filtered_state[
+        "result_input_snapshot"
+    ]
+    shear = results["shear"]
+    provided = capacity.provided_link_shear_assessment(shear)
+    public_provided = result_presentation.provided_link_publication_assessment(
+        inputs,
+        shear,
+        torsion_result=results["torsion"],
+    )
+    link_result = shear["links"]["res"]
+
+    assert provided.valid is True
+    assert public_provided.valid is True
+    assert provided.resistance == pytest.approx(127.653869995)
+    assert provided.utilisation == pytest.approx(0.2350105015)
+    assert provided.status == "PASS"
+    assert link_result["z"] == pytest.approx(242.58799300907657)
+    assert link_result["cot"] == pytest.approx(1.206)
+    assert link_result["vrd_s"] == pytest.approx(127.6538699949732)
+    assert link_result["vrd_max"] == pytest.approx(271.275663688542)
+    nominal = shear["nominal_resistance"]
+    assert nominal["route"] == "concrete"
+    assert nominal["resistance"] == pytest.approx(47.59286046984239)
+    assert nominal["utilisation"] == pytest.approx(30.0 / nominal["resistance"])
+    assert nominal["status"] == "PASS"
+    detailing = results["transverse_reinforcement"]
+    assert detailing["status"] == "FAIL"
+    assert detailing["governing"]["kind"] == "torsion_spacing"
+    assert detailing["governing"]["provided"] == pytest.approx(150.0)
+    assert detailing["governing"]["limit"] == pytest.approx(95.0)
+    assert detailing["governing_utilisation"] == pytest.approx(150.0 / 95.0)
+    assert shear["links"]["longitudinal_shear_force"] == 0.0
+    combined = results["combined"]
+    action_alone_shear = combined["action_alone"]["v"]
+    assert action_alone_shear["resistance"] == pytest.approx(44.181297943302305)
+    assert action_alone_shear["evidence"]["nominal_route"] == "concrete"
+    assert combined["r_v"] == pytest.approx(30.0 / 44.181297943302305)
+    assert action_alone_shear["resistance"] != pytest.approx(provided.resistance)
+    assert combined["transverse"]["shear_fraction"] == 0.0
+
+    pub_m01_example.selectbox(key="view").set_value("Shear").run()
+    assert not pub_m01_example.exception
+    link_metric = next(
+        metric
+        for metric in pub_m01_example.metric
+        if metric.label == "Provided-link comparison $V_{Ed}/V_{Rd}$"
+    )
+    assert str(link_metric.value) == "23.5 %"
+    assert str(link_metric.delta) == "PASS"
+    assert any(
+        caption.value
+        == "Separate link detailing assessment: "
+        + results["transverse_reinforcement"]["status"]
+        + "."
+        for caption in pub_m01_example.caption
+    )
+
+    pub_m01_example.selectbox(key="view").set_value(
+        "Results Overview"
+    ).run()
+    assert not pub_m01_example.exception
+    overview = pub_m01_example.table[0].value
+    by_check = {row["Check"]: row for _, row in overview.iterrows()}
+    assert by_check["Shear without links"]["Status"] == "PASS"
+    assert by_check["Shear without links"]["Result"] == "63.0 % (VEd / VRd,c)"
+    assert by_check["Shear with links"]["Status"] == "PASS"
+    assert by_check["Shear with links"]["Result"] == "23.5 % (non-governing)"
+    assert by_check["Shear/torsion link detailing"]["Status"] == "FAIL"
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_pub_m01_report_profiles_publish_provided_link_pass_separately(
+    pub_m01_example,
+    profile,
+):
+    state = pub_m01_example.session_state.filtered_state
+    pdf = sector_report.build_report(
+        {},
+        state["result_input_snapshot"],
+        state["results"],
+        figures=False,
+        profile=profile,
+    )
+    text = _pub_m01_pdf_text(pdf)
+
+    assert "Shear with links PL-COMPLETE PASS 23.5 %" in text
+    assert "Shear/torsion link detailing PL-COMPLETE FAIL 157.9 %" in text
+    assert text.count("Shear/torsion link detailing PL-COMPLETE") == 1
+    assert "Shear/torsion link detailing PL-COMPLETE NOT APPLICABLE" not in text
+    if profile != "Brief":
+        assert "23.5 % (PASS; non-governing comparison)" in text
+        assert "Separate link detailing assessment: FAIL" in text
+
+
+def test_pub_m01_matching_primary_plastic_fallback_reaches_native_views(
+    pub_m01_example,
+):
+    at = pub_m01_example
+    state = at.session_state.filtered_state
+    inp = state["result_input_snapshot"]
+    baseline = copy.deepcopy(state["results"])
+    fallback = copy.deepcopy(baseline)
+    selected = fallback["plastic_cases"][0]["results"]
+    selected.pop("plastic")
+    contexts = result_presentation._worked_case_contexts(inp, fallback, "plastic")
+    assert contexts[0][3] is True
+    assert contexts[0][2]["plastic"] is fallback["plastic"]
+    assert result_presentation.worked_example_selection(inp, fallback) == (
+        result_presentation.worked_example_selection(inp, baseline)
+    )
+    try:
+        at.session_state["results"] = fallback
+        at.selectbox(key="view").set_value("Shear").run()
+        assert not at.exception
+        metric = next(
+            item for item in at.metric
+            if item.label == "Provided-link comparison $V_{Ed}/V_{Rd}$"
+        )
+        assert str(metric.value) == "23.5 %"
+        assert str(metric.delta) == "PASS"
+        at.selectbox(key="view").set_value("Results Overview").run()
+        assert not at.exception
+        overview = next(item.value for item in at.table if "Check" in item.value)
+        row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
+        assert row["Status"] == "PASS"
+        assert row["Result"] == "23.5 % (non-governing)"
+        assert "plastic" not in selected
+    finally:
+        at.session_state["results"] = baseline
+        at.run()
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_pub_m01_matching_primary_plastic_fallback_reaches_actual_reports(
+    pub_m01_example, profile, tmp_path,
+):
+    state = pub_m01_example.session_state.filtered_state
+    inp = state["result_input_snapshot"]
+    out = copy.deepcopy(state["results"])
+    selected = out["plastic_cases"][0]["results"]
+    selected.pop("plastic")
+    pdf = sector_report.build_report({}, inp, out, figures=False, profile=profile)
+    (tmp_path / f"matching-primary-{profile}.pdf").write_bytes(pdf)
+    text = _pub_m01_pdf_text(pdf)
+    assert "Shear without links PL-COMPLETE PASS 63.0 %" in text
+    assert "Shear with links PL-COMPLETE PASS 23.5 %" in text
+    if profile != "Brief":
+        assert "23.5 % (PASS; non-governing comparison)" in text
+    assert "plastic" not in selected
+
+
+def _pub_m01_unrelated_primary_result(state, operand="Mx_pl"):
+    inp = state["result_input_snapshot"]
+    out = copy.deepcopy(state["results"])
+    out["plastic_cases"][0]["results"].pop("plastic")
+    primary = out["plastic"]
+    if operand == "P_pl":
+        primary["points"][0]["axial_requested"] += 1.0
+    elif operand == "missing-axial":
+        primary["points"][0].pop("axial_requested")
+    elif operand == "missing-applied":
+        primary.pop("applied")
+    elif operand == "nonfinite-applied":
+        primary["applied"] = (float("nan"), primary["applied"][1])
+    else:
+        applied = list(primary["applied"])
+        applied[0 if operand == "Mx_pl" else 1] += 1.0
+        primary["applied"] = tuple(applied)
+    return inp, out
+
+
+@pytest.mark.parametrize("operand", (
+    "Mx_pl", "My_pl", "P_pl", "missing-axial", "missing-applied",
+    "nonfinite-applied",
+))
+def test_pub_m01_primary_fallback_rejects_unrelated_plastic_actions(
+    pub_m01_example, operand,
+):
+    state = pub_m01_example.session_state.filtered_state
+    inp, out = _pub_m01_unrelated_primary_result(state, operand)
+    contexts = result_presentation._worked_case_contexts(inp, out, "plastic")
+    assert contexts[0][3] is True
+    assert "plastic" not in contexts[0][2]
+    assert result_presentation.plastic_publication_authority(
+        contexts[0][1], contexts[0][2], out,
+    ) is None
+    selection = result_presentation.worked_example_selection(inp, out)
+    assert "plastic" not in selection["families"]
+    assert "combined" not in selection["families"]
+    rows = result_presentation.multi_case_summary_rows(inp, out)
+    combined = [row for row in rows if row["check"].startswith("Combined")]
+    assert combined
+    assert all(
+        row["status"] == "NOT ASSESSED" and row["result"] == "-"
+        and row["util"] is None for row in combined
+    )
+    by_check = {row["check"]: row for row in rows}
+    assert by_check["Shear without links"]["status"] == "PASS"
+    assert by_check["Shear with links"]["status"] == "PASS"
+    assert by_check["Shear with links"]["util"] == pytest.approx(0.2350105015)
+    assert "plastic" not in out["plastic_cases"][0]["results"]
+
+
+def test_pub_m01_unrelated_primary_is_withheld_in_native_views(pub_m01_example):
+    at = pub_m01_example
+    state = at.session_state.filtered_state
+    baseline = copy.deepcopy(state["results"])
+    _inp, out = _pub_m01_unrelated_primary_result(state)
+    try:
+        at.session_state["results"] = out
+        at.selectbox(key="view").set_value("Shear").run()
+        assert not at.exception
+        metric = next(
+            item for item in at.metric
+            if item.label == "Provided-link comparison $V_{Ed}/V_{Rd}$"
+        )
+        assert str(metric.value) == "23.5 %"
+        assert str(metric.delta) == "PASS"
+        at.selectbox(key="view").set_value("M-V-T Combined").run()
+        assert not at.exception
+        visible = " ".join(
+            str(item.value)
+            for collection in (at.warning, at.caption, at.markdown)
+            for item in collection
+        )
+        assert "Combined component evidence is not current" in visible
+        assert "Recalculate" in visible
+        assert not at.metric
+        at.selectbox(key="view").set_value("Results Overview").run()
+        assert not at.exception
+        overview = next(item.value for item in at.table if "Check" in item.value)
+        combined = overview.loc[overview["Check"].str.startswith("Combined")]
+        assert not combined.empty
+        assert set(combined["Status"]) == {"NOT ASSESSED"}
+        assert set(combined["Result"]) == {"-"}
+        assert "plastic" not in out["plastic_cases"][0]["results"]
+    finally:
+        at.session_state["results"] = baseline
+        at.run()
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_pub_m01_unrelated_primary_is_withheld_in_actual_reports(
+    pub_m01_example, profile, tmp_path,
+):
+    inp, out = _pub_m01_unrelated_primary_result(
+        pub_m01_example.session_state.filtered_state,
+    )
+    pdf = sector_report.build_report({}, inp, out, figures=False, profile=profile)
+    (tmp_path / f"unrelated-primary-{profile}.pdf").write_bytes(pdf)
+    text = _pub_m01_pdf_text(pdf)
+    assert "Combined M-V-T - DK NA sum PL-COMPLETE NOT ASSESSED -" in text
+    assert "Shear without links PL-COMPLETE PASS 63.0 %" in text
+    assert "Shear with links PL-COMPLETE PASS 23.5 %" in text
+    if profile != "Brief":
+        assert "Combined component evidence is not current" in text
+        assert "23.5 % (PASS; non-governing comparison)" in text
+    assert "plastic" not in out["plastic_cases"][0]["results"]
+
+
+def _pub_m01_shear_payloads(results):
+    seen = set()
+    candidates = [results]
+    candidates.extend(
+        entry.get("results") or {}
+        for entry in results.get("plastic_cases") or ()
+        if isinstance(entry, dict)
+    )
+    for candidate in candidates:
+        shear = candidate.get("shear") if isinstance(candidate, dict) else None
+        if isinstance(shear, dict) and id(shear) not in seen:
+            seen.add(id(shear))
+            yield shear
+
+
+def _poison_selected_link_child(results, *, require_selected=True):
+    for shear in _pub_m01_shear_payloads(results):
+        links = shear["links"]
+        if require_selected:
+            assert shear["nominal_resistance"]["route"] == "links"
+        links["shear_geometry"]["duct_factor_links"] = "bad"
+
+
+def test_pub_m01_native_required_authority_and_incomplete_child_fail_closed(
+    pub_m01_example,
+):
+    baseline = copy.deepcopy(pub_m01_example.session_state["results"])
+    old_vrd_c = f"{baseline['shear']['res']['vrd_c']:.3f}"
+    old_utilisation = f"{100.0 * baseline['shear']['util']:.1f} %"
+    try:
+        for shear in _pub_m01_shear_payloads(
+            pub_m01_example.session_state["results"]
+        ):
+            shear["links"].pop("required", None)
+        pub_m01_example.selectbox(key="view").set_value("Shear").run()
+        assert not pub_m01_example.exception
+        assert {metric.label: str(metric.value) for metric in pub_m01_example.metric} == {
+            "Applied shear": "-",
+            "Resistance $V_{Rd}$": "-",
+            "Assessment": "NOT ASSESSED",
+        }
+        visible = " ".join(
+            str(item.value)
+            for collection in (
+                pub_m01_example.warning,
+                pub_m01_example.caption,
+                pub_m01_example.markdown,
+            )
+            for item in collection
+        )
+        assert "NOT ASSESSED" in visible
+        assert old_vrd_c not in visible
+        assert old_utilisation not in visible
+
+        pub_m01_example.session_state["results"] = copy.deepcopy(baseline)
+        for shear in _pub_m01_shear_payloads(
+            pub_m01_example.session_state["results"]
+        ):
+            del shear["links"]["res"]["vrd_s"]
+        pub_m01_example.selectbox(key="view").set_value("Shear").run()
+        assert not pub_m01_example.exception
+        assert any(
+            "provided-link resistance is NOT ASSESSED" in warning.value
+            for warning in pub_m01_example.warning
+        )
+        assert not any(
+            metric.label == "Provided-link comparison $V_{Ed}/V_{Rd}$"
+            for metric in pub_m01_example.metric
+        )
+        assert any(
+            caption.value == "Separate link detailing assessment: FAIL."
+            for caption in pub_m01_example.caption
+        )
+
+        pub_m01_example.selectbox(key="view").set_value(
+            "Results Overview"
+        ).run()
+        assert not pub_m01_example.exception
+        overview = pub_m01_example.table[0].value
+        by_check = {row["Check"]: row for _, row in overview.iterrows()}
+        assert by_check["Shear without links"]["Status"] == "PASS"
+        assert by_check["Shear without links"]["Result"] == (
+            "63.0 % (VEd / VRd,c)"
+        )
+        assert by_check["Shear with links"]["Status"] == "NOT ASSESSED"
+        assert by_check["Shear with links"]["Result"] == "-"
+        assert by_check["Shear/torsion link detailing"]["Status"] == "FAIL"
+    finally:
+        pub_m01_example.session_state["results"] = baseline
+        pub_m01_example.run()
+
+
+def test_pub_m01_native_hostile_chord_status_fails_closed_without_raw_copy(
+    pub_m01_example,
+):
+    baseline = copy.deepcopy(pub_m01_example.session_state["results"])
+    try:
+        for shear in _pub_m01_shear_payloads(
+            pub_m01_example.session_state["results"]
+        ):
+            shear["links"]["longitudinal_assessment"]["status"] = []
+
+        pub_m01_example.selectbox(key="view").set_value("Shear").run()
+
+        assert not pub_m01_example.exception
+        visible = " ".join(
+            str(item.value)
+            for collection in (
+                pub_m01_example.warning,
+                pub_m01_example.caption,
+                pub_m01_example.markdown,
+            )
+            for item in collection
+        )
+        assert "provided-link resistance is NOT ASSESSED" in visible
+        assert "[]" not in visible
+        assert any(
+            caption.value == "Separate link detailing assessment: FAIL."
+            for caption in pub_m01_example.caption
+        )
+
+        pub_m01_example.selectbox(key="view").set_value(
+            "Results Overview"
+        ).run()
+        overview = pub_m01_example.table[0].value
+        by_check = {row["Check"]: row for _, row in overview.iterrows()}
+        assert "Shear longitudinal chords" not in by_check
+        assert by_check["Shear without links"]["Status"] == "PASS"
+        assert by_check["Shear without links"]["Result"] == (
+            "63.0 % (VEd / VRd,c)"
+        )
+        assert by_check["Shear with links"]["Status"] == "NOT ASSESSED"
+        assert by_check["Shear with links"]["Result"] == "-"
+        assert "[]" not in overview.to_string(index=False)
+        assert by_check["Shear/torsion link detailing"]["Status"] == "FAIL"
+    finally:
+        pub_m01_example.session_state["results"] = baseline
+        pub_m01_example.run()
+
+
+def test_pub_m01_native_stale_concrete_input_is_value_free_in_shear_and_overview(
+    pub_m01_example,
+):
+    baseline_results = copy.deepcopy(pub_m01_example.session_state["results"])
+    baseline_snapshot = copy.deepcopy(
+        pub_m01_example.session_state["result_input_snapshot"]
+    )
+    baseline_signature = pub_m01_example.session_state["result_sig"]
+    stale_snapshot = copy.deepcopy(baseline_snapshot)
+    stale_snapshot["concrete"] = dataclasses.replace(
+        stale_snapshot["concrete"],
+        fck=80.0,
+    )
+    old_shear = pub_m01_example.session_state["results"]["shear"]
+    old_vrd_c = f"{old_shear['res']['vrd_c']:.3f}"
+    old_utilisation = f"{100.0 * old_shear['util']:.1f} %"
+    try:
+        pub_m01_example.session_state["result_input_snapshot"] = stale_snapshot
+        pub_m01_example.session_state["result_sig"] = "forced-stale-concrete"
+        pub_m01_example.selectbox(key="view").set_value("Shear").run()
+
+        assert not pub_m01_example.exception
+        metrics = {metric.label: str(metric.value) for metric in pub_m01_example.metric}
+        assert metrics == {
+            "Applied shear": "-",
+            "Resistance $V_{Rd}$": "-",
+            "Assessment": "NOT ASSESSED",
+        }
+        visible = " ".join(
+            str(item.value)
+            for collection in (
+                pub_m01_example.warning,
+                pub_m01_example.caption,
+                pub_m01_example.markdown,
+            )
+            for item in collection
+        )
+        assert old_vrd_c not in visible
+        assert old_utilisation not in visible
+        assert not pub_m01_example.get("plotly_chart")
+        rendered_tables = " ".join(
+            frame.value.to_string(index=False)
+            for frame in pub_m01_example.dataframe
+        )
+        assert old_vrd_c not in rendered_tables
+        assert old_utilisation not in rendered_tables
+
+        pub_m01_example.selectbox(key="view").set_value(
+            "Results Overview"
+        ).run()
+        overview = pub_m01_example.table[0].value
+        by_check = {row["Check"]: row for _, row in overview.iterrows()}
+        assert by_check["Shear without links"]["Status"] == "STALE"
+        assert by_check["Shear without links"]["Result"] == "-"
+        assert by_check["Shear with links"]["Status"] == "STALE"
+        assert by_check["Shear with links"]["Result"] == "-"
+
+        pub_m01_example.session_state["results"] = copy.deepcopy(baseline_results)
+        _poison_selected_link_child(
+            pub_m01_example.session_state["results"],
+            require_selected=False,
+        )
+        pub_m01_example.selectbox(key="view").set_value("Shear").run()
+        assert not pub_m01_example.exception
+        assert {metric.label: str(metric.value) for metric in pub_m01_example.metric} == {
+            "Applied shear": "-",
+            "Resistance $V_{Rd}$": "-",
+            "Assessment": "NOT ASSESSED",
+        }
+        assert not pub_m01_example.get("plotly_chart")
+        rendered_tables = " ".join(
+            frame.value.to_string(index=False)
+            for frame in pub_m01_example.dataframe
+        )
+        assert old_vrd_c not in rendered_tables
+        assert old_utilisation not in rendered_tables
+    finally:
+        pub_m01_example.session_state["results"] = baseline_results
+        pub_m01_example.session_state["result_input_snapshot"] = baseline_snapshot
+        pub_m01_example.session_state["result_sig"] = baseline_signature
+        pub_m01_example.run()
+
+
+def test_pub_m01_selected_link_nominal_route_rejects_stale_child_in_native_views(
+    pub_m01_required_links_example,
+):
+    pub_m01_example = pub_m01_required_links_example
+    baseline = copy.deepcopy(pub_m01_example.session_state["results"])
+    baseline_snapshot = copy.deepcopy(
+        pub_m01_example.session_state["result_input_snapshot"]
+    )
+    baseline_signature = pub_m01_example.session_state["result_sig"]
+    try:
+        _poison_selected_link_child(
+            pub_m01_example.session_state["results"]
+        )
+        pub_m01_example.selectbox(key="view").set_value("Shear").run()
+        assert not pub_m01_example.exception
+        assert not any(
+            metric.label == "Provided-link comparison $V_{Ed}/V_{Rd}$"
+            for metric in pub_m01_example.metric
+        )
+        assert not any(
+            "Nominal utilisation" in metric.label
+            or "Utilisation" in metric.label
+            for metric in pub_m01_example.metric
+        )
+        visible = " ".join(
+            str(item.value)
+            for collection in (
+                pub_m01_example.warning,
+                pub_m01_example.caption,
+                pub_m01_example.markdown,
+            )
+            for item in collection
+        )
+        assert "NOT ASSESSED" in visible
+
+        pub_m01_example.selectbox(key="view").set_value(
+            "Results Overview"
+        ).run()
+        overview = pub_m01_example.table[0].value
+        by_check = {row["Check"]: row for _, row in overview.iterrows()}
+        assert "Shear without links" not in by_check
+        assert by_check["Shear with links"]["Status"] == "NOT ASSESSED"
+        assert by_check["Shear with links"]["Result"] == "-"
+        assert by_check["Shear/torsion link detailing"]["Status"] == "FAIL"
+    finally:
+        pub_m01_example.session_state["results"] = baseline
+        pub_m01_example.session_state["result_input_snapshot"] = baseline_snapshot
+        pub_m01_example.session_state["result_sig"] = baseline_signature
+        pub_m01_example.run()
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_pub_m01_selected_link_nominal_route_rejects_stale_child_in_reports(
+    pub_m01_required_links_example,
+    profile,
+):
+    pub_m01_example = pub_m01_required_links_example
+    state = pub_m01_example.session_state.filtered_state
+    results = copy.deepcopy(state["results"])
+    _poison_selected_link_child(results)
+    inp = state["result_input_snapshot"]
+
+    pdf = sector_report.build_report(
+        {},
+        inp,
+        results,
+        figures=False,
+        profile=profile,
+    )
+    text = _pub_m01_pdf_text(pdf)
+
+    assert "Shear without links PL-COMPLETE" not in text
+    assert "Shear with links PL-COMPLETE NOT ASSESSED -" in text
+    assert "Shear/torsion link detailing PL-COMPLETE FAIL 157.9 %" in text
+    assert "provided-link resistance evidence is unavailable" not in text
+    assert "127.654" not in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_pub_m01_stale_concrete_input_suppresses_old_worked_values_in_reports(
+    pub_m01_example,
+    profile,
+):
+    state = pub_m01_example.session_state.filtered_state
+    inp = copy.deepcopy(state["result_input_snapshot"])
+    inp["concrete"] = dataclasses.replace(inp["concrete"], fck=80.0)
+    shear = state["results"]["shear"]
+    old_vrd_c = f"{shear['res']['vrd_c']:.3f}"
+    old_utilisation = f"{100.0 * shear['util']:.1f} %"
+
+    pdf = sector_report.build_report(
+        {}, inp, state["results"], figures=False, profile=profile
+    )
+    text = _pub_m01_pdf_text(pdf)
+
+    assert "Shear without links PL-COMPLETE NOT ASSESSED -" in text
+    assert "Shear with links PL-COMPLETE NOT ASSESSED -" in text
+    assert old_vrd_c not in text
+    assert old_utilisation not in text
+    assert "Effective depth d" not in text
+    if profile != "Brief":
+        assert "Recalculate the shear check before relying on resistance" in text
+
+
+@pytest.mark.parametrize("profile", ("Standard", "Audit"))
+def test_pub_m01_malformed_links_and_stale_concrete_suppress_all_shear_operands(
+    pub_m01_example,
+    profile,
+):
+    state = pub_m01_example.session_state.filtered_state
+    results = copy.deepcopy(state["results"])
+    _poison_selected_link_child(results, require_selected=False)
+    inp = copy.deepcopy(state["result_input_snapshot"])
+    inp["concrete"] = dataclasses.replace(inp["concrete"], fck=80.0)
+    old_vrd_c = f"{state['results']['shear']['res']['vrd_c']:.3f}"
+
+    pdf = sector_report.build_report(
+        {}, inp, results, figures=False, profile=profile
+    )
+    text = _pub_m01_pdf_text(pdf)
+
+    assert "Shear without links PL-COMPLETE NOT ASSESSED -" in text
+    assert "Shear with links PL-COMPLETE NOT ASSESSED -" in text
+    assert old_vrd_c not in text
+    assert "Effective depth d" not in text
+
+
+@pytest.mark.parametrize("profile", ("Standard", "Audit"))
+@pytest.mark.parametrize(
+    "attack",
+    ("method", "concrete", "diameter", "cotangent"),
+)
+def test_pub_m01_reports_bind_provided_links_to_current_input(
+    pub_m01_example,
+    profile,
+    attack,
+):
+    state = pub_m01_example.session_state.filtered_state
+    inp = copy.deepcopy(state["result_input_snapshot"])
+    if attack == "method":
+        inp["shear_method"] = next(
+            method
+            for method in capacity.SHEAR_METHODS
+            if method != inp["shear_method"]
+        )
+    elif attack == "concrete":
+        inp["concrete"] = dataclasses.replace(
+            inp["concrete"],
+            fck=inp["concrete"].fck + 1.0,
+        )
+    elif attack == "diameter":
+        inp["shear_link_dia"] += 1.0
+    else:
+        inp["strut_cot_min"] += 0.1
+
+    pdf = sector_report.build_report(
+        {},
+        inp,
+        state["results"],
+        figures=False,
+        profile=profile,
+    )
+    text = _pub_m01_pdf_text(pdf)
+
+    concrete_is_current = attack in {"diameter", "cotangent"}
+    assert (
+        "Shear without links PL-COMPLETE PASS 63.0 %" in text
+    ) is concrete_is_current
+    if not concrete_is_current:
+        assert "Shear without links PL-COMPLETE NOT ASSESSED -" in text
+    assert "Shear with links PL-COMPLETE NOT ASSESSED -" in text
+    assert "Shear/torsion link detailing PL-COMPLETE FAIL 157.9 %" in text
+    assert "23.5 % (PASS; non-governing comparison)" not in text
+    assert "Recalculate" in text
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "missing-vrd-s",
+        "mismatched-minimum",
+        "missing-geometry",
+        "empty-geometry",
+        "malformed-geometry",
+        "malformed-member-angle",
+        "mismatched-diameter",
+        "mismatched-legs",
+    ),
+)
+@pytest.mark.parametrize("profile", ("Standard", "Audit"))
+def test_pub_m01_hostile_retained_link_evidence_fails_closed_in_reports(
+    pub_m01_example,
+    profile,
+    attack,
+):
+    state = pub_m01_example.session_state.filtered_state
+    results = copy.deepcopy(state["results"])
+    for shear in _pub_m01_shear_payloads(results):
+        links = shear["links"]
+        if attack == "missing-vrd-s":
+            del links["res"]["vrd_s"]
+        elif attack == "mismatched-minimum":
+            links["res"]["vrd_s"] = 1.0
+        elif attack == "missing-geometry":
+            del links["shear_geometry"]
+        elif attack == "empty-geometry":
+            links["shear_geometry"] = {}
+        elif attack == "malformed-geometry":
+            links["shear_geometry"]["duct_factor_links"] = "bad"
+        elif attack == "malformed-member-angle":
+            links["member_angle_selection"] = {"objective_labels": True}
+        elif attack == "mismatched-diameter":
+            links["dia"] *= 2.0
+        else:
+            links["legs"] *= 2.0
+
+    pdf = sector_report.build_report(
+        {},
+        state["result_input_snapshot"],
+        results,
+        figures=False,
+        profile=profile,
+    )
+    text = _pub_m01_pdf_text(pdf)
+
+    assert "Shear with links PL-COMPLETE NOT ASSESSED -" in text
+    assert "Shear/torsion link detailing PL-COMPLETE FAIL 157.9 %" in text
+    assert text.count("Shear/torsion link detailing PL-COMPLETE") == 1
+    assert "Shear/torsion link detailing PL-COMPLETE NOT APPLICABLE" not in text
+    assert "23.5 % (PASS; non-governing comparison)" not in text
+    assert "provided-link resistance evidence is unavailable" not in text
+    assert "Recalculate the reinforced-shear check" in text
 
 
 def test_fatigue_outputs_match_independent_equations(

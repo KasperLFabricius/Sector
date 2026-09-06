@@ -1252,18 +1252,48 @@ class ReportBuilder:
         entries = self._base_out.get(f"{family}_cases")
         if entries is not None:
             contexts = []
-            for entry in entries:
+            try:
+                current_records = case_analysis.case_records(self._base_inp, family)
+            except (KeyError, TypeError, ValueError, OverflowError):
+                current_records = []
+            authority = presentation._worked_case_contexts(
+                self._base_inp,
+                self._base_out,
+                family,
+            )
+            for index, (name, case_inp, case_results, current) in enumerate(
+                authority
+            ):
+                entry = entries[index] if index < len(entries) else {}
                 actions = entry.get("actions") or {}
-                if family == "plastic":
-                    case_inp = case_analysis.plastic_case_input(
-                        self._base_inp, actions
-                    )
+                if not isinstance(case_inp, Mapping) and not current:
+                    # Removed or renamed retained rows are not current report cases.
+                    continue
+                if not isinstance(case_inp, Mapping):
+                    try:
+                        case_inp = (
+                            case_analysis.plastic_case_input(
+                                self._base_inp, actions
+                            )
+                            if family == "plastic"
+                            else case_analysis.elastic_case_input(
+                                self._base_inp, actions
+                            )
+                        )
+                    except (KeyError, TypeError, ValueError, OverflowError):
+                        case_inp = dict(self._base_inp)
                 else:
-                    case_inp = case_analysis.elastic_case_input(
-                        self._base_inp, actions
-                    )
-                case_inp["_report_case_actions"] = dict(actions)
-                contexts.append((case_inp, entry.get("results") or {}))
+                    case_inp = dict(case_inp)
+                matching_actions = [
+                    record for record in current_records if record.get("name") == name
+                ]
+                case_inp["_report_case_actions"] = (
+                    dict(matching_actions[0])
+                    if current and len(matching_actions) == 1
+                    else {"name": name}
+                )
+                case_inp["_report_case_current"] = bool(current)
+                contexts.append((case_inp, case_results))
             return contexts
 
         # The current direct report API also accepts one calculation input/result
@@ -1281,6 +1311,44 @@ class ReportBuilder:
             )
         )
         return [(self._base_inp, self._base_out)] if active else []
+
+    def _plastic_publication_authority(self):
+        """Return the current table-level plastic evidence for named cases."""
+
+        return presentation.plastic_publication_authority(
+            self.inp, self.out, self._base_out,
+        )
+
+    def _shear_publication_authority(self):
+        """Return the matching shear evidence for a named torsion case."""
+
+        shear = self.out.get("shear")
+        if isinstance(shear, Mapping):
+            return shear
+        shear = self._base_out.get("shear")
+        return shear if isinstance(shear, Mapping) else None
+
+    def _current_case_inputs(self, family):
+        """Return the canonical current input register for one case family."""
+
+        table_key = f"{family}_cases"
+        if table_key in self._base_inp:
+            try:
+                records = case_analysis.case_records(self._base_inp, family)
+                return [
+                    (
+                        case_analysis.plastic_case_input(self._base_inp, record)
+                        if family == "plastic"
+                        else case_analysis.elastic_case_input(
+                            self._base_inp,
+                            record,
+                        )
+                    )
+                    for record in records
+                ]
+            except (KeyError, TypeError, ValueError, OverflowError):
+                return []
+        return [self._base_inp] if self._case_contexts(family) else []
 
     @staticmethod
     def _case_id(case_inp, family):
@@ -1303,35 +1371,39 @@ class ReportBuilder:
         if not isinstance(selected, Mapping):
             return False
         matches = [
-            case_out
+            (case_inp, case_out)
             for case_inp, case_out in self._case_contexts("plastic")
             if self._case_id(case_inp, "plastic") == selected.get("case_id")
         ]
         return (
             len(matches) == 1
-            and matches[0].get("combined") is not None
-            and presentation.combined_bending_assessment_blocker(matches[0]) is None
+            and matches[0][1].get("combined") is not None
+            and presentation.combined_bending_assessment_blocker(
+                matches[0][1],
+                matches[0][0],
+            ) is None
         )
 
     def _result_values(self, key):
         family = "elastic" if key == "elastic" else "plastic"
         return [
             result[key]
-            for _, result in self._case_contexts(family)
-            if key in result
+            for case_inp, result in self._case_contexts(family)
+            if case_inp.get("_report_case_current") is not False
+            and key in result
         ]
 
     def _case_register(self, family):
         """Escaped case register for cover-page document control."""
-        contexts = self._case_contexts(family)
+        contexts = self._current_case_inputs(family)
         if self.profile.key == "Brief":
             return _LiteralReportText(", ".join(
                 presentation.action_set(case_inp, family)["id"] or "ID NOT SET"
-                for case_inp, _ in contexts
+                for case_inp in contexts
             ))
         return _LiteralReportText("; ".join(
             _report_action_set_text(case_inp, family)
-            for case_inp, _ in contexts
+            for case_inp in contexts
         ))
 
     def _tick(self, frac, text):
@@ -2457,6 +2529,11 @@ class ReportBuilder:
                 if key not in case_out:
                     continue
                 if (
+                    case_inp.get("_report_case_current") is False
+                    and key != "torsion"
+                ):
+                    continue
+                if (
                     key == "combined"
                     and not case_out[key].get("valid")
                     and not case_out[key].get("biaxial")
@@ -2465,12 +2542,16 @@ class ReportBuilder:
                 if (
                     self._selected_family(key, case_inp) is None
                     and not self._needs_diagnostic_chapter(
-                        key, case_out[key]
+                        key,
+                        case_out[key],
+                        case_inp=case_inp,
+                        case_out=case_out,
                     )
                     and not (
                         key == "combined"
                         and presentation.combined_bending_assessment_blocker(
-                            case_out
+                            case_out,
+                            case_inp,
                         ) is not None
                     )
                 ):
@@ -2505,6 +2586,13 @@ class ReportBuilder:
                     != "APPLICABLE"
                 ):
                     continue
+                if presentation.torsion_publication_component_is_current(
+                    case_inp,
+                    case_out.get("shear"),
+                    case_out.get("torsion"),
+                    component=selection.get("component"),
+                )[0] is not True:
+                    continue
                 case_id = presentation.action_set(case_inp, "plastic")["id"] or "-"
                 jobs.append((
                     case_inp,
@@ -2515,13 +2603,17 @@ class ReportBuilder:
                 ))
                 break
         for case_inp, case_out in self._case_contexts("elastic"):
+            if case_inp.get("_report_case_current") is False:
+                continue
             case_id = presentation.action_set(case_inp, "elastic")["id"] or "-"
             if (
                 "elastic" in case_out
                 and (
                     self._selected_family("elastic", case_inp) is not None
                     or self._needs_diagnostic_chapter(
-                        "elastic", case_out["elastic"]
+                        "elastic",
+                        case_out["elastic"],
+                        case_inp=case_inp,
                     )
                 )
             ):
@@ -2586,12 +2678,12 @@ class ReportBuilder:
         active_families = [
             family
             for family in ("plastic", "elastic")
-            if self._case_contexts(family)
+            if self._current_case_inputs(family)
         ]
         cases = [
             presentation.action_set(case_inp, family)["id"]
             for family in active_families
-            for case_inp, _ in self._case_contexts(family)
+            for case_inp in self._current_case_inputs(family)
             if presentation.action_set(case_inp, family)["id"]
         ]
         cases.extend([
@@ -2611,7 +2703,7 @@ class ReportBuilder:
             summary = []
             for family in active_families:
                 summary.append(
-                    f"{family.title()} {len(self._case_contexts(family))}"
+                    f"{family.title()} {len(self._current_case_inputs(family))}"
                 )
             fatigue_count = len(fatigue_presentation.items(
                 self._base_out.get("fatigue"), "spectra"
@@ -3871,12 +3963,12 @@ class ReportBuilder:
                     alias=direction_alias,
                 ),
             ])
-        if self._case_contexts("plastic"):
+        if self._current_case_inputs("plastic"):
             rows.append([
                 "Plastic analysis cases",
                 self._case_register("plastic"),
             ])
-        if self._case_contexts("elastic"):
+        if self._current_case_inputs("elastic"):
             rows.append([
                 "Elastic analysis cases",
                 self._case_register("elastic"),
@@ -4586,7 +4678,7 @@ class ReportBuilder:
         if "plastic_cases" in inp or "elastic_cases" in inp:
             plastic = (
                 case_analysis.case_records(inp, "plastic")
-                if self._case_contexts("plastic") else []
+                if inp.get("plastic_cases") is not None else []
             )
             if plastic:
                 self._small("<b>Plastic / capacity cases</b>")
@@ -4630,7 +4722,7 @@ class ReportBuilder:
 
             elastic = (
                 case_analysis.case_records(inp, "elastic")
-                if self._case_contexts("elastic") else []
+                if inp.get("elastic_cases") is not None else []
             )
             if elastic:
                 self._small("<b>Elastic cases</b>")
@@ -5145,18 +5237,47 @@ class ReportBuilder:
             references=("elastic.modular-ratio.short",),
         )
 
-    def _needs_diagnostic_chapter(self, family, result):
+    def _needs_diagnostic_chapter(
+        self,
+        family,
+        result,
+        *,
+        case_inp=None,
+        case_out=None,
+    ):
         """Keep an unrankable/invalid result's reason without a worked chain."""
 
         if not isinstance(result, Mapping):
             return False
+        if (
+            isinstance(case_inp, Mapping)
+            and case_inp.get("_report_case_current") is False
+        ):
+            return True
         if family in {"plastic", "elastic"}:
             return result.get("converged") is False
         if family == "torsion":
+            shear = (
+                case_out.get("shear")
+                if isinstance(case_out, Mapping)
+                else self._shear_publication_authority()
+            )
+            if (
+                isinstance(case_inp, Mapping)
+                and presentation.torsion_publication_evidence_is_current(
+                    case_inp,
+                    shear,
+                    result,
+                )[0]
+                is not True
+            ):
+                return True
             return (
                 result.get("valid") is False
                 or presentation.torsion_applicability_publication_status(result)
                 == "NOT ASSESSED"
+                or presentation.torsion_assessment_status(result)
+                not in {"PASS", "FAIL"}
             )
         if family in {"minimum_reinforcement", "transverse_reinforcement"}:
             checks = tuple(result.get("checks") or ())
@@ -5168,8 +5289,27 @@ class ReportBuilder:
                 for check in checks
             )
         if family == "shear":
+            if (
+                isinstance(case_inp, Mapping)
+                and presentation.shear_publication_input_is_current(
+                    case_inp,
+                    result,
+                    plastic_result=self._plastic_publication_authority(),
+                )[0]
+                is not True
+            ):
+                return True
             directions = result.get("directions") or {}
             items = tuple(directions.values()) or (result,)
+            if isinstance(case_inp, Mapping) and case_inp.get("shear_links") is True:
+                torsion = (case_out or {}).get("torsion")
+                if any(
+                    presentation.provided_link_publication_assessment(
+                        case_inp, item, torsion_result=torsion,
+                    ).valid is not True
+                    for item in items
+                ):
+                    return True
             return not any(
                 (
                     (item.get("links") or {}).get("res") or {}
@@ -5214,6 +5354,8 @@ class ReportBuilder:
                 item.get("valid") is True
                 and item.get("dkna_valid", item.get("valid")) is True
                 and self._retained_utilisation_available(item.get("dkna_sum"))
+                and presentation.combined_dkna_status(item)
+                in {"PASS", "FAIL", "CONDITIONAL"}
                 for item in items
             )
         return False
@@ -6873,6 +7015,7 @@ class ReportBuilder:
         nominal = presentation.nominal_shear_resistance(
             sh,
             links_selected=self.inp.get("shear_links") is True,
+            input_payload=self.inp,
         )
         concrete_route_selected = bool(
             nominal.get("valid") is True and nominal.get("route") == "concrete"
@@ -6905,14 +7048,45 @@ class ReportBuilder:
 
     def _shear(self):
         aggregate = self.out["shear"]
+        aggregate_current, aggregate_reason = (
+            presentation.shear_publication_input_is_current(
+                self.inp,
+                aggregate,
+                plastic_result=self._plastic_publication_authority(),
+                validate_directions=False,
+            )
+        )
+        if aggregate_current is not True:
+            guidance = _result_reason(
+                aggregate_reason,
+                "shear",
+                "report shear family authority",
+            )
+            self._case_heading("Shear resistance", "plastic")
+            self._h2("Assessment")
+            self._small(
+                "NOT ASSESSED: "
+                + _html_escape(guidance)
+                + ". Recalculate the shear check before relying on resistance, "
+                  "utilisation or worked calculation values. No resistance, "
+                  "utilisation or PASS/FAIL verdict is published."
+            )
+            return
         directions = aggregate.get("directions") or {}
         selected = self._selected_family("shear", self.inp)
         critical = selected is not None
 
         def selected_failure_reason(item):
+            if capacity.validated_signed_shear_demand(item) is None:
+                return _result_reason(
+                    "retained shear action evidence is unavailable",
+                    "shear",
+                    "report signed shear action",
+                )
             selected_resistance = presentation.nominal_shear_resistance(
                 item,
                 links_selected=self.inp.get("shear_links") is True,
+                input_payload=self.inp,
             )
             if selected_resistance.get("valid") is not True:
                 return _result_reason(
@@ -6935,10 +7109,14 @@ class ReportBuilder:
             selected_resistance = presentation.nominal_shear_resistance(
                 aggregate,
                 links_selected=self.inp.get("shear_links") is True,
+                input_payload=self.inp,
             )
             resistance = selected_resistance.get("resistance")
             utilisation = selected_resistance.get("utilisation")
-            selected_unavailable = selected_resistance.get("valid") is not True
+            selected_unavailable = (
+                selected_resistance.get("valid") is not True
+                or capacity.validated_signed_shear_demand(aggregate) is None
+            )
             retained_status = str(
                 aggregate.get("assessment_status")
                 or selected_resistance.get("status")
@@ -6954,7 +7132,10 @@ class ReportBuilder:
                      "Utilisation", "Status", "Tension face"],
                     [
                         action,
-                        f"{_fmt(aggregate.get('signed_v_ed', aggregate.get('v_ed')), 3)} kN",
+                        (
+                            "-" if selected_unavailable
+                            else f"{_fmt(capacity.validated_signed_shear_demand(aggregate), 3)} kN"
+                        ),
                         (
                             "-" if selected_unavailable
                             else f"{_fmt(resistance, 3)} kN"
@@ -7031,10 +7212,14 @@ class ReportBuilder:
             selected_resistance = presentation.nominal_shear_resistance(
                 item,
                 links_selected=self.inp.get("shear_links") is True,
+                input_payload=self.inp,
             )
             resistance = selected_resistance.get("resistance")
             utilisation = selected_resistance.get("utilisation")
-            selected_unavailable = selected_resistance.get("valid") is not True
+            selected_unavailable = (
+                selected_resistance.get("valid") is not True
+                or capacity.validated_signed_shear_demand(item) is None
+            )
             retained_status = str(
                 item.get("status")
                 or item.get("assessment_status")
@@ -7043,7 +7228,10 @@ class ReportBuilder:
             ).upper()
             rows.append([
                 "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>",
-                f"{_fmt(item.get('signed_v_ed', item.get('v_ed')), 3)} kN",
+                (
+                    "-" if selected_unavailable
+                    else f"{_fmt(capacity.validated_signed_shear_demand(item), 3)} kN"
+                ),
                 (
                     "-" if selected_unavailable
                     else f"{_fmt(resistance, 3)} kN"
@@ -7114,11 +7302,43 @@ class ReportBuilder:
     def _shear_direction(self, sh, *, include_case_heading=True, component=None):
         res = sh["res"]
         combined_blocker = presentation.combined_bending_assessment_blocker(
-            self.out
+            self.out,
+            self.inp,
         )
         combined_blocked = combined_blocker is not None
         if include_case_heading:
             self._case_heading("Shear resistance", "plastic")
+        signed_action = capacity.validated_signed_shear_demand(sh)
+        if signed_action is None:
+            self._h2("Assessment")
+            self._small(
+                "NOT ASSESSED: Recalculate the applied shear action and "
+                "resistance before relying on this result. No resistance, "
+                "utilisation or PASS/FAIL verdict is published."
+            )
+            return
+        input_current, input_reason = (
+            presentation.shear_direction_publication_input_is_current(
+                self.inp,
+                sh,
+                plastic_result=self._plastic_publication_authority(),
+            )
+        )
+        if input_current is not True:
+            guidance = _result_reason(
+                input_reason,
+                "shear",
+                "report shear current-input authority",
+            )
+            self._h2("Assessment")
+            self._small(
+                "NOT ASSESSED: "
+                + _html_escape(guidance)
+                + ". Recalculate the shear check before relying on resistance, "
+                  "utilisation or worked calculation values. No resistance, "
+                  "utilisation or PASS/FAIL verdict is published."
+            )
+            return
         component = component or sh.get("component") or (
             "vy" if sh["axis"] == "x" else "vx"
         )
@@ -7131,7 +7351,6 @@ class ReportBuilder:
                 f"shear reinforcement (EN 1992-1-1 sec. {clause}), method "
                 f"<b>{sh['method']}</b>. {axis}, with the "
                 f"tension reinforcement on the {face} face.")
-        signed_action = float(sh.get("signed_v_ed", sh.get("v_ed", 0.0)))
         self._small(
             f"Entered {action} = {_fmt(signed_action, 3)} kN; resistance and "
             f"utilisation use |{action}| = {_fmt(abs(signed_action), 3)} kN."
@@ -7193,7 +7412,14 @@ class ReportBuilder:
             self._small("Warning: V<sub>Rd,c</sub> is zero -- no tension "
                         "reinforcement on the chosen face, or a zero effective depth "
                         "/ web width.")
-        if sh.get("both_faces_evaluated"):
+        face_evidence_current, _face_evidence_reason = (
+            presentation.directional_shear_publication_evidence_is_current(
+                self.inp,
+                sh,
+                plastic_result=self._plastic_publication_authority(),
+            )
+        )
+        if sh.get("both_faces_evaluated") and face_evidence_current:
             face_rows = [["Candidate face", "V<sub>Rd,c</sub>",
                           "|V<sub>Ed</sub>|/V<sub>Rd,c</sub>",
                           "|V<sub>Ed</sub>|/V<sub>Rd</sub>",
@@ -7276,6 +7502,13 @@ class ReportBuilder:
             )
             if combined_blocked:
                 self._small(combined_blocker)
+        elif sh.get("both_faces_evaluated"):
+            self._h2("Face-specific shear comparison")
+            self._small(
+                "NOT ASSESSED: Recalculate before relying on either mandatory "
+                "face or its governing selection. No face-specific resistance, "
+                "utilisation or PASS/FAIL verdict is published."
+            )
         geometry_basis = presentation.shear_geometry_basis(self.inp, sh)
         z_geometry = geometry_basis["z_mm"]
         bw_src = "user input" if sh["bw_user"] else "auto minimum solid width"
@@ -7392,6 +7625,7 @@ class ReportBuilder:
         nominal = presentation.nominal_shear_resistance(
             sh,
             links_selected=self.inp.get("shear_links") is True,
+            input_payload=self.inp,
         )
         concrete_route_selected = bool(
             nominal.get("valid") is True and nominal.get("route") == "concrete"
@@ -7417,13 +7651,16 @@ class ReportBuilder:
 
     def _shear_links(self, sh):
         links = sh["links"]
-        lk = links["res"]
+        link_mapping = links if isinstance(links, dict) else {}
+        lk = link_mapping.get("res")
         self._h2("Shear reinforcement (links)")
-        model_2023 = bool(links.get("model_2023"))
+        model_2023 = bool(link_mapping.get("model_2023"))
         clause = "8.2.3" if model_2023 else "6.2.3"
         nominal = presentation.nominal_shear_resistance(
             sh,
             links_selected=self.inp.get("shear_links") is True,
+            input_payload=self.inp,
+            torsion_result=self.out.get("torsion"),
         )
         links_are_nominal = bool(
             nominal.get("valid") is True and nominal.get("route") == "links"
@@ -7442,10 +7679,10 @@ class ReportBuilder:
             + _html_escape(detailing_status)
             + "."
         )
-        if not lk["valid"]:
+        if not isinstance(lk, dict) or lk.get("valid") is not True:
             reason = _result_reason(
-                links.get("assessment_reason")
-                or lk.get("reason")
+                link_mapping.get("assessment_reason")
+                or (lk or {}).get("reason")
                 or "invalid reinforced-shear input",
                 "shear",
                 "report reinforced-shear reason",
@@ -7456,27 +7693,46 @@ class ReportBuilder:
                 + ". No link lever arm, resistance, utilisation or PASS/FAIL "
                   "verdict is published for this result."
             )
-            angle_applicability = lk.get("angle_applicability") or links.get(
+            angle_applicability = (lk or {}).get(
+                "angle_applicability"
+            ) or link_mapping.get(
                 "angle_applicability"
             )
-            if (
-                isinstance(angle_applicability, dict)
-                and angle_applicability.get("applicable") is False
-            ):
+            public_angle = (
+                presentation.strut_angle_applicability_publication(
+                    angle_applicability
+                )
+            )
+            if public_angle is not None:
                 self._small(
                     "Requested cot theta: "
-                    f"{_fmt(angle_applicability.get('requested_min'), 3)} to "
-                    f"{_fmt(angle_applicability.get('requested_max'), 3)}; "
+                    f"{_fmt(public_angle['requested_min'], 3)} to "
+                    f"{_fmt(public_angle['requested_max'], 3)}; "
                     "permitted for "
-                    + _html_escape(str(angle_applicability.get("method") or "-"))
+                    + _html_escape(public_angle["method"])
                     + ": "
-                    f"{_fmt(angle_applicability.get('permitted_min'), 3)} to "
-                    f"{_fmt(angle_applicability.get('permitted_max'), 3)} ("
-                    + _html_escape(str(angle_applicability.get("clause") or "-"))
-                    + ")."
+                    f"{_fmt(public_angle['permitted_min'], 3)} to "
+                    f"{_fmt(public_angle['permitted_max'], 3)}."
                 )
             return
-        req = ("required (V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>)" if links["required"]
+        provided_link = presentation.provided_link_publication_assessment(
+            self.inp,
+            sh,
+        )
+        if provided_link.valid is not True:
+            reason = _result_reason(
+                provided_link.reason,
+                "shear",
+                "report provided-link resistance assessment",
+            )
+            self._small(
+                "NOT ASSESSED: "
+                + _html_escape(reason)
+                + ". No link resistance, utilisation or PASS/FAIL verdict is "
+                  "published until the reinforced-shear result is recalculated."
+            )
+            return
+        req = ("required (V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>)" if nominal.get("links_required") is True
                else "not strictly required (V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>); "
                     "minimum reinforcement rules still apply")
         if links_are_nominal:
@@ -7487,7 +7743,8 @@ class ReportBuilder:
             )
         else:
             self._p(
-                "The provided-link resistance is retained as non-governing context. "
+                "The provided-link resistance is an independent non-governing "
+                "resistance subcheck. "
                 "The concrete route remains the selected nominal resistance because "
                 "|V<sub>Ed</sub>| &#8804; V<sub>Rd,c</sub>. Minimum reinforcement "
                 "and link detailing are assessed separately."
@@ -7668,9 +7925,9 @@ class ReportBuilder:
             subst=f"min({_fmt(lk['vrd_s'], 3)}, {_fmt(lk['vrd_max'], 3)})",
             result=f"V<sub>Rd</sub> = {_fmt(lk['vrd'], 3)} kN "
                    f"(governed by {lk['governs']})")
-        util = links["util"]
+        util = provided_link.utilisation
         util_txt = _pct(util)
-        verdict = _demand_resistance_verdict(viz.util_ok(util))
+        verdict = provided_link.status
         self._formula("|V<sub>Ed</sub>| / V<sub>Rd</sub>",
                       equation_key="shear.links.utilisation",
                       references=("shear.links.vrd",),
@@ -7678,7 +7935,7 @@ class ReportBuilder:
                       result=(
                           f"{util_txt}  ({verdict})"
                           if links_are_nominal
-                          else f"{util_txt} (non-governing comparison)"
+                          else f"{util_txt} ({verdict}; non-governing comparison)"
                       ))
         if links.get("theta_mode") == "utilisation":
             shared_note = (
@@ -7694,7 +7951,27 @@ class ReportBuilder:
         else:
             angle_note = ("The strut angle is auto-optimised within the bounds to "
                           "maximise V<sub>Rd</sub>.")
-        chord_assessment = links.get("longitudinal_assessment") or {}
+        chord_publication = (
+            presentation.provided_link_longitudinal_publication_assessment(
+                self.inp,
+                sh,
+                torsion_result=self.out.get("torsion"),
+            )
+        )
+        chord_assessment = chord_publication.get("assessment") or {
+            "status": "NOT ASSESSED",
+            "ok": None,
+            "util": None,
+            "reason": "longitudinal chord evidence is unavailable",
+            "coverage_complete": False,
+            "governing": None,
+        }
+        if chord_publication.get("valid") is not True:
+            self._h2("Longitudinal chord assessment")
+            self._small(
+                "NOT ASSESSED: Recalculate the shear and longitudinal chord "
+                "checks before using their worked evidence."
+            )
         if not links_are_nominal:
             self._small(
                 angle_note
@@ -7725,7 +8002,7 @@ class ReportBuilder:
         # Longitudinal chord under M + V (+ T), at the member strut angle -- the
         # same check the combined section shows; printed here so a shear + bending
         # run without torsion still documents it.
-        ch = links.get("chord")
+        ch = chord_publication.get("governing")
         if chord_assessment.get("status") == "NOT APPLICABLE":
             ch = None
         if ch is not None and ch.get("valid"):
@@ -7763,7 +8040,7 @@ class ReportBuilder:
                          f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)"
                 ),
                 result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
-            fallback = presentation.required_chord_fallback(links)
+            fallback = chord_publication.get("fallback")
             fell_back = fallback is not None
             chord_status = str(
                 chord_assessment.get("status") or "NOT ASSESSED"
@@ -7847,7 +8124,7 @@ class ReportBuilder:
                     "N<sub>Vd</sub>z", "M<sub>Ed,total</sub>",
                     "M<sub>Rd</sub>", "Utilisation", "Status",
                 ]]
-                for candidate in links.get("chord_candidates") or ():
+                for candidate in chord_publication.get("candidates") or ():
                     if candidate.get("role") != "shear_axis":
                         continue
                     rows.append([
@@ -7886,7 +8163,7 @@ class ReportBuilder:
                     )
                 )
             self._chord_off_block(
-                links.get("chord_off"),
+                chord_publication.get("chord_off"),
                 assessment_complete=assessment_complete,
             )
         elif model_2023 and isinstance(chord_assessment, Mapping):
@@ -8069,7 +8346,10 @@ class ReportBuilder:
         self._case_heading(
             "Combined bending + shear + torsion (M-V-T)", "plastic"
         )
-        blocker = presentation.combined_bending_assessment_blocker(self.out)
+        blocker = presentation.combined_bending_assessment_blocker(
+            self.out,
+            self.inp,
+        )
         if blocker is not None:
             self._small("Combined Base-EN components: NOT ASSESSED. " + blocker)
             return
@@ -8147,7 +8427,8 @@ class ReportBuilder:
             return
         screen_label = presentation.combined_dkna_screen_label(aggregate)
         combined_blocker = presentation.combined_bending_assessment_blocker(
-            self.out
+            self.out,
+            self.inp,
         )
         if combined_blocker is not None:
             self._case_heading(
@@ -9199,6 +9480,31 @@ class ReportBuilder:
         t = self.out["torsion"]
         critical = self._selected_family("torsion", self.inp) is not None
         self._case_heading("Torsion (thin-walled tube)", "plastic")
+        if self.inp.get("_report_case_current") is False:
+            self._h2("Torsion result")
+            self._status_block(
+                "NOT ASSESSED - Recalculate this action set before relying on "
+                "the torsion result.",
+                "NOT ASSESSED",
+            )
+            return
+        current, current_reason = presentation.torsion_publication_component_is_current(
+            self.inp,
+            self._shear_publication_authority(),
+            t,
+        )
+        if current is not True:
+            guidance = _result_reason(
+                current_reason,
+                "torsion",
+                "report torsion current-evidence reason",
+            )
+            self._h2("Torsion result")
+            self._status_block(
+                "NOT ASSESSED - " + guidance + ". Recalculate the torsion check.",
+                "NOT ASSESSED",
+            )
+            return
         applicability = t.get("applicability")
         if not isinstance(applicability, Mapping):
             applicability = {}
@@ -9291,11 +9597,7 @@ class ReportBuilder:
                 "model, method <b>"
                 + str(t["method"])
                 + "</b>. "
-                + (
-                    "The member strut angle is shared with shear under 6.3.2(2)."
-                    if t.get("theta_mode") == "utilisation"
-                    else "The strut angle maximises torsion resistance."
-                )
+                + presentation.torsion_angle_selection_note(t)
             )
         elif tube_valid and not transverse_resistance_assessed:
             angle_applicability = t.get("angle_applicability")
@@ -9370,6 +9672,16 @@ class ReportBuilder:
             min_reinf_notes = []
             for component in ("vx", "vy"):
                 item = directional.get(component)
+                if presentation.torsion_publication_component_is_current(
+                    self.inp, self._shear_publication_authority(), t, component=component,
+                )[0] is not True:
+                    label = "Vx+T" if component == "vx" else "Vy+T"
+                    rows.append([label, "-", "-", "-", "-", "NOT ASSESSED"])
+                    min_reinf_rows.append([
+                        label, "-", "-", "NOT ASSESSED",
+                        "Recalculate this directional torsion check", "NOT ASSESSED",
+                    ])
+                    continue
                 if not item:
                     continue
                 if transverse_resistance_available:
@@ -12953,9 +13265,13 @@ class ReportBuilder:
         torsion_results = self._result_values("torsion")
         combined_results = [
             case_out["combined"]
-            for _, case_out in self._case_contexts("plastic")
-            if case_out.get("combined") is not None
-            and presentation.combined_bending_assessment_blocker(case_out) is None
+            for case_inp, case_out in self._case_contexts("plastic")
+            if case_inp.get("_report_case_current") is not False
+            and case_out.get("combined") is not None
+            and presentation.combined_bending_assessment_blocker(
+                case_out,
+                case_inp,
+            ) is None
         ]
         if plastic_results:
             if "2023" in str(self.inp.get("concrete_preset", "")):

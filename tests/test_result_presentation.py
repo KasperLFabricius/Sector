@@ -17,9 +17,16 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import result_presentation as presentation  # noqa: E402
 
-from app import modelled_direction  # noqa: E402
-from sector import capacity, codes, combined as combined_core  # noqa: E402
+from app import case_analysis, load_cases, modelled_direction  # noqa: E402
+from sector import (  # noqa: E402
+    capacity,
+    codes,
+    combined as combined_core,
+    section as section_core,
+    shear as shear_core,
+)
 from sector.design_standards import DesignBasisKey, get_design_basis  # noqa: E402
+from sector.materials import Concrete, MildSteel  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -126,6 +133,11 @@ def test_plastic_compression_depth_requires_a_retained_mapping_field():
 
 
 def test_worked_example_selection_retains_named_cases_branches_and_directions():
+    shear_a_vx = _complete_publication_shear(v_ed=80.0, vrd_c=100.0)
+    shear_a_vx.update(axis="y", component="vx")
+    shear_a_vy = _complete_publication_shear(v_ed=80.0, vrd_c=100.0)
+    shear_b_vx = _complete_publication_shear(v_ed=95.0, vrd_c=100.0)
+    shear_b_vx.update(axis="y", component="vx")
     out = {
         "plastic_cases": [
             {
@@ -139,8 +151,8 @@ def test_worked_example_selection_retains_named_cases_branches_and_directions():
                         "util_valid": True,
                     },
                     "shear": {"directions": {
-                        "vx": {"res": {"valid": True}, "util": 0.8},
-                        "vy": {"res": {"valid": True}, "util": 0.8},
+                        "vx": shear_a_vx,
+                        "vy": shear_a_vy,
                     }},
                 },
             },
@@ -154,9 +166,7 @@ def test_worked_example_selection_retains_named_cases_branches_and_directions():
                         "util": 0.9,
                         "util_valid": True,
                     },
-                    "shear": {"directions": {
-                        "vx": {"res": {"valid": True}, "util": 0.95},
-                    }},
+                    "shear": {"directions": {"vx": shear_b_vx}},
                 },
             },
         ],
@@ -901,33 +911,38 @@ def _applicable_torsion_evidence(t_ed=40.0):
 
 @pytest.mark.parametrize(
     ("axis", "tension_low", "component", "angle", "face"),
-    (
-        ("x", True, "z_y", 90.0, "bottom (-y)"),
-        ("x", False, "z_y", 270.0, "top (+y)"),
-        ("y", True, "z_x", 0.0, "left (-x)"),
-        ("y", False, "z_x", 180.0, "right (+x)"),
+        (
+            ("x", True, "z_y", 90.0, "bottom (-y)"),
+            ("x", False, "z_y", -90.0, "top (+y)"),
+            ("y", True, "z_x", 0.0, "left (-x)"),
+            ("y", False, "z_x", 180.0, "right (+x)"),
     ),
 )
 def test_shear_geometry_basis_reconciles_calculated_links_arm_to_source_state(
     axis, tension_low, component, angle, face
 ):
-    shear = {
-        "axis": axis,
-        "tension_low": tension_low,
-        "d": 550.0,
-        "res": {"valid": True, "vrd_c": 100.0},
-        "links": {
-            "res": {"valid": True, "z": 517.787},
-            "z_component": component,
-            "z_source_angle_deg": angle,
-            "z_source_case": "PL-01",
-        },
-    }
+    shear = _complete_publication_shear(
+        v_ed=30.0,
+        vrd_c=100.0,
+        z_mm=517.787,
+    )
+    shear.update(
+        axis=axis,
+        component="vy" if axis == "x" else "vx",
+        tension_low=tension_low,
+    )
+    shear["links"].update(
+        z_component=component,
+        z_source_angle_deg=angle,
+    )
 
-    basis = presentation.shear_geometry_basis(_inp(), shear)
+    basis = presentation.shear_geometry_basis(
+        _publication_inp(shear),
+        shear,
+    )
 
-    assert basis["z_mm"] == pytest.approx(517.787)
-    assert f"|{component}| from PL-01" in basis["statement"]
+    assert basis["z_mm"] == pytest.approx(shear["links"]["res"]["z"])
+    assert f"|{component}| from PL-17" in basis["statement"]
     assert f"{face} {angle:.0f}" in basis["statement"]
     assert "used in V_Rd,s and V_Rd,max" in basis["statement"]
     assert "used in V_Rd,c" in basis["statement"]
@@ -1281,7 +1296,7 @@ def _complete_longitudinal_candidate(
     }
 
 
-def test_combined_summary_cannot_hide_subordinate_failure():
+def test_combined_component_formatter_retains_subordinate_failure():
     theta_deg = math.degrees(math.atan2(1.0, 1.5))
     combined = {
         "valid": True,
@@ -1307,22 +1322,21 @@ def test_combined_summary_cannot_hide_subordinate_failure():
         "torsion_subtubes": None,
         "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
-    rows = presentation.result_summary_rows(
-        _inp(mode="Plastic", combined_on=True),
-        {"plastic": _plastic(), "combined": combined},
-    )
-    by_check = {row["check"]: row for row in rows}
+    components = presentation.combined_physical_components(combined)
+    by_key = {item["key"]: item for item in components}
 
-    assert by_check["Combined M-V-T - DK NA sum"]["status"] == "PASS"
-    assert by_check["Combined concrete compression strut"]["status"] == "FAIL"
-    assert by_check["Combined closed stirrup"]["status"] == "PASS"
-    assert by_check["Combined longitudinal reinforcement"]["status"] == "PASS"
-    assert by_check["Combined longitudinal reinforcement"]["util"] == pytest.approx(
-        0.65
+    assert presentation.combined_dkna_status(combined) == "PASS"
+    assert by_key["concrete"]["status"] == "FAIL"
+    assert by_key["stirrup"]["status"] == "PASS"
+    assert by_key["longitudinal"]["status"] == "PASS"
+    assert by_key["longitudinal"]["util"] == pytest.approx(0.65)
+    assert capacity.aggregate_assessment_status(
+        ("PASS", *(item["status"] for item in components))
+    ) == "FAIL"
+    _assert_unbound_combined_is_not_published(
+        _inp(mode="Plastic", combined_on=True),
+        combined,
     )
-    assert "Combined transverse reinforcement" not in by_check
-    assert "Combined off-axis chord" not in by_check
-    assert presentation.overall_summary_status(rows) == "FAIL"
 
 
 def test_combined_summary_names_independent_dkna_inclusion_route():
@@ -1336,20 +1350,15 @@ def test_combined_summary_names_independent_dkna_inclusion_route():
         "dkna_ok": None,
         "m_v_independent": True,
     }
-    rows = presentation.result_summary_rows(
+    assert presentation.combined_dkna_status(combined) == "CONDITIONAL"
+    note = presentation.combined_dkna_assumption_note(combined)
+    assert "design assumption" in note
+    assert "area, distribution and anchorage" in note
+    assert "N+M+V+T" not in note
+    _assert_unbound_combined_is_not_published(
         _inp(mode="Plastic", combined_on=True),
-        {"plastic": _plastic(), "combined": combined},
+        combined,
     )
-    row = next(
-        item for item in rows
-        if item["check"] == "Combined M-V-T - DK NA sum"
-    )
-
-    assert row["status"] == "CONDITIONAL"
-    assert "DK NA screen: max(N+M+T, N+V+T)" in row["note"]
-    assert "design assumption" in row["note"]
-    assert "area, distribution and anchorage" in row["note"]
-    assert "N+M+V+T" not in row["note"]
 
 
 @pytest.mark.parametrize(
@@ -1497,17 +1506,19 @@ def test_separate_mv_assumption_preserves_conservative_overall_state(
         "torsion_subtubes": None,
         "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
-    rows = presentation.result_summary_rows(
+    components = presentation.combined_physical_components(combined)
+    longitudinal_component = next(
+        item for item in components if item["key"] == "longitudinal"
+    )
+    assert presentation.combined_dkna_status(combined) == expected_dkna
+    assert longitudinal_component["status"] == expected_physical
+    assert capacity.aggregate_assessment_status(
+        (expected_dkna, *(item["status"] for item in components))
+    ) == overall
+    _assert_unbound_combined_is_not_published(
         _inp(mode="Plastic", combined_on=True),
-        {"plastic": _plastic(), "combined": combined},
+        combined,
     )
-    by_check = {row["check"]: row for row in rows}
-
-    assert by_check["Combined M-V-T - DK NA sum"]["status"] == expected_dkna
-    assert by_check["Combined longitudinal reinforcement"]["status"] == (
-        expected_physical
-    )
-    assert presentation.overall_summary_status(rows) == overall
 
 
 @pytest.mark.parametrize(
@@ -1551,17 +1562,19 @@ def test_combined_summary_withholds_verdict_for_fallback_or_missing_checks():
         },
         "longitudinal_all_conditional": False,
     }
-    rows = presentation.result_summary_rows(
-        _inp(mode="Plastic", combined_on=True),
-        {"plastic": _plastic(), "combined": combined},
-    )
-    by_check = {row["check"]: row for row in rows}
-
-    assert by_check["Combined concrete compression strut"]["status"] == "NOT ASSESSED"
-    assert by_check["Combined closed stirrup"]["status"] == "NOT ASSESSED"
-    assert by_check["Combined longitudinal reinforcement"]["status"] == "NOT ASSESSED"
+    by_key = {
+        item["key"]: item
+        for item in presentation.combined_physical_components(combined)
+    }
+    assert by_key["concrete"]["status"] == "NOT ASSESSED"
+    assert by_key["stirrup"]["status"] == "NOT ASSESSED"
+    assert by_key["longitudinal"]["status"] == "NOT ASSESSED"
     assert "pure-axis substitute" in (
-        by_check["Combined longitudinal reinforcement"]["note"].lower()
+        by_key["longitudinal"]["note"].lower()
+    )
+    _assert_unbound_combined_is_not_published(
+        _inp(mode="Plastic", combined_on=True),
+        combined,
     )
 
 
@@ -1574,18 +1587,13 @@ def test_combined_summary_marks_missing_prerequisites_not_assessed():
         "method": "DK NA",
         "m_v_independent": True,
     }
-    rows = presentation.result_summary_rows(
-        _inp(mode="Plastic", combined_on=True),
-        {"plastic": _plastic(), "combined": combined},
-    )
-    by_check = {row["check"]: row for row in rows}
-
-    assert by_check["Combined M-V-T - DK NA sum"]["status"] == "NOT ASSESSED"
-    assert by_check["Combined M-V-T - DK NA sum"]["note"] == (
-        "DK NA screen: max(N+M+T, N+V+T); Missing prerequisite: V, T"
-    )
     assert presentation.combined_dkna_screen_label(combined) == (
         "max(N+M+T, N+V+T)"
+    )
+    assert presentation.combined_dkna_status(combined) == "NOT ASSESSED"
+    rows = _assert_unbound_combined_is_not_published(
+        _inp(mode="Plastic", combined_on=True),
+        combined,
     )
     assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
 
@@ -1619,15 +1627,17 @@ def test_combined_summary_surfaces_incomplete_torsion_chord_coverage():
         "longitudinal_all_conditional": True,
         "torsion_longitudinal_assessment": _zero_formula_628_assessment(),
     }
-    rows = presentation.result_summary_rows(
-        _inp(mode="Plastic", combined_on=True),
-        {"plastic": _plastic(), "combined": combined},
+    longitudinal = next(
+        item
+        for item in presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
     )
-    by_check = {row["check"]: row for row in rows}
-
-    assert by_check["Combined longitudinal reinforcement"]["status"] == "NOT ASSESSED"
-    assert "not solved" in by_check["Combined longitudinal reinforcement"]["note"]
-    assert "Combined off-axis chord coverage" not in by_check
+    assert longitudinal["status"] == "NOT ASSESSED"
+    assert "not solved" in longitudinal["note"]
+    rows = _assert_unbound_combined_is_not_published(
+        _inp(mode="Plastic", combined_on=True),
+        combined,
+    )
     assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
 
 
@@ -1883,54 +1893,1018 @@ def test_combined_component_formatter_does_not_reselect_governing_chords():
     assert "candidate_util" not in source
 
 
-def test_shear_screening_does_not_fail_when_selected_links_pass():
-    shear = {
-        "res": {"valid": True, "vrd_c": 100.0},
-        "util": 1.20,
-        "method": "DK NA",
+def _complete_publication_shear(
+    *,
+    v_ed,
+    vrd_c,
+    asw_over_s=0.5,
+    z_mm=500.0,
+    longitudinal_assessment=None,
+):
+    link_result = shear_core.vrd_links(
+        35.0,
+        codes.EC2_2005_DKNA,
+        300.0,
+        550.0,
+        asw_over_s,
+        500.0,
+        0.0,
+        0.18,
+        1.0,
+        2.5,
+        z_mm=z_mm,
+        v_ed_kn=v_ed,
+    )
+    spacing = 200.0
+    link_area = asw_over_s * spacing
+    legs = 2.0
+    diameter = math.sqrt(4.0 * link_area / (legs * math.pi))
+    angle_limits = {
+        "minimum": codes.EC2_2005_DKNA.shear_cot_min_limit,
+        "maximum": codes.EC2_2005_DKNA.shear_cot_max_limit,
+        "basis": "2005-family fixed range",
+        "ductility_class": "B",
+        "ductility_factor": 1.0,
+        "axial_tension_applied": False,
+        "compression_extension_credited": False,
+        "clause": "EN 1992-1-1:2005, 6.2.3(2), Formula (6.7N)",
+    }
+
+
+    angle_applicability = shear_core.strut_angle_applicability(
+        1.0,
+        2.5,
+        permitted_min=angle_limits["minimum"],
+        permitted_max=angle_limits["maximum"],
+        method=codes.EC2_2005_DKNA.label,
+        basis=angle_limits["basis"],
+        clause=angle_limits["clause"],
+        active=v_ed > 0.0,
+    )
+    link_result["angle_applicability"] = angle_applicability
+    geometry = shear_core.resolve_shear_geometry(
+        model_2023=False,
+        solid_rectangle=True,
+        section_form=shear_core.SHEAR_SECTION_AUTO,
+        bw_mm=300.0,
+        bw_user=False,
+        links_present=True,
+        duct_case=shear_core.SHEAR_DUCT_NONE,
+    )
+    longitudinal_force = (
+        0.0 if v_ed <= vrd_c else 0.5 * v_ed * link_result["cot"]
+    )
+    if longitudinal_assessment is None:
+        longitudinal_assessment = {
+            "status": (
+                "NOT APPLICABLE"
+                if longitudinal_force == 0.0
+                else "NOT ASSESSED"
+            ),
+            "ok": None,
+            "util": None,
+            "reason": (
+                "no_longitudinal_chord_action"
+                if longitudinal_force == 0.0
+                else "required_longitudinal_chord_coverage_incomplete"
+            ),
+            "coverage_complete": longitudinal_force == 0.0,
+            "governing": None,
+        }
+    return {
+        "v_ed": v_ed,
+        "signed_v_ed": v_ed,
+        "axis": "x",
+        "component": "vy",
+        "tension_low": True,
+        "n_ed": 0.0,
+        "n_ed_comp": 0.0,
+        "ac": 0.18,
+        "d": 550.0,
+        "fck": 35.0,
+        "bw": 300.0,
+        "res": {"valid": True, "vrd_c": vrd_c},
+        "util": v_ed / vrd_c,
+        "method": codes.EC2_2005_DKNA.label,
+        "model_2023": False,
         "links": {
-            "res": {"valid": True, "governs": "links"},
-            "util": 0.80,
+            "res": link_result,
+            "util": v_ed / link_result["vrd"],
+            "asw": link_area,
+            "asw_over_s": asw_over_s,
+            "effective_asw_over_s": asw_over_s,
+            "asw_factor": 1.0,
+            "legs": legs,
+            "dia": diameter,
+            "s": spacing,
+            "longitudinal_shear_force": longitudinal_force,
+            "longitudinal_shear_symbol": "delta_Ftd",
+            "longitudinal_shear_clause": "6.2.3(7), Formula (6.18)",
+            "delta_ftd": longitudinal_force,
+            "required": bool(v_ed > vrd_c),
+            "fywk": 500.0,
+            "cot_min": 1.0,
+            "cot_max": 2.5,
+            "cot_limit_lo": 1.0,
+            "cot_limit_hi": 2.5,
+            "angle_limits": angle_limits,
+            "angle_applicability": angle_applicability,
+            "model_2023": False,
+            "theta_mode": "resistance",
+            "member_angle_selection": None,
+            "longitudinal_assessment": longitudinal_assessment,
+            "longitudinal_all_conditional": False,
+            "out_of_limits": False,
+            "z_source": "plastic internal lever arm",
+            "z_component": "z_y",
+            "z_source_angle_deg": 90.0,
+            "z_source_case": "PL-17",
+            "z_source_axial_kn": 0.0,
+            "shear_geometry": geometry,
         },
     }
+
+
+def _complete_publication_shear_2023(
+    *,
+    v_ed,
+    vrd_c,
+    asw_over_s=10.0,
+):
+    shear = _complete_publication_shear(
+        v_ed=v_ed,
+        vrd_c=vrd_c,
+        asw_over_s=asw_over_s,
+    )
+    limits = shear_core.compression_field_limits_2023(0.0, v_ed, "B")
+    applicability = shear_core.strut_angle_applicability(
+        1.0,
+        2.5,
+        permitted_min=limits["minimum"],
+        permitted_max=limits["maximum"],
+        method=codes.EC2_2023.label,
+        basis=limits["basis"],
+        clause=limits["clause"],
+        active=v_ed > 0.0,
+    )
+    links = shear["links"]
+    result = shear_core.vrd_links(
+        35.0,
+        codes.EC2_2023,
+        300.0,
+        550.0,
+        asw_over_s,
+        500.0,
+        0.0,
+        0.18,
+        1.0,
+        2.5,
+        z_mm=500.0,
+        fcd_mpa=35.0 / 1.45,
+        gamma_s=1.20,
+        v_ed_kn=v_ed,
+        ductility_class="B",
+        angle_applicability=applicability,
+    )
+    geometry = shear_core.resolve_shear_geometry(
+        model_2023=True,
+        solid_rectangle=True,
+        section_form=shear_core.SHEAR_SECTION_AUTO,
+        bw_mm=300.0,
+        bw_user=False,
+        links_present=True,
+        duct_case=shear_core.SHEAR_DUCT_NONE,
+    )
+    links.update(
+        res=result,
+        util=v_ed / result["vrd"],
+        longitudinal_shear_force=(
+            0.0 if v_ed <= vrd_c else v_ed * result["cot"]
+        ),
+        longitudinal_shear_symbol="NVd",
+        longitudinal_shear_clause="8.2.3(8), Formula (8.50)",
+        delta_ftd=None,
+        cot_limit_lo=limits["minimum"],
+        cot_limit_hi=limits["maximum"],
+        angle_limits=limits,
+        angle_applicability=applicability,
+        model_2023=True,
+        shear_geometry=geometry,
+    )
+    shear.update(
+        method=codes.EC2_2023.label,
+        model_2023=True,
+        fck=35.0,
+        n_ed_comp=0.0,
+        ac=0.18,
+    )
+    return shear
+
+
+def _publication_inp(shear, **updates):
+    links = shear["links"]
+    axis = shear.get("axis", "x")
+    component = shear.get("component") or ("vy" if axis == "x" else "vx")
+    method = shear.get("method", codes.EC2_2005_DKNA.label)
+    angle_limits = links.get("angle_limits") or {}
+    ductility_class = angle_limits.get("ductility_class", "B")
+    outer = (
+        [
+            (-0.15, -0.30),
+            (0.15, -0.30),
+            (0.15, 0.30),
+            (-0.15, 0.30),
+        ]
+        if axis == "x"
+        else [
+            (-0.30, -0.15),
+            (0.30, -0.15),
+            (0.30, 0.15),
+            (-0.30, 0.15),
+        ]
+    )
+    if axis == "x":
+        bars = [(-0.10, -0.25 if shear.get("tension_low", True) else 0.25, 1473.0)]
+    else:
+        bars = [(-0.25 if shear.get("tension_low", True) else 0.25, -0.10, 1473.0)]
+    inp = _inp(
+        outer=outer,
+        holes=[],
+        bars=bars,
+        tendons=[],
+        section=section_core.Section.from_polygon(
+            corners=outer,
+            bars_xy_area_mm2=bars,
+        ),
+        prestress=None,
+        concrete=Concrete(fck=35.0, gamma_c=1.45, curve=2),
+        steel=MildSteel(
+            fytk=500.0,
+            fyck=500.0,
+            futk=500.0,
+            eut=0.05,
+            gamma_y=1.2,
+            curve=2,
+        ),
+        P_pl=0.0,
+        Mx_pl=0.0,
+        My_pl=0.0,
+        shear_on=True,
+        shear_links=True,
+        shear_method=method,
+        transverse_ductility_class=ductility_class,
+        shear_fywk=500.0,
+        shear_section_form=shear_core.SHEAR_SECTION_AUTO,
+        shear_axis=axis,
+        shear_tension=bool(shear.get("tension_low", True)),
+        shear_V=shear["v_ed"],
+        shear_bw=0.0,
+        shear_link_dia=links["dia"],
+        shear_link_s=links["s"],
+        strut_cot_min=links["cot_min"],
+        strut_cot_max=links["cot_max"],
+        shear_vx_bw=0.0,
+        shear_vy_bw=0.0,
+        shear_vx_web_inclination_deg=0.0,
+        shear_vy_web_inclination_deg=0.0,
+        shear_hoop_diameter=0.0,
+        shear_vx_fitted_z=0.0,
+        shear_vy_fitted_z=0.0,
+        shear_duct_case=shear_core.SHEAR_DUCT_NONE,
+        shear_vx_duct_sum=0.0,
+        shear_vy_duct_sum=0.0,
+        shear_vx_duct_largest=0.0,
+        shear_vy_duct_largest=0.0,
+        shear_dlower=16.0,
+        shear_gamma_v=1.4,
+    )
+    inp[f"shear_{component}_link_legs"] = links["legs"]
+    inp.update(updates)
+    link_result = links.get("res") or {}
+    if link_result.get("z") is not None:
+        expected_z, _z_reason = capacity.shear_lever_arm(
+            inp,
+            axis,
+            bool(shear.get("tension_low", True)),
+            shear["d"],
+        )
+        assert expected_z is not None
+        rebuilt = shear_core.vrd_links(
+            shear["fck"],
+            capacity.SHEAR_METHODS[inp["shear_method"]],
+            shear["bw"],
+            shear["d"],
+            links["asw_over_s"],
+            links["fywk"],
+            shear.get("n_ed_comp", 0.0),
+            shear.get("ac", 0.18),
+            links["cot_min"],
+            links["cot_max"],
+            z_mm=expected_z,
+            fcd_mpa=inp["concrete"].fcd,
+            gamma_s=inp["steel"].gamma_y,
+            v_ed_kn=shear["v_ed"],
+            ductility_class=ductility_class,
+            angle_applicability=links["angle_applicability"],
+        )
+        links["res"] = rebuilt
+        links["util"] = shear["v_ed"] / rebuilt["vrd"]
+        link_result = rebuilt
+        links["z_input_basis"] = capacity.shear_link_arm_publication_basis(
+            inp,
+            axis,
+            bool(shear.get("tension_low", True)),
+            link_result["z"],
+        )
+    return inp
+
+
+def _bind_concrete_publication_fixture(shear, inp):
+    """Replace the synthetic VRd,c child with one complete canonical record."""
+
+    axis = shear["axis"]
+    tension_low = shear["tension_low"]
+    if axis == "x":
+        inp["outer"] = [
+            (-0.15, -0.30),
+            (0.15, -0.30),
+            (0.15, 0.30),
+            (-0.15, 0.30),
+        ]
+        inp["bars"] = [(-0.10, -0.25 if tension_low else 0.25, 1473.0)]
+    else:
+        inp["outer"] = [
+            (-0.30, -0.15),
+            (0.30, -0.15),
+            (0.30, 0.15),
+            (-0.30, 0.15),
+        ]
+        inp["bars"] = [(-0.25 if tension_low else 0.25, -0.10, 1473.0)]
+    area, cx, cy = capacity.gross_area_centroid(inp["outer"], inp["holes"])
+    asl, cg, asl_ids = shear_core.tension_reinforcement_selection(
+        inp["bars"], axis, tension_low, cy if axis == "x" else cx
+    )
+    d_mm = shear_core.effective_depth(inp["outer"], axis, tension_low, cg)
+    bw_auto = shear_core.min_web_width(inp["outer"], inp["holes"], axis)
+    code = capacity.SHEAR_METHODS[inp["shear_method"]]
+    model_2023 = getattr(code, "shear_model", "2005") == "2023"
+    fyd = capacity.design_yield(inp["steel"])
+    geometry = shear_core.resolve_shear_geometry(
+        model_2023=model_2023,
+        solid_rectangle=True,
+        section_form=inp["shear_section_form"],
+        bw_mm=bw_auto,
+        bw_user=False,
+        links_present=True,
+        duct_case=inp["shear_duct_case"],
+    )
+    ddg = code.shear_ddg(inp["concrete"].fck, inp["shear_dlower"]) if model_2023 else 0.0
+    gamma_v = (
+        shear_core.validate_gamma_v(inp["shear_gamma_v"], label="gamma_V")
+        if model_2023
+        else None
+    )
+    m_ed_2023 = inp["Mx_pl"] if axis == "x" else inp["My_pl"]
+    concrete = shear_core.vrd_c(
+        inp["concrete"].fck,
+        code,
+        geometry["concrete_bw_mm"],
+        d_mm,
+        asl,
+        0.0,
+        area,
+        fyd_mpa=fyd,
+        ddg_mm=(ddg or 32.0),
+        m_ed_knm=m_ed_2023,
+        v_ed_kn=shear["v_ed"],
+        fcd_mpa=inp["concrete"].fcd,
+        gamma_c=inp["concrete"].gamma_c,
+        gamma_v=gamma_v,
+    )
+    shear.update(
+        res=concrete,
+        util=shear["v_ed"] / concrete["vrd_c"],
+        signed_v_ed=shear["v_ed"],
+        bw=bw_auto,
+        bw_auto=bw_auto,
+        bw_user=False,
+        shear_geometry=geometry,
+        d=d_mm,
+        asl=asl,
+        asl_bar_ids=asl_ids,
+        asl_cg=cg,
+        ac=area,
+        fck=inp["concrete"].fck,
+        n_ed=0.0,
+        n_prestress=0.0,
+        n_ed_comp=0.0,
+        m_ed_2023=m_ed_2023,
+        moment_reference_shift=0.0,
+        m_prestress=0.0,
+        centroid=(cx, cy),
+        method=inp["shear_method"],
+        model_2023=model_2023,
+        ddg=ddg,
+        fyd_flex=fyd,
+    )
+    links = shear.get("links")
+    if isinstance(links, dict) and (links.get("res") or {}).get("z") is not None:
+        links["required"] = bool(shear["v_ed"] > concrete["vrd_c"])
+        links["z_input_basis"] = capacity.shear_link_arm_publication_basis(
+            inp,
+            axis,
+            tension_low,
+            links["res"]["z"],
+        )
+    return concrete["vrd_c"]
+
+
+def _bind_link_chord_publication_fixture(shear, inp, *, mx_factor=0.0):
+    """Attach one current face/chord result to a complete shear fixture."""
+
+    axis = shear["axis"]
+    tension_low = shear["tension_low"]
+    m_rd, conditional = capacity.shear_face_mrd(
+        inp,
+        axis,
+        tension_low,
+        m_off=0.0,
+        moment_reference_shift=0.0,
+    )
+    if axis == "x":
+        inp["Mx_pl"] = mx_factor * m_rd
+    else:
+        inp["My_pl"] = mx_factor * m_rd
+    shear["m_ed_2023"] = inp["Mx_pl"] if axis == "x" else inp["My_pl"]
+    links = shear["links"]
+    force = (
+        0.5 * shear["v_ed"] * links["res"]["cot"]
+        if shear["v_ed"] > shear["res"]["vrd_c"]
+        else 0.0
+    )
+    links["longitudinal_shear_force"] = force
+    links["delta_ftd"] = force
+    applied = combined_core.chord_applied_moment(
+        inp["Mx_pl"] if axis == "x" else inp["My_pl"],
+        tension_low,
+    )
+    chord = combined_core.longitudinal_check(
+        applied,
+        m_rd,
+        force,
+        0.0,
+        links["res"]["z"] / 1000.0,
+        cap_shear_force=True,
+    )
+    chord.update(
+        valid=True,
+        role="shear_axis",
+        axis=axis,
+        tension_low=tension_low,
+        off_util=0.0,
+        biaxial=False,
+        m_off=0.0,
+        conditional=conditional,
+        has_torsion=False,
+        gets_shift=True,
+        off_not_evaluated=None,
+        z_src="plastic internal lever arm",
+        theta_mode=links["theta_mode"],
+    )
+    links.update(
+        chord=chord,
+        chord_off=None,
+        chord_candidates=[chord],
+        governing_longitudinal=chord,
+        longitudinal_fallback=None,
+        longitudinal_all_conditional=True,
+    )
+    links["longitudinal_assessment"] = capacity.longitudinal_chord_assessment(
+        links,
+        shear_axis=axis,
+        shear_tension_low=tension_low,
+        shear_live=True,
+        torsion_live=False,
+        torsion_subdivided=False,
+    )
+    links["z_input_basis"] = capacity.shear_link_arm_publication_basis(
+        inp,
+        axis,
+        tension_low,
+        links["res"]["z"],
+    )
+    return chord
+
+
+def test_provided_link_publication_accepts_reversed_entered_cot_limits():
+    shear = _complete_publication_shear(v_ed=30.0, vrd_c=47.59286047)
+    inp = _publication_inp(shear)
+    inp["strut_cot_min"], inp["strut_cot_max"] = (
+        inp["strut_cot_max"],
+        inp["strut_cot_min"],
+    )
+
+    assessment = presentation.provided_link_publication_assessment(inp, shear)
+
+    assert assessment.valid is True
+    assert assessment.status == "PASS"
+
+
+def _directional_publication_inp(shear, *, signed_v=30.0):
+    """Return one complete named-case Vx/Vy authority record."""
+
+    inp = _publication_inp(shear)
+    inp.update(
+        shear_Vx=0.0,
+        shear_Vy=float(signed_v),
+        shear_face_x="auto",
+        shear_face_y="auto",
+        shear_components={
+            "vx": {
+                "signed_v_ed": 0.0,
+                "v_ed": 0.0,
+                "axis": "y",
+                "face": "auto",
+                "active": False,
+            },
+            "vy": {
+                "signed_v_ed": float(signed_v),
+                "v_ed": abs(float(signed_v)),
+                "axis": "x",
+                "face": "auto",
+                "active": True,
+            },
+        },
+    )
+    shear["signed_v_ed"] = float(signed_v)
+    return inp
+
+
+@pytest.mark.parametrize("signed_v", (30.0, -30.0))
+def test_directional_link_publication_accepts_coherent_signed_action(signed_v):
+    shear = _complete_publication_shear(v_ed=30.0, vrd_c=47.59286047)
+    inp = _directional_publication_inp(shear, signed_v=signed_v)
+
+    assessment = presentation.provided_link_publication_assessment(inp, shear)
+
+    assert assessment.valid is True
+    assert assessment.status == "PASS"
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "raw-action",
+        "component-magnitude",
+        "component-signed",
+        "component-axis",
+        "component-face",
+        "component-active",
+        "mx-action",
+        "my-action",
+    ),
+)
+def test_directional_link_publication_rejects_contradictory_action_aliases(attack):
+    shear = _complete_publication_shear(v_ed=30.0, vrd_c=47.59286047)
+    inp = _directional_publication_inp(shear)
+    component = inp["shear_components"]["vy"]
+    if attack == "raw-action":
+        inp["shear_Vy"] = 31.0
+    elif attack == "component-magnitude":
+        component["v_ed"] = 31.0
+    elif attack == "component-signed":
+        component["signed_v_ed"] = 31.0
+    elif attack == "component-axis":
+        component["axis"] = "y"
+    elif attack == "component-face":
+        component["face"] = "negative"
+    elif attack == "component-active":
+        component["active"] = False
+    elif attack == "mx-action":
+        inp["Mx_pl"] = True
+    else:
+        inp["My_pl"] = math.inf
+
+    assessment = presentation.provided_link_publication_assessment(inp, shear)
+
+    assert assessment.valid is False
+    assert assessment.status == "NOT ASSESSED"
+    assert assessment.resistance is None
+    assert assessment.utilisation is None
+
+
+def test_link_publication_recomputes_expected_lever_arm_instead_of_trusting_child():
+    shear = _complete_publication_shear(v_ed=30.0, vrd_c=47.59286047)
+    inp = _directional_publication_inp(shear)
+    links = shear["links"]
+    forged_z = links["res"]["z"] + 100.0
+    forged = shear_core.vrd_links(
+        shear["fck"],
+        capacity.SHEAR_METHODS[inp["shear_method"]],
+        shear["bw"],
+        shear["d"],
+        links["asw_over_s"],
+        links["fywk"],
+        0.0,
+        0.18,
+        links["cot_min"],
+        links["cot_max"],
+        z_mm=forged_z,
+        v_ed_kn=shear["v_ed"],
+        angle_applicability=links["angle_applicability"],
+    )
+    links["res"] = forged
+    links["util"] = shear["v_ed"] / forged["vrd"]
+    links["z_input_basis"] = capacity.shear_link_arm_publication_basis(
+        inp,
+        shear["axis"],
+        shear["tension_low"],
+        forged_z,
+    )
+
+    assessment = presentation.provided_link_publication_assessment(inp, shear)
+
+    assert assessment.valid is False
+    assert assessment.status == "NOT ASSESSED"
+    assert assessment.resistance is None
+    assert assessment.utilisation is None
+
+
+def _forge_publication_compression_coefficient(shear, coefficient):
+    links = shear["links"]
+    result = links["res"]
+    model_2023 = links["model_2023"]
+    a = result["asw_over_s"] * result["fywd"]
+    if model_2023:
+        result["nu"] = coefficient
+        result["nu1"] = coefficient
+        b = result["bw"] * coefficient * result["fcd"]
+    else:
+        result["alpha_cw"] = coefficient
+        b = coefficient * result["bw"] * result["nu1"] * result["fcd"]
+    angle = shear_core.optimum_strut_angle(
+        a,
+        b,
+        result["cot_min"],
+        result["cot_max"],
+    )
+    vrd_s = a * result["z"] * angle.cot / 1000.0
+    vrd_max = b * result["z"] / (angle.cot + angle.tan) / 1000.0
+    result.update(
+        vrd_s=vrd_s,
+        vrd_max=vrd_max,
+        vrd=min(vrd_s, vrd_max),
+        cot=angle.cot,
+        tan=angle.tan,
+        theta_deg=angle.theta_deg,
+        sin_cos=angle.sin_cos,
+        cot_unconstrained=angle.cot_unconstrained,
+        angle_selection=angle.selection,
+        angle_a=a,
+        angle_b=b,
+        governs=(
+            "links (tau_Rd,sy)"
+            if model_2023 and vrd_s <= vrd_max
+            else "compression field (sigma_cd)"
+            if model_2023
+            else "stirrups (VRd,s)"
+            if vrd_s <= vrd_max
+            else "crushing (VRd,max)"
+        ),
+    )
+    if model_2023:
+        tau_ed = shear["v_ed"] * 1000.0 / (result["bw"] * result["z"])
+        result.update(
+            nu_fcd=coefficient * result["fcd"],
+            sigma_cd=tau_ed * (angle.cot + angle.tan),
+            tau_ed=tau_ed,
+            tau_rd_sy=result["rho_w"] * result["fywd"] * angle.cot,
+            tau_rd_max=(
+                coefficient * result["fcd"] / (angle.cot + angle.tan)
+            ),
+        )
+    links["util"] = shear["v_ed"] / result["vrd"]
+    force = (1.0 if model_2023 else 0.5) * shear["v_ed"] * angle.cot
+    links["longitudinal_shear_force"] = force
+    if not model_2023:
+        links["delta_ftd"] = force
+
+
+@pytest.mark.parametrize(
+    ("factory", "coefficient"),
+    (
+        (_complete_publication_shear, 2.0),
+        (_complete_publication_shear_2023, 1.0),
+    ),
+)
+def test_current_link_publication_rejects_coherent_compression_coefficient_forgery(
+    factory,
+    coefficient,
+):
+    shear = factory(v_ed=1000.0, vrd_c=47.59286047, asw_over_s=10.0)
+    inp = _publication_inp(shear)
+    vrd_c = _bind_concrete_publication_fixture(shear, inp)
+    baseline = presentation.provided_link_publication_assessment(inp, shear)
+    assert baseline.valid is True
+    assert baseline.status == "FAIL"
+
+    _forge_publication_compression_coefficient(shear, coefficient)
+    retained = capacity.provided_link_shear_assessment(shear)
+    guarded = presentation.provided_link_publication_assessment(inp, shear)
+
+    assert retained.valid is True
+    assert retained.status == "PASS"
+    assert guarded.valid is False
+    assert guarded.status == "NOT ASSESSED"
+    assert guarded.resistance is None
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "method",
+        "fck",
+        "gamma-c",
+        "diameter",
+        "legs",
+        "spacing",
+        "cotangent",
+        "section-form",
+        "duct-case",
+    ),
+)
+def test_provided_link_publication_binds_every_current_input_operand(attack):
+    shear = _complete_publication_shear(v_ed=30.0, vrd_c=47.59286047)
+    inp = _publication_inp(shear)
+    if attack == "method":
+        inp["shear_method"] = next(
+            method
+            for method in capacity.SHEAR_METHODS
+            if method != codes.EC2_2005_DKNA.label
+        )
+    elif attack == "fck":
+        inp["concrete"] = Concrete(fck=40.0, gamma_c=1.45, curve=2)
+    elif attack == "gamma-c":
+        inp["concrete"] = Concrete(fck=35.0, gamma_c=1.50, curve=2)
+    elif attack == "diameter":
+        inp["shear_link_dia"] *= 1.01
+    elif attack == "legs":
+        inp["shear_vy_link_legs"] += 1.0
+    elif attack == "spacing":
+        inp["shear_link_s"] += 1.0
+    elif attack == "cotangent":
+        inp["strut_cot_min"] = 1.1
+    elif attack == "section-form":
+        inp["shear_section_form"] = shear_core.SHEAR_SECTION_CIRCULAR
+    else:
+        inp["shear_duct_case"] = shear_core.SHEAR_DUCT_GROUTED_PLASTIC_THIN
+
+    assessment = presentation.provided_link_publication_assessment(inp, shear)
+
+    assert assessment.valid is False
+    assert assessment.status == "NOT ASSESSED"
+    assert assessment.resistance is None
+    assert assessment.utilisation is None
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "input-axial",
+        "result-axial",
+        "retained-axial",
+        "angle",
+        "case",
+        "component",
+        "source",
+    ),
+)
+def test_link_arm_publication_rejects_stale_source_evidence(attack):
+    shear = _complete_publication_shear(v_ed=30.0, vrd_c=47.59286047)
+    inp = _publication_inp(shear)
+    if attack == "input-axial":
+        inp["P_pl"] = 1.0
+    elif attack == "result-axial":
+        shear["n_ed"] = 1.0
+    elif attack == "retained-axial":
+        shear["links"]["z_source_axial_kn"] = 1.0
+    elif attack == "angle":
+        shear["links"]["z_source_angle_deg"] = 91.0
+    elif attack == "case":
+        shear["links"]["z_source_case"] = "PL-OLD"
+    elif attack == "component":
+        shear["links"]["z_component"] = "z_x"
+    else:
+        shear["links"]["z_source"] = "internal route"
+
+    assessment = presentation.provided_link_publication_assessment(inp, shear)
+    basis = presentation.shear_geometry_basis(inp, shear)
+
+    assert assessment.valid is False
+    assert basis["z_mm"] is None
+    assert "not assessed" in basis["statement"].lower()
+
+
+def _publication_shear_with_chord(
+    *,
+    v_ed=120.0,
+    vrd_c=100.0,
+    m_ed=20.0,
+    m_rd=100.0,
+):
+    shear = _complete_publication_shear(v_ed=v_ed, vrd_c=vrd_c)
+    force = shear["links"]["longitudinal_shear_force"]
+    chord = combined_core.longitudinal_check(
+        m_ed,
+        m_rd,
+        force,
+        0.0,
+        0.25,
+    )
+    chord.update(
+        valid=True,
+        role="shear_axis",
+        axis="x",
+        tension_low=True,
+        conditional=True,
+        biaxial=False,
+        off_util=0.0,
+        off_not_evaluated=None,
+        has_torsion=False,
+        gets_shift=True,
+    )
+    links = shear["links"]
+    links.update(
+        chord=chord,
+        chord_off=None,
+        chord_candidates=[chord],
+        governing_longitudinal=chord,
+        longitudinal_fallback=None,
+        longitudinal_all_conditional=True,
+    )
+    links["longitudinal_assessment"] = capacity.longitudinal_chord_assessment(
+        links,
+        shear_axis="x",
+        shear_tension_low=True,
+        shear_live=True,
+        torsion_live=False,
+        torsion_subdivided=False,
+    )
+    return shear
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "m-total",
+        "utilisation",
+        "status",
+        "candidate",
+        "governing-alias",
+        "face-alias",
+        "force",
+        "all-conditional",
+    ),
+)
+def test_link_chord_publication_fails_closed_on_hostile_retained_evidence(attack):
+    shear = _publication_shear_with_chord()
+    links = shear["links"]
+    if attack == "m-total":
+        links["chord_candidates"][0]["m_total"] = True
+    elif attack == "utilisation":
+        links["chord_candidates"][0]["util"] = "0.5"
+    elif attack == "status":
+        links["longitudinal_assessment"]["status"] = []
+    elif attack == "candidate":
+        links["chord_candidates"] = ["stale"]
+    elif attack == "governing-alias":
+        links["governing_longitudinal"] = {"valid": True}
+    elif attack == "face-alias":
+        links["chord"] = {"valid": True}
+    elif attack == "force":
+        links["longitudinal_shear_force"] += 1.0
+    else:
+        links["longitudinal_all_conditional"] = False
+
+    assessment = capacity.provided_link_longitudinal_publication_assessment(
+        shear
+    )
+
+    assert assessment["valid"] is False
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["util"] is None
+    assert assessment["governing"] is None
+
+
+def test_link_chord_publication_accepts_one_reconciled_governing_face():
+    assessment = capacity.provided_link_longitudinal_publication_assessment(
+        _publication_shear_with_chord()
+    )
+
+    assert assessment["valid"] is True
+    assert assessment["status"] == "PASS"
+    assert assessment["governing"]["role"] == "shear_axis"
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("route", "internal route"),
+        ("resistance", 1.0),
+        ("utilisation", True),
+        ("status", []),
+    ),
+)
+def test_nominal_shear_publication_rejects_stale_retained_alias(field, value):
+    shear = _complete_publication_shear(v_ed=30.0, vrd_c=47.59286047)
+    canonical = presentation.nominal_shear_resistance(
+        shear,
+        links_selected=True,
+        input_payload=_publication_inp(shear),
+    )
+    shear["nominal_resistance"] = dict(canonical)
+    shear["nominal_resistance"][field] = value
+
+    selected = presentation.nominal_shear_resistance(
+        shear,
+        links_selected=True,
+        input_payload=_publication_inp(shear),
+    )
+
+    assert selected["valid"] is False
+    assert selected["route"] is None
+    assert selected["resistance"] is None
+    assert selected["utilisation"] is None
+    assert selected["status"] == "NOT ASSESSED"
+
+
+def test_nominal_shear_publication_preserves_specific_canonical_failure_reason():
+    shear = _complete_publication_shear(v_ed=300.0, vrd_c=47.59286047)
+    inp = _publication_inp(shear)
+    shear["nominal_resistance"] = presentation.nominal_shear_resistance(
+        shear,
+        links_selected=True,
+        input_payload=inp,
+    )
+    del shear["links"]["res"]["vrd_s"]
+
+    selected = presentation.nominal_shear_resistance(
+        shear,
+        links_selected=True,
+        input_payload=inp,
+    )
+
+    assert selected["valid"] is False
+    assert selected["reason"] == "provided-link resistance evidence is unavailable"
+
+
+def test_shear_screening_does_not_fail_when_selected_links_pass():
+    shear = _complete_publication_shear(
+        v_ed=120.0,
+        vrd_c=100.0,
+    )
+    inp = _publication_inp(shear, mode="Plastic")
+    vrd_c = _bind_concrete_publication_fixture(shear, inp)
+    _bind_link_chord_publication_fixture(shear, inp)
     rows = presentation.result_summary_rows(
-        _inp(mode="Plastic", shear_on=True, shear_links=True),
+        inp,
         {"plastic": _plastic(), "shear": shear},
     )
     by_check = {row["check"]: row for row in rows}
 
     assert by_check["Shear without links"]["status"] == "NOT APPLICABLE"
-    assert by_check["Shear without links"]["util"] == pytest.approx(1.20)
+    assert by_check["Shear without links"]["util"] == pytest.approx(
+        120.0 / vrd_c
+    )
     assert by_check["Shear with links"]["status"] == "PASS"
     assert presentation.overall_summary_status(rows) == "PASS"
     governing = dict(zip(
         (row["check"] for row in rows),
         presentation.summary_governing_flags(rows),
     ))
+    assert governing["Plastic bending"] is True
     assert governing["Shear without links"] is False
-    assert governing["Shear with links"] is True
+    assert governing["Shear with links"] is False
 
 
 def test_sparse_links_keep_capacity_pass_and_publish_detailing_failure_separately():
-    shear = {
-        "v_ed": 80.0,
-        "res": {"valid": True, "vrd_c": 103.417},
-        "util": 80.0 / 103.417,
-        "method": "DK NA",
-        "links": {
-            "res": {
-                "valid": True,
-                "vrd": 29.452,
-                "governs": "stirrups (VRd,s)",
-            },
-            "util": 80.0 / 29.452,
-            "longitudinal_assessment": {
-                "status": "NOT APPLICABLE",
-                "util": None,
-                "reason": "no_longitudinal_chord_action",
-            },
+    shear = _complete_publication_shear(
+        v_ed=80.0,
+        vrd_c=103.417,
+        asw_over_s=0.0571190303030303,
+        z_mm=495.0,
+        longitudinal_assessment={
+            "status": "NOT APPLICABLE",
+            "util": None,
+            "reason": "no_longitudinal_chord_action",
         },
-    }
+    )
+    inp = _publication_inp(
+        shear,
+        mode="Plastic",
+        transverse_detailing_on=True,
+    )
+    vrd_c = _bind_concrete_publication_fixture(shear, inp)
     results = {
         "plastic": _plastic(),
         "shear": shear,
@@ -1940,36 +2914,227 @@ def test_sparse_links_keep_capacity_pass_and_publish_detailing_failure_separatel
             "checks": [],
         },
     }
-    rows = presentation.result_summary_rows(
-        _inp(
-            mode="Plastic",
-            shear_on=True,
-            shear_links=True,
-            transverse_detailing_on=True,
-        ),
-        results,
-    )
+    rows = presentation.result_summary_rows(inp, results)
     by_check = {row["check"]: row for row in rows}
 
     concrete = by_check["Shear without links"]
     provided_links = by_check["Shear with links"]
     detailing = by_check["Shear/torsion link detailing"]
     assert concrete["status"] == "PASS"
-    assert concrete["util"] == pytest.approx(80.0 / 103.417)
-    assert provided_links["status"] == "NOT APPLICABLE"
-    assert provided_links["util"] is None
-    assert "271.6 % (non-governing)" == provided_links["result"]
-    assert "context only" in provided_links["note"]
+    assert concrete["util"] == pytest.approx(80.0 / vrd_c)
+    assert provided_links["status"] == "FAIL"
+    expected_link_util = 80.0 / shear["links"]["res"]["vrd"]
+    assert provided_links["util"] == pytest.approx(expected_link_util)
+    assert (
+        f"{100.0 * expected_link_util:.1f} % (non-governing)"
+        == provided_links["result"]
+    )
+    assert "independent non-governing resistance subcheck" in provided_links["note"]
     assert detailing["status"] == "FAIL"
     assert "minimum shear reinforcement" in detailing["note"].lower()
     assert presentation.overall_summary_status(rows) == "FAIL"
 
 
+def test_concrete_nominal_route_rejects_current_fck_mismatch_value_free():
+    shear = _complete_publication_shear(
+        v_ed=80.0,
+        vrd_c=103.417,
+        asw_over_s=0.0571190303030303,
+        z_mm=495.0,
+    )
+    inp = _publication_inp(shear, mode="Plastic")
+    _bind_concrete_publication_fixture(shear, inp)
+    baseline = presentation.nominal_shear_resistance(
+        shear,
+        links_selected=True,
+        input_payload=inp,
+    )
+    assert baseline["valid"] is True
+    assert baseline["route"] == "concrete"
+
+    stale_input = dict(
+        inp,
+        concrete=Concrete(fck=80.0, gamma_c=1.45, curve=2),
+    )
+    selected = presentation.nominal_shear_resistance(
+        shear,
+        links_selected=True,
+        input_payload=stale_input,
+    )
+
+    assert presentation.concrete_shear_publication_input_is_current(
+        stale_input, shear
+    )[0] is False
+    assert selected["valid"] is False
+    assert selected["status"] == "NOT ASSESSED"
+    assert selected["resistance"] is None
+    assert selected["utilisation"] is None
+
+
+def test_current_concrete_context_survives_malformed_links_without_nominal_bypass():
+    shear = _complete_publication_shear(
+        v_ed=80.0,
+        vrd_c=103.417,
+        asw_over_s=0.0571190303030303,
+        z_mm=495.0,
+    )
+    inp = _publication_inp(shear, mode="Plastic")
+    _bind_concrete_publication_fixture(shear, inp)
+    shear["links"] = "poison"
+
+    selected = presentation.nominal_shear_resistance(
+        shear,
+        links_selected=True,
+        input_payload=inp,
+    )
+    rows = presentation.result_summary_rows(
+        inp, {"plastic": _plastic(), "shear": shear}
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert selected["valid"] is False
+    assert selected["status"] == "NOT ASSESSED"
+    assert presentation.concrete_shear_publication_input_is_current(
+        inp, shear
+    )[0] is True
+    assert by_check["Shear without links"]["status"] == "PASS"
+    assert by_check["Shear without links"]["result"] != "-"
+    assert by_check["Shear with links"]["status"] == "NOT ASSESSED"
+    assert by_check["Shear with links"]["result"] == "-"
+    assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
+
+
+def test_selected_link_nominal_route_fails_closed_on_stale_publication_geometry():
+    shear = _complete_publication_shear(
+        v_ed=300.0,
+        vrd_c=47.59286047,
+        asw_over_s=0.5,
+    )
+    shear["links"]["shear_geometry"]["duct_factor_links"] = "bad"
+
+    rows = presentation.result_summary_rows(
+        _publication_inp(shear, mode="Plastic"),
+        {"plastic": _plastic(), "shear": shear},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Shear without links"]["status"] == "NOT ASSESSED"
+    assert by_check["Shear without links"]["result"] == "-"
+    assert by_check["Shear without links"]["util"] is None
+    assert by_check["Shear with links"]["status"] == "NOT ASSESSED"
+    assert by_check["Shear with links"]["result"] == "-"
+    assert by_check["Shear with links"]["util"] is None
+
+
+@pytest.mark.parametrize("malformed_links", ("poison", True, ["stale"]))
+def test_nonmapping_provided_links_fail_closed_in_overview(malformed_links):
+    shear = _complete_publication_shear(
+        v_ed=30.0,
+        vrd_c=47.59286047,
+        asw_over_s=0.5,
+    )
+    shear["links"] = malformed_links
+
+    rows = presentation.result_summary_rows(
+        _inp(mode="Plastic", shear_on=True, shear_links=True),
+        {"plastic": _plastic(), "shear": shear},
+    )
+    link_row = next(row for row in rows if row["check"] == "Shear with links")
+
+    assert link_row["status"] == "NOT ASSESSED"
+    assert link_row["result"] == "-"
+    assert link_row["util"] is None
+
+
+def test_stale_provided_link_child_does_not_suppress_valid_detailing_row():
+    shear = _complete_publication_shear(
+        v_ed=30.0,
+        vrd_c=47.59286047,
+        asw_over_s=0.5,
+    )
+    inp = _publication_inp(
+        shear,
+        mode="Plastic",
+        transverse_detailing_on=True,
+    )
+    vrd_c = _bind_concrete_publication_fixture(shear, inp)
+    del shear["links"]["res"]["vrd_s"]
+    results = {
+        "plastic": _plastic(),
+        "shear": shear,
+        "transverse_reinforcement": {
+            "status": "FAIL",
+            "reason": "entered link spacing exceeds the permitted limit",
+            "checks": [],
+        },
+    }
+
+    rows = presentation.result_summary_rows(inp, results)
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Shear with links"]["status"] == "NOT ASSESSED"
+    assert by_check["Shear with links"]["result"] == "-"
+    assert by_check["Shear/torsion link detailing"]["status"] == "FAIL"
+
+
+@pytest.mark.parametrize("attack", ("missing", "empty", "malformed"))
+def test_malformed_provided_link_geometry_fails_closed_before_overview_copy(
+    attack,
+):
+    shear = _complete_publication_shear(
+        v_ed=30.0,
+        vrd_c=47.59286047,
+        asw_over_s=0.5,
+    )
+    if attack == "missing":
+        del shear["links"]["shear_geometry"]
+    elif attack == "empty":
+        shear["links"]["shear_geometry"] = {}
+    else:
+        shear["links"]["shear_geometry"]["duct_factor_links"] = "bad"
+
+    rows = presentation.result_summary_rows(
+        _publication_inp(shear, mode="Plastic"),
+        {"plastic": _plastic(), "shear": shear},
+    )
+    link_row = next(row for row in rows if row["check"] == "Shear with links")
+
+    assert link_row["status"] == "NOT ASSESSED"
+    assert link_row["result"] == "-"
+    assert link_row["util"] is None
+
+
+def test_links_governing_resistance_row_is_independent_of_failed_chord():
+    shear = _complete_publication_shear(
+        v_ed=300.0,
+        vrd_c=50.0,
+        asw_over_s=5.0,
+    )
+    inp = _publication_inp(shear, mode="Plastic")
+    _bind_concrete_publication_fixture(shear, inp)
+    _bind_link_chord_publication_fixture(shear, inp, mx_factor=1.10)
+
+    rows = presentation.result_summary_rows(
+        inp,
+        {"plastic": _plastic(), "shear": shear},
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert by_check["Shear with links"]["status"] == "PASS"
+    assert by_check["Shear with links"]["util"] == pytest.approx(
+        300.0 / shear["links"]["res"]["vrd"]
+    )
+    assert by_check["Shear longitudinal chords"]["status"] == "FAIL"
+    assert by_check["Shear longitudinal chords"]["util"] > 1.0
+    assert presentation.overall_summary_status(rows) == "FAIL"
+
+
 def test_unavailable_calculated_link_arm_is_not_assessed_without_a_verdict():
     shear = {
+        "v_ed": 120.0,
         "res": {"valid": True, "vrd_c": 100.0},
         "util": 1.20,
-        "method": "DK NA",
+        "method": codes.EC2_2005_DKNA.label,
         "links": {
             "res": {
                 "valid": False,
@@ -1993,7 +3158,11 @@ def test_unavailable_calculated_link_arm_is_not_assessed_without_a_verdict():
     assert link_row["status"] == "NOT ASSESSED"
     assert link_row["result"] == "-"
     assert link_row["util"] is None
-    assert "did not converge" in link_row["note"]
+    assert link_row["note"] == (
+        "Recalculate the applied shear action and resistance before relying on "
+        "this result"
+    )
+    assert "did not converge" not in link_row["note"]
     assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
 
 
@@ -2006,34 +3175,34 @@ def test_out_of_range_links_keep_angle_free_concrete_route_and_no_link_verdict()
         "permitted_min": 1.0,
         "permitted_max": 2.5,
     }
-    shear = {
-        "v_ed": 80.0,
-        "res": {"valid": True, "vrd_c": 103.417},
-        "util": 80.0 / 103.417,
-        "method": "DS/EN 1992-1-1:2005",
-        "links": {
-            "res": {
-                "valid": False,
-                "calculation_state": "NOT ASSESSED",
-                "reason": reason,
-                "vrd": None,
-                "angle_applicability": applicability,
-            },
-            "util": None,
-            "assessment_reason": reason,
+    shear = _complete_publication_shear(v_ed=80.0, vrd_c=103.417)
+    inp = _publication_inp(
+        shear,
+        mode="Plastic",
+        strut_cot_max=3.0,
+    )
+    vrd_c = _bind_concrete_publication_fixture(shear, inp)
+    shear["links"].update(
+        res={
+            "valid": False,
+            "calculation_state": "NOT ASSESSED",
+            "reason": reason,
+            "vrd": None,
             "angle_applicability": applicability,
         },
-    }
+        util=None,
+        assessment_reason=reason,
+        angle_applicability=applicability,
+    )
 
     rows = presentation.result_summary_rows(
-        _inp(mode="Plastic", shear_on=True, shear_links=True),
-        {"plastic": _plastic(), "shear": shear},
+        inp, {"plastic": _plastic(), "shear": shear}
     )
     by_check = {row["check"]: row for row in rows}
 
     assert by_check["Shear without links"]["status"] == "PASS"
     assert by_check["Shear without links"]["util"] == pytest.approx(
-        80.0 / 103.417
+        80.0 / vrd_c
     )
     assert by_check["Shear with links"]["status"] == "NOT ASSESSED"
     assert by_check["Shear with links"]["result"] == "-"
@@ -2288,9 +3457,10 @@ def test_2023_axial_compression_guidance_governs_the_links_overview_note():
         "2023 axial-compression applicability conditions were not demonstrated"
     )
     shear = {
+        "v_ed": 50.0,
         "res": {"valid": True, "vrd_c": 100.0},
         "util": 0.50,
-        "method": "DS/EN 1992-1-1:2023",
+        "method": codes.EC2_2023.label,
         "links": {
             "res": {
                 "valid": False,
@@ -2316,19 +3486,26 @@ def test_2023_axial_compression_guidance_governs_the_links_overview_note():
 
     assert link_row["status"] == "NOT ASSESSED"
     assert link_row["result"] == "-"
-    assert "Net axial compression is present" in link_row["note"]
-    assert "Annex G" in link_row["note"]
+    assert link_row["note"] == (
+        "Recalculate the applied shear action and resistance before relying on "
+        "this result"
+    )
+    assert "Net axial compression" not in link_row["note"]
+    assert "Annex G" not in link_row["note"]
     assert "Complete both required longitudinal chord checks" not in link_row["note"]
 
 
 def test_shear_without_links_retains_concrete_screening_verdict():
-    shear = {
-        "res": {"valid": True, "vrd_c": 100.0},
-        "util": 1.20,
-        "method": "DK NA",
-    }
+    shear = _complete_publication_shear(v_ed=120.0, vrd_c=100.0)
+    inp = _publication_inp(
+        shear,
+        mode="Plastic",
+        shear_links=False,
+    )
+    _bind_concrete_publication_fixture(shear, inp)
+    shear.pop("links")
     rows = presentation.result_summary_rows(
-        _inp(mode="Plastic", shear_on=True, shear_links=False),
+        inp,
         {"plastic": _plastic(), "shear": shear},
     )
     by_check = {row["check"]: row for row in rows}
@@ -2519,21 +3696,16 @@ def test_combined_summary_cannot_promote_torsion_longitudinal_state(status):
             "longitudinal_assessment"
         ],
     }
-    rows = presentation.result_summary_rows(
+    assert presentation.combined_dkna_status(combined) == status
+    _assert_unbound_combined_is_not_published(
         _inp(
             mode="Plastic",
             torsion_on=True,
             combined_on=True,
             shear_links=True,
         ),
-        {"plastic": _plastic(), "torsion": torsion, "combined": combined},
+        combined,
     )
-    by_check = {row["check"]: row for row in rows}
-
-    combined_row = by_check["Combined M-V-T - DK NA sum"]
-    assert combined_row["status"] == status
-    assert "numerical component evidence" in combined_row["note"]
-    assert presentation.combined_dkna_status(combined) == status
 
 
 def test_definite_dkna_failure_outranks_unverified_torsion_note():
@@ -2618,7 +3790,27 @@ def test_combined_longitudinal_component_publishes_governing_ratio():
     assert component["util"] == pytest.approx(1.25)
 
 
-def test_pub_h01_exact_longitudinal_failure_feeds_component_and_overview():
+def _assert_unbound_combined_is_not_published(inp, combined, *, plastic=None):
+    """Synthetic component payloads cannot act as current root evidence."""
+
+    rows = presentation.result_summary_rows(
+        inp,
+        {"plastic": plastic or _plastic(), "combined": combined},
+    )
+    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
+    assert len(combined_rows) == 1
+    row = combined_rows[0]
+    assert row["status"] == "NOT ASSESSED"
+    assert row["result"] == "-"
+    assert row["util"] is None
+    assert row["note"] == (
+        "Combined component evidence is not current. Recalculate the shear, "
+        "torsion and M-V-T checks."
+    )
+    return rows
+
+
+def test_pub_h01_exact_longitudinal_failure_feeds_component_formatter():
     direct = {
         "valid": True,
         "status": "FAIL",
@@ -2640,6 +3832,8 @@ def test_pub_h01_exact_longitudinal_failure_feeds_component_and_overview():
         "util": 1.2392531643,
         "capped": False,
     }
+
+
     combined = {
         "valid": True,
         "method": codes.EC2_2005.label,
@@ -2659,22 +3853,15 @@ def test_pub_h01_exact_longitudinal_failure_feeds_component_and_overview():
         for item in presentation.combined_physical_components(combined)
         if item["key"] == "longitudinal"
     )
-    rows = presentation.result_summary_rows(
-        {"combined_on": True, "combined_method": codes.EC2_2005.label},
-        {"combined": combined},
-    )
-    row = next(
-        item for item in rows
-        if item["check"] == "Combined longitudinal reinforcement"
-    )
-
     assert component["assessment"] is canonical
     assert component["governing"] is direct
     assert component["status"] == "FAIL"
     assert component["util"] == pytest.approx(1.2392531643)
-    assert row["status"] == "FAIL"
-    assert row["util"] == pytest.approx(1.2392531643)
-    assert row["result"] == "123.9 %"
+    _assert_unbound_combined_is_not_published(
+        {"combined_on": True, "combined_method": codes.EC2_2005.label},
+        combined,
+        plastic={},
+    )
 
 
 def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
@@ -2781,26 +3968,77 @@ def test_torsion_wall_evidence_failure_is_not_assessed_without_stale_value():
 
 
 def test_biaxial_shear_summary_keeps_directional_verdicts_and_limitation():
-    vx = {
-        "res": {"valid": True, "vrd_c": 100.0},
-        "util": 0.60,
-        "method": "DK NA",
-        "status": "PASS",
-    }
-    vy = {
-        "res": {"valid": True, "vrd_c": 80.0},
-        "util": 0.75,
-        "method": "DK NA",
-        "status": "PASS",
-    }
-    aggregate = dict(
-        vx,
-        directions={"vx": vx, "vy": vy},
-        biaxial=True,
+    seed = _complete_publication_shear(v_ed=60.0, vrd_c=100.0)
+    inp = _publication_inp(
+        seed,
+        mode="Plastic",
+        shear_links=False,
+        shear_Vx=60.0,
+        shear_Vy=60.0,
+        shear_face_x="negative",
+        shear_face_y="negative",
     )
+    inp["bars"] = [
+        (-0.10, -0.10, 500.0),
+        (0.10, -0.10, 500.0),
+        (0.10, 0.10, 500.0),
+        (-0.10, 0.10, 500.0),
+    ]
+    contexts = capacity.build_directional_shear_contexts(inp, 0.0, 0.0)
+    directions = {}
+    specs = capacity.shear_direction_specs(inp)
+    for component in ("vx", "vy"):
+        child = dict(contexts[component]["candidates"][0][0])
+        nominal = capacity.select_nominal_shear_resistance(
+            child, links_selected=False
+        )
+        child.update(
+            signed_v_ed=specs[component]["signed_v_ed"],
+            nominal_resistance=asdict(nominal),
+            resistance_status=nominal.status,
+            assessment_status=nominal.status,
+            assessment_ok=nominal.ok,
+        )
+        face = {
+            "tension_low": True,
+            "shear_status": nominal.status,
+            "shear_metric": nominal.utilisation,
+            "torsion_status": "NOT RUN",
+            "torsion_metric": 0.0,
+            "min_reinf_status": "NOT RUN",
+            "min_reinf_metric": 0.0,
+            "combined_status": "NOT RUN",
+            "combined_metric": 0.0,
+            "shear": child,
+            "torsion": None,
+            "combined": None,
+        }
+        directions[component] = dict(
+            child,
+            face_mode="negative",
+            both_faces_evaluated=False,
+            governing_face="negative",
+            associated_moment=specs[component]["moment"],
+            associated_moment_origin=specs[component]["moment_origin"],
+            status=nominal.status,
+            governing_domains={
+                "shear": {
+                    "face": "negative",
+                    "cot": None,
+                    "status": nominal.status,
+                    "util": nominal.utilisation,
+                }
+            },
+            face_candidates=[face],
+        )
+    aggregate = {
+        "directions": directions,
+        "active_directions": ["vx", "vy"],
+        "biaxial": True,
+    }
 
     rows = presentation.result_summary_rows(
-        _inp(mode="Plastic", shear_on=True, shear_links=False),
+        inp,
         {"plastic": _plastic(), "shear": aggregate},
     )
     by_check = {row["check"]: row for row in rows}
@@ -2830,17 +4068,16 @@ def test_biaxial_combined_summary_reports_directions_without_three_way_verdict()
             },
         },
     }
-    rows = presentation.result_summary_rows(
+    assert presentation.combined_dkna_status(
+        combined["directions"]["vx"]
+    ) == "PASS"
+    assert presentation.combined_dkna_status(
+        combined["directions"]["vy"]
+    ) == "FAIL"
+    _assert_unbound_combined_is_not_published(
         _inp(mode="Plastic", combined_on=True),
-        {"plastic": _plastic(), "combined": combined},
+        combined,
     )
-    by_check = {row["check"]: row for row in rows}
-
-    assert by_check["Combined Vx+T - DK NA sum"]["status"] == "PASS"
-    assert by_check["Combined Vy+T - DK NA sum"]["status"] == "FAIL"
-    assert by_check["Combined Vx+T - DK NA sum"]["criterion"] == "<= 100 %"
-    assert by_check["Generic Vx-Vy-T interaction"]["status"] == "NOT CALCULATED"
-    assert presentation.overall_summary_status(rows) == "FAIL"
 
 
 def test_base_en_combined_summary_publishes_only_supported_physical_checks():
@@ -2878,27 +4115,27 @@ def test_base_en_combined_summary_publishes_only_supported_physical_checks():
             "vy": direction(0.80, 0.90, 1.10),
         },
     }
-    rows = presentation.result_summary_rows(
+    direction_items = presentation.base_en_combined_direction_items(combined)
+    assert direction_items is not None
+    by_direction = dict(direction_items)
+    vy_components = presentation.combined_physical_components(
+        by_direction["vy"]
+    )
+    assert next(
+        item for item in vy_components if item["key"] == "longitudinal"
+    )["status"] == "FAIL"
+    assert all(
+        presentation.combined_uses_dkna(item) is False
+        for item in by_direction.values()
+    )
+    _assert_unbound_combined_is_not_published(
         _inp(
             mode="Plastic",
             combined_on=True,
             combined_method=codes.EC2_2005.label,
         ),
-        {"plastic": _plastic(), "combined": combined},
+        combined,
     )
-
-    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
-    checks = {row["check"] for row in combined_rows}
-    assert "Combined Vx+T concrete compression strut" in checks
-    assert "Combined Vy+T closed stirrup" in checks
-    assert "Combined Vy+T longitudinal reinforcement" in checks
-    assert "Generic Vx-Vy-T interaction" in checks
-    assert all("DK NA" not in row["check"] for row in combined_rows)
-    assert all("dkna" not in row["overview_key"] for row in combined_rows)
-    assert next(
-        row for row in combined_rows
-        if row["check"] == "Combined Vy+T longitudinal reinforcement"
-    )["status"] == "FAIL"
 
 
 def test_base_en_incomplete_case_cannot_displace_governing_worked_case():
@@ -2996,20 +4233,13 @@ def test_base_en_biaxial_direction_evidence_fails_closed(directions):
     assert presentation._transverse_metric("combined", combined) is None
     assert presentation._transverse_direction("combined", combined) is None
 
-    rows = presentation.result_summary_rows(
+    _assert_unbound_combined_is_not_published(
         _inp(
             mode="Plastic",
             combined_on=True,
             combined_method=codes.EC2_2005.label,
         ),
-        {"plastic": _plastic(), "combined": combined},
-    )
-    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
-    assert len(combined_rows) == 1
-    assert combined_rows[0]["status"] == "NOT ASSESSED"
-    assert combined_rows[0]["util"] is None
-    assert "both directional combined calculations" in (
-        combined_rows[0]["note"].casefold()
+        combined,
     )
 
 
@@ -3125,18 +4355,14 @@ def test_base_en_invalid_utilisations_are_not_publication_numbers(
     ) == generic_interaction_status
     assert presentation.viz.util_ok(retained) is False
 
-    rows = presentation.result_summary_rows(
+    _assert_unbound_combined_is_not_published(
         _inp(
             mode="Plastic",
             combined_on=True,
             combined_method=codes.EC2_2005.label,
         ),
-        {"plastic": _plastic(), "combined": combined},
+        combined,
     )
-    combined_rows = [row for row in rows if row["view"] == "M-V-T Combined"]
-    assert len(combined_rows) == 3
-    assert {row["status"] for row in combined_rows} == {"NOT ASSESSED"}
-    assert all(row["result"] == "-" and row["util"] is None for row in combined_rows)
 
 
 def test_biaxial_unavailable_combined_keeps_aggregate_separate_route_identity():
@@ -3160,26 +4386,16 @@ def test_biaxial_unavailable_combined_keeps_aggregate_separate_route_identity():
         },
     }
 
-    rows = presentation.result_summary_rows(
-        _inp(mode="Plastic", combined_on=True),
-        {"plastic": _plastic(), "combined": combined},
-    )
-    directional = [
-        row for row in rows
-        if row["check"] in {
-            "Combined Vx+T - DK NA sum",
-            "Combined Vy+T - DK NA sum",
-        }
-    ]
-
     assert presentation.combined_dkna_screen_label(combined) == (
         "max(N+M+T, N+V+T)"
     )
-    assert len(directional) == 2
-    assert all(row["status"] == "NOT ASSESSED" for row in directional)
     assert all(
-        "max(N+M+T, N+V+T)" in row["note"]
-        for row in directional
+        presentation.combined_dkna_status(item) == "NOT ASSESSED"
+        for item in combined["directions"].values()
+    )
+    rows = _assert_unbound_combined_is_not_published(
+        _inp(mode="Plastic", combined_on=True),
+        combined,
     )
     assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
 
@@ -3262,6 +4478,7 @@ def _plastic_case_entry(name, util, *, vx=0.0, vy=0.0, t=0.0):
         "vx_face": "auto",
         "vy_face": "auto",
         "t_ed_knm": t,
+        "check_minimum_reinforcement": False,
     }
     return {
         "name": name,
@@ -3281,12 +4498,21 @@ def test_multi_case_summary_marks_governing_case_for_each_check():
         torsion_on=False,
         combined_on=False,
     )
-    rows = presentation.multi_case_summary_rows(inp, {
-        "plastic_cases": [
-            _plastic_case_entry("PL-A", 0.60),
-            _plastic_case_entry("PL-B", 0.90),
-        ],
-    })
+    entries = [
+        _plastic_case_entry("PL-A", 0.60),
+        _plastic_case_entry("PL-B", 0.90),
+    ]
+    inp["plastic_cases"] = [entry["actions"] for entry in entries]
+    for entry in entries:
+        entry["signature"] = case_analysis.case_signature(
+            entry["actions"],
+            load_cases.PLASTIC_TABLE_KEY,
+            inp,
+        )
+    rows = presentation.multi_case_summary_rows(
+        inp,
+        {"plastic_cases": entries},
+    )
 
     assert [row["case"] for row in rows] == ["PL-A", "PL-B"]
     assert presentation.summary_governing_case_flags(rows) == [False, True]
@@ -3794,15 +5020,127 @@ def test_multi_case_summary_records_zero_actions_as_not_evaluated():
         torsion_on=True,
         combined_on=True,
     )
-    rows = presentation.multi_case_summary_rows(inp, {
-        "plastic_cases": [_plastic_case_entry("PL-ZERO", 0.50)],
-    })
+    entry = _plastic_case_entry("PL-ZERO", 0.50)
+    inp["plastic_cases"] = [entry["actions"]]
+    entry["signature"] = case_analysis.case_signature(
+        entry["actions"],
+        load_cases.PLASTIC_TABLE_KEY,
+        inp,
+    )
+    rows = presentation.multi_case_summary_rows(
+        inp,
+        {"plastic_cases": [entry]},
+    )
     by_check = {row["check"]: row for row in rows}
 
     assert by_check["Shear Vx"]["status"] == "NOT APPLICABLE"
     assert by_check["Shear Vy"]["result"] == "Vy,Ed = 0"
     assert by_check["Torsion"]["status"] == "NOT APPLICABLE"
     assert by_check["Combined M-V-T"]["result"] == "Vx,Ed = Vy,Ed = TEd = 0"
+
+
+def test_multi_case_summary_withholds_every_changed_action_result_value():
+    retained = _plastic_case_entry(
+        "PL-STALE",
+        0.50,
+        vy=50.0,
+        t=40.0,
+    )
+    retained["results"].update(
+        shear=_complete_publication_shear(v_ed=50.0, vrd_c=100.0),
+        torsion={
+            **_applicable_torsion_evidence(40.0),
+            "valid": True,
+            "util": 0.40,
+            "assessment_status": "PASS",
+        },
+        combined={
+            "valid": True,
+            "method": codes.EC2_2005_DKNA.label,
+            "dkna_valid": True,
+            "dkna_sum": 0.80,
+            "dkna_status": "PASS",
+        },
+    )
+    current_action = dict(retained["actions"], t_ed_knm=41.0)
+    inp = _inp(
+        mode="Plastic",
+        plastic_cases=[current_action],
+        elastic_cases=[],
+        shear_on=True,
+        torsion_on=True,
+        combined_on=True,
+        shear_links=True,
+    )
+    old_inp = dict(inp, plastic_cases=[retained["actions"]])
+    retained["signature"] = case_analysis.case_signature(
+        retained["actions"],
+        load_cases.PLASTIC_TABLE_KEY,
+        old_inp,
+    )
+
+    rows = presentation.multi_case_summary_rows(
+        inp,
+        {"plastic_cases": [retained]},
+    )
+    derived = [
+        row for row in rows
+        if not row.get("overview_placeholder")
+    ]
+
+    assert derived
+    assert {row["case"] for row in derived} == {"PL-STALE"}
+    assert {row["status"] for row in derived} == {"NOT ASSESSED"}
+    assert all(
+        row["result"] == "-" and row["util"] is None
+        for row in derived
+    )
+    assert all(
+        row["note"] == "Recalculate this action set before relying on the result"
+        for row in derived
+    )
+
+
+def test_multi_case_summary_replaces_removed_result_case_with_current_not_run():
+    old = _plastic_case_entry("PL-OLD", 0.75)
+    current = _plastic_case_entry("PL-NEW", 0.0)["actions"]
+    inp = _inp(
+        mode="Plastic",
+        plastic_cases=[current],
+        elastic_cases=[],
+        shear_on=False,
+        torsion_on=False,
+        combined_on=False,
+    )
+
+    rows = presentation.multi_case_summary_rows(
+        inp,
+        {"plastic_cases": [old]},
+    )
+
+    assert rows
+    assert {row["case"] for row in rows} == {"PL-NEW"}
+    assert {row["status"] for row in rows} == {"NOT RUN"}
+    assert "PL-OLD" not in repr(rows)
+
+
+def test_multi_case_summary_keeps_fresh_named_case_not_run():
+    current = _plastic_case_entry("PL-FRESH", 0.0)["actions"]
+    inp = _inp(
+        mode="Plastic",
+        plastic_cases=[current],
+        elastic_cases=[],
+        shear_on=False,
+        torsion_on=False,
+        combined_on=False,
+    )
+
+    rows = presentation.multi_case_summary_rows(inp, {})
+
+    assert len(rows) == 1
+    assert rows[0]["case"] == "PL-FRESH"
+    assert rows[0]["status"] == "NOT RUN"
+    assert rows[0]["result"] == "-"
 
 
 def test_detailing_summary_reports_values_status_and_target_view():
@@ -3949,7 +5287,10 @@ def test_link_detailing_summary_does_not_treat_missing_links_as_not_applicable()
             "my_ed_knm": 0.0,
             "vx_ed_kn": 50.0,
             "vy_ed_kn": 0.0,
+            "vx_face": "auto",
+            "vy_face": "auto",
             "t_ed_knm": 0.0,
+            "check_minimum_reinforcement": False,
         },
         "evaluated": False,
         "results": {},
@@ -4052,6 +5393,13 @@ def test_multi_case_summary_adds_section_wide_spacing_only_once():
                 "utilisation": 2.0 / 3.0,
             }],
         }
+    inp["plastic_cases"] = [first["actions"], second["actions"]]
+    for entry in (first, second):
+        entry["signature"] = case_analysis.case_signature(
+            entry["actions"],
+            load_cases.PLASTIC_TABLE_KEY,
+            inp,
+        )
     spacing = {
         "status": "PASS", "clause": "8.2(2)",
         "governing": {

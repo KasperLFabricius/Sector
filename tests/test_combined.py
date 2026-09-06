@@ -5018,6 +5018,403 @@ def test_app_dkna_action_alone_resistances_are_not_evaluated_at_common_angle():
     assert t_action["evidence"]["cot"] != pytest.approx(cot_star)
 
 
+@pytest.fixture(scope="module")
+def pub_m01_native_environment(tmp_path_factory):
+    """Isolate module-scoped native producers before function fixtures run."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(
+            "SECTOR_AUTOSAVE_DIR",
+            str(tmp_path_factory.mktemp("pub-m01-module") / "autosave"),
+        )
+        yield
+
+
+@pytest.fixture(scope="module")
+def pub_m01_exact_minimax_case(pub_m01_native_environment):
+    """One exact producer for the shared-angle minimax and endpoint control."""
+
+    at = _fresh()
+    at.run()
+    _run_member(
+        at,
+        mx=150.0,
+        v=550.0,
+        t=100.0,
+        strut_band=(1.0, 2.5),
+    )
+    assert not at.exception
+    wide_input = copy.deepcopy(at.session_state["result_input_snapshot"])
+    wide_results = copy.deepcopy(at.session_state["results"])
+
+    _select_view(at, "Shear")
+    assert not at.exception
+    shear_metrics = tuple(
+        (metric.label, str(metric.value), str(metric.delta))
+        for metric in at.metric
+    )
+    shear_visible = " ".join(
+        str(item.value)
+        for collection in (at.warning, at.info, at.caption, at.markdown)
+        for item in collection
+    )
+    shear_tables = " ".join(
+        frame.value.to_string(index=False) for frame in at.dataframe
+    )
+
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    combined_metrics = tuple(
+        (metric.label, str(metric.value), str(metric.delta))
+        for metric in at.metric
+    )
+    combined_visible = " ".join(
+        str(item.value)
+        for collection in (at.warning, at.info, at.caption, at.markdown)
+        for item in collection
+    )
+
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = at.table[0].value.copy(deep=True)
+
+    _run_member(
+        at,
+        mx=150.0,
+        v=550.0,
+        t=100.0,
+        strut_band=(2.5, 2.5),
+    )
+    assert not at.exception
+    fixed_input = copy.deepcopy(at.session_state["result_input_snapshot"])
+    fixed_results = copy.deepcopy(at.session_state["results"])
+
+    poisoned_results = copy.deepcopy(wide_results)
+    for family in ("shear", "torsion", "combined"):
+        poisoned_results[family] = copy.deepcopy(fixed_results[family])
+    for target, source in zip(
+        poisoned_results.get("plastic_cases") or (),
+        fixed_results.get("plastic_cases") or (),
+        strict=True,
+    ):
+        target_results = target.get("results") or {}
+        source_results = source.get("results") or {}
+        for family in ("shear", "torsion", "combined"):
+            target_results[family] = copy.deepcopy(source_results[family])
+
+    _set(
+        at,
+        ("number_input", "strut_cot_min", 1.0),
+        ("number_input", "strut_cot_max", 2.5),
+    )
+    at.session_state["results"] = copy.deepcopy(poisoned_results)
+    at.session_state["result_input_snapshot"] = copy.deepcopy(wide_input)
+    at.session_state["result_sig"] = wide_input["signature"]
+    at.session_state["result_plastic_sig"] = wide_input["plastic_sig"]
+    at.session_state["result_plastic_case_context_sig"] = wide_input[
+        "plastic_case_context_sig"
+    ]
+    at.session_state["result_plastic_bending_context_sig"] = wide_input[
+        "plastic_bending_context_sig"
+    ]
+    _select_view(at, "Torsion")
+    assert not at.exception
+    poisoned_torsion_metrics = tuple(
+        (metric.label, str(metric.value), str(metric.delta))
+        for metric in at.metric
+    )
+    poisoned_torsion_visible = " ".join(
+        str(item.value)
+        for collection in (at.warning, at.info, at.caption, at.markdown)
+        for item in collection
+    )
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    poisoned_overview = at.table[0].value.copy(deep=True)
+    return {
+        "wide_input": wide_input,
+        "wide_results": wide_results,
+        "fixed_input": fixed_input,
+        "fixed_results": fixed_results,
+        "poisoned_results": poisoned_results,
+        "poisoned_torsion_metrics": poisoned_torsion_metrics,
+        "poisoned_torsion_visible": poisoned_torsion_visible,
+        "poisoned_overview": poisoned_overview,
+        "shear_metrics": shear_metrics,
+        "shear_visible": shear_visible,
+        "shear_tables": shear_tables,
+        "combined_metrics": combined_metrics,
+        "combined_visible": combined_visible,
+        "overview": overview,
+    }
+
+
+def test_pub_m01_exact_minimax_rejects_coherent_fixed_endpoint_result(
+    pub_m01_exact_minimax_case,
+):
+    case = pub_m01_exact_minimax_case
+    wide_input = case["wide_input"]
+    wide = case["wide_results"]
+    fixed_input = case["fixed_input"]
+    fixed = case["fixed_results"]
+
+    selection = wide["combined"]["member_angle_selection"]
+    assert selection["cot"] == pytest.approx(2.332)
+    assert selection["theta_deg"] == pytest.approx(23.210450538217586)
+    assert selection["utilisation"] == pytest.approx(1.7899186763923811)
+    assert selection["samples"] == 1501
+    assert selection["step"] == pytest.approx(0.001)
+    assert selection["selected_index"] == 1332
+    assert selection["objective_count"] == 9
+    assert selection["governing_component_indices"] == (6,)
+    assert selection["governing_objectives"] == (
+        "x-axis positive longitudinal chord",
+    )
+    assert selection["runner_up_utilisation"] == pytest.approx(
+        1.7891604810044097
+    )
+    assert wide["shear"]["links"]["util"] == pytest.approx(
+        1.0579291203151089
+    )
+    assert wide["combined"]["dkna_sum"] == pytest.approx(
+        2.402432432531132
+    )
+    assert result_presentation.combined_publication_evidence_is_current(
+        wide_input,
+        wide,
+    ) == (True, None)
+
+    fixed_selection = fixed["combined"]["member_angle_selection"]
+    assert fixed_selection["cot"] == pytest.approx(2.5)
+    assert fixed_selection["utilisation"] == pytest.approx(1.9188665055664464)
+    assert fixed["shear"]["links"]["util"] == pytest.approx(
+        0.9868362834299335
+    )
+    assert result_presentation.combined_publication_evidence_is_current(
+        fixed_input,
+        fixed,
+    ) == (True, None)
+    assert result_presentation.combined_publication_evidence_is_current(
+        wide_input,
+        fixed,
+    ) == (False, "combined component evidence is unavailable")
+    assert result_presentation.torsion_publication_evidence_is_current(
+        wide_input,
+        wide["shear"],
+        wide["torsion"],
+    ) == (True, None)
+    assert result_presentation.torsion_publication_evidence_is_current(
+        fixed_input,
+        fixed["shear"],
+        fixed["torsion"],
+    ) == (True, None)
+    assert result_presentation.torsion_publication_evidence_is_current(
+        wide_input,
+        wide["shear"],
+        fixed["torsion"],
+    ) == (False, "torsion result evidence is unavailable")
+    for missing in ("absent", "none"):
+        shear = copy.deepcopy(wide["shear"])
+        torsion = copy.deepcopy(fixed["torsion"])
+        if missing == "absent":
+            (shear.get("links") or {}).pop("member_angle_selection", None)
+            torsion.pop("member_angle_selection", None)
+        else:
+            (shear.get("links") or {})["member_angle_selection"] = None
+            torsion["member_angle_selection"] = None
+        assert result_presentation.torsion_publication_evidence_is_current(
+            wide_input,
+            shear,
+            torsion,
+        ) == (False, "torsion result evidence is unavailable")
+        for theta_mode in (None, "resistance", "unavailable"):
+            altered_shear = copy.deepcopy(shear)
+            links = altered_shear.get("links") or {}
+            if theta_mode is None:
+                links.pop("theta_mode", None)
+            else:
+                links["theta_mode"] = theta_mode
+            assert result_presentation.torsion_publication_evidence_is_current(
+                wide_input,
+                altered_shear,
+                torsion,
+            ) == (False, "torsion result evidence is unavailable")
+    independent_torsion = copy.deepcopy(fixed["torsion"])
+    independent_torsion.pop("member_angle_selection", None)
+    independent_input = copy.deepcopy(fixed_input)
+    independent_input["shear_on"] = False
+    independent_input["shear_V"] = 0.0
+    independent_input["shear_Vx"] = 0.0
+    independent_input["shear_Vy"] = 0.0
+    assert result_presentation.torsion_publication_evidence_is_current(
+        independent_input,
+        None,
+        independent_torsion,
+    ) == (False, "torsion result evidence is unavailable")
+
+    # A positive independent control is calculated with its actual participants;
+    # removing evidence from a shared-angle result cannot create that control.
+    import sector_app
+
+    independent = {"plastic": copy.deepcopy(wide["plastic"])}
+    sector_app._run_capacity_checks(independent_input, independent)
+    assert independent["torsion"]["member_angle_selection"] is not None
+    assert result_presentation.torsion_publication_evidence_is_current(
+        independent_input,
+        None,
+        independent["torsion"],
+    ) == (True, None)
+
+
+def test_pub_m01_exact_minimax_reaches_native_views(
+    pub_m01_exact_minimax_case,
+):
+    case = pub_m01_exact_minimax_case
+    assert any(
+        value == "105.8 %" and delta in {"FAIL", "Over limit"}
+        for _label, value, delta in case["shear_metrics"]
+    )
+    assert "2.332" in case["shear_visible"] + case["shear_tables"]
+    assert "NOT ASSESSED" not in case["shear_visible"]
+    assert any(
+        value == "240.2 %" and delta == "FAIL"
+        for _label, value, delta in case["combined_metrics"]
+    )
+    assert ("Shear share", "105.8 %", "") in case["combined_metrics"]
+    assert any(
+        label == "Closed-stirrup utilisation"
+        and value == "178.9 %" and delta == "FAIL"
+        for label, value, delta in case["combined_metrics"]
+    )
+    assert "cot\\theta=2.33" in case["combined_visible"].replace(" ", "")
+
+    by_check = {
+        row["Check"]: row
+        for _, row in case["overview"].iterrows()
+    }
+    assert by_check["Shear with links"]["Status"] == "FAIL"
+    assert by_check["Shear with links"]["Result"] == "105.8 %"
+    assert by_check["Combined M-V-T - DK NA sum"]["Status"] == "FAIL"
+    assert by_check["Combined M-V-T - DK NA sum"]["Result"] == "240.2 %"
+
+
+def test_pub_m01_fixed_angle_torsion_transplant_is_withheld_from_native_views(
+    pub_m01_exact_minimax_case,
+):
+    case = pub_m01_exact_minimax_case
+    assert any(
+        value == "NOT ASSESSED"
+        for _label, value, _delta in case["poisoned_torsion_metrics"]
+    )
+    visible = case["poisoned_torsion_visible"]
+    assert "NOT ASSESSED" in visible
+    assert "101.4 %" not in visible
+    assert "3084" not in visible.replace(",", "")
+
+    rows = case["poisoned_overview"]
+    torsion = rows.loc[rows["Check"] == "Torsion"].iloc[0]
+    assert torsion["Status"] == "NOT ASSESSED"
+    assert torsion["Result"] == "-"
+    assert not rows["Result"].astype(str).str.contains("101.4", regex=False).any()
+    assert not rows["Result"].astype(str).str.contains("3084", regex=False).any()
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_pub_m01_exact_minimax_reaches_every_report_profile(
+    pub_m01_exact_minimax_case,
+    profile,
+):
+    import io
+
+    from pypdf import PdfReader
+
+    import sector_report
+
+    inp = pub_m01_exact_minimax_case["wide_input"]
+    results = copy.deepcopy(pub_m01_exact_minimax_case["wide_results"])
+    results["worked_example_selection"] = (
+        result_presentation.worked_example_selection(inp, results)
+    )
+    pdf = sector_report.build_report(
+        {},
+        inp,
+        results,
+        figures=False,
+        profile=profile,
+    )
+    text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in PdfReader(io.BytesIO(pdf)).pages
+    )
+
+    assert "Shear with links PL-01 FAIL 105.8 %" in text
+    assert "Combined M-V-T - DK NA sum PL-01 FAIL 240.2 %" in text
+    if profile != "Brief":
+        assert "Selected common member angle: cot theta = 2.332" in text.replace(
+            chr(0x03B8), "theta"
+        )
+        assert "105.8 %" in text
+        assert "240.2 %" in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_pub_m01_fixed_angle_torsion_transplant_is_withheld_from_reports(
+    pub_m01_exact_minimax_case,
+    profile,
+):
+    import io
+
+    from pypdf import PdfReader
+
+    import sector_report
+
+    case = pub_m01_exact_minimax_case
+    pdf = sector_report.build_report(
+        {},
+        case["wide_input"],
+        copy.deepcopy(case["poisoned_results"]),
+        figures=False,
+        profile=profile,
+    )
+    text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in PdfReader(io.BytesIO(pdf)).pages
+    )
+    assert "Torsion PL-01 NOT ASSESSED -" in text
+    assert "101.4 %" not in text
+    assert "3,084" not in text
+    assert "3084" not in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_pub_m01_genuine_fixed_angle_keeps_its_own_report_values(
+    pub_m01_exact_minimax_case, profile,
+):
+    import io
+
+    from pypdf import PdfReader
+
+    import sector_report
+
+    case = pub_m01_exact_minimax_case
+    inp = case["fixed_input"]
+    out = copy.deepcopy(case["fixed_results"])
+    out["worked_example_selection"] = result_presentation.worked_example_selection(inp, out)
+    assert result_presentation.torsion_publication_evidence_is_current(
+        inp, out["shear"], out["torsion"],
+    ) == (True, None)
+    pdf = sector_report.build_report({}, inp, out, figures=False, profile=profile)
+    text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in PdfReader(io.BytesIO(pdf)).pages
+    )
+    assert "Shear with links PL-01 PASS 98.7 %" in text
+    assert "Torsion transverse/strut resistance PL-01 FAIL 101.4 %" in text
+    if profile != "Brief":
+        assert "Selected common member angle: cot theta = 2.500" in text.replace(
+            chr(0x03B8), "theta",
+        )
+
+
 def test_app_combined_is_skipped_when_shear_is_zero(monkeypatch):
     # VEd = 0 disables the shear and dependent combined checks for this case.
     monkeypatch.setattr(

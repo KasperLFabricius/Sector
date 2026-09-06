@@ -283,6 +283,311 @@ def _shear_route_result(v_ed, *, vrd_c=103.417, vrd_links=None):
     return result
 
 
+def _publication_shear_route_result(
+    v_ed,
+    *,
+    vrd_c=103.417,
+    asw_over_s=0.5,
+    cot_min=1.0,
+    cot_max=2.5,
+    n_ed_comp=0.0,
+):
+    spacing = 200.0
+    asw = asw_over_s * spacing
+    link_result = shear.vrd_links(
+        35.0,
+        codes.EC2_2005_DKNA,
+        300.0,
+        550.0,
+        asw_over_s,
+        500.0,
+        n_ed_comp,
+        0.18,
+        cot_min,
+        cot_max,
+        z_mm=500.0,
+        v_ed_kn=v_ed,
+    )
+    result = _shear_route_result(v_ed, vrd_c=vrd_c)
+    result.update(
+        bw=300.0,
+        method=codes.EC2_2005_DKNA.label,
+        fck=35.0,
+        n_ed_comp=n_ed_comp,
+        ac=0.18,
+    )
+    legs = 2.0
+    diameter = math.sqrt(4.0 * asw / (legs * math.pi))
+    angle_limits = {
+        "minimum": codes.EC2_2005_DKNA.shear_cot_min_limit,
+        "maximum": codes.EC2_2005_DKNA.shear_cot_max_limit,
+        "basis": "2005-family fixed range",
+        "ductility_class": "B",
+        "ductility_factor": 1.0,
+        "axial_tension_applied": False,
+        "compression_extension_credited": False,
+        "clause": "EN 1992-1-1:2005, 6.2.3(2), Formula (6.7N)",
+    }
+    angle_applicability = shear.strut_angle_applicability(
+        cot_min,
+        cot_max,
+        permitted_min=angle_limits["minimum"],
+        permitted_max=angle_limits["maximum"],
+        method=codes.EC2_2005_DKNA.label,
+        basis=angle_limits["basis"],
+        clause=angle_limits["clause"],
+        active=v_ed > 0.0,
+    )
+    link_result["angle_applicability"] = angle_applicability
+    geometry = shear.resolve_shear_geometry(
+        model_2023=False,
+        solid_rectangle=True,
+        section_form=shear.SHEAR_SECTION_AUTO,
+        bw_mm=300.0,
+        bw_user=False,
+        links_present=True,
+        duct_case=shear.SHEAR_DUCT_NONE,
+    )
+    longitudinal_force = (
+        0.0 if v_ed <= vrd_c else 0.5 * v_ed * link_result["cot"]
+    )
+    result["links"] = dict(
+        res=link_result,
+        util=v_ed / link_result["vrd"],
+        asw=asw,
+        asw_over_s=asw_over_s,
+        effective_asw_over_s=asw_over_s,
+        asw_factor=1.0,
+        legs=legs,
+        dia=diameter,
+        s=spacing,
+        longitudinal_shear_force=longitudinal_force,
+        longitudinal_shear_symbol="delta_Ftd",
+        longitudinal_shear_clause="6.2.3(7), Formula (6.18)",
+        delta_ftd=longitudinal_force,
+        fywk=500.0,
+        cot_min=cot_min,
+        cot_max=cot_max,
+        cot_limit_lo=1.0,
+        cot_limit_hi=2.5,
+        angle_limits=angle_limits,
+        angle_applicability=angle_applicability,
+        model_2023=False,
+        theta_mode="resistance",
+        member_angle_selection=None,
+        out_of_limits=False,
+        z_source="plastic internal lever arm",
+        shear_geometry=geometry,
+    )
+    return result
+
+
+def _publication_shear_route_result_2023(
+    v_ed,
+    *,
+    vrd_c=47.59286047,
+    asw_over_s=10.0,
+):
+    spacing = 200.0
+    asw = asw_over_s * spacing
+    angle_limits = shear.compression_field_limits_2023(
+        0.0,
+        v_ed,
+        "B",
+    )
+    applicability = shear.strut_angle_applicability(
+        1.0,
+        2.5,
+        permitted_min=angle_limits["minimum"],
+        permitted_max=angle_limits["maximum"],
+        method=codes.EC2_2023.label,
+        basis=angle_limits["basis"],
+        clause=angle_limits["clause"],
+        active=v_ed > 0.0,
+    )
+    link_result = shear.vrd_links(
+        35.0,
+        codes.EC2_2023,
+        300.0,
+        550.0,
+        asw_over_s,
+        500.0,
+        0.0,
+        0.18,
+        1.0,
+        2.5,
+        z_mm=500.0,
+        fcd_mpa=35.0 / 1.5,
+        v_ed_kn=v_ed,
+        ductility_class="B",
+        angle_applicability=applicability,
+    )
+    result = _shear_route_result(v_ed, vrd_c=vrd_c)
+    result.update(
+        bw=300.0,
+        method=codes.EC2_2023.label,
+        model_2023=True,
+        fck=35.0,
+        n_ed_comp=0.0,
+        ac=0.18,
+    )
+    legs = 2.0
+    diameter = math.sqrt(4.0 * asw / (legs * math.pi))
+    geometry = shear.resolve_shear_geometry(
+        model_2023=True,
+        solid_rectangle=True,
+        section_form=shear.SHEAR_SECTION_AUTO,
+        bw_mm=300.0,
+        bw_user=False,
+        links_present=True,
+        duct_case=shear.SHEAR_DUCT_NONE,
+    )
+    longitudinal_force = (
+        0.0 if v_ed <= vrd_c else v_ed * link_result["cot"]
+    )
+    result["links"] = dict(
+        res=link_result,
+        util=v_ed / link_result["vrd"],
+        asw=asw,
+        asw_over_s=asw_over_s,
+        effective_asw_over_s=asw_over_s,
+        asw_factor=1.0,
+        legs=legs,
+        dia=diameter,
+        s=spacing,
+        longitudinal_shear_force=longitudinal_force,
+        longitudinal_shear_symbol="NVd",
+        longitudinal_shear_clause="8.2.3(8), Formula (8.50)",
+        delta_ftd=None,
+        fywk=500.0,
+        cot_min=1.0,
+        cot_max=2.5,
+        cot_limit_lo=angle_limits["minimum"],
+        cot_limit_hi=angle_limits["maximum"],
+        angle_limits=angle_limits,
+        angle_applicability=applicability,
+        model_2023=True,
+        theta_mode="resistance",
+        member_angle_selection=None,
+        out_of_limits=False,
+        z_source="plastic internal lever arm",
+        shear_geometry=geometry,
+    )
+    return result
+
+
+def _forge_link_compression_coefficient(result, coefficient):
+    links = result["links"]
+    link_result = links["res"]
+    model_2023 = links["model_2023"]
+    a = link_result["asw_over_s"] * link_result["fywd"]
+    if model_2023:
+        link_result["nu"] = coefficient
+        link_result["nu1"] = coefficient
+        b = link_result["bw"] * coefficient * link_result["fcd"]
+    else:
+        link_result["alpha_cw"] = coefficient
+        b = (
+            coefficient
+            * link_result["bw"]
+            * link_result["nu1"]
+            * link_result["fcd"]
+        )
+    angle = shear.optimum_strut_angle(
+        a,
+        b,
+        link_result["cot_min"],
+        link_result["cot_max"],
+    )
+    cot = angle.cot
+    tan = angle.tan
+    vrd_s = a * link_result["z"] * cot / 1000.0
+    vrd_max = b * link_result["z"] / (cot + tan) / 1000.0
+    link_result.update(
+        vrd_s=vrd_s,
+        vrd_max=vrd_max,
+        vrd=min(vrd_s, vrd_max),
+        cot=cot,
+        tan=tan,
+        theta_deg=angle.theta_deg,
+        sin_cos=angle.sin_cos,
+        cot_unconstrained=angle.cot_unconstrained,
+        angle_selection=angle.selection,
+        angle_a=a,
+        angle_b=b,
+        governs=(
+            "links (tau_Rd,sy)"
+            if model_2023 and vrd_s <= vrd_max
+            else "compression field (sigma_cd)"
+            if model_2023
+            else "stirrups (VRd,s)"
+            if vrd_s <= vrd_max
+            else "crushing (VRd,max)"
+        ),
+    )
+    if model_2023:
+        tau_ed = result["v_ed"] * 1000.0 / (
+            link_result["bw"] * link_result["z"]
+        )
+        link_result.update(
+            nu_fcd=coefficient * link_result["fcd"],
+            sigma_cd=tau_ed * (cot + tan),
+            tau_ed=tau_ed,
+            tau_rd_sy=(
+                link_result["rho_w"] * link_result["fywd"] * cot
+            ),
+            tau_rd_max=coefficient * link_result["fcd"] / (cot + tan),
+        )
+    links["util"] = result["v_ed"] / link_result["vrd"]
+    factor = 1.0 if model_2023 else 0.5
+    longitudinal_force = factor * result["v_ed"] * cot
+    links["longitudinal_shear_force"] = longitudinal_force
+    if not model_2023:
+        links["delta_ftd"] = longitudinal_force
+
+
+@pytest.mark.parametrize(
+    ("factory", "coefficient"),
+    (
+        (_publication_shear_route_result, 2.0),
+        (_publication_shear_route_result_2023, 1.0),
+    ),
+)
+def test_provided_link_publication_rejects_coherent_compression_coefficient_forgery(
+    factory,
+    coefficient,
+):
+    result = factory(1000.0, vrd_c=47.59286047, asw_over_s=10.0)
+    baseline = capacity.provided_link_shear_publication_assessment(result)
+    assert baseline.valid is True
+    assert baseline.status == "FAIL"
+
+    _forge_link_compression_coefficient(result, coefficient)
+    internally_coherent = capacity.provided_link_shear_assessment(result)
+    guarded = capacity.provided_link_shear_publication_assessment(result)
+
+    assert internally_coherent.valid is True
+    assert internally_coherent.status == "PASS"
+    assert guarded.valid is False
+    assert guarded.status == "NOT ASSESSED"
+    assert guarded.resistance is None
+
+
+def test_provided_link_publication_accepts_current_2005_axial_tension_coefficient():
+    result = _publication_shear_route_result(
+        100.0,
+        vrd_c=47.59286047,
+        asw_over_s=10.0,
+        n_ed_comp=-100.0,
+    )
+
+    assert result["links"]["res"]["sigma_cp"] < 0.0
+    assessment = capacity.provided_link_shear_publication_assessment(result)
+
+    assert assessment.valid is True
+    assert assessment.resistance is not None
+
+
 def test_sparse_links_do_not_replace_applicable_concrete_resistance_or_verdict():
     selected = capacity.select_nominal_shear_resistance(
         _shear_route_result(80.0, vrd_links=29.452),
@@ -296,6 +601,295 @@ def test_sparse_links_do_not_replace_applicable_concrete_resistance_or_verdict()
     assert selected.ok is True
     assert selected.links_required is False
     assert 80.0 / 29.452 == pytest.approx(2.7162841233)
+
+
+def test_provided_link_assessment_reproduces_pub_m01_oracle_independently():
+    result = _shear_route_result(
+        30.0,
+        vrd_c=47.59286047,
+        vrd_links=127.653869995,
+    )
+
+    provided = capacity.provided_link_shear_assessment(result)
+    nominal = capacity.select_nominal_shear_resistance(
+        result,
+        links_selected=True,
+    )
+
+    assert provided.valid is True
+    assert provided.resistance == pytest.approx(127.653869995)
+    assert provided.utilisation == pytest.approx(0.2350105015)
+    assert provided.status == "PASS"
+    assert provided.ok is True
+    assert nominal.route == "concrete"
+    assert nominal.utilisation == pytest.approx(30.0 / 47.59286047)
+    assert nominal.status == "PASS"
+
+
+def test_links_governing_route_uses_the_same_provided_link_assessment():
+    result = _shear_route_result(
+        150.0,
+        vrd_c=47.59286047,
+        vrd_links=127.653869995,
+    )
+
+    provided = capacity.provided_link_shear_assessment(result)
+    nominal = capacity.select_nominal_shear_resistance(
+        result,
+        links_selected=True,
+    )
+
+    assert provided.valid is True
+    assert provided.utilisation == pytest.approx(150.0 / 127.653869995)
+    assert provided.status == "FAIL"
+    assert provided.ok is False
+    assert nominal.route == "links"
+    assert nominal.utilisation == pytest.approx(provided.utilisation)
+    assert nominal.status == "FAIL"
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "invalid-result",
+        "non-finite-resistance",
+        "mismatched-utilisation",
+        "inapplicable-angle",
+        "boolean-demand",
+    ),
+)
+def test_provided_link_assessment_fails_closed_on_invalid_evidence(attack):
+    result = _shear_route_result(
+        30.0,
+        vrd_c=47.59286047,
+        vrd_links=127.653869995,
+    )
+    if attack == "invalid-result":
+        result["links"]["res"]["valid"] = False
+    elif attack == "non-finite-resistance":
+        result["links"]["res"]["vrd"] = math.inf
+    elif attack == "mismatched-utilisation":
+        result["links"]["util"] = 0.5
+    elif attack == "inapplicable-angle":
+        result["links"]["res"]["angle_applicability"] = {
+            "active": True,
+            "applicable": False,
+        }
+    else:
+        result["v_ed"] = True
+
+    provided = capacity.provided_link_shear_assessment(result)
+
+    assert provided.valid is False
+    assert provided.resistance is None
+    assert provided.utilisation is None
+    assert provided.status == "NOT ASSESSED"
+    assert provided.ok is None
+
+
+def test_provided_link_assessment_ignores_unrelated_status_fields():
+    result = _shear_route_result(
+        30.0,
+        vrd_c=47.59286047,
+        vrd_links=127.653869995,
+    )
+    result["signed_v_ed"] = -30.0
+    result.update(assessment_status="FAIL", assessment_ok=False)
+    result["links"].update(
+        assessment_status="FAIL",
+        longitudinal_assessment={"status": "FAIL", "util": 2.0},
+    )
+    result["links"]["res"].update(status="FAIL", ok=False)
+
+    provided = capacity.provided_link_shear_assessment(result)
+
+    assert provided.valid is True
+    assert provided.utilisation == pytest.approx(0.2350105015)
+    assert provided.status == "PASS"
+    assert provided.ok is True
+
+
+def test_provided_link_assessment_rejects_negative_canonical_demand():
+    result = _shear_route_result(
+        -30.0,
+        vrd_c=47.59286047,
+        vrd_links=127.653869995,
+    )
+
+    provided = capacity.provided_link_shear_assessment(result)
+
+    assert provided.valid is False
+    assert provided.status == "NOT ASSESSED"
+
+
+@pytest.mark.parametrize(
+    "attack",
+    (
+        "missing-vrd-s",
+        "mismatched-minimum",
+        "mismatched-governing-label",
+        "blocked-state-whitespace",
+        "contradictory-state",
+        "unknown-state",
+        "missing-geometry",
+        "empty-geometry",
+        "malformed-geometry",
+        "mismatched-diameter",
+        "mismatched-legs",
+        "stale-unconstrained-angle",
+        "stale-angle-a",
+        "missing-angle-limits",
+        "empty-angle-limits",
+        "mismatched-cot-limit",
+        "mismatched-angle-basis",
+        "mismatched-model",
+        "invalid-geometry-flag",
+        "out-of-limits",
+        "unknown-section-form",
+        "unknown-duct-case",
+        "mismatched-geometry-factor",
+        "contradictory-duct-size",
+        "stale-longitudinal-force",
+        "unknown-longitudinal-symbol",
+        "unknown-theta-mode",
+        "internal-z-source",
+        "boolean-signed-demand",
+        "mismatched-signed-demand",
+    ),
+)
+def test_provided_link_publication_assessment_fails_closed_on_stale_child(
+    attack,
+):
+    result = _publication_shear_route_result(
+        30.0,
+        vrd_c=47.59286047,
+    )
+    link_result = result["links"]["res"]
+    if attack == "missing-vrd-s":
+        del link_result["vrd_s"]
+    elif attack == "mismatched-minimum":
+        link_result["vrd_s"] = 1.0
+    elif attack == "mismatched-governing-label":
+        link_result["governs"] = "crushing (VRd,max)"
+    elif attack == "blocked-state-whitespace":
+        link_result["calculation_state"] = " not assessed "
+    elif attack == "contradictory-state":
+        link_result["calculation_state"] = "NOT APPLICABLE"
+    elif attack == "unknown-state":
+        link_result["calculation_state"] = "garbage"
+    elif attack == "missing-geometry":
+        del result["links"]["shear_geometry"]
+    elif attack == "empty-geometry":
+        result["links"]["shear_geometry"] = {}
+    elif attack == "malformed-geometry":
+        result["links"]["shear_geometry"]["duct_factor_links"] = "bad"
+    elif attack == "mismatched-diameter":
+        result["links"]["dia"] *= 2.0
+    elif attack == "mismatched-legs":
+        result["links"]["legs"] *= 2.0
+    elif attack == "stale-unconstrained-angle":
+        link_result["cot_unconstrained"] = 3.5
+    elif attack == "stale-angle-a":
+        link_result["angle_a"] *= 1.1
+    elif attack == "missing-angle-limits":
+        del result["links"]["angle_limits"]
+    elif attack == "empty-angle-limits":
+        result["links"]["angle_limits"] = {}
+    elif attack == "mismatched-cot-limit":
+        result["links"]["cot_limit_hi"] = 2.4
+    elif attack == "mismatched-angle-basis":
+        result["links"]["angle_limits"]["basis"] = "internal route"
+    elif attack == "mismatched-model":
+        link_result["model"] = "2023"
+    elif attack == "invalid-geometry-flag":
+        result["links"]["shear_geometry"]["links_valid"] = False
+    elif attack == "out-of-limits":
+        result["links"]["out_of_limits"] = True
+    elif attack == "unknown-section-form":
+        result["links"]["shear_geometry"]["section_form"] = "internal form"
+    elif attack == "unknown-duct-case":
+        result["links"]["shear_geometry"]["duct_case"] = "internal duct"
+    elif attack == "mismatched-geometry-factor":
+        result["links"]["shear_geometry"]["asw_factor"] = 0.9
+    elif attack == "contradictory-duct-size":
+        result["links"]["shear_geometry"]["duct_largest_mm"] = 1.0
+    elif attack == "stale-longitudinal-force":
+        result["links"]["longitudinal_shear_force"] = 1.0
+    elif attack == "unknown-longitudinal-symbol":
+        result["links"]["longitudinal_shear_symbol"] = "internal"
+    elif attack == "unknown-theta-mode":
+        result["links"]["theta_mode"] = "internal"
+    elif attack == "internal-z-source":
+        result["links"]["z_source"] = "internal route"
+    elif attack == "boolean-signed-demand":
+        result["signed_v_ed"] = True
+    else:
+        result["signed_v_ed"] = -31.0
+
+    provided = capacity.provided_link_shear_publication_assessment(result)
+
+    assert provided.valid is False
+    assert provided.status == "NOT ASSESSED"
+    assert provided.utilisation is None
+
+
+def test_provided_link_publication_ignores_stale_required_alias():
+    result = _publication_shear_route_result(
+        30.0,
+        vrd_c=47.59286047,
+    )
+    result["links"]["required"] = True
+
+    provided = capacity.provided_link_shear_publication_assessment(result)
+    nominal = capacity.select_nominal_shear_resistance(
+        result,
+        links_selected=True,
+    )
+
+    assert provided.valid is True
+    assert nominal.route == "concrete"
+    assert nominal.links_required is False
+
+
+@pytest.mark.parametrize("signed_demand", (30.0, -30.0))
+def test_provided_link_publication_accepts_coherent_signed_action(signed_demand):
+    result = _publication_shear_route_result(30.0, vrd_c=47.59286047)
+    result["signed_v_ed"] = signed_demand
+
+    provided = capacity.provided_link_shear_publication_assessment(result)
+
+    assert provided.valid is True
+    assert provided.status == "PASS"
+    assert provided.utilisation == pytest.approx(30.0 / provided.resistance)
+
+
+@pytest.mark.parametrize(
+    ("asw_over_s", "cot_min", "cot_max", "selection"),
+    (
+        (0.5, 1.0, 2.5, "upper bound"),
+        (10.0, 1.5, 2.5, "lower bound"),
+        (10.0, 1.0, 2.5, "cot(theta) = 1 optimum"),
+        (1.8248275862068964, 1.0, 2.5, "stirrup/crushing crossover"),
+    ),
+)
+def test_provided_link_publication_reconstructs_every_angle_selection(
+    asw_over_s,
+    cot_min,
+    cot_max,
+    selection,
+):
+    result = _publication_shear_route_result(
+        30.0,
+        vrd_c=47.59286047,
+        asw_over_s=asw_over_s,
+        cot_min=cot_min,
+        cot_max=cot_max,
+    )
+
+    provided = capacity.provided_link_shear_publication_assessment(result)
+
+    assert result["links"]["res"]["angle_selection"] == selection
+    assert provided.valid is True
 
 
 @pytest.mark.parametrize(

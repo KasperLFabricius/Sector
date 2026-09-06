@@ -9,8 +9,9 @@ and prevents UI reruns from becoming the only way to exercise member checks.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from importlib import import_module
 from numbers import Real
 from typing import Any
@@ -314,6 +315,23 @@ class NominalShearResistanceSelection:
 
 
 @dataclass(frozen=True, slots=True)
+class ProvidedLinkShearAssessment:
+    """Independent resistance assessment for the entered shear links.
+
+    This record is separate from both the selected nominal shear route and
+    link-detailing compliance.  Its status is derived only from the validated
+    link resistance and the applied shear action.
+    """
+
+    valid: bool
+    resistance: float | None
+    utilisation: float | None
+    status: str
+    ok: bool | None
+    reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class LockedInPrestressTendon:
     """One tendon's locked-in elastic prestress contribution.
 
@@ -488,6 +506,35 @@ def _nonnegative_finite_real(
     return number
 
 
+def validated_signed_shear_demand(shear_result: object) -> float | None:
+    """Return a coherent signed shear action for public retained evidence."""
+
+    if not isinstance(shear_result, Mapping):
+        return None
+    try:
+        canonical = _nonnegative_finite_real(
+            shear_result.get("v_ed", _MISSING),
+            "shear demand",
+        )
+    except CapacityInputError:
+        return None
+    retained = shear_result.get("signed_v_ed", canonical)
+    if _is_boolean_scalar(retained) or isinstance(retained, (str, bytes)):
+        return None
+    try:
+        signed = float(retained)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(signed) or not math.isclose(
+        abs(signed),
+        canonical,
+        rel_tol=1.0e-12,
+        abs_tol=1.0e-12,
+    ):
+        return None
+    return signed
+
+
 def select_nominal_shear_resistance(
     shear_result: object,
     *,
@@ -602,6 +649,823 @@ def select_nominal_shear_resistance(
         links_required=links_required,
         reason=None,
     )
+
+
+def provided_link_shear_assessment(
+    shear_result: object,
+) -> ProvidedLinkShearAssessment:
+    """Assess the entered links without changing the nominal shear route."""
+
+    unavailable_reason = "provided-link resistance evidence is unavailable"
+
+    def unavailable() -> ProvidedLinkShearAssessment:
+        return ProvidedLinkShearAssessment(
+            valid=False,
+            resistance=None,
+            utilisation=None,
+            status="NOT ASSESSED",
+            ok=None,
+            reason=unavailable_reason,
+        )
+
+    if not isinstance(shear_result, Mapping):
+        return unavailable()
+    signed_demand = validated_signed_shear_demand(shear_result)
+    if signed_demand is None:
+        return unavailable()
+    demand = abs(signed_demand)
+
+    links = shear_result.get("links")
+    if not isinstance(links, Mapping):
+        return unavailable()
+    link_result = links.get("res")
+    if not isinstance(link_result, Mapping) or link_result.get("valid") is not True:
+        return unavailable()
+    calculation_state = link_result.get("calculation_state", _MISSING)
+    if calculation_state is not _MISSING:
+        return unavailable()
+    angle_applicability = link_result.get(
+        "angle_applicability",
+        links.get("angle_applicability", _MISSING),
+    )
+    if angle_applicability is not _MISSING:
+        if not isinstance(angle_applicability, Mapping):
+            return unavailable()
+        angle_active = angle_applicability.get("active", True)
+        angle_applicable = angle_applicability.get("applicable", _MISSING)
+        if (
+            type(angle_active) is not bool
+            or type(angle_applicable) is not bool
+            or (angle_active and not angle_applicable)
+        ):
+            return unavailable()
+
+    try:
+        resistance = _positive_finite_real(
+            link_result.get("vrd", _MISSING),
+            "provided-link shear resistance",
+        )
+        retained_utilisation = _nonnegative_finite_real(
+            links.get("util", _MISSING),
+            "provided-link utilisation",
+        )
+    except CapacityInputError:
+        return unavailable()
+    utilisation = demand / resistance
+    if not math.isclose(
+        retained_utilisation,
+        utilisation,
+        rel_tol=1.0e-12,
+        abs_tol=1.0e-12,
+    ):
+        return unavailable()
+    ok = utilisation <= 1.0
+    return ProvidedLinkShearAssessment(
+        valid=True,
+        resistance=resistance,
+        utilisation=utilisation,
+        status="PASS" if ok else "FAIL",
+        ok=ok,
+        reason=None,
+    )
+
+
+def provided_link_shear_publication_assessment(
+    shear_result: object,
+    *,
+    expected_member_angle_selection: object = _MISSING,
+) -> ProvidedLinkShearAssessment:
+    """Validate the retained operands needed by every public links surface.
+
+    The numerical resistance comparison remains independent of this display
+    boundary.  A stale or incomplete retained child must, however, fail closed
+    consistently before the UI or a report indexes its worked operands.
+    """
+
+    assessment = provided_link_shear_assessment(shear_result)
+    if assessment.valid is not True:
+        return assessment
+
+    def unavailable() -> ProvidedLinkShearAssessment:
+        return ProvidedLinkShearAssessment(
+            valid=False,
+            resistance=None,
+            utilisation=None,
+            status="NOT ASSESSED",
+            ok=None,
+            reason="provided-link resistance evidence is unavailable",
+        )
+
+    if not isinstance(shear_result, Mapping):
+        return unavailable()
+    signed_demand = validated_signed_shear_demand(shear_result)
+    if signed_demand is None:
+        return unavailable()
+    demand = abs(signed_demand)
+    links = shear_result.get("links")
+    if not isinstance(links, Mapping):
+        return unavailable()
+    link_result = links.get("res")
+    if not isinstance(link_result, Mapping):
+        return unavailable()
+    method = shear_result.get("method")
+    if type(method) is not str or method not in SHEAR_METHODS:
+        return unavailable()
+    selected_code = SHEAR_METHODS[method]
+    model_2023 = links.get("model_2023", False)
+    if type(model_2023) is not bool:
+        return unavailable()
+    expected_model = (
+        "2023"
+        if getattr(selected_code, "shear_model", "2005") == "2023"
+        else "2005"
+    )
+    if model_2023 is not (expected_model == "2023"):
+        return unavailable()
+    if link_result.get("model") != expected_model:
+        return unavailable()
+
+    try:
+        retained_resistance_operands: dict[str, float] = {}
+        for key in (
+            "vrd_s",
+            "vrd_max",
+            "vrd",
+            "cot",
+            "tan",
+            "theta_deg",
+            "sin_cos",
+            "z",
+            "fywd",
+            "cot_min",
+            "cot_max",
+            "cot_unconstrained",
+            "angle_a",
+            "angle_b",
+        ):
+            retained_resistance_operands[key] = _positive_finite_real(
+                link_result.get(key, _MISSING),
+                f"provided-link {key}",
+            )
+        retained_link_operands: dict[str, float] = {}
+        for key in ("asw", "asw_over_s", "legs", "dia", "s"):
+            retained_link_operands[key] = _positive_finite_real(
+                links.get(key, _MISSING),
+                f"provided-link {key}",
+            )
+        retained_link_operands["effective_asw_over_s"] = _positive_finite_real(
+            links.get("effective_asw_over_s", links.get("asw_over_s", _MISSING)),
+            "effective provided-link area per spacing",
+        )
+        retained_link_operands["asw_factor"] = _positive_finite_real(
+            links.get("asw_factor", 1.0),
+            "provided-link area factor",
+        )
+        retained_link_operands["cot_min"] = _positive_finite_real(
+            links.get("cot_min", _MISSING),
+            "provided-link requested lower cotangent",
+        )
+        retained_link_operands["cot_max"] = _positive_finite_real(
+            links.get("cot_max", _MISSING),
+            "provided-link requested upper cotangent",
+        )
+        retained_link_operands["cot_limit_lo"] = _positive_finite_real(
+            links.get("cot_limit_lo", _MISSING),
+            "provided-link permitted lower cotangent",
+        )
+        retained_link_operands["cot_limit_hi"] = _positive_finite_real(
+            links.get("cot_limit_hi", _MISSING),
+            "provided-link permitted upper cotangent",
+        )
+        _nonnegative_finite_real(
+            links.get("longitudinal_shear_force", _MISSING),
+            "provided-link longitudinal force",
+        )
+        retained_resistance_operands["bw"] = _positive_finite_real(
+            link_result.get("bw", shear_result.get("bw", _MISSING)),
+            "provided-link web width",
+        )
+        retained_resistance_operands["kernel_asw_over_s"] = (
+            _positive_finite_real(
+                link_result.get("asw_over_s", _MISSING),
+                "provided-link kernel area per spacing",
+            )
+        )
+    except CapacityInputError:
+        return unavailable()
+
+    if not all(
+        type(link_result.get(key)) is str and bool(link_result.get(key))
+        for key in ("governs", "angle_selection")
+    ):
+        return unavailable()
+    expected_resistance = min(
+        retained_resistance_operands["vrd_s"],
+        retained_resistance_operands["vrd_max"],
+    )
+    if not math.isclose(
+        retained_resistance_operands["vrd"],
+        expected_resistance,
+        rel_tol=1.0e-12,
+        abs_tol=1.0e-12,
+    ):
+        return unavailable()
+    expected_governing = (
+        "links (tau_Rd,sy)"
+        if model_2023
+        and retained_resistance_operands["vrd_s"]
+        <= retained_resistance_operands["vrd_max"]
+        else "compression field (sigma_cd)"
+        if model_2023
+        else "stirrups (VRd,s)"
+        if retained_resistance_operands["vrd_s"]
+        <= retained_resistance_operands["vrd_max"]
+        else "crushing (VRd,max)"
+    )
+    if link_result.get("governs") != expected_governing:
+        return unavailable()
+    model_fields = (
+        ("rho_w", "nu", "tau_ed", "tau_rd_sy", "sigma_cd", "nu_fcd", "fcd")
+        if model_2023
+        else ("nu1", "alpha_cw", "fcd")
+    )
+    try:
+        retained_model_operands: dict[str, float] = {}
+        for key in model_fields:
+            retained_model_operands[key] = _nonnegative_finite_real(
+                link_result.get(key, _MISSING),
+                f"provided-link {key}",
+            )
+        if model_2023:
+            _positive_finite_real(
+                links.get("cot_limit_lo", _MISSING),
+                "provided-link lower cotangent limit",
+            )
+            _positive_finite_real(
+                links.get("cot_limit_hi", _MISSING),
+                "provided-link upper cotangent limit",
+            )
+        else:
+            sigma_cp = _combined_longitudinal_finite(
+                link_result.get("sigma_cp", _MISSING)
+            )
+            if sigma_cp is None:
+                return unavailable()
+            retained_model_operands["sigma_cp"] = sigma_cp
+    except CapacityInputError:
+        return unavailable()
+
+    def coherent(left: float, right: float) -> bool:
+        return math.isclose(left, right, rel_tol=1.0e-10, abs_tol=1.0e-10)
+
+    cot = retained_resistance_operands["cot"]
+    tan = retained_resistance_operands["tan"]
+    theta_deg = retained_resistance_operands["theta_deg"]
+    cot_min = retained_resistance_operands["cot_min"]
+    cot_max = retained_resistance_operands["cot_max"]
+    if cot_min > cot_max or cot < cot_min or cot > cot_max:
+        return unavailable()
+
+    angle_applicability = link_result.get("angle_applicability")
+    if not isinstance(angle_applicability, Mapping):
+        return unavailable()
+    retained_applicability = links.get("angle_applicability")
+    angle_limits = links.get("angle_limits")
+    if not isinstance(retained_applicability, Mapping) or not isinstance(
+        angle_limits, Mapping
+    ):
+        return unavailable()
+
+    shear_module = _module("shear")
+    ductility_class = angle_limits.get("ductility_class")
+    if type(ductility_class) is not str or ductility_class not in {"A", "B", "C"}:
+        return unavailable()
+    if model_2023:
+        n_ed_comp = shear_result.get("n_ed_comp", _MISSING)
+        if _is_boolean_scalar(n_ed_comp) or isinstance(n_ed_comp, (str, bytes)):
+            return unavailable()
+        try:
+            n_ed_comp_value = float(n_ed_comp)
+        except (TypeError, ValueError, OverflowError):
+            return unavailable()
+        if not math.isfinite(n_ed_comp_value):
+            return unavailable()
+        expected_shear_limits = shear_module.compression_field_limits_2023(
+            -n_ed_comp_value,
+            demand,
+            ductility_class,
+        )
+    else:
+        expected_shear_limits = {
+            "minimum": selected_code.shear_cot_min_limit,
+            "maximum": selected_code.shear_cot_max_limit,
+            "basis": "2005-family fixed range",
+            "ductility_class": ductility_class,
+            "ductility_factor": 1.0,
+            "axial_tension_applied": False,
+            "compression_extension_credited": False,
+            "clause": "EN 1992-1-1:2005, 6.2.3(2), Formula (6.7N)",
+        }
+
+    retained_method = angle_applicability.get("method")
+    shared_method_prefix = f"{method} with "
+    if retained_method == method:
+        expected_permitted_min = expected_shear_limits["minimum"]
+        expected_permitted_max = expected_shear_limits["maximum"]
+        expected_basis = expected_shear_limits["basis"]
+        expected_clause = expected_shear_limits["clause"]
+    elif (
+        type(retained_method) is str
+        and retained_method.startswith(shared_method_prefix)
+        and retained_method[len(shared_method_prefix):] in SHEAR_CODES
+    ):
+        torsion_code = SHEAR_CODES[retained_method[len(shared_method_prefix):]]
+        expected_permitted_min = max(
+            expected_shear_limits["minimum"],
+            torsion_code.shear_cot_min_limit,
+        )
+        expected_permitted_max = min(
+            expected_shear_limits["maximum"],
+            torsion_code.shear_cot_max_limit,
+        )
+        expected_basis = "shared shear and torsion permitted-range intersection"
+        expected_clause = (
+            f"{expected_shear_limits['clause']}; "
+            "EN 1992-1-1:2005, 6.3.2(2)"
+        )
+    else:
+        return unavailable()
+
+    for key, expected in expected_shear_limits.items():
+        retained = angle_limits.get(key, _MISSING)
+        if key in {"minimum", "maximum", "basis", "clause"}:
+            continue
+        if isinstance(expected, float):
+            if _is_boolean_scalar(retained) or not isinstance(retained, Real):
+                return unavailable()
+            if not coherent(float(retained), expected):
+                return unavailable()
+        elif retained != expected:
+            return unavailable()
+    try:
+        retained_limit_min = _positive_finite_real(
+            angle_limits.get("minimum", _MISSING),
+            "provided-link retained lower limit",
+        )
+        retained_limit_max = _positive_finite_real(
+            angle_limits.get("maximum", _MISSING),
+            "provided-link retained upper limit",
+        )
+    except CapacityInputError:
+        return unavailable()
+    if not all((
+        coherent(retained_limit_min, expected_permitted_min),
+        coherent(retained_limit_max, expected_permitted_max),
+        angle_limits.get("basis") == expected_basis,
+        angle_limits.get("clause") == expected_clause,
+        coherent(retained_link_operands["cot_limit_lo"], expected_permitted_min),
+        coherent(retained_link_operands["cot_limit_hi"], expected_permitted_max),
+    )):
+        return unavailable()
+
+    try:
+        expected_applicability = shear_module.strut_angle_applicability(
+            retained_link_operands["cot_min"],
+            retained_link_operands["cot_max"],
+            permitted_min=expected_permitted_min,
+            permitted_max=expected_permitted_max,
+            method=str(retained_method),
+            basis=expected_basis,
+            clause=expected_clause,
+            active=demand > 0.0,
+        )
+    except ValueError:
+        return unavailable()
+
+    def mappings_cohere(left: Mapping, right: Mapping) -> bool:
+        if set(left) != set(right):
+            return False
+        for key, expected in right.items():
+            retained = left.get(key)
+            if isinstance(expected, float):
+                if _is_boolean_scalar(retained) or not isinstance(retained, Real):
+                    return False
+                if not coherent(float(retained), expected):
+                    return False
+            elif retained != expected:
+                return False
+        return True
+
+    if not mappings_cohere(angle_applicability, expected_applicability):
+        return unavailable()
+    if not mappings_cohere(retained_applicability, expected_applicability):
+        return unavailable()
+    if links.get("out_of_limits") is not bool(
+        expected_applicability["active"]
+        and expected_applicability["applicable"] is False
+    ):
+        return unavailable()
+
+    gross_asw_over_s = (
+        retained_link_operands["asw"] / retained_link_operands["s"]
+    )
+    expected_link_area = (
+        retained_link_operands["legs"]
+        * math.pi
+        * retained_link_operands["dia"] ** 2
+        / 4.0
+    )
+    effective_asw_over_s = (
+        gross_asw_over_s * retained_link_operands["asw_factor"]
+    )
+    if not all((
+        coherent(retained_link_operands["asw"], expected_link_area),
+        coherent(retained_link_operands["asw_over_s"], gross_asw_over_s),
+        coherent(
+            retained_link_operands["effective_asw_over_s"],
+            effective_asw_over_s,
+        ),
+        coherent(
+            retained_resistance_operands["kernel_asw_over_s"],
+            effective_asw_over_s,
+        ),
+        coherent(tan, 1.0 / cot),
+        coherent(theta_deg, math.degrees(math.atan(tan))),
+    )):
+        return unavailable()
+
+    z = retained_resistance_operands["z"]
+    bw = retained_resistance_operands["bw"]
+    fywd = retained_resistance_operands["fywd"]
+    angle_a = effective_asw_over_s * fywd
+    if model_2023:
+        expected_nu = 0.5
+        rho_w = effective_asw_over_s / bw
+        tau_ed = float(shear_result["v_ed"]) * 1000.0 / (bw * z)
+        tau_rd_sy = rho_w * fywd * cot
+        nu_fcd = retained_model_operands["nu"] * retained_model_operands["fcd"]
+        sigma_cd = tau_ed * (cot + tan)
+        angle_b = bw * retained_model_operands["nu"] * retained_model_operands["fcd"]
+        expected_vrd_s = tau_rd_sy * bw * z / 1000.0
+        expected_vrd_max = nu_fcd * bw * z / (cot + tan) / 1000.0
+        coherent_model = all((
+            coherent(retained_model_operands["rho_w"], rho_w),
+            coherent(retained_model_operands["tau_ed"], tau_ed),
+            coherent(retained_model_operands["tau_rd_sy"], tau_rd_sy),
+            coherent(retained_model_operands["nu_fcd"], nu_fcd),
+            coherent(retained_model_operands["sigma_cd"], sigma_cd),
+            coherent(retained_model_operands["nu"], expected_nu),
+        ))
+    else:
+        fck = _combined_longitudinal_finite_nonnegative(
+            shear_result.get("fck", _MISSING)
+        )
+        n_ed_comp = _combined_longitudinal_finite(
+            shear_result.get("n_ed_comp", _MISSING)
+        )
+        ac = _combined_longitudinal_finite_nonnegative(
+            shear_result.get("ac", _MISSING)
+        )
+        if fck is None or fck <= 0.0 or n_ed_comp is None or ac is None or ac <= 0.0:
+            return unavailable()
+        expected_sigma_cp = n_ed_comp / ac / 1000.0
+        expected_nu1 = selected_code.shear_nu1(fck)
+        expected_alpha_cw = selected_code.shear_alpha_cw(
+            expected_sigma_cp,
+            retained_model_operands["fcd"],
+        )
+        angle_b = (
+            retained_model_operands["alpha_cw"]
+            * bw
+            * retained_model_operands["nu1"]
+            * retained_model_operands["fcd"]
+        )
+        expected_vrd_s = effective_asw_over_s * z * fywd * cot / 1000.0
+        expected_vrd_max = (
+            angle_b
+            * z
+            / (cot + tan)
+            / 1000.0
+        )
+        coherent_model = all((
+            coherent(retained_model_operands["nu1"], expected_nu1),
+            coherent(
+                retained_model_operands["alpha_cw"],
+                expected_alpha_cw,
+            ),
+            coherent(
+                retained_model_operands["sigma_cp"],
+                expected_sigma_cp,
+            ),
+        ))
+    expected_angle = shear_module.optimum_strut_angle(
+        angle_a,
+        angle_b,
+        cot_min,
+        cot_max,
+    )
+    if not all((
+        coherent_model,
+        coherent(retained_resistance_operands["angle_a"], angle_a),
+        coherent(retained_resistance_operands["angle_b"], angle_b),
+        coherent(cot, expected_angle.cot),
+        coherent(tan, expected_angle.tan),
+        coherent(theta_deg, expected_angle.theta_deg),
+        coherent(
+            retained_resistance_operands["sin_cos"],
+            expected_angle.sin_cos,
+        ),
+        coherent(
+            retained_resistance_operands["cot_unconstrained"],
+            expected_angle.cot_unconstrained,
+        ),
+        link_result.get("angle_selection") == expected_angle.selection,
+        coherent(retained_resistance_operands["vrd_s"], expected_vrd_s),
+        coherent(retained_resistance_operands["vrd_max"], expected_vrd_max),
+    )):
+        return unavailable()
+
+    shear_geometry = links.get("shear_geometry")
+    if not isinstance(shear_geometry, Mapping):
+        return unavailable()
+    selected_form = shear_geometry.get("section_form")
+    try:
+        expected_geometry = shear_module.resolve_shear_geometry(
+            model_2023=model_2023,
+            solid_rectangle=(selected_form == shear_module.SHEAR_SECTION_AUTO),
+            section_form=selected_form,
+            bw_mm=shear_geometry.get("bw_mm", _MISSING),
+            bw_user=(selected_form != shear_module.SHEAR_SECTION_AUTO),
+            links_present=True,
+            web_inclination_deg=shear_geometry.get(
+                "web_inclination_deg", _MISSING
+            ),
+            hoop_diameter_mm=shear_geometry.get(
+                "hoop_diameter_mm", _MISSING
+            ),
+            fitted_z_mm=shear_geometry.get("fitted_z_mm", _MISSING),
+            duct_case=shear_geometry.get("duct_case", _MISSING),
+            duct_sum_mm=shear_geometry.get("duct_sum_mm", _MISSING),
+            duct_largest_mm=shear_geometry.get(
+                "duct_largest_mm", _MISSING
+            ),
+        )
+    except (TypeError, ValueError, OverflowError):
+        return unavailable()
+    if expected_geometry.get("valid") is not True:
+        return unavailable()
+    if set(shear_geometry) != set(expected_geometry):
+        return unavailable()
+    for key, expected in expected_geometry.items():
+        retained = shear_geometry.get(key)
+        if isinstance(expected, float):
+            if _is_boolean_scalar(retained) or not isinstance(retained, Real):
+                return unavailable()
+            if not coherent(float(retained), expected):
+                return unavailable()
+        elif retained != expected:
+            return unavailable()
+    owner_geometry = shear_result.get("shear_geometry", _MISSING)
+    if owner_geometry is not _MISSING:
+        if not isinstance(owner_geometry, Mapping) or set(owner_geometry) != set(
+            shear_geometry
+        ):
+            return unavailable()
+        for key, expected in shear_geometry.items():
+            retained = owner_geometry.get(key)
+            if isinstance(expected, float):
+                if _is_boolean_scalar(retained) or not isinstance(retained, Real):
+                    return unavailable()
+                if not coherent(float(retained), expected):
+                    return unavailable()
+            elif retained != expected:
+                return unavailable()
+    if not all((
+        coherent(float(expected_geometry["links_bw_mm"]), bw),
+        coherent(
+            float(expected_geometry["asw_factor"]),
+            retained_link_operands["asw_factor"],
+        ),
+    )):
+        return unavailable()
+    z_source = links.get("z_source")
+    expected_z_source = (
+        "circular_fitted_section"
+        if selected_form == shear_module.SHEAR_SECTION_CIRCULAR
+        else "plastic internal lever arm"
+    )
+    if z_source != expected_z_source:
+        return unavailable()
+    if selected_form == shear_module.SHEAR_SECTION_CIRCULAR and not all((
+        z_source == "circular_fitted_section",
+        coherent(z, float(expected_geometry["fitted_z_mm"])),
+    )):
+        return unavailable()
+    theta_mode = links.get("theta_mode")
+    if theta_mode not in {"resistance", "utilisation"}:
+        return unavailable()
+    shared_angle = links.get("member_angle_selection")
+    if shared_angle is not None and not isinstance(shared_angle, Mapping):
+        return unavailable()
+    if theta_mode == "resistance":
+        if shared_angle is not None or not all((
+            coherent(cot_min, retained_link_operands["cot_min"]),
+            coherent(cot_max, retained_link_operands["cot_max"]),
+        )):
+            return unavailable()
+    else:
+        if not isinstance(shared_angle, Mapping) or set(shared_angle) != {
+            "cot",
+            "theta_deg",
+            "utilisation",
+            "cot_min",
+            "cot_max",
+            "samples",
+            "step",
+            "selected_index",
+            "objective_count",
+            "governing_component_indices",
+            "runner_up_utilisation",
+            "objective_labels",
+            "governing_objectives",
+        }:
+            return unavailable()
+        try:
+            shared_cot = _positive_finite_real(
+                shared_angle.get("cot", _MISSING),
+                "provided-link shared cotangent",
+            )
+            shared_min = _positive_finite_real(
+                shared_angle.get("cot_min", _MISSING),
+                "provided-link shared lower cotangent",
+            )
+            shared_max = _positive_finite_real(
+                shared_angle.get("cot_max", _MISSING),
+                "provided-link shared upper cotangent",
+            )
+            shared_theta = _positive_finite_real(
+                shared_angle.get("theta_deg", _MISSING),
+                "provided-link shared angle",
+            )
+            _nonnegative_finite_real(
+                shared_angle.get("utilisation", _MISSING),
+                "provided-link shared utilisation",
+            )
+            shared_step = _nonnegative_finite_real(
+                shared_angle.get("step", _MISSING),
+                "provided-link shared angle step",
+            )
+        except CapacityInputError:
+            return unavailable()
+        samples = shared_angle.get("samples")
+        selected_index = shared_angle.get("selected_index")
+        objective_count = shared_angle.get("objective_count")
+        indices = shared_angle.get("governing_component_indices")
+        if not all((
+            type(samples) is int and samples == 1501,
+            type(selected_index) is int and 0 <= selected_index < samples,
+            type(objective_count) is int and objective_count >= 2,
+            isinstance(indices, (list, tuple)) and bool(indices),
+            all(type(index) is int for index in indices),
+        )):
+            return unavailable()
+        if any(index < 0 or index >= objective_count for index in indices):
+            return unavailable()
+        runner_up = shared_angle.get("runner_up_utilisation")
+        if runner_up is not None:
+            try:
+                _nonnegative_finite_real(
+                    runner_up,
+                    "provided-link runner-up utilisation",
+                )
+            except CapacityInputError:
+                return unavailable()
+        if not all((
+            shared_min <= shared_max,
+            coherent(shared_min, retained_link_operands["cot_min"]),
+            coherent(shared_max, retained_link_operands["cot_max"]),
+            coherent(shared_step, (shared_max - shared_min) / (samples - 1)),
+            coherent(shared_cot, shared_min + selected_index * shared_step),
+            coherent(shared_cot, cot),
+            coherent(shared_theta, math.degrees(math.atan2(1.0, shared_cot))),
+            coherent(cot_min, shared_cot),
+            coherent(cot_max, shared_cot),
+        )):
+            return unavailable()
+        sequences: dict[str, tuple[str, ...]] = {}
+        for key in ("objective_labels", "governing_objectives"):
+            value = shared_angle.get(key, _MISSING)
+            if (
+                not isinstance(value, (list, tuple))
+                or not all(type(item) is str and bool(item) for item in value)
+            ):
+                return unavailable()
+            sequences[key] = tuple(value)
+        labels = sequences["objective_labels"]
+        allowed_label = re.compile(
+            r"(?:shear link yielding|shear strut crushing|shared closed stirrup|"
+            r"shared shear-torsion strut|torsion sub-tube [1-9][0-9]*|"
+            r"[xy]-axis (?:negative|positive) (?:longitudinal|off-axis) chord)"
+        )
+        if not all((
+            len(labels) == objective_count,
+            len(set(labels)) == len(labels),
+            labels[:2] == ("shear link yielding", "shear strut crushing"),
+            all(allowed_label.fullmatch(label) for label in labels),
+            sequences["governing_objectives"]
+            == tuple(labels[index] for index in indices),
+        )):
+            return unavailable()
+        if (
+            not isinstance(expected_member_angle_selection, Mapping)
+            or set(expected_member_angle_selection) != set(shared_angle)
+        ):
+            return unavailable()
+        integer_fields = {
+            "samples",
+            "selected_index",
+            "objective_count",
+        }
+        sequence_fields = {
+            "governing_component_indices",
+            "objective_labels",
+            "governing_objectives",
+        }
+        for key, expected in expected_member_angle_selection.items():
+            retained = shared_angle.get(key)
+            if key in integer_fields:
+                if type(retained) is not int or retained != expected:
+                    return unavailable()
+            elif key in sequence_fields:
+                if (
+                    not isinstance(retained, (list, tuple))
+                    or tuple(retained) != tuple(expected)
+                ):
+                    return unavailable()
+            elif expected is None:
+                if retained is not None:
+                    return unavailable()
+            elif isinstance(expected, Real) and not _is_boolean_scalar(expected):
+                if (
+                    _is_boolean_scalar(retained)
+                    or not isinstance(retained, Real)
+                    or not coherent(float(retained), float(expected))
+                ):
+                    return unavailable()
+            elif retained != expected:
+                return unavailable()
+
+    selected_nominal = select_nominal_shear_resistance(
+        shear_result,
+        links_selected=True,
+    )
+    if selected_nominal.valid is not True:
+        return unavailable()
+    expected_longitudinal_force = (
+        0.0
+        if selected_nominal.route == "concrete"
+        else (1.0 if model_2023 else 0.5) * demand * cot
+    )
+    try:
+        retained_longitudinal_force = _nonnegative_finite_real(
+            links.get("longitudinal_shear_force", _MISSING),
+            "provided-link longitudinal shear force",
+        )
+    except CapacityInputError:
+        return unavailable()
+    expected_symbol = "NVd" if model_2023 else "delta_Ftd"
+    expected_clause = (
+        "8.2.3(8), Formula (8.50)"
+        if model_2023
+        else "6.2.3(7), Formula (6.18)"
+    )
+    if not all((
+        coherent(retained_longitudinal_force, expected_longitudinal_force),
+        links.get("longitudinal_shear_symbol") == expected_symbol,
+        links.get("longitudinal_shear_clause") == expected_clause,
+    )):
+        return unavailable()
+    retained_delta = links.get("delta_ftd")
+    if model_2023:
+        if retained_delta is not None:
+            return unavailable()
+    else:
+        try:
+            delta = _nonnegative_finite_real(
+                retained_delta,
+                "provided-link longitudinal shear shift",
+            )
+        except CapacityInputError:
+            return unavailable()
+        if not coherent(delta, expected_longitudinal_force):
+            return unavailable()
+    chord = links.get("chord")
+    if chord is not None and not isinstance(chord, Mapping):
+        return unavailable()
+    longitudinal = links.get("longitudinal_assessment")
+    if longitudinal is not None and not isinstance(longitudinal, Mapping):
+        return unavailable()
+    return assessment
 
 
 def combined_interaction_authority(
@@ -1111,11 +1975,9 @@ def _combined_longitudinal_candidate(
     if (chord_formula is _MISSING) is not (chord_role is _MISSING):
         return None
 
-    mv_uncapped = operands["ftd_v"] * operands["z"]
-    shear_headroom = max(operands["m_rd"] - operands["m_ed"], 0.0)
-    cap_shear_force = value.get("cap_shear_force", _MISSING)
+    face_m_ed_number: float | None = None
+    flexural_tension_low = value.get("flexural_tension_low", _MISSING)
     if chord_formula in {"8.51", "8.52"}:
-        flexural_tension_low = value.get("flexural_tension_low", _MISSING)
         if (
             type(chord_role) is not str
             or chord_role not in {"flexural_tension", "flexural_compression"}
@@ -1124,7 +1986,38 @@ def _combined_longitudinal_candidate(
             is not (value["tension_low"] is flexural_tension_low)
             or (chord_role == "flexural_tension")
             is not (chord_formula == "8.51")
-            or cap_shear_force is not False
+        ):
+            return None
+        face_m_ed_number = _combined_longitudinal_finite(
+            value.get("face_m_ed_signed", _MISSING)
+        )
+        if face_m_ed_number is None:
+            return None
+        expected_face_m_ed = (
+            operands["m_ed"]
+            if chord_role == "flexural_tension"
+            else -operands["m_ed"]
+        )
+        if not _combined_longitudinal_close(
+            face_m_ed_number,
+            expected_face_m_ed,
+        ):
+            return None
+
+    mv_uncapped = operands["ftd_v"] * operands["z"]
+    shear_headroom = max(
+        operands["m_rd"]
+        - (
+            max(face_m_ed_number, 0.0)
+            if face_m_ed_number is not None
+            else operands["m_ed"]
+        ),
+        0.0,
+    )
+    cap_shear_force = value.get("cap_shear_force", _MISSING)
+    if chord_formula in {"8.51", "8.52"}:
+        if (
+            cap_shear_force is not False
             or value["capped"] is not False
         ):
             return None
@@ -1188,20 +2081,7 @@ def _combined_longitudinal_candidate(
     ):
         return None
     if chord_formula in {"8.51", "8.52"}:
-        face_m_ed = value.get("face_m_ed_signed", _MISSING)
-        face_m_ed_number = _combined_longitudinal_finite(face_m_ed)
-        if face_m_ed_number is None:
-            return None
-        expected_face_m_ed = (
-            operands["m_ed"]
-            if chord_role == "flexural_tension"
-            else -operands["m_ed"]
-        )
-        if not _combined_longitudinal_close(
-            face_m_ed_number,
-            expected_face_m_ed,
-        ):
-            return None
+        assert face_m_ed_number is not None
         expected_total = max(face_m_ed_number + operands["mv"], 0.0) + operands["mt"]
     else:
         expected_total = operands["m_ed"] + operands["mv"] + operands["mt"]
@@ -2438,6 +3318,215 @@ def _combined_longitudinal_evidence_equal(
     return bool(equal) if _is_boolean_scalar(equal) else False
 
 
+def provided_link_longitudinal_publication_assessment(
+    shear_result: object,
+) -> Mapping[str, Any]:
+    """Return strict retained chord evidence for public reinforced-shear views."""
+
+    unavailable = {
+        "valid": False,
+        "status": "NOT ASSESSED",
+        "ok": None,
+        "util": None,
+        "reason": "longitudinal chord evidence is unavailable",
+        "coverage_complete": False,
+        "governing": None,
+        "candidates": (),
+        "chord_off": None,
+        "fallback": None,
+        "assessment": None,
+    }
+    if not isinstance(shear_result, Mapping):
+        return unavailable
+    links = shear_result.get("links")
+    if not isinstance(links, Mapping):
+        return unavailable
+    axis = shear_result.get("axis")
+    tension_low = shear_result.get("tension_low")
+    model_2023 = links.get("model_2023", False)
+    if (
+        type(axis) is not str
+        or axis not in {"x", "y"}
+        or type(tension_low) is not bool
+        or type(model_2023) is not bool
+    ):
+        return unavailable
+
+    candidates_value = links.get("chord_candidates", _MISSING)
+    if not isinstance(candidates_value, (list, tuple)):
+        return unavailable
+    candidates: list[Mapping[str, Any]] = []
+    for value in candidates_value:
+        candidate = _combined_longitudinal_candidate(value)
+        if candidate is None or candidate.get("role") not in {
+            "shear_axis",
+            "off_axis",
+        }:
+            return unavailable
+        candidates.append(candidate)
+
+    shear_candidates = [
+        candidate for candidate in candidates
+        if candidate.get("role") == "shear_axis"
+    ]
+    if candidates and not shear_candidates:
+        return unavailable
+    torsion_states = {
+        candidate.get("has_torsion") for candidate in shear_candidates
+    }
+    if any(type(value) is not bool for value in torsion_states) or len(
+        torsion_states
+    ) > 1:
+        return unavailable
+    torsion_live = next(iter(torsion_states), False)
+    shear_live = any(
+        float(candidate["ftd_v"]) > 0.0 or float(candidate["mv"]) > 0.0
+        for candidate in shear_candidates
+    )
+    retained_force = _combined_longitudinal_finite_nonnegative(
+        links.get("longitudinal_shear_force", _MISSING)
+    )
+    if retained_force is None or (retained_force > 0.0) is not shear_live:
+        return unavailable
+    if any(
+        not _combined_longitudinal_close(
+            float(candidate["ftd_v"]),
+            retained_force if candidate.get("gets_shift") is True else 0.0,
+        )
+        for candidate in shear_candidates
+    ):
+        return unavailable
+    torsion_subdivided = any(
+        candidate.get("off_not_evaluated") == "subdivided"
+        for candidate in shear_candidates
+    )
+    derived = longitudinal_chord_assessment(
+        {
+            "model_2023": model_2023,
+            "chord_candidates": candidates_value,
+        },
+        shear_axis=axis,
+        shear_tension_low=tension_low,
+        shear_live=shear_live,
+        torsion_live=torsion_live,
+        torsion_subdivided=torsion_subdivided,
+    )
+    if (
+        derived["status"] == "NOT ASSESSED"
+        and shear_candidates
+        and all(
+            candidate.get("off_not_evaluated") == "circular_geometry"
+            for candidate in shear_candidates
+        )
+    ):
+        # The producer retains the specific missing-geometry reason alongside
+        # the valid partial chords. It does not turn incomplete coverage into
+        # a complete assessment.
+        derived = dict(derived, reason=_module("shear").SHEAR_CIRCULAR_REASON)
+    retained = links.get("longitudinal_assessment")
+    if not isinstance(retained, Mapping):
+        return unavailable
+    retained_util = _combined_longitudinal_utilisation(retained.get("util"))
+    derived_util = _combined_longitudinal_utilisation(derived.get("util"))
+    util_matches = bool(
+        (retained_util is None) is (derived_util is None)
+        and (
+            retained_util is None
+            or retained_util == derived_util
+            or (
+                math.isfinite(retained_util)
+                and math.isfinite(derived_util)
+                and math.isclose(
+                    retained_util,
+                    derived_util,
+                    rel_tol=1.0e-12,
+                    abs_tol=0.0,
+                )
+            )
+        )
+    )
+    retained_governing = retained.get("governing")
+    derived_governing = derived.get("governing")
+    if not all((
+        retained.get("status") == derived.get("status"),
+        retained.get("ok") is derived.get("ok"),
+        retained.get("coverage_complete") is derived.get("coverage_complete"),
+        retained.get("reason") == derived.get("reason"),
+        util_matches,
+        _combined_longitudinal_evidence_equal(
+            retained_governing,
+            derived_governing,
+        ),
+    )):
+        return unavailable
+
+    expected_chord = (
+        max(shear_candidates, key=lambda item: float(item["util"]))
+        if shear_candidates
+        else None
+    )
+    chord_value = links.get("chord")
+    if expected_chord is None:
+        if chord_value is not None:
+            return unavailable
+        chord = None
+    else:
+        chord = _combined_longitudinal_candidate(chord_value)
+        if chord is None or not _combined_longitudinal_evidence_equal(
+            chord_value, expected_chord,
+        ):
+            return unavailable
+    alias = links.get("governing_longitudinal", _MISSING)
+    if alias is not _MISSING and not _combined_longitudinal_evidence_equal(
+        alias,
+        derived_governing,
+    ):
+        return unavailable
+
+    def optional_candidate(key: str) -> Mapping[str, Any] | None | object:
+        value = links.get(key)
+        if value is None:
+            return None
+        candidate = _combined_longitudinal_candidate(value)
+        return candidate if candidate is not None else _MISSING
+
+    off_axis_candidates = [
+        candidate for candidate in candidates
+        if candidate.get("role") == "off_axis"
+    ]
+    expected_chord_off = (
+        max(off_axis_candidates, key=lambda item: float(item["util"]))
+        if off_axis_candidates
+        else None
+    )
+    chord_off = optional_candidate("chord_off")
+    fallback = optional_candidate("longitudinal_fallback")
+    if (
+        chord_off is _MISSING
+        or fallback is _MISSING
+        or not _combined_longitudinal_evidence_equal(
+            chord_off,
+            expected_chord_off,
+        )
+        or fallback is not None
+        or links.get("longitudinal_all_conditional") is not bool(candidates)
+    ):
+        return unavailable
+    return {
+        "valid": True,
+        "status": retained["status"],
+        "ok": retained["ok"],
+        "util": retained_util,
+        "reason": retained["reason"],
+        "coverage_complete": retained["coverage_complete"],
+        "governing": chord,
+        "candidates": tuple(candidates),
+        "chord_off": chord_off,
+        "fallback": fallback,
+        "assessment": retained,
+    }
+
+
 def combined_longitudinal_assessment(
     combined: object,
 ) -> Mapping[str, Any]:
@@ -3089,6 +4178,103 @@ def shear_lever_arm(inp, axis, tension_low, d_mm):
             "tension-compression resultant arm is zero or degenerate"
         )
     return lever * 1000.0, "plastic internal lever arm"
+
+
+def _publication_basis_value(value, label):
+    """Return one finite, equality-safe value for retained calculation evidence."""
+
+    if is_dataclass(value) and not isinstance(value, type):
+        return (
+            "record",
+            type(value).__module__,
+            type(value).__qualname__,
+            _publication_basis_value(asdict(value), label),
+        )
+    if isinstance(value, Mapping):
+        try:
+            items = sorted(value.items(), key=lambda item: str(item[0]))
+        except Exception as exc:
+            raise CapacityInputError(f"{label} mapping is unavailable") from exc
+        return tuple(
+            (
+                str(key),
+                _publication_basis_value(item, f"{label} {key}"),
+            )
+            for key, item in items
+        )
+    if hasattr(value, "tolist") and not isinstance(value, (str, bytes)):
+        try:
+            value = value.tolist()
+        except Exception as exc:
+            raise CapacityInputError(f"{label} array is unavailable") from exc
+    if isinstance(value, (list, tuple)):
+        return tuple(
+            _publication_basis_value(item, f"{label} item") for item in value
+        )
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, Real):
+        number = float(value)
+        if not math.isfinite(number):
+            raise CapacityInputError(f"{label} must be finite")
+        return number
+    raise CapacityInputError(f"{label} contains an unsupported value")
+
+
+def shear_link_arm_publication_basis(inp, axis, tension_low, z_mm):
+    """Retain the complete current-input basis behind a calculated links arm.
+
+    This is structured engineering evidence, not an opaque signature.  It binds
+    the published arm to the section, reinforcement, material and prestress state
+    used by the face-aligned Plastic solve, while retaining the arm itself as an
+    independently reconciled operand.
+    """
+
+    if not isinstance(inp, Mapping):
+        raise CapacityInputError("shear-link arm input evidence is unavailable")
+    if axis not in {"x", "y"} or type(tension_low) is not bool:
+        raise CapacityInputError("shear-link arm direction evidence is unavailable")
+    z_value = _positive_finite_real(z_mm, "shear-link lever arm")
+    section = inp.get("section")
+    section_state = None
+    if section is not None:
+        try:
+            section_state = {
+                "concrete": section.concrete,
+                "bars": tuple(
+                    (item.x, item.y, item.area) for item in section.bars
+                ),
+                "tendons": tuple(
+                    (item.x, item.y, item.area) for item in section.tendons
+                ),
+            }
+        except Exception as exc:
+            raise CapacityInputError(
+                "shear-link section evidence is unavailable"
+            ) from exc
+    basis = {
+        "axis": axis,
+        "tension_low": tension_low,
+        "z_mm": z_value,
+        "outer": inp.get("outer"),
+        "holes": inp.get("holes") or (),
+        "bars": inp.get("bars") or (),
+        "tendons": inp.get("tendons") or (),
+        "section": section_state,
+        "concrete": inp.get("concrete"),
+        "steel": inp.get("steel"),
+        "prestress": inp.get("prestress"),
+        "bar_materials": inp.get("bar_materials"),
+        "tendon_materials": inp.get("tendon_materials"),
+        "plastic_axial_action_kn": inp.get("P_pl"),
+        "plastic_mx_action_knm": inp.get("Mx_pl"),
+        "plastic_my_action_knm": inp.get("My_pl"),
+        "plastic_case": inp.get("plastic_case"),
+    }
+    return {
+        key: _publication_basis_value(value, f"shear-link arm {key}")
+        for key, value in basis.items()
+    }
 
 
 def shear_face_mrd(
@@ -4208,6 +5394,374 @@ def build_torsion_context(inp, n_ed_comp):
     }
 
 
+def shared_member_angle_contexts(inp, link_context, torsion_context):
+    """Apply the common range only to the current eligible angle participants.
+
+    The producer and publication reconstruction use this same applicability
+    context. An independently invalid shear prerequisite cannot narrow the
+    otherwise valid torsion range.
+    """
+    if link_context is None or torsion_context is None:
+        return link_context, torsion_context
+    if torsion_context.get("applicability_blocked") is True:
+        return link_context, torsion_context
+    v_ed = link_context["v_ed"]
+    vrd_c = link_context.get("vrd_c")
+    concrete_route_applicable = bool(
+        vrd_c is not None
+        and math.isfinite(float(vrd_c))
+        and float(vrd_c) > 0.0
+        and v_ed <= float(vrd_c)
+    )
+    torsion_active = bool(
+        torsion_context["closed_links_present"]
+        and torsion_context["asw_over_s_t"] > 0.0
+        and all(tube["valid"] for tube in torsion_context["subtubes"])
+        and abs(torsion_context["t_ed"]) > 0.0
+    )
+    shear_active = bool(
+        (link_context.get("shear_geometry") or {}).get("links_valid") is True
+        and link_context.get("angle_prerequisites_available") is True
+        and v_ed > 0.0
+        and (not concrete_route_applicable or torsion_active)
+    )
+    if not (shear_active and torsion_active):
+        return link_context, torsion_context
+
+    shear_limits = link_context["angle_limits"]
+    torsion_limits = torsion_context["angle_limits"]
+    shared_limits = {
+        **shear_limits,
+        "minimum": max(shear_limits["minimum"], torsion_limits["minimum"]),
+        "maximum": min(shear_limits["maximum"], torsion_limits["maximum"]),
+        "basis": "shared shear and torsion permitted-range intersection",
+        "clause": f"{shear_limits['clause']}; {torsion_limits['clause']}",
+    }
+    applicability = _module("shear").strut_angle_applicability(
+        inp["strut_cot_min"],
+        inp["strut_cot_max"],
+        permitted_min=shared_limits["minimum"],
+        permitted_max=shared_limits["maximum"],
+        method=f"{inp['shear_method']} with {inp['torsion_method']}",
+        basis=shared_limits["basis"],
+        clause=shared_limits["clause"],
+        active=True,
+    )
+    original_build = link_context["build"]
+    return (
+        dict(
+            link_context,
+            angle_limits=shared_limits,
+            angle_applicability=applicability,
+            build=lambda cot_lo, cot_hi: original_build(
+                cot_lo, cot_hi, angle_applicability_override=applicability
+            ),
+        ),
+        dict(
+            torsion_context,
+            angle_limits=shared_limits,
+            angle_applicability=applicability,
+            _tk=dict(torsion_context["_tk"], angle_applicability=applicability),
+        ),
+    )
+
+
+def minimum_reinforcement_screen_from_context(
+    inp: Mapping[str, Any],
+    shear_payload: Mapping[str, Any] | None,
+    torsion_context: Mapping[str, Any],
+    primary_tube_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Build the exact Formula (6.31) child from current calculation context."""
+
+    shear_result = (shear_payload or {}).get("res") or {}
+    shear_method = str(inp.get("shear_method") or "")
+    torsion_method = str(inp.get("torsion_method") or "")
+    selected_shear = selected_shear_code(shear_method)
+    model_2023 = getattr(selected_shear, "shear_model", "2005") == "2023"
+    combined = _module("combined")
+    geometry = _module("geometry")
+    return asdict(combined.minimum_reinforcement_screen_result(
+        torsion_context["t_ed"],
+        primary_tube_result.get("trd_c"),
+        (shear_payload or {}).get("v_ed"),
+        shear_result.get("vrd_c") if shear_result.get("valid") else None,
+        solid_rectangle=geometry.section_is_approximately_solid_rectangle(
+            inp["outer"], inp.get("holes") or ()
+        ),
+        subdivided=bool(torsion_context["subdivide"]),
+        model_2023=model_2023,
+        shear_available=bool(
+            shear_payload is not None and shear_result.get("valid")
+        ),
+        dk_na=(
+            codes.EC2_2005_DKNA.label
+            in {shear_method, torsion_method}
+        ),
+        shear_method=shear_method,
+        torsion_method=torsion_method,
+        n_ed=inp.get("P_pl", 0.0),
+        mx_ed=inp.get("Mx_pl", 0.0),
+        my_ed=inp.get("My_pl", 0.0),
+    ))
+
+
+def _direction_detailing_depth(direction: Mapping) -> float:
+    """Return the smallest valid required-face depth for detailing."""
+
+    depths: list[float] = []
+    for candidate in direction.get("face_candidates") or ():
+        if not isinstance(candidate, Mapping):
+            continue
+        value = (candidate.get("shear") or {}).get("d")
+        if value is not None:
+            depth = float(value)
+            if math.isfinite(depth) and depth > 0.0:
+                depths.append(depth)
+    value = direction.get("d")
+    if value is not None:
+        depth = float(value)
+        if math.isfinite(depth) and depth > 0.0:
+            depths.append(depth)
+    return min(depths, default=0.0)
+
+
+def transverse_detailing_result(
+    inp: Mapping,
+    shear_out: Mapping | None,
+    torsion_out: Mapping | None,
+) -> dict:
+    """Rebuild the separate link-detailing result from current evidence."""
+
+    shear_specs = []
+    shear_out = shear_out or {}
+    if inp.get("shear_on") and shear_out:
+        directions = shear_out.get("directions")
+        if isinstance(directions, Mapping) and directions:
+            items = list(directions.items())
+        else:
+            component = str(
+                shear_out.get("component")
+                or ("vy" if shear_out.get("axis") == "x" else "vx")
+            )
+            items = [(component, shear_out)]
+        for component, direction in items:
+            if not isinstance(direction, Mapping):
+                continue
+            links = direction.get("links") or {}
+            resistance = direction.get("res") or {}
+            resistance_valid = bool(resistance.get("valid"))
+            vrd_c = resistance.get("vrd_c")
+            v_ed = direction.get("v_ed")
+            if (
+                resistance_valid
+                and vrd_c is not None
+                and v_ed is not None
+                and math.isfinite(float(vrd_c))
+                and math.isfinite(float(v_ed))
+            ):
+                links_required = float(v_ed) > float(vrd_c)
+            else:
+                links_required = None
+            shear_specs.append({
+                "component": component,
+                "links_present": inp.get("shear_links") is True,
+                "links_required": links_required,
+                "requirement_clause": (
+                    "8.2.2" if bool(direction.get("model_2023")) else "6.2.2"
+                ),
+                "bw_mm": direction.get("bw", 0.0),
+                "d_mm": _direction_detailing_depth(direction),
+                "legs": links.get(
+                    "legs",
+                    inp.get(
+                        "shear_vx_link_legs"
+                        if component == "vx"
+                        else "shear_vy_link_legs",
+                        0.0,
+                    ),
+                ),
+                "transverse_leg_spacing_mm": inp.get(
+                    "shear_vx_transverse_leg_spacing"
+                    if component == "vx"
+                    else "shear_vy_transverse_leg_spacing",
+                    0.0,
+                ),
+                "measurement_axis": "y" if component == "vx" else "x",
+            })
+
+    torsion_specs = []
+    torsion_out = torsion_out or {}
+    if inp.get("torsion_on") and torsion_out:
+        subresults = torsion_out.get("subtubes") or ()
+        if subresults:
+            tube_items = [
+                (f"Tube {index}", subresult)
+                for index, subresult in enumerate(subresults, start=1)
+                if isinstance(subresult, Mapping)
+            ]
+        else:
+            tube_items = [("Tube", torsion_out)]
+        for label, subresult in tube_items:
+            tube = subresult.get("tube") or {}
+            geometry_valid = (
+                subresult.get("tube_valid")
+                if "tube_valid" in subresult
+                else subresult.get("valid")
+            )
+            torsion_specs.append({
+                "label": label,
+                "valid": geometry_valid is True and tube.get("valid") is True,
+                "reason": subresult.get("reason") or tube.get("reason"),
+                "tef_mm": tube.get("tef", 0.0),
+                "uk_mm": float(tube.get("uk", 0.0)) * 1000.0,
+                "minimum_dimension_mm": tube.get("minimum_dimension_mm", 0.0),
+            })
+
+    detailing = _module("detailing")
+    return detailing.transverse_reinforcement(
+        edition=inp["detailing_edition"],
+        fck_mpa=inp["concrete"].fck,
+        fywk_mpa=inp["shear_fywk"],
+        diameter_mm=inp["shear_link_dia"],
+        spacing_mm=inp["shear_link_s"],
+        shear_directions=shear_specs,
+        torsion_tubes=torsion_specs,
+        ductility_class=inp.get("transverse_ductility_class", "B"),
+        apply_ductility_reduction=inp.get(
+            "transverse_apply_ductility_reduction", False
+        ),
+        member_type=inp.get(
+            "detailing_member_type", detailing.MEMBER_BEAM
+        ),
+    )
+
+
+def formula_631_detailing_state(
+    inp: Mapping,
+    shear_out: Mapping | None,
+    torsion_out: Mapping | None,
+) -> tuple[str, str]:
+    """Return the current separate detailing state attached to Formula (6.31)."""
+
+    if inp.get("transverse_detailing_on") is not True:
+        return "NOT RUN", "separate_detailing_not_run"
+    transverse = transverse_detailing_result(inp, shear_out, torsion_out)
+    status = str(transverse.get("status") or "").upper()
+    if status == "PASS":
+        return "PASS", "separate_detailing_passed"
+    if status == "FAIL":
+        return "FAIL", "separate_detailing_failed"
+    return "NOT ASSESSED", "separate_detailing_incomplete"
+
+
+def shear_torsion_crushing_from_context(
+    shear_payload: Mapping[str, Any],
+    link_context: Mapping[str, Any],
+    torsion_context: Mapping[str, Any],
+    cot: float,
+) -> dict[str, Any] | None:
+    """Build the exact Formula (6.29) child from current member context."""
+
+    if (
+        not isinstance(torsion_context.get("subtubes"), (list, tuple))
+        or not torsion_context["subtubes"]
+        or not isinstance(torsion_context.get("ted_parts"), (list, tuple))
+        or not torsion_context["ted_parts"]
+    ):
+        return None
+    kwargs = dict(torsion_context["_tk"], cot_min=cot, cot_max=cot)
+    primary = tube_torsion(
+        torsion_context["subtubes"][0],
+        torsion_context["ted_parts"][0],
+        **kwargs,
+    )
+    links = link_context["build"](cot, cot)
+    if (
+        links.get("valid") is not True
+        or primary.get("tube_valid") is not True
+        or primary.get("transverse_resistance_assessed") is not True
+    ):
+        return None
+    interaction = _module("combined").crushing_interaction_result(
+        primary["t_ed"],
+        primary["trd_max"],
+        shear_payload["v_ed"],
+        links["vrd_max"],
+    )
+    return {
+        "valid": True,
+        "cot": cot,
+        "theta_deg": math.degrees(math.atan2(1.0, cot)),
+        "trd_max": primary["trd_max"],
+        "vrd_max": links["vrd_max"],
+        "t_ed": primary["t_ed"],
+        "v_ed": shear_payload["v_ed"],
+        "value": interaction.utilisation,
+        "torsion_ratio": interaction.torsion_ratio,
+        "shear_ratio": interaction.shear_ratio,
+        "ok": interaction.ok,
+        "torsion_strut": primary["strut_resistance"],
+    }
+
+
+def combined_transverse_from_children(
+    shear_payload: Mapping[str, Any],
+    torsion_primary: Mapping[str, Any],
+    links_payload: Mapping[str, Any],
+    interaction: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Build the shared-stirrup/strut child from its assessed components."""
+
+    if interaction is not None and interaction.get("valid") is not True:
+        return {
+            "valid": False,
+            "reason": "shared member-angle calculation is invalid",
+        }
+    combined = _module("combined")
+    v_ed = shear_payload["v_ed"]
+    vrd_c = shear_payload["res"]["vrd_c"]
+    cot = (
+        interaction["cot"]
+        if interaction is not None
+        else links_payload["res"]["cot"]
+    )
+    shear_credited = v_ed <= vrd_c
+    shear_fraction = (
+        0.0
+        if shear_credited
+        else combined.ratio(v_ed, links_payload["res"]["vrd_s"])
+    )
+    torsion_fraction = combined.ratio(
+        torsion_primary["t_ed"],
+        torsion_primary["trd_s"],
+    )
+    stirrup_util = shear_fraction + torsion_fraction
+    crushing_util = (
+        interaction["value"]
+        if interaction is not None
+        else combined.ratio(v_ed, links_payload["res"]["vrd_max"])
+    )
+    governing = max(stirrup_util, crushing_util)
+    return {
+        "valid": True,
+        "cot": cot,
+        "tan": math.inf if cot == 0.0 else 1.0 / cot,
+        "sin_cos": cot / (1.0 + cot * cot),
+        "theta_deg": math.degrees(math.atan2(1.0, cot)),
+        "u_stirrup": stirrup_util,
+        "u_crush": crushing_util,
+        "governing": governing,
+        "governs": "crushing" if crushing_util > stirrup_util else "stirrups",
+        "ok": bool(governing <= 1.0 + 1e-9),
+        "shear_fraction": shear_fraction,
+        "torsion_fraction": torsion_fraction,
+        "shear_credited": shear_credited,
+        "vrd_c": vrd_c,
+        "v_ed": v_ed,
+    }
+
+
 _DKNA_CLAUSE = "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)"
 _DKNA_ACTION_ALONE_GUIDANCE = (
     "An action-alone resistance could not be determined. Check the section, "
@@ -4907,53 +6461,10 @@ def finalize_combined(inp, out):
         and torsion_out["asw_over_s"] > 0.0
     ):
         interaction = torsion_out.get("interaction")
-        if interaction is not None and not interaction.get("valid"):
-            payload["transverse"] = {
-                "valid": False,
-                "reason": "shared member-angle calculation is invalid",
-            }
-        else:
-            v_ed = shear_out["v_ed"]
-            t_ed_web = torsion_out["primary"]["t_ed"]
-            vrd_c = shear_out["res"]["vrd_c"]
-            cot = (
-                interaction["cot"]
-                if interaction is not None
-                else links["res"]["cot"]
-            )
-            shear_credited = v_ed <= vrd_c
-            shear_fraction = (
-                0.0
-                if shear_credited
-                else combined.ratio(v_ed, links["res"]["vrd_s"])
-            )
-            torsion_fraction = combined.ratio(
-                t_ed_web, torsion_out["primary"]["trd_s"]
-            )
-            stirrup_util = shear_fraction + torsion_fraction
-            crushing_util = (
-                interaction["value"]
-                if interaction is not None
-                else combined.ratio(v_ed, links["res"]["vrd_max"])
-            )
-            governing = max(stirrup_util, crushing_util)
-            payload["transverse"] = {
-                "valid": True,
-                "cot": cot,
-                "tan": math.inf if cot == 0.0 else 1.0 / cot,
-                "sin_cos": cot / (1.0 + cot * cot),
-                "theta_deg": math.degrees(math.atan2(1.0, cot)),
-                "u_stirrup": stirrup_util,
-                "u_crush": crushing_util,
-                "governing": governing,
-                "governs": (
-                    "crushing" if crushing_util > stirrup_util else "stirrups"
-                ),
-                "ok": bool(governing <= 1.0 + 1e-9),
-                "shear_fraction": shear_fraction,
-                "torsion_fraction": torsion_fraction,
-                "shear_credited": shear_credited,
-                "vrd_c": vrd_c,
-                "v_ed": v_ed,
-            }
+        payload["transverse"] = combined_transverse_from_children(
+            shear_out,
+            torsion_out["primary"],
+            links,
+            interaction,
+        )
     out["combined"] = payload
