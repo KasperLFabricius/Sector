@@ -2817,18 +2817,23 @@ def test_link_chord_publication_accepts_one_reconciled_governing_face():
 )
 def test_nominal_shear_publication_rejects_stale_retained_alias(field, value):
     shear = _complete_publication_shear(v_ed=30.0, vrd_c=47.59286047)
+    inp = _publication_inp(shear)
+    _bind_concrete_publication_fixture(shear, inp)
     canonical = presentation.nominal_shear_resistance(
         shear,
         links_selected=True,
-        input_payload=_publication_inp(shear),
+        input_payload=inp,
     )
+    assert canonical["valid"] is True
+    assert canonical["status"] == "PASS"
+    assert canonical["resistance"] > 0.0
     shear["nominal_resistance"] = dict(canonical)
     shear["nominal_resistance"][field] = value
 
     selected = presentation.nominal_shear_resistance(
         shear,
         links_selected=True,
-        input_payload=_publication_inp(shear),
+        input_payload=inp,
     )
 
     assert selected["valid"] is False

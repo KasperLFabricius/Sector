@@ -1709,18 +1709,7 @@ def directional_shear_publication_evidence_is_current(
         return metric if metric is not None and metric >= 0.0 else None
 
     def candidate_input_for(face):
-        candidate_input = dict(inp)
-        for key in ("shear_Vx", "shear_Vy", "shear_components"):
-            candidate_input.pop(key, None)
-        direction = capacity.shear_direction_specs(inp)[action["component"]]
-        candidate_input.update(
-            shear_axis=action["axis"],
-            shear_tension=face,
-            shear_V=action["expected_signed_v"],
-            shear_bw=action["expected_bw_override"],
-            shear_link_legs=direction["legs"],
-        )
-        return candidate_input
+        return _current_shear_face_input(inp, action, face)
 
     def combined_state(
         candidate_input,
@@ -2271,6 +2260,22 @@ def shear_direction_publication_input_is_current(
     )
 
 
+def _current_shear_face_input(inp, action, tension_low):
+    """Reproduce the raw face kernel's magnitude after checking its signed parent."""
+    candidate_input = dict(inp)
+    for key in ("shear_Vx", "shear_Vy", "shear_components"):
+        candidate_input.pop(key, None)
+    direction = capacity.shear_direction_specs(inp)[action["component"]]
+    candidate_input.update(
+        shear_axis=action["axis"],
+        shear_tension=tension_low,
+        shear_V=action["expected_v"],
+        shear_bw=action["expected_bw_override"],
+        shear_link_legs=direction["legs"],
+    )
+    return candidate_input
+
+
 def _current_shear_calculation_input(inp, shear_result):
     """Translate one retained direction onto the shared uniaxial kernel input."""
 
@@ -2298,7 +2303,7 @@ def _current_shear_calculation_input(inp, shear_result):
         calculation_input.update(
             shear_axis=action["axis"],
             shear_tension=action["tension_low"],
-            shear_V=action["expected_signed_v"],
+            shear_V=action["expected_v"],
             shear_bw=action["expected_bw_override"],
             shear_link_legs=direction["legs"],
         )
@@ -2955,6 +2960,18 @@ def _single_torsion_publication_evidence_is_current(
         return False, unavailable
 
     expected_root = current.get("torsion_root")
+    if not isinstance(expected_root, Mapping):
+        return False, unavailable
+    expected_util = expected_root.get("util")
+    expected_status = (
+        "NOT ASSESSED"
+        if expected_root.get("valid") is not True or expected_util is None
+        else "PASS"
+        if math.isfinite(expected_util) and expected_util <= 1.0
+        else "FAIL"
+    )
+    if torsion_result.get("resistance_status") != expected_status:
+        return False, unavailable
     for key in (
         "trd_s",
         "trd_max",
@@ -3020,9 +3037,7 @@ def torsion_direction_publication_evidence_is_current(
             return False, unavailable
         candidate = matches[0]
         child = candidate.get("torsion")
-        _action, candidate_input = _current_shear_calculation_input(
-            inp, candidate.get("shear"),
-        )
+        candidate_input = _current_shear_face_input(inp, action, face)
         current = _current_shear_torsion_children(
             candidate_input, candidate.get("shear"), child,
         )
@@ -4443,16 +4458,29 @@ def _transverse_metric(
     shear_result=None,
     torsion_result=None,
     plastic_result=None,
+    directional_owner=None,
 ):
     """Rank an already-computed shear, torsion or combined result."""
     if not isinstance(result, Mapping):
         return None
+    shear_owner = result
+    if family == "shear" and directional_owner is not None:
+        owner_directions = (
+            directional_owner.get("directions")
+            if isinstance(directional_owner, Mapping)
+            else None
+        )
+        if not isinstance(owner_directions, Mapping) or not any(
+            child is result for child in owner_directions.values()
+        ):
+            return None
+        shear_owner = directional_owner
     if (
         family == "shear"
         and input_payload is not None
         and shear_publication_input_is_current(
             input_payload,
-            result,
+            shear_owner,
             plastic_result=plastic_result,
             validate_directions=False,
         )[0]
@@ -4570,7 +4598,8 @@ def _transverse_metric(
         metric = None
         if family == "torsion":
             if (
-                torsion_assessment_status(result) in {"PASS", "FAIL"}
+                torsion_assessment_status(result, input_payload=input_payload)
+                in {"PASS", "FAIL"}
                 or (
                     not input_payload
                     and result.get("valid") is True
@@ -4626,6 +4655,7 @@ def _transverse_direction(
             shear_result=shear_result,
             torsion_result=torsion_result,
             plastic_result=plastic_result,
+            directional_owner=result if family == "shear" else None,
         )
         if metric is None:
             continue
@@ -5762,13 +5792,15 @@ def _util_summary_status(util, *, valid=True):
     return "PASS" if viz.util_ok(metric) else "FAIL"
 
 
-def torsion_assessment_status(torsion):
+def torsion_assessment_status(torsion, *, input_payload=None):
     """Return the canonical overall torsion state, including Formula (6.28)."""
 
     torsion = torsion or {}
     if torsion.get("valid") is not True:
         return "NOT ASSESSED"
-    longitudinal = torsion_longitudinal_assessment(torsion)
+    longitudinal = torsion_longitudinal_assessment(
+        torsion, input_payload=input_payload,
+    )
     if isinstance(torsion.get("longitudinal_assessment"), Mapping):
         resistance_status = _util_summary_status(
             torsion.get("util"),
@@ -5786,21 +5818,44 @@ def torsion_assessment_status(torsion):
     return _util_summary_status(torsion.get("util"), valid=True)
 
 
-def torsion_longitudinal_assessment(torsion):
+def torsion_longitudinal_assessment(torsion, *, input_payload=None):
     """Return sanitized Formula (6.28) evidence for every public surface."""
 
     torsion = torsion or {}
-    return capacity.validated_torsion_longitudinal_assessment(
-        torsion.get("longitudinal_assessment"),
+    retained = torsion.get("longitudinal_assessment")
+    assessment = capacity.validated_torsion_longitudinal_assessment(
+        retained,
         owner=torsion,
     )
+    if input_payload is None:
+        return assessment
+    if isinstance(input_payload, Mapping) and isinstance(retained, Mapping):
+        try:
+            expected = capacity.torsion_longitudinal_assessment(
+                input_payload,
+                assessment.get("required_by_tube_mm2") or (),
+                resistance_assessed=torsion.get("valid") is True,
+            )
+        except (AttributeError, TypeError, ValueError, OverflowError):
+            expected = None
+        if isinstance(expected, Mapping) and _publication_mapping_contains_current(
+            retained, expected,
+        ):
+            return assessment
+    unavailable = capacity.validated_torsion_longitudinal_assessment(
+        None, owner=torsion,
+    )
+    unavailable["evidence_consistent"] = False
+    return unavailable
 
 
-def torsion_assessment_note(torsion):
+def torsion_assessment_note(torsion, *, input_payload=None):
     """Return authored engineer guidance for the canonical torsion state."""
 
     torsion = torsion or {}
-    longitudinal = torsion_longitudinal_assessment(torsion)
+    longitudinal = torsion_longitudinal_assessment(
+        torsion, input_payload=input_payload,
+    )
     if (
         isinstance(torsion.get("longitudinal_assessment"), Mapping)
         and longitudinal["status"] != "PASS"
@@ -7505,7 +7560,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 overview_key="torsion",
             ))
         else:
-            overall_status = torsion_assessment_status(torsion)
+            overall_status = torsion_assessment_status(torsion, input_payload=inp)
             rows.append(_summary_row(
                 "Torsion",
                 "plastic",
@@ -7514,7 +7569,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 "Resistance, longitudinal steel and detailing",
                 None,
                 "Torsion",
-                torsion_assessment_note(torsion),
+                torsion_assessment_note(torsion, input_payload=inp),
                 inp,
                 overview_key="torsion",
             ))
@@ -7540,7 +7595,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 overview_key="torsion:resistance",
                 overview_parent="torsion",
             ))
-            longitudinal = torsion_longitudinal_assessment(torsion)
+            longitudinal = torsion_longitudinal_assessment(torsion, input_payload=inp)
             if isinstance(torsion.get("longitudinal_assessment"), Mapping):
                 required = longitudinal.get("required_asl_mm2")
                 provided = longitudinal.get("provided_equivalent_area_mm2")

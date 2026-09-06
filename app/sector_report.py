@@ -1320,12 +1320,9 @@ class ReportBuilder:
         )
 
     def _shear_publication_authority(self):
-        """Return the matching shear evidence for a named torsion case."""
+        """Use the selected case's shear; an absent zero-shear result is intentional."""
 
         shear = self.out.get("shear")
-        if isinstance(shear, Mapping):
-            return shear
-        shear = self._base_out.get("shear")
         return shear if isinstance(shear, Mapping) else None
 
     def _current_case_inputs(self, family):
@@ -5276,7 +5273,9 @@ class ReportBuilder:
                 result.get("valid") is False
                 or presentation.torsion_applicability_publication_status(result)
                 == "NOT ASSESSED"
-                or presentation.torsion_assessment_status(result)
+                or presentation.torsion_assessment_status(
+                    result, input_payload=case_inp,
+                )
                 not in {"PASS", "FAIL"}
             )
         if family in {"minimum_reinforcement", "transverse_reinforcement"}:
@@ -9626,7 +9625,7 @@ class ReportBuilder:
                 "<b>NOT ASSESSED:</b> the thin-walled tube geometry is invalid. "
                 "Review the reason below."
             )
-        status = presentation.torsion_assessment_status(t)
+        status = presentation.torsion_assessment_status(t, input_payload=self.inp)
         reported_trd = t.get("trd") if transverse_resistance_available else None
         reported_util = t.get("util") if transverse_resistance_available else None
         reported_governing = (
@@ -9656,7 +9655,7 @@ class ReportBuilder:
                 "<b>Overall "
                 + status
                 + ":</b> "
-                + _html_escape(presentation.torsion_assessment_note(t))
+                + _html_escape(presentation.torsion_assessment_note(t, input_payload=self.inp))
                 + "."
             )
         directional = t.get("directional_interactions") or {}
@@ -9945,7 +9944,7 @@ class ReportBuilder:
             return
         retained_longitudinal_assessment = t.get("longitudinal_assessment")
         longitudinal_assessment = (
-            presentation.torsion_longitudinal_assessment(t)
+            presentation.torsion_longitudinal_assessment(t, input_payload=self.inp)
         )
         if isinstance(retained_longitudinal_assessment, Mapping):
             self._h2("Longitudinal torsion reinforcement (Formula 6.28)")
@@ -9972,7 +9971,7 @@ class ReportBuilder:
                 font=7.0,
             )
             self._small(
-                _html_escape(presentation.torsion_assessment_note(t))
+                _html_escape(presentation.torsion_assessment_note(t, input_payload=self.inp))
                 + ". The modelled passive-bar total is not credited as usable "
                 "torsion reinforcement until reserve beyond bending, distribution "
                 "around every torsion-tube side and anchorage along the member are "
@@ -10171,9 +10170,9 @@ class ReportBuilder:
                    "(required beyond bending demand)")
         self._small(
             "Overall torsion status: <b>"
-            + presentation.torsion_assessment_status(t)
+            + presentation.torsion_assessment_status(t, input_payload=self.inp)
             + "</b>. "
-            + _html_escape(presentation.torsion_assessment_note(t))
+            + _html_escape(presentation.torsion_assessment_note(t, input_payload=self.inp))
             + "."
         )
         self._small("Lengths shown in m and f in MPa; the &#183; 1000 converts "

@@ -15174,10 +15174,6 @@ def torsion_view(inp, results, *, global_results=None):
         return
     t = results["torsion"]
     shear_authority = results.get("shear")
-    if not isinstance(shear_authority, Mapping) and isinstance(
-        global_results, Mapping
-    ):
-        shear_authority = global_results.get("shear")
     current, current_reason = presentation.torsion_publication_component_is_current(
         inp,
         shear_authority,
@@ -15706,8 +15702,8 @@ def torsion_view(inp, results, *, global_results=None):
             width="stretch",
         )
 
-    overall_status = presentation.torsion_assessment_status(t)
-    overall_note = presentation.torsion_assessment_note(t)
+    overall_status = presentation.torsion_assessment_status(t, input_payload=inp)
+    overall_note = presentation.torsion_assessment_note(t, input_payload=inp)
     if overall_status != "PASS":
         _manual_warning(
             st,
@@ -15715,7 +15711,7 @@ def torsion_view(inp, results, *, global_results=None):
             f"Overall torsion assessment: {overall_status}. {overall_note}.",
         )
     retained_longitudinal = t.get("longitudinal_assessment")
-    longitudinal = presentation.torsion_longitudinal_assessment(t)
+    longitudinal = presentation.torsion_longitudinal_assessment(t, input_payload=inp)
     if isinstance(retained_longitudinal, dict):
         def _area_text(value):
             return "-" if value is None else f"{float(value):.0f} mm2"

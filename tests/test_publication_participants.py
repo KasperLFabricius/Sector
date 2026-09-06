@@ -154,6 +154,30 @@ def test_pub_m01_current_participants_retain_independent_native_evidence(
     if case["name"].startswith("biaxial"):
         assert out["shear"].get("links") is None
         assert set(t["directional_interactions"]) == {"vx", "vy"}
+        shear_selection = presentation.worked_example_selection(inp, out)["families"]["shear"]
+        expected_direction = max(
+            ("vx", "vy"),
+            key=lambda component: out["shear"]["directions"][component]["nominal_resistance"]["utilisation"],
+        )
+        assert shear_selection == {"case_id": "PL-01", "component": expected_direction}
+        poisoned = copy.deepcopy(out)
+        changed_child = poisoned["shear"]["directions"][expected_direction]
+        changed_child["signed_v_ed"] += 1.0
+        remaining = "vy" if expected_direction == "vx" else "vx"
+        assert presentation._transverse_direction(
+            "shear", poisoned["shear"], input_payload=inp,
+            shear_result=poisoned["shear"], torsion_result=t,
+            plastic_result=out["plastic"],
+        ) is None
+        # A changed action invalidates wrapper identity. A poisoned quantitative
+        # alias within an otherwise current wrapper withholds only that child.
+        poisoned = copy.deepcopy(out)
+        poisoned["shear"]["directions"][expected_direction]["nominal_resistance"]["resistance"] += 1.0
+        assert presentation._transverse_direction(
+            "shear", poisoned["shear"], input_payload=inp,
+            shear_result=poisoned["shear"], torsion_result=t,
+            plastic_result=out["plastic"],
+        ) == remaining
         assert presentation._single_torsion_publication_evidence_is_current(
             t, presentation._current_torsion_only_children(inp),
         ) == (True, None)
@@ -206,6 +230,11 @@ def test_pub_m01_current_participants_reach_actual_report_routes(
     if profile == "Audit" and t.get("directional_interactions"):
         selected = out["worked_example_selection"]["torsion_subchecks"]
         assert selected["minimum_reinforcement"]["component"] in {"vx", "vy"}
+    if case["name"].startswith("biaxial") and profile != "Brief":
+        selected = out["worked_example_selection"]["families"]["shear"]
+        component = selected["component"][-1]
+        assert f"Governingworkedexample:V{component},Ed" in "".join(text.split())
+        assert "Worked shear calculation unavailable" not in text
 
 
 def test_pub_m01_participant_records_cannot_authorize_missing_or_changed_evidence(
