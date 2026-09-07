@@ -468,3 +468,65 @@ def test_direct_report_consumer(direct_torsion_cases, demand, profile, attack, t
     else:
         assert "Shear with links PL-01 NOT ASSESSED" in text
         assert resistance not in text
+
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize("check_util", (False, True, pytest.param(None, id="default")))
+@pytest.mark.parametrize("member_key", (None, "shear_on", "torsion_on", "combined_on"))
+def test_direct_plastic_loads_disclose_active_member_moments(
+    tmp_path, profile, check_util, member_key,
+):
+    """Direct load-table and PDF contract; calculation outcomes are not forged."""
+    inp = dict(
+        plastic_case={"id": "PL-DIRECT", "type": "", "source": ""},
+        P_pl=-200.0, Mx_pl=25.0, My_pl=-10.0,
+        shear_on=False, torsion_on=False, combined_on=False,
+        shear_axis="x", shear_V=-30.0, torsion_T=40.0,
+    )
+    if member_key is not None:
+        inp[member_key] = True
+    out = {"plastic": {} if check_util is None else {"check_util": check_util}}
+    applied = check_util is not False
+    before = pickle.dumps((inp, out))
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(
+        buffer, {}, inp, out, figures=False, profile=profile,
+    )
+    builder._loads_block()
+
+    def tables_in(items):
+        for item in items:
+            if isinstance(item, sector_report.KeepTogether):
+                yield from tables_in(item._content)
+            elif isinstance(item, sector_report.Table):
+                yield item
+
+    rows = [
+        tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+              for cell in row)
+        for table in tables_in(builder.flow) for row in table._cellvalues
+    ]
+    capacity_row = ("PL-DIRECT - axial, capacity only", "-200.000", "-", "-")
+    applied_row = ("PL-DIRECT - plastic applied", "-200.000", "25.000", "-10.000")
+    member_row = ("PL-DIRECT - member inputs", "-200.000", "25.000", "-10.000")
+    assert rows.count(applied_row if applied else capacity_row) == 1
+    assert (capacity_row in rows) is (not applied)
+    assert (applied_row in rows) is applied
+    assert rows.count(member_row) == int(member_key is not None and not applied)
+    if member_key is None and not applied:
+        assert all("25.000" not in row and "-10.000" not in row for row in rows)
+    sector_report.SimpleDocTemplate(
+        buffer, pagesize=sector_report.A4,
+        leftMargin=20 * sector_report.mm, rightMargin=20 * sector_report.mm,
+        topMargin=25 * sector_report.mm, bottomMargin=20 * sector_report.mm,
+    ).build(list(builder.flow))
+    pdf = buffer.getvalue()
+    (tmp_path / "direct-plastic-member-loads.pdf").write_bytes(pdf)
+    text = " ".join(page.extract_text() for page in PdfReader(io.BytesIO(pdf)).pages)
+    assert "PL-DIRECT" in text
+    if member_key is not None and not applied:
+        assert "member inputs" in text and "25.000" in text and "-10.000" in text
+    else:
+        assert "member inputs" not in text
+    assert pickle.dumps((inp, out)) == before

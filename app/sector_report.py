@@ -4816,8 +4816,8 @@ class ReportBuilder:
 
         rows = [["Load case", "N (kN)", "M<sub>x</sub> (kNm)", "M<sub>y</sub> (kNm)"]]
         if "plastic" in out:
-            # In a capacity-only run the applied moments are ignored, so only the
-            # axial force (which defines the envelope) is listed.
+            # Capacity-only Plastic defines the axial-force envelope. Active
+            # member checks also receive the separate input-moment row below.
             cap_only = not out["plastic"].get("check_util", True)
             case = _html_escape(
                 presentation.action_set(inp, "plastic")["id"] or "-"
@@ -4831,7 +4831,9 @@ class ReportBuilder:
             rows.append([
                 _LiteralReportText(label), _fmt(inp.get("P_pl"), 3), mx, my
             ])
-        elif any(inp.get(key) for key in ("shear_on", "torsion_on", "combined_on")):
+        if any(inp.get(key) for key in ("shear_on", "torsion_on", "combined_on")) and (
+            "plastic" not in out or not out["plastic"].get("check_util", True)
+        ):
             case = _html_escape(
                 presentation.action_set(inp, "plastic")["id"] or "-"
             )
