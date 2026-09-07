@@ -42,8 +42,8 @@ from sector import (
     geometry,
     heightened_crack_control,
     material_presets,
-    plastic,
-    shear,
+    plastic_sweep,
+    shear_inputs,
 )
 from sector.build_info import source_revision
 from sector.engineer_message import EngineerMessage
@@ -414,8 +414,8 @@ _EXACT_TEXT_OPTIONS = {
     }),
     "qsv_t_orientation": frozenset({"Flange at top", "Flange at bottom"}),
     "qsv_qs_rebar_mode": frozenset({"By number", "By spacing"}),
-    "shear_section_form": frozenset(shear.SHEAR_SECTION_FORMS),
-    "shear_duct_case": frozenset(shear.SHEAR_DUCT_CASES),
+    "shear_section_form": frozenset(shear_inputs.SHEAR_SECTION_FORMS),
+    "shear_duct_case": frozenset(shear_inputs.SHEAR_DUCT_CASES),
     "torsion_design_basis": frozenset(capacity.TORSION_DESIGN_BASES),
     "torsion_member_scope": frozenset(capacity.TORSION_MEMBER_SCOPES),
     "conc_preset": frozenset(material_presets.CONCRETE_PRESETS),
@@ -1175,17 +1175,17 @@ def _canonical_scalars(
         for name in case_names
     }
     try:
-        plastic.plastic_sweep_angles(
+        plastic_sweep.plastic_sweep_angles(
             payload.get("v_min", 0.0),
             payload.get("v_max", 360.0),
             payload.get("v_inc", 15.0),
         )
-    except plastic.PlasticSweepSpanError as exc:
+    except plastic_sweep.PlasticSweepSpanError as exc:
         raise ProjectInputError(
             f"invalid neutral-axis sweep span: {exc}",
             engineer_message=_PROJECT_SWEEP_SPAN,
         ) from exc
-    except plastic.PlasticSweepResolutionError as exc:
+    except plastic_sweep.PlasticSweepResolutionError as exc:
         raise ProjectInputError(
             f"invalid neutral-axis sweep resolution: {exc}",
             engineer_message=_PROJECT_SWEEP_RESOLUTION,

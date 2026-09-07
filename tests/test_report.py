@@ -8,6 +8,7 @@ import inspect
 import io
 import math
 import pathlib
+import pickle
 import re
 import sys
 import textwrap
@@ -25,6 +26,9 @@ import fatigue_inputs  # noqa: E402
 import case_analysis  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
+from native_member_report_fixtures import native_member_report_cases  # noqa: E402,F401
+from native_member_report_fixtures import native_formula_631_cases  # noqa: E402,F401
+from native_member_report_fixtures import native_base_en_report_case  # noqa: E402,F401
 import publication_image_export  # noqa: E402
 import result_presentation  # noqa: E402
 import sector_report  # noqa: E402
@@ -52,10 +56,10 @@ _build_report_from_completed_payload = sector_report.build_report
 def _build_report_with_selection(meta, inp, out, *args, **kwargs):
     """Mirror run_analysis assembly for report unit-test payloads."""
     completed = dict(out or {})
-    completed.setdefault(
-        "worked_example_selection",
-        result_presentation.worked_example_selection(inp, completed),
-    )
+    if "worked_example_selection" not in completed:
+        completed["worked_example_selection"] = (
+            result_presentation.worked_example_selection(inp, completed)
+        )
     # This legacy module exercises the exhaustive equation/evidence surface.
     # Product-default Standard and cross-profile equality are covered in the
     # dedicated PR-07B profile integration suite.
@@ -66,7 +70,29 @@ def _build_report_with_selection(meta, inp, out, *args, **kwargs):
     )
 
 
-sector_report.build_report = _build_report_with_selection
+def _retain_named_unit_case_metadata(inp, out):
+    """Bind declared rows in explicitly synthetic nonmember unit fixtures.
+
+    This only assembles the native row identity/signature contract. Numerical
+    values remain scalar rendering/selection fixtures, not solver qualification.
+    Call before any intentional current-row mutation; never rebind stale cases.
+    """
+    for family, key in (
+        ("plastic", load_cases.PLASTIC_TABLE_KEY),
+        ("elastic", load_cases.ELASTIC_TABLE_KEY),
+    ):
+        if family + "_cases" not in inp:
+            continue
+        records = {row["name"]: row for row in case_analysis.case_records(inp, family)}
+        for entry in out.get(family + "_cases", []):
+            actions = entry["actions"]
+            name = actions["name"]
+            assert "signature" not in entry
+            assert entry.get("name", name) == name
+            signature = case_analysis.case_signature(actions, key, inp)
+            assert signature == case_analysis.case_signature(records[name], key, inp)
+            entry["name"] = name
+            entry["signature"] = signature
 
 
 def _inp():
@@ -967,7 +993,7 @@ def _fatigue_report_fixture():
 def test_report_includes_complete_grouped_fatigue_evidence():
     inp, out = _fatigue_report_fixture()
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {"proj_no": "FAT-QA"}, inp, out, figures=False
     )).split())
 
@@ -1021,7 +1047,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
 def test_report_profiles_publish_retained_simplified_fatigue_screen(profile):
     inp, out = _fatigue_report_fixture()
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, profile=profile
     )).split())
 
@@ -1057,7 +1083,7 @@ def test_report_profiles_publish_retained_unsupported_fatigue_fallback(profile):
     result.governing_bin = result.governing_damage_bin
     result.utilisation = result.damage
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, profile=profile
     )).split())
 
@@ -1097,7 +1123,7 @@ def test_report_profiles_publish_retained_invalid_fatigue_screen(profile):
                 screen.source,
             ))
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, profile=profile
     )).split())
 
@@ -1110,7 +1136,7 @@ def test_report_profiles_publish_retained_invalid_fatigue_screen(profile):
 def test_fatigue_report_limits_worked_detail_to_independent_global_extrema():
     inp, out = _fatigue_report_fixture()
 
-    text = " ".join(_pdf_body_text(sector_report.build_report(
+    text = " ".join(_pdf_body_text(_build_report_with_selection(
         {}, inp, out, figures=False
     )).split())
 
@@ -1148,7 +1174,7 @@ def test_fatigue_worked_formulas_use_retained_operands(monkeypatch):
             calls.setdefault(key, []).append(kwargs)
 
     monkeypatch.setattr(sector_report.ReportBuilder, "_formula", capture)
-    pdf = sector_report.build_report({}, inp, out, figures=False)
+    pdf = _build_report_with_selection({}, inp, out, figures=False)
 
     assert pdf.startswith(b"%PDF")
     assert "1.234567" in calls[
@@ -1180,7 +1206,7 @@ def test_fatigue_worked_examples_fail_closed_when_operands_are_missing(
             calls.append(kwargs["equation_key"])
 
     monkeypatch.setattr(sector_report.ReportBuilder, "_formula", capture)
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False
     )).split())
 
@@ -1220,7 +1246,7 @@ def test_figures_off_fatigue_report_consumes_completed_payload_only(monkeypatch)
     )
     monkeypatch.setattr(fatigue_analysis, "_global_concrete_example", poison)
 
-    pdf = sector_report.build_report({}, inp, out, figures=False)
+    pdf = _build_report_with_selection({}, inp, out, figures=False)
 
     assert pdf.startswith(b"%PDF")
 
@@ -1330,7 +1356,7 @@ def test_report_includes_damage_equivalent_concrete_method_evidence():
         spectrum.concrete_search.damage = 0.82
         spectrum.concrete_search.upper_damage = 0.821
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False
     )).split())
 
@@ -1378,7 +1404,7 @@ def test_report_discloses_first_generation_formula_6106_bounded_scope():
         },
     })
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False
     )).split())
 
@@ -1405,7 +1431,7 @@ def test_report_marks_project_defined_concrete_miner_as_uncited():
     )
     del payload["capability_bindings"]["concrete"]
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False
     )).split())
 
@@ -1430,7 +1456,7 @@ def test_report_fatigue_chapter_uses_the_engine_failure_state():
     payload["spectra"][1].passed = False
     payload["spectra"][1].utilisation = 1.20
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False
     )).split())
 
@@ -1471,7 +1497,7 @@ def test_report_records_invalid_fatigue_without_suppressing_other_results():
         "utilisation": None,
     }
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False
     )).split())
 
@@ -1495,7 +1521,7 @@ def test_report_escapes_user_defined_fatigue_settings():
     payload["fatigue_detail_basis"][0]["name"] = "Bar <detail> & coupler"
     payload["fatigue_detail_basis"][0]["source"] = "Drawing A&B <rev 2>"
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False
     )).split())
 
@@ -1511,7 +1537,7 @@ def test_report_preserves_literal_engineering_token_identifiers():
     out["fatigue"]["governing_spectrum"] = literal_name
     out["fatigue"]["spectra"][0].spectrum_name = literal_name
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False
     )).split())
 
@@ -1531,7 +1557,7 @@ def test_report_preserves_notation_like_case_and_cover_identities():
         "author": "Engineer 1,25e-6",
     }
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         meta, inp, _out(), figures=False
     )).split())
 
@@ -1544,7 +1570,7 @@ def test_report_escapes_hostile_comments_without_activating_link_markup():
 
     url = "https://attacker.invalid/review?left=1&right=2"
     comments = f'Check A < B & C; <link href="{url}">open review</link>'
-    pdf = sector_report.build_report(
+    pdf = _build_report_with_selection(
         {"comments": comments}, _inp(), _out(), figures=False, profile="Brief"
     )
     reader = pypdf.PdfReader(io.BytesIO(pdf))
@@ -1640,7 +1666,7 @@ def test_report_outline_decodes_literal_engineering_token_case_id():
 
     inp = _inp()
     inp["plastic_case"]["id"] = "sigma"
-    pdf = sector_report.build_report({}, inp, _out(), figures=False)
+    pdf = _build_report_with_selection({}, inp, _out(), figures=False)
     reader = pypdf.PdfReader(io.BytesIO(pdf))
 
     titles = []
@@ -1665,7 +1691,7 @@ def test_report_contents_escape_decoded_hostile_case_heading():
     inp["plastic_case"]["id"] = case_id
 
     reader = pypdf.PdfReader(io.BytesIO(
-        sector_report.build_report({}, inp, _out(), figures=False)
+        _build_report_with_selection({}, inp, _out(), figures=False)
     ))
     text = " ".join(
         " ".join((page.extract_text() or "").split()) for page in reader.pages
@@ -1695,7 +1721,7 @@ def test_report_preserves_negative_infinite_concrete_log_life():
     concrete_bin = out["fatigue"]["spectra"][1].concrete[0].bins[0]
     concrete_bin.log10_cycles_to_failure = -math.inf
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False
     )).split())
 
@@ -1712,7 +1738,7 @@ def test_report_fatigue_chapter_requests_all_engineering_figures(monkeypatch):
         titles.append(str(figure.layout.title.text or ""))
 
     monkeypatch.setattr(sector_report.ReportBuilder, "_fig", capture)
-    sector_report.build_report({}, inp, out, figures=True)
+    _build_report_with_selection({}, inp, out, figures=True)
 
     assert sum(title.startswith("Fatigue utilisation") for title in titles) == 2
     assert sum(title.startswith("S-N assessment") for title in titles) == 1
@@ -1724,7 +1750,7 @@ def test_report_fatigue_chapter_requests_all_engineering_figures(monkeypatch):
 
 
 def test_report_pdf_generates():
-    pdf = sector_report.build_report(
+    pdf = _build_report_with_selection(
         {"proj_no": "P-1", "author": "KLA", "source_revision": "a" * 40},
         _inp(), _out(), version="0.1.0", figures=False,
     )
@@ -1805,7 +1831,7 @@ def test_report_shared_preparation_survives_poisoned_calculators(monkeypatch):
     monkeypatch.setattr(MildSteel, "stress", poisoned)
     monkeypatch.setattr(Prestress, "stress", poisoned)
 
-    pdf = sector_report.build_report(
+    pdf = _build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     )
     text = " ".join(_pdf_text(pdf).split())
@@ -1891,7 +1917,7 @@ def test_complete_profiles_compact_many_curvature_candidates_without_loss():
     }
     before = copy.deepcopy(out)
 
-    standard_pdf = sector_report.build_report(
+    standard_pdf = _build_report_with_selection(
         {}, _inp(), out, figures=False, profile="Standard"
     )
     assert standard_pdf[:4] == b"%PDF"
@@ -1904,7 +1930,7 @@ def test_complete_profiles_compact_many_curvature_candidates_without_loss():
         assert candidate["element_id"] not in standard
         assert sector_report._fmt(candidate["curvature_per_m"], 8) not in standard
 
-    audit_pdf = sector_report.build_report(
+    audit_pdf = _build_report_with_selection(
         {}, _inp(), out, figures=False, profile="Audit"
     )
     assert audit_pdf[:4] == b"%PDF"
@@ -1917,7 +1943,7 @@ def test_complete_profiles_compact_many_curvature_candidates_without_loss():
         assert candidate["element_id"] in audit
         assert sector_report._fmt(candidate["curvature_per_m"], 8) in audit
 
-    brief = " ".join(_pdf_text(sector_report.build_report(
+    brief = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, profile="Brief"
     )).split())
     assert "Ultimate-curvature candidates" not in brief
@@ -1942,7 +1968,7 @@ def test_curvature_selection_is_not_inferred_from_incomplete_retained_evidence(
         "_curvature_selection_substitution",
         forbidden,
     )
-    pdf = sector_report.build_report(
+    pdf = _build_report_with_selection(
         {}, _inp(), out, figures=False, profile="Standard"
     )
     text = " ".join(_pdf_text(pdf).split())
@@ -1950,7 +1976,7 @@ def test_curvature_selection_is_not_inferred_from_incomplete_retained_evidence(
     assert "governing ultimate curvature" not in text
     assert out == before
 
-    audit_text = " ".join(_pdf_text(sector_report.build_report(
+    audit_text = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, profile="Audit"
     )).split())
     assert "Ultimate-curvature candidates" in audit_text
@@ -1960,7 +1986,7 @@ def test_curvature_selection_is_not_inferred_from_incomplete_retained_evidence(
     absent_point.pop("curvature_candidates")
     absent_point.pop("curvature_selection")
     absent_before = copy.deepcopy(absent)
-    absent_text = " ".join(_pdf_text(sector_report.build_report(
+    absent_text = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), absent, figures=False, profile="Standard"
     )).split())
     assert "Ultimate-curvature candidates" not in absent_text
@@ -1968,7 +1994,7 @@ def test_curvature_selection_is_not_inferred_from_incomplete_retained_evidence(
 
 
 def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), _out(), figures=False, qa_appendix=False,
     )).split())
 
@@ -2009,7 +2035,7 @@ def test_report_uses_retained_nonzero_worked_point_for_both_depth_rows():
     out["plastic"]["worked_point_index"] = 1
     before = copy.deepcopy(out)
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
@@ -2027,7 +2053,7 @@ def test_audit_report_reconciles_plastic_arm_source_and_face_specific_depths():
     inp = _inp()
     out = _out()
     out["plastic"]["effective_depths"] = capacity.plastic_effective_depths(inp)
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, profile="Audit",
     )).split())
 
@@ -2054,7 +2080,7 @@ def test_report_keeps_malformed_compression_depth_unavailable(retained):
         point["compression_depth"] = retained
     before = copy.deepcopy(out)
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
@@ -2096,7 +2122,7 @@ def test_completed_textbook_report_never_calls_a_solver_or_material_law(monkeypa
     monkeypatch.setattr(MildSteel, "stress", poisoned)
     monkeypatch.setattr(Prestress, "stress", poisoned)
 
-    pdf = sector_report.build_report(
+    pdf = _build_report_with_selection(
         {}, _inp(), _out(), figures=False, qa_appendix=False,
     )
     assert pdf[:4] == b"%PDF"
@@ -2109,7 +2135,7 @@ def test_textbook_report_fails_closed_when_retained_state_is_incomplete():
     point.pop("concrete_mx")
     out["elastic"].pop("accepted_states")
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
@@ -2132,7 +2158,7 @@ def test_transverse_textbook_report_fails_closed_without_retained_operands():
     combined.pop("dkna_selection")
     out.update(shear=shear, torsion=torsion, combined=combined)
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
@@ -2263,7 +2289,7 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     }
     spacing["pairs"] = [dict(spacing["governing"])]
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp,
         {"minimum_reinforcement": minimum, "clear_spacing": spacing},
         figures=False,
@@ -2357,7 +2383,8 @@ def test_report_profiles_publish_core_m02_refinement_evidence(profile):
         }]
     }
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    _retain_named_unit_case_metadata(inp, out)
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {},
         inp,
         out,
@@ -2372,8 +2399,8 @@ def test_report_profiles_publish_core_m02_refinement_evidence(profile):
         return
     assert "100.1 %" in text
     assert "governing utilisation" in text
-    assert "Angular resolution: initial 15° envelope" in text
-    assert "achieved governing interval 0.083° for the 0.100° target" in text
+    assert "Angular resolution: initial 15\u00b0 envelope" in text
+    assert "achieved governing interval 0.083\u00b0 for the 0.100\u00b0 target" in text
     assert "65 angles retained; all retained angles converged; assessment resolved" in text
     assert "utilisation interval 100.0560 to 100.0620 %" in text
 
@@ -2447,7 +2474,8 @@ def test_report_maps_unresolved_core_m02_result_to_engineering_guidance():
         }]
     }
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    _retain_named_unit_case_metadata(inp, out)
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {},
         inp,
         out,
@@ -2457,7 +2485,7 @@ def test_report_maps_unresolved_core_m02_result_to_engineering_guidance():
 
     assert "NOT ASSESSED - The nominal resistance is too close" in text
     assert "assess this case separately" in text
-    assert "achieved governing interval 0.009° for the 0.010° target" in text
+    assert "achieved governing interval 0.009\u00b0 for the 0.010\u00b0 target" in text
     assert "utilisation interval 99.9999 to 100.0002 %" in text
     assert "separate assessment required" in text
     assert "available angular resolution" not in text
@@ -2532,7 +2560,8 @@ def test_report_hides_retained_angle_boundary_for_moved_direction_failure(
         }]
     }
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    _retain_named_unit_case_metadata(inp, out)
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {},
         inp,
         out,
@@ -2545,7 +2574,7 @@ def test_report_hides_retained_angle_boundary_for_moved_direction_failure(
         "be refined consistently" in text
     )
     assert "assess this case separately" in text
-    assert "achieved governing interval 15.000° for the 0.010° target" in text
+    assert "achieved governing interval 15.000\u00b0 for the 0.010\u00b0 target" in text
     assert "3080 angles retained" in text
     assert "separate assessment required" in text
     assert "4097" not in text
@@ -2575,7 +2604,7 @@ def test_report_publishes_canonical_direction_and_html_safe_project_alias():
         "checks": [],
     }
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, {"minimum_reinforcement": minimum}, figures=False,
     )).split())
 
@@ -2596,7 +2625,7 @@ def test_report_cover_keeps_canonical_direction_when_minimum_check_is_off():
         "modelled_direction_alias": "<b>span axis</b>",
     })
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, {}, figures=False,
     )).split())
 
@@ -2712,7 +2741,7 @@ def test_report_includes_shear_torsion_link_detailing_evidence():
             "not available."
         ],
     }
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, {"transverse_reinforcement": result}, figures=False,
     )).split())
 
@@ -2751,7 +2780,7 @@ def test_report_states_when_required_shear_links_are_not_defined():
             "reason": "shear resistance without links is insufficient",
         }],
     }
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, {"transverse_reinforcement": result}, figures=False,
     )).split())
     assert "Required links" in text
@@ -2785,7 +2814,7 @@ def test_report_explains_one_sided_transverse_spacing_screen():
             "measurement_axis": "y",
         }],
     )
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, {"transverse_reinforcement": result}, figures=False,
     )).split())
     assert result["status"] == "NOT ASSESSED"
@@ -2816,7 +2845,7 @@ def test_report_keeps_failed_2005_no_bar_result_in_minimum_area_format():
         }],
     }
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, {"minimum_reinforcement": minimum}, figures=False,
     )).split())
 
@@ -2871,7 +2900,7 @@ def test_report_traces_multiple_materials_to_element_assignments():
         }
         for material_id in ("M1", second_id)
     ]
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
     flat = " ".join(txt.split())
 
     assert "M1 New reinforcement" in flat
@@ -2932,7 +2961,7 @@ def test_report_describes_built_in_prestress_without_false_zero_strengths():
             "my_knm": 0.0,
         },
     }
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
     flat = " ".join(txt.split())
 
     assert "Built-in fixed curve 1" in flat
@@ -2975,7 +3004,7 @@ def test_report_does_not_assign_eurocode_source_to_custom_or_generic_steel(prese
         "material_id": "M1",
         "design_yield_mpa": law.fytk / law.gamma_y,
     }]
-    flat = " ".join(_pdf_text(sector_report.build_report(
+    flat = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False,
     )).split())
 
@@ -2988,7 +3017,7 @@ def test_report_does_not_assign_eurocode_source_to_custom_or_generic_steel(prese
 
 
 def test_report_footer_identifies_the_organisational_licensee():
-    txt = _pdf_text(sector_report.build_report(
+    txt = _pdf_text(_build_report_with_selection(
         {"source_revision": "abcdef1234567890"},
         _inp(),
         _out(),
@@ -3001,7 +3030,7 @@ def test_report_footer_identifies_the_organisational_licensee():
 
 
 def test_report_front_matter_identifies_action_sets_and_result_statuses():
-    txt = _pdf_text(sector_report.build_report(
+    txt = _pdf_text(_build_report_with_selection(
         {"source_revision": "abcdef1234567890"},
         _inp(),
         _out(),
@@ -3024,12 +3053,14 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
             "n_ed_kn": 0.0, "mx_ed_knm": 80.0, "my_ed_knm": 0.0,
             "vx_ed_kn": 0.0, "vy_ed_kn": 0.0,
             "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 0.0,
+            "check_minimum_reinforcement": False,
         },
         {
             "name": "PL-02", "description": "Governing combination",
             "n_ed_kn": 0.0, "mx_ed_knm": 125.0, "my_ed_knm": 0.0,
             "vx_ed_kn": 0.0, "vy_ed_kn": 0.0,
             "vx_face": "auto", "vy_face": "auto", "t_ed_knm": 0.0,
+            "check_minimum_reinforcement": False,
         },
     ]
     elastic_rows = [
@@ -3082,7 +3113,8 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
         ],
     }
 
-    pdf = sector_report.build_report({}, inp, out, figures=False)
+    _retain_named_unit_case_metadata(inp, out)
+    pdf = _build_report_with_selection({}, inp, out, figures=False, profile="Standard")
     txt = _pdf_body_text(pdf)
     outline_titles = _pdf_outline_titles(pdf)
     flat = " ".join(txt.split())
@@ -3170,7 +3202,8 @@ def test_report_publishes_only_governing_fine_and_coarse_crack_examples():
          "results": {"elastic": result}}
             for row, result in zip(rows, (first, second, third))
     ]
-    flat = " ".join(_pdf_text(sector_report.build_report(
+    _retain_named_unit_case_metadata(inp, out)
+    flat = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     )).split())
     assert flat.count("Crack width worked - governing case") == 2
@@ -3198,6 +3231,7 @@ def test_worked_selectors_ignore_invalid_nonfinite_case_results():
             "vx_face": "auto",
             "vy_face": "auto",
             "t_ed_knm": 0.0,
+            "check_minimum_reinforcement": False,
         }
         for name, description in (
             ("PL-INVALID", "Invalid plastic"),
@@ -3312,6 +3346,7 @@ def test_worked_selectors_ignore_invalid_nonfinite_case_results():
         ],
     }
 
+    _retain_named_unit_case_metadata(inp, out)
     selected = result_presentation.worked_example_selection(inp, out)
 
     assert selected["families"]["plastic"]["case_id"] == "PL-INFINITE"
@@ -3503,7 +3538,7 @@ def test_crack_worked_example_fails_closed_on_partial_selected_branch():
         "spacing_operands"
     ]["k1"]
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     )).split())
 
@@ -3522,7 +3557,7 @@ def test_crack_worked_example_rejects_an_unknown_retained_formula_branch():
         "spacing_operands"
     ]["selected_candidate"] = "unknown-formula"
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     )).split())
 
@@ -3559,7 +3594,7 @@ def test_crack_2023_tension_zone_cap_is_a_supported_worked_branch():
         crack_code="EN 1992-1-1:2023",
     )
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     )).split())
 
@@ -3580,7 +3615,7 @@ def test_crack_2023_tension_zone_cap_fails_closed_without_cap_depth():
         crack_code="EN 1992-1-1:2023",
     )
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     )).split())
 
@@ -3686,7 +3721,8 @@ def test_report_publishes_one_globally_critical_cracking_threshold():
         ]
     }
 
-    flat = " ".join(_pdf_text(sector_report.build_report(
+    _retain_named_unit_case_metadata(inp, out)
+    flat = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     )).split())
 
@@ -3717,7 +3753,7 @@ def test_report_publishes_ordinary_cracking_threshold_relation():
 
     ordinary_inp = _inp()
     ordinary_inp["mode"] = "Elastic"
-    ordinary = " ".join(_pdf_text(sector_report.build_report(
+    ordinary = " ".join(_pdf_text(_build_report_with_selection(
         {}, ordinary_inp, out, figures=False, qa_appendix=False,
     )).split())
     compact_ordinary = ordinary.replace(" ", "")
@@ -3735,13 +3771,13 @@ def test_report_escapes_user_entered_action_provenance():
         "type": "Other / project-specific",
         "source": "Model A & register <C1>",
     }
-    txt = _pdf_text(sector_report.build_report({}, inp, _out(), figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, _out(), figures=False))
     assert "PL&A<1>" in txt
     assert "Model A & register <C1>" in txt
 
 
 def test_report_mirrors_the_views():
-    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), _out(), figures=False))
     flat = " ".join(txt.split())
     assert "Fcomp" in txt and "NA x" in txt        # full plastic table columns
     assert "PASS - Plastic bending" in txt
@@ -3760,10 +3796,10 @@ def test_report_mirrors_the_views():
 
 
 def test_legacy_qa_appendix_flag_maps_to_standard_and_audit_profiles():
-    default_text = _pdf_text(sector_report.build_report(
+    default_text = _pdf_text(_build_report_with_selection(
         {}, _inp(), _out(), figures=False, qa_appendix=False
     ))
-    qa_text = _pdf_text(sector_report.build_report(
+    qa_text = _pdf_text(_build_report_with_selection(
         {}, _inp(), _out(), figures=False, qa_appendix=True
     ))
 
@@ -3777,7 +3813,7 @@ def test_legacy_qa_appendix_flag_maps_to_standard_and_audit_profiles():
 
 
 def test_report_includes_sls_outputs_strain_and_candidate_evidence():
-    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), _out(), figures=False))
     assert "Elastic stress outputs" in txt
     assert "No stress-limit criterion is applied" in txt
     assert "DB-SLS-01 section 4" not in txt
@@ -3800,7 +3836,7 @@ def test_report_does_not_round_small_nonzero_product_inertia_to_zero():
     out = _out()
     out["elastic"]["props_un"]["Ixy"] = 1.234567e-8
     out["elastic"]["props_cr"]["Ixy"] = -2.345678e-9
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     times = chr(0x00D7)
     assert f"1.23457 {times} 10-8" in txt
     assert f"-2.34568 {times} 10-9" in txt
@@ -3820,7 +3856,7 @@ def test_report_marks_nonconverged_elastic_results_invalid():
     for assessment in out["elastic"]["crack_output"].values():
         assessment["calculation_state"] = "INVALID"
         assessment["value"] = None
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "INVALID - Elastic result" in txt
     assert "diagnostic only" in txt
     assert "no verified cracking classification" in txt
@@ -3854,7 +3890,7 @@ def test_report_marks_no_crack_width_as_output_not_applicable():
             },
         },
     )
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "NOT ASSESSED" in txt
     assert "Section uncracked; no width is available." in txt
     assert "No crack width: section uncracked or no reinforcement" not in txt
@@ -3891,7 +3927,7 @@ def test_threshold_case_with_unrequested_width_keeps_only_retained_reason():
         },
     )
 
-    text = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    text = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
 
     assert "Cracking threshold - EL-TEST" in text
     assert "NOT REQUESTED" in text
@@ -3932,7 +3968,7 @@ def test_stale_crack_selection_with_no_values_never_infers_physical_reason():
         },
     )
 
-    text = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    text = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
 
     assert retained_reason in text
     assert "No crack width: section uncracked or no reinforcement" not in text
@@ -3959,7 +3995,7 @@ def test_report_publishes_one_retained_critical_user_crack_comparison():
         },
     }
 
-    flat = " ".join(_pdf_text(sector_report.build_report(
+    flat = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
@@ -4060,6 +4096,7 @@ def test_report_applies_one_duration_criterion_without_noncritical_chapter():
         for row, result in zip(rows, (global_result, assessed_result))
     ]
 
+    _retain_named_unit_case_metadata(inp, out)
     summaries = result_presentation.multi_case_summary_rows(inp, out)
     assert any(
         row["case"] == "EL-NONCRITICAL-LIMIT"
@@ -4068,7 +4105,7 @@ def test_report_applies_one_duration_criterion_without_noncritical_chapter():
         for row in summaries
     )
 
-    flat = " ".join(_pdf_text(sector_report.build_report(
+    flat = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     )).split())
 
@@ -4152,7 +4189,7 @@ def test_report_publishes_dual_heightened_crack_chain_from_retained_values():
     out = _out()
     out["heightened_crack_control"] = _heightened_crack_result()
 
-    flat = " ".join(_pdf_text(sector_report.build_report(
+    flat = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
@@ -4177,7 +4214,7 @@ def test_report_heightened_crack_partial_payload_fails_closed():
     del heightened["fine"]["base_reinforcement_ratio"]
     out["heightened_crack_control"] = heightened
 
-    flat = " ".join(_pdf_text(sector_report.build_report(
+    flat = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
@@ -4214,7 +4251,7 @@ def test_report_heightened_crack_provenance_fails_closed(
     mutation(heightened)
     out["heightened_crack_control"] = heightened
 
-    flat = " ".join(_pdf_text(sector_report.build_report(
+    flat = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, qa_appendix=False,
     )).split())
 
@@ -4224,7 +4261,7 @@ def test_report_heightened_crack_provenance_fails_closed(
 
 def test_report_renders_greek_glyphs():
     # The ASCII engineering tokens are rendered as Greek glyphs in the PDF.
-    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), _out(), figures=False))
     assert chr(0x3C3) in txt        # sigma
     assert chr(0x3BA) in txt        # kappa
     assert "kappa" not in txt and "sigma" not in txt
@@ -4232,14 +4269,14 @@ def test_report_renders_greek_glyphs():
 
 def test_report_crack_width_uses_millimetres_not_metres():
     # wk/sr_max/phi/cover are already in mm; the report must not multiply by 1000.
-    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), _out(), figures=False))
     assert "235.0" in txt and "235000" not in txt     # sr_max stays mm
     assert "0.213" in txt                              # wk in mm (0.213 mm)
     assert "213.000" not in txt                        # wk not 1000x (would be 213 mm)
 
 
 def test_report_crack_example_publishes_every_retained_interim_selection():
-    flat = " ".join(_pdf_text(sector_report.build_report(
+    flat = " ".join(_pdf_text(_build_report_with_selection(
         {}, _inp(), _out(), figures=False, qa_appendix=False,
     )).split())
     assert "2.5(h-d)" in flat
@@ -4256,7 +4293,7 @@ def test_report_reinforcement_areas_are_already_square_millimetres():
     inp = _inp()
     inp["bars"] = [(0.0, -0.12, 321.123)]
     inp["tendons"] = [(0.0, 0.12, 654.321)]
-    txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, {}, figures=False))
     assert "321.123" in txt
     assert "654.321" in txt
     assert "321123000" not in txt
@@ -4269,7 +4306,7 @@ def test_oversized_reinforcement_table_repeats_its_header():
         (0.0, -0.12, 300.0 + index)
         for index in range(120)
     ]
-    pdf = sector_report.build_report({}, inp, {}, figures=False)
+    pdf = _build_report_with_selection({}, inp, {}, figures=False)
 
     import io
     import pypdf
@@ -4286,7 +4323,7 @@ def test_report_crack_worked_uses_the_governing_case():
     out = _out()
     out["elastic"]["crack"] = dict(_crack(), wk=0.15)
     out["elastic"]["crack_short"] = dict(_crack(), wk=0.30)
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "short-term" in txt
     assert "governing case (long-term)" not in txt
 
@@ -4298,7 +4335,7 @@ def test_report_wide_spacing_shows_geometric_formula():
     out = _out()
     out["elastic"]["crack"] = _wide_crack()
     out["elastic"]["crack_short"] = _wide_crack()
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "(7.14)" in txt
     assert "close centres" in txt
 
@@ -4312,7 +4349,7 @@ def test_report_dk_na_shows_fine_and_coarse_columns():
     out["elastic"]["crack_coarse"] = _coarse_crack(wk=0.10)
     out["elastic"]["crack_short_coarse"] = _coarse_crack(wk=0.12)
     out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "coarse" in txt.lower() and "fine" in txt.lower()   # both systems in the table
 
 
@@ -4326,7 +4363,7 @@ def test_report_shows_coarse_only_results():
     out["elastic"]["crack_coarse"] = _coarse_crack()
     out["elastic"]["crack_short_coarse"] = _coarse_crack()
     out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "No crack width" not in txt
     assert "coarse" in txt.lower()
 
@@ -4340,7 +4377,7 @@ def test_report_coarse_worked_shows_half_factor_when_it_governs():
     out["elastic"]["crack_coarse"] = _coarse_crack(wk=0.30)
     out["elastic"]["crack_short_coarse"] = _coarse_crack(wk=0.30)
     out["elastic"]["crack_code"] = "DS/EN 1992-1-1 + DK NA"
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert chr(0xBD) in txt            # the 1/2 glyph rendered in Eq (7.8)
 
 
@@ -4350,7 +4387,7 @@ def test_report_ec2_2023_shows_refined_formula():
     out["elastic"]["crack"] = _crack_2023()
     out["elastic"]["crack_short"] = _crack_2023()
     out["elastic"]["crack_code"] = "EN 1992-1-1:2023"
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "9.8" in txt and "9.2.3" in txt      # the 2023 clause and crack formula
     assert "1.7" in txt                          # kw in the worked substitution
 
@@ -4386,7 +4423,7 @@ def test_tables_only_report_does_not_start_the_image_server(monkeypatch):
     calls = {"n": 0}
     monkeypatch.setattr(sector_report, "ensure_image_server",
                         lambda: calls.__setitem__("n", calls["n"] + 1))
-    sector_report.build_report({}, _inp(), _out(), figures=False)
+    _build_report_with_selection({}, _inp(), _out(), figures=False)
     assert calls["n"] == 0
 
 
@@ -4478,7 +4515,7 @@ def test_tables_only_load_tables_publish_input_policy_without_raw_tex():
         }],
     }
 
-    text = _pdf_text(sector_report.build_report(
+    text = _pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     ))
     flat = " ".join(text.split())
@@ -4508,7 +4545,7 @@ def test_fatigue_action_headers_use_registry_in_loads_and_detail(monkeypatch):
     monkeypatch.setattr(
         sector_report, "_input_table_symbol", registered_symbol
     )
-    text = _pdf_text(sector_report.build_report(
+    text = _pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     ))
     table_key = sector_report.table_fields.FATIGUE_SPECTRUM_TABLE_KEY
@@ -4527,7 +4564,7 @@ def test_report_includes_the_nm_interaction_when_present():
     branch = dict(N=[-500.0, 0.0, 1500.0, 4000.0], M=[80.0, 300.0, 340.0, 0.0],
                   applied=(200.0, 100.0), converged=True)
     out["plastic"]["interaction"] = dict(x=branch, y=branch)
-    txt = _pdf_text(sector_report.build_report(
+    txt = _pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, profile="Standard"
     ))
     assert "interaction" in txt.lower()
@@ -4536,7 +4573,7 @@ def test_report_includes_the_nm_interaction_when_present():
     assert "Numerical N-M boundary" not in txt
     assert "4000.000" not in txt
 
-    audit = _pdf_text(sector_report.build_report(
+    audit = _pdf_text(_build_report_with_selection(
         {}, _inp(), out, figures=False, profile="Audit"
     ))
     assert "Numerical N-M boundary" in audit
@@ -4552,7 +4589,7 @@ def test_long_nm_boundary_repeats_its_numeric_traceability_header():
         "converged": True,
     }
     out["plastic"]["interaction"] = {"x": branch, "y": branch}
-    pdf = sector_report.build_report(
+    pdf = _build_report_with_selection(
         {}, _inp(), out, figures=False, profile="Audit"
     )
 
@@ -4569,13 +4606,13 @@ def test_long_nm_boundary_repeats_its_numeric_traceability_header():
 def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
     failed = _out()
     failed["plastic"]["util"] = 1.25
-    txt = _pdf_text(sector_report.build_report({}, _inp(), failed, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), failed, figures=False))
     assert "FAIL - Plastic bending" in txt
     assert " pp" not in txt
 
     invalid = _out()
     invalid["plastic"]["converged"] = False
-    txt = _pdf_text(sector_report.build_report({}, _inp(), invalid, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), invalid, figures=False))
     assert "INVALID - Plastic bending" in txt
     assert "diagnostic only" in txt
     assert "Utilisation (applied direction)" not in txt
@@ -4584,7 +4621,7 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
     capacity_invalid["plastic"].update(
         converged=False, check_util=False, applied=None
     )
-    txt = _pdf_text(sector_report.build_report(
+    txt = _pdf_text(_build_report_with_selection(
         {}, _inp(), capacity_invalid, figures=False
     ))
     assert "INVALID - Plastic bending" in txt
@@ -4600,7 +4637,7 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
         util_gov=None,
         worked_point_basis="peak resultant moment",
     )
-    txt = _pdf_text(sector_report.build_report(
+    txt = _pdf_text(_build_report_with_selection(
         {}, _inp(), origin_invalid, figures=False
     ))
     assert "INVALID - Plastic bending" in txt
@@ -4612,13 +4649,13 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
 
     legacy = _out()
     legacy["plastic"].pop("util_valid")
-    txt = _pdf_text(sector_report.build_report({}, _inp(), legacy, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), legacy, figures=False))
     assert "saved result cannot confirm that the M-M envelope contains" in txt
     assert "Utilisation (applied direction)" not in txt
 
     absent = _out()
     absent["plastic"].update(util=None, util_valid=True, util_gov=None)
-    txt = _pdf_text(sector_report.build_report({}, _inp(), absent, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), absent, figures=False))
     assert "closed envelope has no available utilisation result" in txt
     assert "open arc" not in txt.casefold()
 
@@ -4637,6 +4674,7 @@ def test_legacy_multi_case_utilisation_cannot_select_or_publish_worked_point():
             "vx_face": "auto",
             "vy_face": "auto",
             "t_ed_knm": 0.0,
+            "check_minimum_reinforcement": False,
         }
         for name, description, moment in (
             ("PL-LEGACY-HIGH", "High stale utilisation", 80.0),
@@ -4646,7 +4684,6 @@ def test_legacy_multi_case_utilisation_cannot_select_or_publish_worked_point():
     inp["plastic_cases"] = rows
     high_stale_util = copy.deepcopy(_out()["plastic"])
     high_stale_util.update(util=1.4, worked_point_basis="utilisation direction")
-    high_stale_util.pop("util_valid")
     larger_capacity = copy.deepcopy(_out()["plastic"])
     larger_capacity.update(
         util=0.2,
@@ -4655,7 +4692,6 @@ def test_legacy_multi_case_utilisation_cannot_select_or_publish_worked_point():
         min_mx=-200.0,
         worked_point_basis="utilisation direction",
     )
-    larger_capacity.pop("util_valid")
     out = _out()
     out["plastic_cases"] = [
         {
@@ -4669,6 +4705,11 @@ def test_legacy_multi_case_utilisation_cannot_select_or_publish_worked_point():
         )
     ]
 
+    _retain_named_unit_case_metadata(inp, out)
+    assert high_stale_util["util_valid"] is True
+    assert larger_capacity["util_valid"] is True
+    high_stale_util.pop("util_valid")
+    larger_capacity.pop("util_valid")
     selected = result_presentation.worked_example_selection(inp, out)
     assert selected["families"]["plastic"]["case_id"] == "PL-LEGACY-CAPACITY"
 
@@ -4688,7 +4729,7 @@ def test_legacy_plastic_cannot_publish_retained_combined_verdict():
     inp = _inp()
     inp.update(combined_on=True, shear_on=True, torsion_on=True)
 
-    txt = " ".join(_pdf_text(sector_report.build_report(
+    txt = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False,
     )).split())
 
@@ -4707,7 +4748,7 @@ def test_report_handles_plastic_only():
     out = {"plastic": _out()["plastic"]}
     inp = _inp()
     inp["mode"] = "Plastic"
-    pdf = sector_report.build_report({}, inp, out, figures=False)
+    pdf = _build_report_with_selection({}, inp, out, figures=False)
     assert pdf[:4] == b"%PDF"
     txt = _pdf_text(pdf)
     assert "Cracked-section elastic stresses" not in txt
@@ -4718,14 +4759,14 @@ def test_report_plastic_only_omits_inactive_sls_action_set():
     out = {"plastic": _out()["plastic"]}
     inp = _inp()
     inp["mode"] = "Plastic"
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
     assert "PL-TEST" in txt
     assert "EL-TEST" not in txt
 
 
 def test_report_elastic_only_omits_plastic_theory():
     out = {"elastic": _out()["elastic"]}
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Plastic section capacity" not in txt
     assert "Cracked-section elastic stresses" in txt
 
@@ -4741,7 +4782,7 @@ def test_report_capacity_only_omits_utilisation():
         check_util=False,
         applied=None,
     )
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "capacity only" in txt
     assert "applied direction" not in txt    # no utilisation percentage row
     assert "Plastic (applied)" not in txt    # ignored moments not listed as loads
@@ -4752,12 +4793,12 @@ def test_report_tolerates_plastic_payload_without_applied():
     # report must not crash indexing it.
     out = _out()
     out["plastic"].pop("applied", None)
-    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+    pdf = _build_report_with_selection({}, _inp(), out, figures=False)
     assert pdf[:4] == b"%PDF"
 
 
 def test_report_handles_no_results():
-    pdf = sector_report.build_report({}, _inp(), {}, figures=False)
+    pdf = _build_report_with_selection({}, _inp(), {}, figures=False)
     assert pdf[:4] == b"%PDF"
 
 
@@ -4822,7 +4863,7 @@ def test_report_profiles_publish_exact_2023_input_and_material_sources(profile):
         "transverse_detailing_on": True,
         "clear_spacing_on": True,
     })
-    text = _pdf_text(sector_report.build_report(
+    text = _pdf_text(_build_report_with_selection(
         {}, inp, _out(), figures=False, profile=profile
     ))
     normalised = " ".join(text.split())
@@ -4844,7 +4885,7 @@ def test_report_profiles_publish_exact_2023_input_and_material_sources(profile):
 def test_report_omits_unused_material_sections():
     # Bars only -> mild steel is reported, prestress is omitted.
     inp = _inp()
-    txt = _pdf_text(sector_report.build_report({}, inp, _out(), figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, _out(), figures=False))
     assert "Design yield" in txt
     assert "Initial prestrain" not in txt
     # Tendons only -> prestress is reported, mild steel is omitted.
@@ -4853,7 +4894,7 @@ def test_report_omits_unused_material_sections():
     inp2["bars"] = []
     inp2["tendons"] = [(0.0, -0.12, 5.0e-4)]
     inp2["prestress"] = mp.build_prestress(**list(mp.PRESTRESS_PRESETS.values())[0])
-    txt2 = _pdf_text(sector_report.build_report({}, inp2, _out(), figures=False))
+    txt2 = _pdf_text(_build_report_with_selection({}, inp2, _out(), figures=False))
     assert "Initial prestrain" in txt2
     assert "Design yield" not in txt2
     # No mild bars -> no compression bar-strain split (would be a spurious eps_s,c row).
@@ -4884,7 +4925,7 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
         "concrete": {"design_strength_mpa": inp["concrete"].fcd},
         "mild": [], "prestress": [],
     }}
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
     flat = " ".join(txt.split())
     assert "5.1.6" in txt and "5.3" in txt and "5.4" in txt
     assert "8.1.2" in txt and "8.4" in txt
@@ -4989,7 +5030,7 @@ def test_report_prints_actual_custom_half_and_double_partial_factors():
         "prestress": [],
     }}
     text = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
+        _build_report_with_selection({}, inp, out, figures=False)
     ).split())
 
     assert "60.000 MPa" in text
@@ -5009,7 +5050,7 @@ def test_report_ec2_2023_k_tc_one_states_the_full_assumption():
         "concrete": {"design_strength_mpa": inp["concrete"].fcd},
         "mild": [], "prestress": [],
     }}
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
     assert "28 days" in txt and "56 days" in txt
     assert "at least 3 months" in txt
     assert "National" in txt and "Annex" in txt
@@ -5028,7 +5069,7 @@ def test_report_ignores_removed_design_basis_aggregate():
             "Sector does not implement the torsion check to EN 1992-1-1:2023."
         ],
     }
-    txt = _pdf_text(sector_report.build_report({}, inp, {}, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, {}, figures=False))
     assert "Design basis qualification" not in txt
     assert "Mixed/custom design basis" not in txt
     assert "does not implement the torsion check" not in txt
@@ -5047,7 +5088,7 @@ def test_report_ignores_removed_authority_approval_and_cover_calculator_metadata
         "approver": "OBSOLETE-APPROVER-MARKER",
     }
 
-    text = _pdf_text(sector_report.build_report(
+    text = _pdf_text(_build_report_with_selection(
         meta, inp, _out(), figures=False
     ))
 
@@ -5075,7 +5116,7 @@ def test_report_ignores_stale_bridge_and_trace_payloads():
         "errors": [{"message": "must remain inert"}],
     }
     text = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
+        _build_report_with_selection({}, inp, out, figures=False)
     ).split())
 
     for removed in (
@@ -5095,7 +5136,7 @@ def test_report_handles_uncracked_section():
     out["elastic"]["crack"] = None
     out["elastic"]["crack_short"] = None
     out["elastic"]["props_cr"] = None
-    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+    pdf = _build_report_with_selection({}, _inp(), out, figures=False)
     assert pdf[:4] == b"%PDF"
 
 
@@ -5112,7 +5153,7 @@ def _shear_out():
 def test_report_includes_shear_section():
     out = _out()
     out["shear"] = _shear_out()
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Shear resistance" in txt          # the section heading
     assert "6.2.2" in txt                     # the clause reference
     assert "103.4" in txt                     # the VRd,c value
@@ -5213,7 +5254,7 @@ def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(
     )
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {},
                 inp,
                 {"shear": sh, "transverse_reinforcement": transverse},
@@ -5273,7 +5314,7 @@ def test_report_audits_independent_governing_faces_and_angles():
     out["shear"] = sh
 
     text = " ".join(_pdf_text(
-        sector_report.build_report({}, _inp(), out, figures=False)
+        _build_report_with_selection({}, _inp(), out, figures=False)
     ).split())
     assert "Independent governing selections" in text
     assert "bottom (-y)" in text and "top (+y)" in text
@@ -5281,81 +5322,60 @@ def test_report_audits_independent_governing_faces_and_angles():
     assert "V+T (6.29)" in text
 
 
-def test_report_legacy_blocker_sanitizes_both_face_combined_cells_only():
-    out = _out()
-    out["plastic"].pop("util_valid")
-    out["combined"] = _combined_out()
-    sh = _shear_out()
-    negative = copy.deepcopy(sh)
-    positive = copy.deepcopy(sh)
-    positive.update(tension_low=False, util=0.65)
-    sh.update(
-        component="vy",
-        both_faces_evaluated=True,
-        face_candidates=[
-            dict(
-                tension_low=True,
-                shear=negative,
-                shear_status="SHEAR KEPT A",
-                torsion_status="V+T KEPT A",
-                combined_status="STALE COMBINED A",
-            ),
-            dict(
-                tension_low=False,
-                shear=positive,
-                shear_status="SHEAR KEPT B",
-                torsion_status="V+T KEPT B",
-                combined_status="STALE COMBINED B",
-            ),
-        ],
-        governing_domains={
-            "shear": dict(
-                face="negative", cot=1.25, status="SHEAR KEPT", util=0.77,
-            ),
-            "vt": dict(
-                face="positive", cot=1.75, status="V+T KEPT", util=1.10,
-            ),
-            "combined": dict(
-                face="positive", cot=1.75, status="STALE DOMAIN", util=9.87654,
-            ),
-        },
-    )
-    out["shear"] = sh
-    before = copy.deepcopy(out)
-    builder = sector_report.ReportBuilder(
-        io.BytesIO(), {}, _inp(), out, figures=False,
-    )
-    tables = []
-    builder._table = lambda rows, *args, **kwargs: tables.append(copy.deepcopy(rows))
+@pytest.mark.xdist_group("native-member-report")
+def test_report_legacy_blocker_sanitizes_both_face_combined_cells_only(
+    native_member_report_cases,
+):
+    inp, out = copy.deepcopy(native_member_report_cases["two-face"])
+    assert result_presentation.combined_publication_evidence_is_current(inp, out) == (True, None)
+    assert len(out["shear"]["face_candidates"]) == 2
 
-    builder._shear_direction(sh, component="vy")
+    def capture(bundle):
+        builder = sector_report.ReportBuilder(
+            io.BytesIO(), {}, inp, bundle, figures=False,
+        )
+        tables = []
+        builder._table = lambda rows, *args, **kwargs: tables.append(copy.deepcopy(rows))
+        builder._shear_direction(bundle["shear"], component="vy")
+        face_rows = next(rows for rows in tables if rows[0][-1] == "Combined")
+        governing_rows = next(
+            rows for rows in tables if rows[0][0] == "Check"
+            and rows[0][4] == "Status / outcome"
+        )
+        text = " ".join(
+            item.getPlainText() for item in builder.flow
+            if hasattr(item, "getPlainText")
+        )
+        return face_rows, {row[0]: row for row in governing_rows[1:]}, text
 
-    face_rows = next(rows for rows in tables if rows[0][-1] == "Combined")
-    assert [row[-3:] for row in face_rows[1:]] == [
-        ["SHEAR KEPT A", "V+T KEPT A", "NOT ASSESSED"],
-        ["SHEAR KEPT B", "V+T KEPT B", "NOT ASSESSED"],
-    ]
-    governing_rows = next(
-        rows for rows in tables if rows[0][0] == "Check"
-        and rows[0][-1] == "Status / outcome"
-    )
-    by_check = {row[0]: row for row in governing_rows[1:]}
-    assert by_check["Shear"][-2:] == ["77.0 %", "SHEAR KEPT"]
-    assert by_check["V+T (6.29)"][-2:] == ["110.0 %", "V+T KEPT"]
-    assert by_check["Combined"] == [
+    original_bytes = pickle.dumps((inp, out))
+    current_faces, current_governing, _ = capture(out)
+    assert all(row[-1] == "FAIL" for row in current_faces[1:])
+    assert current_governing["Combined"][4] == "FAIL"
+    assert pickle.dumps((inp, out)) == original_bytes
+
+    legacy = copy.deepcopy(out)
+    assert legacy["plastic_cases"][0]["results"]["plastic"] is legacy["plastic"]
+    legacy["plastic"].pop("util_valid")
+    before = pickle.dumps((inp, legacy))
+    face_rows, by_check, rendered_text = capture(legacy)
+    assert len(face_rows) == len(current_faces) == 3
+    for current, blocked in zip(current_faces[1:], face_rows[1:], strict=True):
+        assert blocked[:-1] == current[:-1]
+        assert blocked[-1] == "NOT ASSESSED"
+    for check in ("Shear", "V+T (6.29)"):
+        assert by_check[check] == current_governing[check]
+    assert by_check["Combined"][:5] == [
         "Combined", "-", "-", "-", "NOT ASSESSED",
     ]
-    rendered_text = " ".join(
-        item.getPlainText()
-        for item in builder.flow
-        if hasattr(item, "getPlainText")
-    )
+    assert by_check["Combined"][5:] == current_governing["Combined"][5:]
     assert (
         "saved bending result cannot confirm that the M-M envelope contains "
         "the origin" in rendered_text
     )
     assert "Recalculate before assessing M-V-T interaction" in rendered_text
-    assert out == before
+    assert pickle.dumps((inp, legacy)) == before
+    assert pickle.dumps((inp, out)) == original_bytes
 
 
 def test_brief_governing_depth_does_not_publish_worked_selection_register():
@@ -5509,7 +5529,7 @@ def test_report_biaxial_shear_separates_directions_without_aggregate_interaction
     )
 
     txt = " ".join(_pdf_text(
-        sector_report.build_report({}, _inp(), out, figures=False)
+        _build_report_with_selection({}, _inp(), out, figures=False)
     ).split())
 
     assert "Vx,Ed" in txt and "Vy,Ed" in txt
@@ -5541,7 +5561,7 @@ def test_report_shear_2023_section():
     out = _out()
     sh = _shear_out_2023()
     out["shear"] = sh
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "8.27" in txt and "8.20" in txt          # the 2023 clauses
     assert "8.30" in txt and "8.31" in txt          # action/axial modification
     assert "8.2.2" in txt                            # the 2023 section reference
@@ -5568,7 +5588,7 @@ def test_report_shear_2023_reproduces_selected_gamma_v_and_references(profile):
     out["shear"] = _shear_out_2023(gamma_v=1.234)
 
     txt = _pdf_text(
-        sector_report.build_report(
+        _build_report_with_selection(
             {}, inp, out, figures=False, profile=profile
         )
     )
@@ -5588,7 +5608,7 @@ def test_report_shear_shows_prestress_precompression():
     sh["n_prestress"] = 900.0
     sh["res"]["sigma_cp"] = 4.5
     out["shear"] = sh
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Tendon precompression" in txt
     assert "900" in txt
 
@@ -5597,7 +5617,7 @@ def test_report_shear_2023_documents_axial_factor():
     out = _out()
     sh = _shear_out_2023()
     out["shear"] = sh
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Formula (8.31)" in txt
     assert f"{sh['res']['k_vp']:.4f}" in txt
     assert "parallel to the member axis" in txt
@@ -5612,7 +5632,7 @@ def test_report_shear_2023_invalid_is_reportable():
     sh = _shear_out_2023()
     sh["res"] = res
     out["shear"] = sh
-    pdf = sector_report.build_report({}, _inp(), out, figures=False)
+    pdf = _build_report_with_selection({}, _inp(), out, figures=False)
     assert pdf[:4] == b"%PDF"
 
 
@@ -5621,12 +5641,12 @@ def test_report_shear_flags_exceeded():
     sh = _shear_out()
     sh["v_ed"], sh["util"] = 200.0, 200.0 / 103.4
     out["shear"] = sh
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "EXCEEDED" in txt
 
 
 def test_report_without_shear_omits_the_section():
-    txt = _pdf_text(sector_report.build_report({}, _inp(), _out(), figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), _out(), figures=False))
     assert "Shear resistance" not in txt
 
 
@@ -5813,7 +5833,7 @@ def _stale_named_torsion_report_payload(*, current_name="PL-SAME"):
 def test_report_profiles_withhold_changed_action_case_values(profile):
     inp, out = _stale_named_torsion_report_payload()
 
-    text = _pdf_text(sector_report.build_report(
+    text = _pdf_text(_build_report_with_selection(
         {},
         inp,
         out,
@@ -5855,7 +5875,7 @@ def test_report_profiles_replace_removed_result_case_with_current_case(profile):
         }],
     }
 
-    text = _pdf_text(sector_report.build_report(
+    text = _pdf_text(_build_report_with_selection(
         {},
         inp,
         out,
@@ -5872,7 +5892,7 @@ def test_report_profiles_replace_removed_result_case_with_current_case(profile):
 def test_report_includes_torsion_section():
     out = _out()
     out["torsion"] = _torsion_out()
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Torsion" in txt
     assert "6.30" in txt and "6.28" in txt          # the clause formulae
     assert "76.4" in txt                            # TRd
@@ -5901,8 +5921,8 @@ def test_report_includes_torsion_section():
         pytest.param(False, id="explicit-false"),
     ],
 )
-def test_report_profiles_fail_closed_for_unestablished_torsion_scope(
-    profile, retained_blocker
+def test_retained_report_profiles_fail_closed_for_unestablished_torsion_scope(
+    profile, retained_blocker, tmp_path
 ):
     applicability = capacity.torsion_applicability(
         {
@@ -5945,7 +5965,7 @@ def test_report_profiles_fail_closed_for_unestablished_torsion_scope(
         shear_links=True,
     )
 
-    pdf = sector_report.build_report(
+    pdf = _torsion_applicability_unit_pdf(
         {},
         inp,
         {
@@ -5961,7 +5981,9 @@ def test_report_profiles_fail_closed_for_unestablished_torsion_scope(
         },
         figures=False,
         profile=profile,
+        include_case_authority=True,
     )
+    (tmp_path / "retained-unestablished-torsion-scope.pdf").write_bytes(pdf)
     text = " ".join(_pdf_text(pdf).split())
 
     assert "Torsion design basis" in text
@@ -5982,6 +6004,201 @@ def test_report_profiles_fail_closed_for_unestablished_torsion_scope(
         assert "Formula (6.28) demand" not in text
 
 
+def _torsion_applicability_unit_pdf(
+    meta, inp, out, *, figures=False, profile, expected_allowed=False,
+    include_case_authority=False,
+):
+    """Render the applicability leaf and the real guarded Combined diagnostic."""
+    assert figures is False
+    original = pickle.dumps((inp, out))
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(buffer, meta, inp, out, figures=False, profile=profile)
+    builder._h1("Retained torsion applicability formatting")
+    if include_case_authority:
+        authority_rows = sector_report._torsion_case_authority_rows(inp)
+        assert authority_rows
+        builder._table(
+            [["Input", "Declaration"], *authority_rows],
+            [85 * sector_report.mm, 85 * sector_report.mm], font=7.5,
+        )
+        authority_tables = [item for item in builder.flow
+                            if isinstance(item, sector_report.Table)]
+        authority_tables.extend(
+            item for group in builder.flow if isinstance(group, sector_report.KeepTogether)
+            for item in group._content if isinstance(item, sector_report.Table)
+        )
+        assert len(authority_tables) == 1
+        authority_table = authority_tables[0]
+        actual_authority = [
+            [cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+             for cell in row]
+            for row in authority_table._cellvalues[authority_table._sector_data_start:]
+        ]
+        assert actual_authority == authority_rows
+    allowed = builder._torsion_applicability_block(out["torsion"])
+    assert allowed is expected_allowed
+    def tables_in(items):
+        for item in items:
+            if isinstance(item, sector_report.KeepTogether):
+                yield from tables_in(item._content)
+            elif isinstance(item, sector_report.Table):
+                yield item
+
+    tables = list(tables_in(builder.flow))
+    assert tables
+    matches = []
+    for table in tables:
+        actual = [
+            tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+                  for cell in row)
+            for row in table._cellvalues
+        ]
+        if actual[table._sector_header_row] == ("Design basis", "Member scope", "Applicability"):
+            matches.append((table, actual))
+    assert len(matches) == 1
+    table, actual = matches[0]
+    assert actual[table._sector_header_row] == ("Design basis", "Member scope", "Applicability")
+    assert actual[table._sector_data_start][2] == (
+        "APPLICABLE" if expected_allowed else "NOT ASSESSED"
+    )
+    if "combined" in out:
+        # Exercise the actual retained torsion-applicability dependency
+        # diagnostic; full native currentness coverage remains separate.
+        builder._combined()
+    sector_report.SimpleDocTemplate(
+        buffer, pagesize=sector_report.A4,
+        leftMargin=20 * sector_report.mm, rightMargin=20 * sector_report.mm,
+        topMargin=25 * sector_report.mm, bottomMargin=20 * sector_report.mm,
+    ).build(list(builder.flow))
+    assert pickle.dumps((inp, out)) == original
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_torsion_applicability_component_rendering_accepts_declared_positive(profile):
+    inp = _inp()
+    inp.update(
+        torsion_on=True, torsion_T=40.0,
+        torsion_design_basis=capacity.TORSION_DESIGN_EQUILIBRIUM,
+        torsion_member_scope=capacity.TORSION_MEMBER_CLOSED,
+    )
+    torsion = {
+        "applicability": capacity.torsion_applicability(inp, 40.0),
+        "applicability_blocked": False,
+        "t_ed": 40.0,
+        "method": codes.EC2_2005_DKNA.label,
+    }
+    assert result_presentation.torsion_applicability_publication_status(torsion) == "APPLICABLE"
+    pdf = _torsion_applicability_unit_pdf(
+        {}, inp, {"torsion": torsion}, profile=profile, expected_allowed=True,
+    )
+    text = " ".join(_pdf_text(pdf).split())
+    assert "Torsion applicability and member scope" in text
+    assert "APPLICABLE" in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.xdist_group("native-member-report")
+def test_native_torsion_report_rejects_isolated_authority_poison(
+    native_member_report_cases, profile, tmp_path,
+):
+    import json
+
+    @result_presentation.publication_calculation_scope()
+    def check_reports():
+        inp, out = copy.deepcopy(native_member_report_cases["two-face"])
+        original = pickle.dumps((inp, out))
+        assert out["plastic_cases"][0]["results"]["torsion"] is out["torsion"]
+        assert result_presentation.torsion_publication_component_is_current(
+            inp, out["shear"], out["torsion"],
+        ) == (True, None)
+        assert result_presentation.torsion_applicability_publication_status(out["torsion"]) == "APPLICABLE"
+        positive_rows = result_presentation.multi_case_summary_rows(inp, out)
+        target = next(row for row in positive_rows if row.get("overview_key") == "torsion:resistance")
+        assert target["status"] in {"PASS", "FAIL"}
+        assert target["util"] is not None and target["result"] != "-"
+
+        def row_pattern(row):
+            return r"\s+".join(
+                re.escape(str(row[key])).replace(r"\ ", r"\s+").replace(r"\-", r"-\s*")
+                for key in ("check", "case", "status", "result")
+            )
+
+        pdf = _build_report_from_completed_payload({}, inp, out, figures=False, profile=profile)
+        (tmp_path / f"native-authority-positive-{profile}.pdf").write_bytes(pdf)
+        text = " ".join(_pdf_text(pdf).split())
+        assert re.search(row_pattern(target), text)
+        if profile != "Brief":
+            assert "Torsion applicability and member scope" in text
+        evidence = []
+        for authority_case in (
+            "stale-blocker", "malformed-blocker", "lowercase-status",
+            "missing-route-entry", "wrong-route", "stale-reason",
+            "text-ted", "boolean-ted", "nonfinite-ted",
+        ):
+            poisoned = copy.deepcopy(out)
+            torsion = poisoned["torsion"]
+            assert poisoned["plastic_cases"][0]["results"]["torsion"] is torsion
+            shear_before = pickle.dumps(poisoned["shear"])
+            primary_before = pickle.dumps(torsion["primary"])
+            # Detach only the root declaration; native physical-face evidence
+            # must stay unchanged so this tests wrapper reconciliation.
+            torsion["applicability"] = copy.deepcopy(torsion["applicability"])
+            if authority_case == "stale-blocker":
+                torsion["applicability_blocked"] = True
+            elif authority_case == "malformed-blocker":
+                torsion["applicability_blocked"] = "False"
+            elif authority_case == "lowercase-status":
+                torsion["applicability"]["status"] = "applicable"
+            elif authority_case == "missing-route-entry":
+                torsion["applicability"].pop("full_resistance_route_entered")
+            elif authority_case == "wrong-route":
+                torsion["applicability"]["route"] = "compatibility residual full resistance"
+            elif authority_case == "stale-reason":
+                torsion["applicability"]["reason"] = "open or warping-sensitive torsion requires member analysis"
+            elif authority_case == "text-ted":
+                torsion["t_ed"] = str(torsion["t_ed"])
+            elif authority_case == "boolean-ted":
+                torsion["t_ed"] = True
+            else:
+                torsion["t_ed"] = math.nan
+            assert pickle.dumps(poisoned["shear"]) == shear_before, authority_case
+            assert pickle.dumps(torsion["primary"]) == primary_before, authority_case
+            poisoned_before = pickle.dumps(poisoned)
+            assert result_presentation.torsion_applicability_publication_status(torsion) == "NOT ASSESSED", authority_case
+            current, reason = result_presentation.torsion_publication_component_is_current(
+                inp, poisoned["shear"], torsion,
+            )
+            assert current is False, authority_case
+            blocked = [
+                row for row in result_presentation.multi_case_summary_rows(inp, poisoned)
+                if str(row.get("overview_key", "")).startswith(("torsion", "combined"))
+            ]
+            assert any(row["overview_key"] == "torsion" for row in blocked), authority_case
+            assert any(str(row["overview_key"]).startswith("combined") for row in blocked), authority_case
+            assert all(row["status"] == "NOT ASSESSED" and row["util"] is None
+                       and row["result"] == "-" for row in blocked), (authority_case, blocked)
+            pdf = _build_report_from_completed_payload({}, inp, poisoned, figures=False, profile=profile)
+            (tmp_path / f"native-authority-{authority_case}-{profile}.pdf").write_bytes(pdf)
+            text = " ".join(_pdf_text(pdf).split())
+            assert all(re.search(row_pattern(row), text) for row in blocked), authority_case
+            assert re.search(row_pattern(target), text) is None, authority_case
+            if profile != "Brief":
+                assert "Torsion result" in text, authority_case
+                assert "Torsion applicability and member scope" not in text, authority_case
+            assert pickle.dumps(poisoned) == poisoned_before, authority_case
+            evidence.append({"case": authority_case, "current": current, "reason": reason,
+                             "blocked_rows": [{key: row[key] for key in ("check", "case", "status", "result")}
+                                              for row in blocked]})
+        assert len(evidence) == 9
+        (tmp_path / f"native-authority-evidence-{profile}.json").write_text(
+            json.dumps(evidence, indent=2) + "\n", encoding="utf-8",
+        )
+        assert pickle.dumps((inp, out)) == original
+
+    check_reports()
+
+
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
 @pytest.mark.parametrize(
     "retained_blocker",
@@ -5999,8 +6216,8 @@ def test_report_profiles_fail_closed_for_unestablished_torsion_scope(
         "incomplete-applicable",
     ),
 )
-def test_report_profiles_fail_closed_for_untrusted_torsion_applicability(
-    profile, retained_blocker, applicability_evidence
+def test_torsion_applicability_component_rendering_rejects_untrusted_evidence(
+    profile, retained_blocker, applicability_evidence, tmp_path
 ):
     applicability = capacity.torsion_applicability(
         {
@@ -6070,7 +6287,7 @@ def test_report_profiles_fail_closed_for_untrusted_torsion_applicability(
         torsion_member_scope=capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
         shear_links=True,
     )
-    pdf = sector_report.build_report(
+    pdf = _torsion_applicability_unit_pdf(
         {},
         inp,
         {
@@ -6087,6 +6304,7 @@ def test_report_profiles_fail_closed_for_untrusted_torsion_applicability(
         figures=False,
         profile=profile,
     )
+    (tmp_path / f"retained-untrusted-{applicability_evidence}-{profile}.pdf").write_bytes(pdf)
     text = " ".join(_pdf_text(pdf).split())
 
     assert "Torsion applicability" in text
@@ -6115,8 +6333,8 @@ def test_report_profiles_fail_closed_for_untrusted_torsion_applicability(
         "nonfinite-ted",
     ),
 )
-def test_report_profiles_require_exact_coherent_torsion_authority(
-    profile, authority_case
+def test_torsion_applicability_component_rendering_requires_exact_authority(
+    profile, authority_case, tmp_path
 ):
     applicability = capacity.torsion_applicability(
         {
@@ -6143,6 +6361,17 @@ def test_report_profiles_require_exact_coherent_torsion_authority(
         "resistance_status": "PASS",
         "assessment_status": "PASS",
     }
+    positive_inp = _inp()
+    positive_inp.update(
+        torsion_on=True, torsion_T=40.0,
+        torsion_design_basis=capacity.TORSION_DESIGN_EQUILIBRIUM,
+        torsion_member_scope=capacity.TORSION_MEMBER_CLOSED,
+    )
+    assert result_presentation.torsion_applicability_publication_status(torsion) == "APPLICABLE"
+    positive_pdf = _torsion_applicability_unit_pdf(
+        {}, positive_inp, {"torsion": torsion}, profile=profile, expected_allowed=True,
+    )
+    (tmp_path / f"retained-applicable-{authority_case}-{profile}.pdf").write_bytes(positive_pdf)
     if authority_case == "stale-blocker":
         torsion["applicability_blocked"] = True
     elif authority_case == "malformed-blocker":
@@ -6172,7 +6401,7 @@ def test_report_profiles_require_exact_coherent_torsion_authority(
         torsion_member_scope=capacity.TORSION_MEMBER_CLOSED,
         shear_links=True,
     )
-    pdf = sector_report.build_report(
+    pdf = _torsion_applicability_unit_pdf(
         {},
         inp,
         {
@@ -6189,6 +6418,7 @@ def test_report_profiles_require_exact_coherent_torsion_authority(
         figures=False,
         profile=profile,
     )
+    (tmp_path / f"retained-authority-{authority_case}-{profile}.pdf").write_bytes(pdf)
     text = " ".join(_pdf_text(pdf).split())
 
     assert "Torsion applicability" in text
@@ -6278,7 +6508,7 @@ def test_audit_drops_stale_torsion_subchecks_when_applicability_is_blocked():
         },
     }
 
-    text = " ".join(_pdf_text(sector_report.build_report(
+    text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, profile="Audit",
     )).split())
 
@@ -6364,7 +6594,7 @@ def test_report_profiles_identify_each_plastic_case_torsion_authority(profile):
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -6384,7 +6614,7 @@ def test_report_profiles_publish_torsion_wall_selection_evidence(profile):
     inp = _inp()
     inp.update(torsion_on=True, shear_links=True)
 
-    pdf = sector_report.build_report(
+    pdf = _build_report_with_selection(
         {}, inp, {"torsion": torsion}, figures=False, profile=profile
     )
     text = " ".join(_pdf_text(pdf).split())
@@ -6463,7 +6693,7 @@ def test_report_profiles_fail_closed_for_incomplete_torsion_wall_evidence(profil
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, {"torsion": torsion}, figures=False, profile=profile
             )
         ).split()
@@ -6521,7 +6751,7 @@ def test_report_profiles_share_longitudinal_torsion_status(
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -6613,7 +6843,7 @@ def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -6669,7 +6899,7 @@ def test_report_withholds_full_torsion_verdict_without_current_closed_links():
     for profile in ("Brief", "Standard", "Audit"):
         text = " ".join(
             _pdf_text(
-                sector_report.build_report(
+                _build_report_with_selection(
                     {},
                     inp,
                     {"torsion": torsion},
@@ -6753,7 +6983,7 @@ def test_report_directional_vt_outside_permitted_range_withholds_verdicts():
     inp.update(torsion_on=True, shear_on=True, shear_links=True)
 
     text = " ".join(_pdf_text(
-        sector_report.build_report({}, inp, out, figures=False)
+        _build_report_with_selection({}, inp, out, figures=False)
     ).split())
     assert "Torsion NOT ASSESSED" in text
     assert "outside the permitted range" in text
@@ -6769,7 +6999,7 @@ def test_report_compound_torsion_requires_subdivision():
     t["reason"] = "compound outline requires subdivision"
     t["compound_detected"] = True
     out["torsion"] = t
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Torsion not evaluated" in txt
     assert "6.3.1(3)" in txt
     assert "Enable sub-tubes" in txt
@@ -6878,7 +7108,7 @@ def test_report_torsion_subdivided():
         ),
     }
     out["torsion"] = t
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Sub-tubes" in txt                        # the compound-section heading
     assert "6.3.1(3)" in txt                         # the sub-division clause
     assert "web" in txt
@@ -6905,7 +7135,7 @@ def test_report_invalid_subtube_partition_withholds_verdict():
     t["subdivision_valid"] = False
     t["subdivision_reason"] = "sub-rectangle 1 extends outside"
     out["torsion"] = t
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     flat = " ".join(txt.split())
     assert "Torsion not assessed" in flat
     assert "sub-tubes do not partition the concrete section" in flat
@@ -6917,40 +7147,18 @@ def test_report_invalid_subtube_partition_withholds_verdict():
 def test_report_torsion_shows_combined_interaction():
     out = _out()
     out["torsion"] = _torsion_out(interaction=True)
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "6.29" in txt                            # the combined crushing clause
     assert "Combined shear" in txt
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_report_torsion_shows_min_reinf_screen(profile):
-    # F7: the 6.31 minimum-reinforcement screen appears when applicable.
-    out = _out()
-    t = _torsion_out()
-    t["min_reinf"] = dict(
-        applicable=True,
-        status="PASS",
-        scope_key="applicable_first_generation_rectangle",
-        value=0.52,
-        ok=True,
-        t_ed=40.0,
-        trd_c=100.0,
-        v_ed=30.0,
-        vrd_c=250.0,
-        torsion_ratio=0.4,
-        shear_ratio=0.12,
-        governs="torsion",
-        solid=True,
-        model_2023=False,
-        detailing_status="PASS",
-        detailing_scope_key="separate_detailing_passed",
-    )
-    out["torsion"] = t
-    inp = _inp()
-    inp.update(torsion_on=True, shear_on=True)
+def test_report_torsion_shows_min_reinf_screen(profile, native_formula_631_cases):
+    # Full publication from a native low-action, fully detailed case.
+    inp, out = native_formula_631_cases(detailing_status="PASS")
     txt = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -6986,34 +7194,18 @@ def test_report_profiles_separate_formula_631_condition_from_detailing(
     detailing_status,
     detailing_scope_key,
     detailing_text,
+    native_formula_631_cases,
 ):
-    out = _out()
-    torsion = _torsion_out()
-    torsion["min_reinf"] = dict(
-        applicable=True,
-        status=condition_status,
-        scope_key="applicable_first_generation_rectangle",
-        value=value,
-        ok=condition_status == "PASS",
-        t_ed=40.0,
-        trd_c=100.0,
-        v_ed=30.0,
-        vrd_c=75.0 if condition_status == "FAIL" else 250.0,
-        torsion_ratio=0.4,
-        shear_ratio=value - 0.4,
-        governs="torsion" if condition_status == "PASS" else "shear",
-        solid=True,
-        model_2023=False,
-        detailing_status=detailing_status,
-        detailing_scope_key=detailing_scope_key,
+    inp, out = native_formula_631_cases(
+        condition_status=condition_status, detailing_status=detailing_status,
     )
-    out["torsion"] = torsion
-    inp = _inp()
-    inp.update(torsion_on=True, shear_on=True)
+    minimum = out["torsion"]["min_reinf"]
+    assert (minimum["value"] <= 1.0) is (value <= 1.0)
+    assert minimum["detailing_scope_key"] == detailing_scope_key
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -7033,41 +7225,14 @@ def test_report_profiles_separate_formula_631_condition_from_detailing(
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_report_profiles_use_selected_2023_scope_when_shear_is_disabled(profile):
-    out = _out()
-    torsion = _torsion_out()
-    torsion["min_reinf"] = dict(
-        applicable=False,
-        status="NOT APPLICABLE",
-        scope_key="selected_2023_route",
-        value=None,
-        ok=None,
-        t_ed=15.0,
-        trd_c=26.435,
-        v_ed=None,
-        vrd_c=None,
-        torsion_ratio=None,
-        shear_ratio=None,
-        governs=None,
-        solid=True,
-        model_2023=True,
-        shear_method=codes.EC2_2023.label,
-        torsion_method=codes.EC2_2005_DKNA.label,
-        detailing_status="NOT RUN",
-        detailing_scope_key="separate_detailing_not_run",
-    )
-    out["torsion"] = torsion
-    inp = _inp()
-    inp.update(
-        torsion_on=True,
-        shear_on=False,
-        shear_method=codes.EC2_2023.label,
-        torsion_method=codes.EC2_2005_DKNA.label,
-    )
+def test_report_profiles_use_selected_2023_scope_when_shear_is_disabled(profile, native_formula_631_cases):
+    inp, out = native_formula_631_cases(scope_context="selected-2023-no-shear")
+    assert inp["shear_on"] is False
+    assert out["torsion"]["min_reinf"]["scope_key"] == "selected_2023_route"
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -7101,52 +7266,14 @@ def test_report_profiles_retain_dkna_formula_631_normal_and_moment_scope(
     mx_ed,
     my_ed,
     applicable,
+    native_formula_631_cases,
 ):
-    out = _out()
-    torsion = _torsion_out()
-    torsion["min_reinf"] = dict(
-        applicable=applicable,
-        status="PASS" if applicable else "NOT APPLICABLE",
-        scope_key=(
-            "applicable_first_generation_rectangle"
-            if applicable else "dkna_combined_normal_or_moment"
-        ),
-        value=0.65 if applicable else None,
-        ok=True if applicable else None,
-        t_ed=15.0,
-        trd_c=50.0,
-        v_ed=35.0,
-        vrd_c=100.0,
-        torsion_ratio=0.3 if applicable else None,
-        shear_ratio=0.35 if applicable else None,
-        governs="shear" if applicable else None,
-        solid=True,
-        model_2023=False,
-        dk_na=True,
-        shear_method=codes.EC2_2005_DKNA.label,
-        torsion_method=codes.EC2_2005_DKNA.label,
-        n_ed=n_ed,
-        mx_ed=mx_ed,
-        my_ed=my_ed,
-        normal_or_moment_active=not applicable,
-        detailing_status="NOT RUN",
-        detailing_scope_key="separate_detailing_not_run",
-    )
-    out["torsion"] = torsion
-    inp = _inp()
-    inp.update(
-        torsion_on=True,
-        shear_on=True,
-        shear_method=codes.EC2_2005_DKNA.label,
-        torsion_method=codes.EC2_2005_DKNA.label,
-        P_pl=n_ed,
-        Mx_pl=mx_ed,
-        My_pl=my_ed,
-    )
+    inp, out = native_formula_631_cases(n_ed=n_ed, mx_ed=mx_ed, my_ed=my_ed)
+    assert out["torsion"]["min_reinf"]["applicable"] is applicable
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -7202,6 +7329,7 @@ def test_report_profiles_keep_dkna_requirement_across_other_631_scope_limits(
     scope_overrides,
     action,
     value,
+    native_formula_631_cases,
 ):
     inputs = dict(
         t_ed=15.0,
@@ -7224,24 +7352,17 @@ def test_report_profiles_keep_dkna_requirement_across_other_631_scope_limits(
     minimum = asdict(
         combined_core.minimum_reinforcement_screen_result(**inputs)
     )
-    out = _out()
-    torsion = _torsion_out()
-    torsion["min_reinf"] = minimum
-    out["torsion"] = torsion
-    inp = _inp()
-    inp.update(
-        torsion_on=True,
-        shear_on=inputs["shear_available"],
-        shear_method=inputs["shear_method"],
-        torsion_method=inputs["torsion_method"],
-        P_pl=inputs["n_ed"],
-        Mx_pl=inputs["mx_ed"],
-        My_pl=inputs["my_ed"],
+    inp, out = native_formula_631_cases(
+        scope_context=scope_context,
+        n_ed=inputs["n_ed"], mx_ed=inputs["mx_ed"], my_ed=inputs["my_ed"],
     )
+    native_minimum = out["torsion"]["min_reinf"]
+    assert native_minimum["status"] == minimum["status"]
+    assert native_minimum["scope_key"] == minimum["scope_key"]
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -7293,48 +7414,29 @@ def test_report_profiles_publish_formula_631_scope_without_false_sufficiency(
     status,
     reason,
     note,
+    native_formula_631_cases,
 ):
-    out = _out()
-    t = _torsion_out()
-    t["min_reinf"] = dict(
-        applicable=False,
-        status=status,
-        scope_key=reason,
-        value=None,
-        ok=None,
-        t_ed=40.0,
-        trd_c=26.435,
-        v_ed=30.0 if reason != "shear_resistance_unavailable" else None,
-        vrd_c=136.0 if reason != "shear_resistance_unavailable" else None,
-        torsion_ratio=None,
-        shear_ratio=None,
-        governs=None,
-        solid=False,
-        model_2023=reason == "selected_2023_route",
-    )
-    out["torsion"] = t
-    inp = _inp()
-    inp.update(torsion_on=True, shear_on=True)
-    if reason == "selected_2023_route":
-        t["min_reinf"].update(
-            shear_method=codes.EC2_2023.label,
-            torsion_method=codes.EC2_2005_DKNA.label,
-        )
-        inp.update(
-            shear_method=codes.EC2_2023.label,
-            torsion_method=codes.EC2_2005_DKNA.label,
-        )
+    scope_context = {
+        "section_geometry": "nonrectangular",
+        "subdivided_section": "subdivided",
+        "selected_2023_route": "selected-2023",
+        "shear_resistance_unavailable": "unavailable-shear",
+    }[reason]
+    inp, out = native_formula_631_cases(scope_context=scope_context)
+    minimum = out["torsion"]["min_reinf"]
+    assert minimum["status"] == status
+    assert minimum["scope_key"] == reason
 
     txt = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
     )
 
     assert "6.31" in txt
-    assert "minimum-reinforcement screen" in txt.casefold()
+    assert re.search(r"minimum-\s*reinforcement screen", txt.casefold())
     assert status in txt
     assert note in txt
     assert "low-action condition satisfied" not in txt.casefold()
@@ -7546,6 +7648,7 @@ def _base_en_formula_628_governing_out():
 
 
 def _base_en_incomplete_failed_chord_out():
+    """Retain an explicitly uncapped 90/60 chord failure with incomplete faces."""
     combined = _base_en_combined_out()
     chord = combined["longitudinal"]
     chord.update(
@@ -7557,6 +7660,11 @@ def _base_en_incomplete_failed_chord_out():
         off_not_evaluated="not_solved",
         m_rd=60.0,
         util=1.50,
+        cap_shear_force=False,
+        capped=False,
+        mv_uncapped=20.0,
+        shear_headroom=0.0,
+        shear_term_selection="uncapped",
     )
     combined.update(
         longitudinal_candidates=[chord],
@@ -7568,12 +7676,6 @@ def _base_en_incomplete_failed_chord_out():
             "reason": "required_longitudinal_chord_failed",
             "coverage_complete": False,
             "governing": chord,
-        },
-        torsion_longitudinal_assessment={
-            "status": "NOT ASSESSED",
-            "ok": None,
-            "reason": "longitudinal_torsion_reinforcement_not_verified",
-            "demand_ratio": 0.50,
         },
     )
     combined["overall_longitudinal_assessment"] = (
@@ -7805,7 +7907,66 @@ def _base_en_scheduler_combined_case(action, util, *, component):
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_base_en_publishes_physical_checks_without_dkna_artifacts(profile):
+@pytest.mark.xdist_group("native-member-report")
+def test_native_base_en_report_retains_physical_rows_without_dkna_aggregate(
+    native_base_en_report_case, profile, tmp_path,
+):
+    @result_presentation.publication_calculation_scope()
+    def check_report():
+        inp, out = copy.deepcopy(native_base_en_report_case)
+        original = pickle.dumps((inp, out))
+        assert result_presentation.combined_publication_evidence_is_current(
+            inp, out,
+        ) == (True, None)
+        combined = out["combined"]
+        assert combined["method"] == codes.EC2_2005.label
+        assert not combined.get("biaxial")
+        assert "dkna_sum" not in combined
+        assert "action_alone" not in combined
+        crushing = combined["crushing"]
+        assert crushing["value"] == pytest.approx(
+            crushing["t_ed"] / crushing["trd_max"]
+            + crushing["v_ed"] / crushing["vrd_max"]
+        )
+        stirrup = combined["transverse"]
+        assert stirrup["u_stirrup"] == pytest.approx(
+            stirrup["shear_fraction"] + stirrup["torsion_fraction"]
+        )
+        rows = [
+            row for row in result_presentation.multi_case_summary_rows(inp, out)
+            if str(row["overview_key"]).startswith("combined:")
+        ]
+        assert len(rows) == 3
+        assert any(row["status"] in {"PASS", "FAIL"} for row in rows)
+        pdf = _build_report_from_completed_payload(
+            {}, inp, out, figures=False, profile=profile,
+        )
+        (tmp_path / f"native-base-en-{profile}.pdf").write_bytes(pdf)
+        text = " ".join(_pdf_text(pdf).split())
+        for row in rows:
+            pattern = r"\s+".join(
+                re.escape(str(row[key])).replace(r"\-", r"-\s*")
+                for key in ("check", "case", "status", "result")
+            )
+            assert re.search(pattern, text), row
+        assert "Combined concrete compression strut" in text
+        assert "Combined closed stirrup" in text
+        assert "Combined longitudinal reinforcement" in text
+        assert "DK NA sum" not in text
+        assert "action-alone" not in text
+        assert "N+M+V+T" not in text
+        assert "max(N+M+T, N+V+T)" not in text
+        assert "Separate M/V route selected as a design assumption" not in text
+        if profile != "Brief":
+            assert "Supported Base-EN physical interactions" in text
+            assert "Concrete compression strut (6.29)" in text
+        assert pickle.dumps((inp, out)) == original
+
+    check_report()
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_base_en_2005_component_rendering_omits_dkna_artifacts(profile, tmp_path):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -7816,13 +7977,12 @@ def test_report_base_en_publishes_physical_checks_without_dkna_artifacts(profile
         torsion_on=True,
     )
     out = {"plastic": _out()["plastic"], "combined": _base_en_combined_out()}
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(
+        inp, out["combined"], profile,
     )
+    (tmp_path / f"retained-base-en-physical-components-{profile}.pdf").write_bytes(pdf)
+    assert len(actual_rows) >= 4
+    text = " ".join(_pdf_text(pdf).split())
 
     folded = text.casefold()
     assert "concrete compression strut" in folded
@@ -7841,8 +8001,9 @@ def test_report_base_en_publishes_physical_checks_without_dkna_artifacts(profile
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_base_en_separates_chord_and_overall_longitudinal_utilisation(
+def test_base_en_2005_component_rendering_separates_chord_and_overall_utilisation(
     profile,
+    tmp_path,
 ):
     inp = _inp()
     inp.update(
@@ -7856,13 +8017,27 @@ def test_report_base_en_separates_chord_and_overall_longitudinal_utilisation(
         "plastic": _out()["plastic"],
         "combined": _base_en_formula_628_governing_out(),
     }
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    component = next(
+        item for item in result_presentation.combined_physical_components(out["combined"])
+        if item["key"] == "longitudinal"
     )
+    assert component["status"] == "FAIL"
+    assert component["util"] == pytest.approx(2.0)
+    assert component["chord_status"] == "PASS"
+    assert component["chord_util"] == pytest.approx(0.5)
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(
+        inp, out["combined"], profile,
+    )
+    (tmp_path / f"retained-base-en-formula-628-governs-{profile}.pdf").write_bytes(pdf)
+    assert len(actual_rows) >= 4
+    assert next(
+        row for row in actual_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[:5] == (
+        "Combined longitudinal reinforcement", "PL-TEST", "FAIL",
+        "200.0 %", "<= 100 %",
+    )
+    text = " ".join(_pdf_text(pdf).split())
 
     assert re.search(
         r"Combined longitudinal reinforcement\s+PL-TEST\s+FAIL\s+200[.,]0\s*%",
@@ -7879,7 +8054,9 @@ def test_report_base_en_separates_chord_and_overall_longitudinal_utilisation(
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_known_failed_chord_survives_incomplete_face(profile):
+def test_base_en_2005_component_rendering_retains_failed_chord_with_incomplete_face(
+    profile, tmp_path,
+):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -7893,13 +8070,40 @@ def test_report_known_failed_chord_survives_incomplete_face(profile):
         "combined": _base_en_incomplete_failed_chord_out(),
     }
 
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    chord = out["combined"]["longitudinal"]
+    assert (chord["m_ed"], chord["mv"], chord["mt"], chord["m_total"], chord["m_rd"]) == (
+        60.0, 20.0, 10.0, 90.0, 60.0,
     )
+    assert chord["cap_shear_force"] is False
+    assert chord["mv"] == chord["ftd_v"] * chord["z"]
+    assert chord["mt"] == chord["ftd_t"] * chord["z"] / 2.0
+    assert capacity._combined_longitudinal_candidate(chord) is not None
+    torsion = out["combined"]["torsion_longitudinal_assessment"]
+    assert torsion["status"] == "NOT ASSESSED"
+    assert torsion["reason"] == "longitudinal_torsion_reinforcement_not_verified"
+    assert torsion["demand_ratio"] == pytest.approx(470.4 / 600.0)
+
+    component = next(
+        item for item in result_presentation.combined_physical_components(out["combined"])
+        if item["key"] == "longitudinal"
+    )
+    assert component["status"] == "FAIL"
+    assert component["util"] == pytest.approx(1.5)
+    assert component["chord_status"] == "FAIL"
+    assert component["chord_util"] == pytest.approx(1.5)
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(
+        inp, out["combined"], profile,
+    )
+    (tmp_path / f"retained-base-en-incomplete-failed-chord-{profile}.pdf").write_bytes(pdf)
+    assert len(actual_rows) >= 4
+    assert next(
+        row for row in actual_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[:5] == (
+        "Combined longitudinal reinforcement", "PL-TEST", "FAIL",
+        "150.0 %", "<= 100 %",
+    )
+    text = " ".join(_pdf_text(pdf).split())
 
     assert re.search(
         r"Combined longitudinal reinforcement\s+PL-TEST\s+FAIL\s+150[.,]0\s*%",
@@ -7910,6 +8114,36 @@ def test_report_known_failed_chord_survives_incomplete_face(profile):
         assert re.search(r"150[.,]0\s*%\s*FAIL", text)
         assert "Overall longitudinal reinforcement assessment: 150.0 % FAIL" in text
         assert "Governing check: combined M + V + T tension chord" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_base_en_2005_component_rendering_rejects_ambiguous_shear_cap(profile, tmp_path):
+    inp = _inp()
+    inp.update(
+        mode="Plastic", combined_on=True, combined_method=codes.EC2_2005.label,
+        shear_on=True, torsion_on=True,
+    )
+    combined = _base_en_incomplete_failed_chord_out()
+    positive_pdf, positive_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-explicit-uncapped-{profile}.pdf").write_bytes(positive_pdf)
+    assert next(
+        row for row in positive_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[2:4] == ("FAIL", "150.0 %")
+    # The old 60 + 20 + 10 = 90 kNm / 60 kNm vector is ambiguous without
+    # its explicit uncapped choice, since the available shear headroom is zero.
+    combined["longitudinal"].pop("cap_shear_force")
+    assert capacity._combined_longitudinal_candidate(combined["longitudinal"]) is None
+    assert capacity.combined_longitudinal_assessment(combined)["status"] == "NOT ASSESSED"
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-ambiguous-cap-{profile}.pdf").write_bytes(pdf)
+    assert next(
+        row for row in actual_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[2:4] == ("NOT ASSESSED", "-")
+    text = " ".join(_pdf_text(pdf).split())
+    assert re.search(r"FAIL\s+150[.,]0\s*%", text) is None
+    assert re.search(r"150[.,]0\s*%\s*FAIL", text) is None
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
@@ -7928,7 +8162,7 @@ def test_report_stale_2023_single_face_pass_is_not_assessed(profile):
     }
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -8154,6 +8388,67 @@ def _pub_h01_report_current_direct(
     return combined
 
 
+def _pub_h01_2005_component_unit_pdf(inp, combined, profile):
+    """Render retained 2005 component arithmetic and declared overview rows.
+
+    This is a formatting unit document, not a completed calculation report.
+    The normal publication provider is restored before component/PDF rendering.
+    """
+    assert combined["method"] == codes.EC2_2005.label
+    assert combined.get("longitudinal_model_2023") is not True
+    original = pickle.dumps((inp, combined))
+    components = result_presentation.combined_physical_components(combined)
+    rows = [
+        result_presentation._summary_row(
+            "Combined " + item["label"].lower(), "plastic", item["status"],
+            result_presentation._percent(item["util"]), "<= 100 %", item["util"],
+            "M-V-T Combined", item["note"], inp,
+            overview_key="combined:" + item["key"],
+        )
+        for item in components
+    ]
+    rows_before = pickle.dumps(rows)
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(
+        buffer, {}, inp, {}, figures=False, profile=profile,
+    )
+    builder._h1("Retained 2005 component formatting")
+    original_provider = result_presentation.multi_case_summary_rows
+    calls = []
+
+    def declared_rows(current_inp, current_out):
+        assert current_inp is builder._base_inp
+        assert current_out is builder._base_out
+        calls.append(True)
+        return copy.deepcopy(rows)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(result_presentation, "multi_case_summary_rows", declared_rows)
+        builder._results_overview()
+    assert result_presentation.multi_case_summary_rows is original_provider
+    assert calls == [True]
+    tables = [item for item in builder.flow
+              if getattr(item, "_sector_results_overview", False)]
+    assert len(tables) == 1
+    actual_rows = [
+        tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+              for cell in row)
+        for row in tables[0]._cellvalues
+    ]
+    assert sum(row[0] == "Combined longitudinal reinforcement"
+               for row in actual_rows) == 1
+    if profile != "Brief":
+        builder._combined_base_en_direction(combined)
+    sector_report.SimpleDocTemplate(
+        buffer, pagesize=sector_report.A4,
+        leftMargin=20 * sector_report.mm, rightMargin=20 * sector_report.mm,
+        topMargin=25 * sector_report.mm, bottomMargin=20 * sector_report.mm,
+    ).build(list(builder.flow))
+    assert pickle.dumps(rows) == rows_before
+    assert pickle.dumps((inp, combined)) == original
+    return buffer.getvalue(), actual_rows
+
+
 def _pub_h01_report_zero_formula_628():
     return {
         "status": "PASS",
@@ -8270,16 +8565,16 @@ def _pub_h01_report_four_face_torsion():
 @pytest.mark.parametrize(
     "attack",
     [
-        "headroom_cap",
         "formula_628",
         "owner_liveness",
         "subtube_liveness",
         "array_status",
         "tube_overflow",
-        "face_overflow",
     ],
 )
-def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack):
+def test_pub_h01_2005_component_rendering_rejects_stale_longitudinal_operands(
+    profile, attack, tmp_path,
+):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -8298,165 +8593,91 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
     ):
         combined.pop(key, None)
 
-    if attack in {
-        "formula_628",
-        "owner_liveness",
-        "subtube_liveness",
-        "array_status",
-        "tube_overflow",
-    }:
-        direct = {
-            "valid": True,
-            "status": "PASS",
-            "ok": True,
-            "axis": "x",
-            "tension_low": True,
-            "conditional": True,
-            "biaxial": False,
-            "off_util": 0.0,
-            "off_not_evaluated": None,
-            "m_ed": 40.0,
-            "mv": 10.0,
-            "mt": 0.0,
-            "m_total": 50.0,
-            "m_rd": 100.0,
-            "ftd_v": 40.0,
-            "ftd_t": 0.0,
-            "z": 0.25,
-            "util": 0.50,
-            "capped": False,
-            "cap_shear_force": True,
-            "mv_uncapped": 10.0,
-            "shear_headroom": 60.0,
-            "shear_term_selection": "uncapped",
-        }
-        stale_formula = _pub_h01_report_zero_formula_628()
-        if attack == "formula_628":
+    direct = {
+        "valid": True,
+        "status": "PASS",
+        "ok": True,
+        "axis": "x",
+        "tension_low": True,
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "m_ed": 40.0,
+        "mv": 10.0,
+        "mt": 0.0,
+        "m_total": 50.0,
+        "m_rd": 100.0,
+        "ftd_v": 40.0,
+        "ftd_t": 0.0,
+        "z": 0.25,
+        "util": 0.50,
+        "capped": False,
+        "cap_shear_force": True,
+        "mv_uncapped": 10.0,
+        "shear_headroom": 60.0,
+        "shear_term_selection": "uncapped",
+    }
+    stale_formula = _pub_h01_report_zero_formula_628()
+    if attack == "formula_628":
+        stale_formula.update(
+            required_asl_mm2=500.0,
+            required_design_force_kn=200.0,
+            provided_design_force_kn=100.0,
+            area_sufficient=False,
+        )
+    elif attack in {"owner_liveness", "subtube_liveness"}:
+        direct.update(
+            ftd_t=317.693568,
+            mt=39.711696,
+            m_total=89.711696,
+            util=0.89711696,
+        )
+        combined.update(
+            t_ed=0.0 if attack == "owner_liveness" else 40.0,
+            asl_torsion=0.0 if attack == "owner_liveness" else 500.0,
+            torsion_subdivided=attack == "subtube_liveness",
+            torsion_subtubes=(
+                (
+                    {"asl_req": 200.0, "t_ed": 40.0},
+                    {"asl_req": 300.0, "t_ed": 0.0},
+                )
+                if attack == "subtube_liveness"
+                else None
+            ),
+        )
+        if attack == "subtube_liveness":
+            stale_formula = _pub_h01_report_zero_formula_628()
             stale_formula.update(
+                status="NOT ASSESSED",
+                ok=None,
+                reason="longitudinal_torsion_reinforcement_not_verified",
                 required_asl_mm2=500.0,
                 required_design_force_kn=200.0,
-                provided_design_force_kn=100.0,
-                area_sufficient=False,
+                demand_ratio=0.50,
+                required_by_tube_mm2=(200.0, 300.0),
             )
-        elif attack in {"owner_liveness", "subtube_liveness"}:
-            direct.update(
-                ftd_t=317.693568,
-                mt=39.711696,
-                m_total=89.711696,
-                util=0.89711696,
-            )
-            combined.update(
-                t_ed=0.0 if attack == "owner_liveness" else 40.0,
-                asl_torsion=0.0 if attack == "owner_liveness" else 500.0,
-                torsion_subdivided=attack == "subtube_liveness",
-                torsion_subtubes=(
-                    (
-                        {"asl_req": 200.0, "t_ed": 40.0},
-                        {"asl_req": 300.0, "t_ed": 0.0},
-                    )
-                    if attack == "subtube_liveness"
-                    else None
-                ),
-            )
-            if attack == "subtube_liveness":
-                stale_formula = _pub_h01_report_zero_formula_628()
-                stale_formula.update(
-                    status="NOT ASSESSED",
-                    ok=None,
-                    reason="longitudinal_torsion_reinforcement_not_verified",
-                    required_asl_mm2=500.0,
-                    required_design_force_kn=200.0,
-                    demand_ratio=0.50,
-                    required_by_tube_mm2=(200.0, 300.0),
-                )
-        else:
-            if attack == "array_status":
-                stale_formula["status"] = np.array(["PASS"])
-            else:
-                stale_formula["required_by_tube_mm2"] = (10**1000,)
-            combined.update(
-                t_ed=0.0,
-                asl_torsion=0.0,
-                torsion_subdivided=attack == "tube_overflow",
-                torsion_subtubes=(
-                    ({"asl_req": 0.0, "t_ed": 0.0},)
-                    if attack == "tube_overflow"
-                    else None
-                ),
-            )
-        combined.update(
-            longitudinal_model_2023=False,
-            longitudinal=direct,
-            longitudinal_all_conditional=True,
-            torsion_longitudinal_assessment=stale_formula,
-        )
     else:
-        ftd_v = 300.0 if attack == "headroom_cap" else 40.0
-        common = {
-            "valid": True,
-            "status": "PASS",
-            "ok": True,
-            "role": "shear_axis",
-            "axis": "x",
-            "conditional": True,
-            "biaxial": False,
-            "off_util": 0.0,
-            "off_not_evaluated": None,
-            "m_rd": 100.0,
-            "ftd_v": ftd_v,
-            "ftd_t": 0.0,
-            "z": 0.25,
-            "mt": 0.0,
-            "cap_shear_force": False,
-            "has_torsion": False,
-            "gets_shift": True,
-            "flexural_tension_low": True,
-        }
-        tension = {
-            **common,
-            "tension_low": True,
-            "chord_role": "flexural_tension",
-            "chord_formula": "8.51",
-            "m_ed": 40.0,
-            "face_m_ed_signed": (
-                10**1000 if attack == "face_overflow" else 40.0
-            ),
-            "mv": 60.0 if attack == "headroom_cap" else 10.0,
-            "m_total": 100.0 if attack == "headroom_cap" else 50.0,
-            "util": 1.0 if attack == "headroom_cap" else 0.50,
-            "capped": attack == "headroom_cap",
-        }
-        compression_mv = ftd_v * 0.25
-        compression_total = max(-20.0 + compression_mv, 0.0)
-        compression = {
-            **common,
-            "tension_low": False,
-            "chord_role": "flexural_compression",
-            "chord_formula": "8.52",
-            "m_ed": 20.0,
-            "face_m_ed_signed": -20.0,
-            "mv": compression_mv,
-            "m_total": compression_total,
-            "util": compression_total / 100.0,
-            "capped": False,
-        }
+        if attack == "array_status":
+            stale_formula["status"] = np.array(["PASS"])
+        else:
+            stale_formula["required_by_tube_mm2"] = (10**1000,)
         combined.update(
-            longitudinal_model_2023=True,
-            longitudinal=tension,
-            longitudinal_candidates=[tension, compression],
-            governing_longitudinal=tension,
-            longitudinal_assessment={
-                "status": "PASS",
-                "ok": True,
-                "util": 1.0,
-                "reason": "required_longitudinal_chords_satisfied",
-                "coverage_complete": True,
-                "governing": tension,
-            },
-            torsion_longitudinal_assessment=(
-                _pub_h01_report_zero_formula_628()
+            t_ed=0.0,
+            asl_torsion=0.0,
+            torsion_subdivided=attack == "tube_overflow",
+            torsion_subtubes=(
+                ({"asl_req": 0.0, "t_ed": 0.0},)
+                if attack == "tube_overflow"
+                else None
             ),
         )
+    combined.update(
+        longitudinal_model_2023=False,
+        longitudinal=direct,
+        longitudinal_all_conditional=True,
+        torsion_longitudinal_assessment=stale_formula,
+    )
 
     combined["overall_longitudinal_assessment"] = (
         capacity.combined_longitudinal_assessment(combined)
@@ -8464,17 +8685,20 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
     assert combined["overall_longitudinal_assessment"]["status"] == (
         "NOT ASSESSED"
     )
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {},
-                inp,
-                {"plastic": _out()["plastic"], "combined": combined},
-                figures=False,
-                profile=profile,
-            )
-        ).split()
+    # Preserve the original compound payloads as retained formatting units.
+    # Isolated positive-to-negative controls are exercised in the next test.
+    component = next(
+        item for item in result_presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
     )
+    assert component["status"] == "NOT ASSESSED"
+    assert component["util"] is None
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-compound-{attack}-{profile}.pdf").write_bytes(pdf)
+    assert next(
+        row for row in actual_rows if row[0] == "Combined longitudinal reinforcement"
+    )[1:4] == ("PL-TEST", "NOT ASSESSED", "-")
+    text = " ".join(_pdf_text(pdf).split())
 
     assert re.search(
         r"Combined longitudinal reinforcement\s+PL-TEST\s+"
@@ -8485,11 +8709,537 @@ def test_report_pub_h01_stale_longitudinal_operands_fail_closed(profile, attack)
         r"Combined longitudinal reinforcement\s+PL-TEST\s+PASS",
         text,
     ) is None
-    if attack == "headroom_cap" and profile in {"Standard", "Audit"}:
-        assert "Longitudinal chord assessment: NOT ASSESSED" in text
-        assert "Longitudinal chord assessment: PASS" not in text
     assert re.search(r"\b(?:nan|inf|-inf)\b", text.casefold()) is None
 
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize(
+    "attack", ["formula_628", "owner_liveness", "subtube_liveness", "array_status", "tube_overflow"]
+)
+def test_pub_h01_2005_component_rendering_binds_operand_poison_controls(
+    profile, attack, tmp_path,
+):
+    """Bind retained component transitions; no native publication is claimed."""
+    inp = _inp()
+    inp.update(
+        mode="Plastic", combined_on=True, combined_method=codes.EC2_2005.label,
+        shear_on=True, torsion_on=True,
+    )
+    combined = _base_en_combined_out()
+    for key in (
+        "governing_longitudinal", "longitudinal_assessment", "longitudinal_candidates",
+        "longitudinal_fallback", "overall_longitudinal_assessment",
+    ):
+        combined.pop(key, None)
+    direct = {
+        "valid": True, "status": "PASS", "ok": True,
+        "axis": "x", "tension_low": True, "conditional": True,
+        "biaxial": False, "off_util": 0.0, "off_not_evaluated": None,
+        "m_ed": 40.0, "mv": 10.0, "mt": 0.0, "m_total": 50.0,
+        "m_rd": 100.0, "ftd_v": 40.0, "ftd_t": 0.0, "z": 0.25,
+        "util": 0.50, "capped": False, "cap_shear_force": True,
+        "mv_uncapped": 10.0, "shear_headroom": 60.0,
+        "shear_term_selection": "uncapped",
+    }
+    formula = _pub_h01_report_zero_formula_628()
+    combined.update(
+        longitudinal_model_2023=False, longitudinal=direct,
+        longitudinal_all_conditional=True, t_ed=0.0, asl_torsion=0.0,
+        torsion_subdivided=False, torsion_subtubes=None,
+        torsion_longitudinal_assessment=formula,
+    )
+    expected_status, expected_util, expected_percent = "PASS", 0.50, "50.0 %"
+    if attack == "tube_overflow":
+        combined.update(
+            torsion_subdivided=True,
+            torsion_subtubes=({"asl_req": 0.0, "t_ed": 0.0},),
+        )
+        formula["required_by_tube_mm2"] = (0.0,)
+    elif attack == "subtube_liveness":
+        direct.update(
+            ftd_t=317.693568, mt=39.711696, m_total=89.711696, util=0.89711696,
+        )
+        combined.update(
+            t_ed=40.0, asl_torsion=500.0, torsion_subdivided=True,
+            torsion_subtubes=(
+                {"asl_req": 200.0, "t_ed": 16.0},
+                {"asl_req": 300.0, "t_ed": 24.0},
+            ),
+        )
+        formula.update(
+            status="FAIL", ok=False,
+            reason="longitudinal_torsion_reinforcement_insufficient",
+            required_asl_mm2=500.0, required_design_force_kn=200.0,
+            provided_design_force_kn=100.0, demand_ratio=2.0,
+            area_sufficient=False, required_by_tube_mm2=(200.0, 300.0),
+        )
+        assert sum(tube["t_ed"] for tube in combined["torsion_subtubes"]) == 40.0
+        assert sum(tube["asl_req"] for tube in combined["torsion_subtubes"]) == 500.0
+        expected_status, expected_util, expected_percent = "FAIL", 2.0, "200.0 %"
+
+    assert direct["m_total"] == pytest.approx(40.0 + 10.0 + direct["mt"])
+    assert direct["mt"] == pytest.approx(direct["ftd_t"] * 0.25 / 2.0)
+    assert direct["util"] == pytest.approx(direct["m_total"] / 100.0)
+    assert formula["required_design_force_kn"] == pytest.approx(
+        formula["required_asl_mm2"] * 400.0 / 1000.0
+    )
+    def formula_evidence():
+        return capacity.validated_torsion_longitudinal_assessment(
+            formula,
+            owner={
+                "asl_req": combined["asl_torsion"], "t_ed": combined["t_ed"],
+                "subdivided": combined["torsion_subdivided"],
+                "subtubes": combined["torsion_subtubes"],
+            },
+        )
+
+    assert formula_evidence()["evidence_consistent"] is True
+    assert capacity._combined_longitudinal_candidate(direct) is direct
+    positive = capacity.combined_longitudinal_assessment(combined)
+    assert positive["status"] == expected_status
+    assert positive["util"] == pytest.approx(expected_util)
+    assert positive["chord_status"] == "PASS"
+    assert positive["chord_util"] == pytest.approx(direct["util"])
+    positive_pdf, positive_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"operand-control-positive-{attack}-{profile}.pdf").write_bytes(positive_pdf)
+    assert next(
+        row for row in positive_rows if row[0] == "Combined longitudinal reinforcement"
+    )[1:4] == ("PL-TEST", expected_status, expected_percent)
+    positive_text = " ".join(_pdf_text(positive_pdf).split())
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+" + expected_status
+        + r"\s+" + re.escape(expected_percent), positive_text,
+    )
+
+    before_poison = copy.deepcopy(combined)
+    if attack == "formula_628":
+        # Only the retained Formula (6.28) mapping changes. Its stale status
+        # and ratio conflict with the changed force/area operands.
+        formula.update(
+            required_asl_mm2=500.0, required_design_force_kn=200.0,
+            provided_design_force_kn=100.0, area_sufficient=False,
+        )
+    elif attack == "owner_liveness":
+        # This chord remains arithmetically coherent, but its torsion demand
+        # has no live owner. The zero-owner Formula (6.28) stays coherent.
+        direct.update(
+            ftd_t=317.693568, mt=39.711696, m_total=89.711696, util=0.89711696,
+        )
+        assert capacity._combined_longitudinal_candidate(direct) is direct
+    elif attack == "subtube_liveness":
+        combined["torsion_subtubes"][0]["t_ed"] = 40.0
+        combined["torsion_subtubes"][1]["t_ed"] = 0.0
+        assert sum(tube["t_ed"] for tube in combined["torsion_subtubes"]) == 40.0
+        assert sum(tube["asl_req"] for tube in combined["torsion_subtubes"]) == 500.0
+    elif attack == "array_status":
+        formula["status"] = np.array(["PASS"])
+    else:
+        formula["required_by_tube_mm2"] = (10**1000,)
+    changed_keys = {
+        key for key in combined
+        if pickle.dumps(combined[key]) != pickle.dumps(before_poison[key])
+    }
+    assert changed_keys == {
+        "longitudinal" if attack == "owner_liveness"
+        else "torsion_subtubes" if attack == "subtube_liveness"
+        else "torsion_longitudinal_assessment"
+    }
+    negative = capacity.combined_longitudinal_assessment(combined)
+    assert negative["status"] == "NOT ASSESSED"
+    assert negative["util"] is None
+    assert capacity._combined_longitudinal_candidate(direct) is direct
+    if attack == "owner_liveness":
+        assert formula_evidence()["evidence_consistent"] is True
+        assert negative["chord_status"] == "NOT ASSESSED"
+        assert negative["torsion_status"] == "PASS"
+    else:
+        assert formula_evidence()["evidence_consistent"] is False
+        assert negative["chord_status"] == "PASS"
+        assert negative["torsion_status"] == "NOT ASSESSED"
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"operand-control-negative-{attack}-{profile}.pdf").write_bytes(pdf)
+    assert next(
+        row for row in actual_rows if row[0] == "Combined longitudinal reinforcement"
+    )[1:4] == ("PL-TEST", "NOT ASSESSED", "-")
+    text = " ".join(_pdf_text(pdf).split())
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+NOT ASSESSED\s+-", text,
+    )
+    assert re.search(
+        r"Combined longitudinal reinforcement\s+PL-TEST\s+(?:PASS|FAIL)", text,
+    ) is None
+    assert re.search(r"\b(?:nan|inf|-inf)\b", text.casefold()) is None
+
+
+@pytest.mark.parametrize("attack", ["headroom_cap", "face_overflow"])
+def test_retained_2023_chord_compound_operands_fail_closed(attack):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        combined_on=True,
+        combined_method=codes.EC2_2005.label,
+        shear_on=True,
+        torsion_on=True,
+    )
+    combined = _base_en_combined_out()
+    for key in (
+        "governing_longitudinal",
+        "longitudinal_assessment",
+        "longitudinal_candidates",
+        "longitudinal_fallback",
+        "overall_longitudinal_assessment",
+    ):
+        combined.pop(key, None)
+    ftd_v = 300.0 if attack == "headroom_cap" else 40.0
+    common = {
+        "valid": True,
+        "status": "PASS",
+        "ok": True,
+        "role": "shear_axis",
+        "axis": "x",
+        "conditional": True,
+        "biaxial": False,
+        "off_util": 0.0,
+        "off_not_evaluated": None,
+        "m_rd": 100.0,
+        "ftd_v": ftd_v,
+        "ftd_t": 0.0,
+        "z": 0.25,
+        "mt": 0.0,
+        "cap_shear_force": False,
+        "has_torsion": False,
+        "gets_shift": True,
+        "flexural_tension_low": True,
+    }
+    tension = {
+        **common,
+        "tension_low": True,
+        "chord_role": "flexural_tension",
+        "chord_formula": "8.51",
+        "m_ed": 40.0,
+        "face_m_ed_signed": (
+            10**1000 if attack == "face_overflow" else 40.0
+        ),
+        "mv": 60.0 if attack == "headroom_cap" else 10.0,
+        "m_total": 100.0 if attack == "headroom_cap" else 50.0,
+        "util": 1.0 if attack == "headroom_cap" else 0.50,
+        "capped": attack == "headroom_cap",
+    }
+    compression_mv = ftd_v * 0.25
+    compression_total = max(-20.0 + compression_mv, 0.0)
+    compression = {
+        **common,
+        "tension_low": False,
+        "chord_role": "flexural_compression",
+        "chord_formula": "8.52",
+        "m_ed": 20.0,
+        "face_m_ed_signed": -20.0,
+        "mv": compression_mv,
+        "m_total": compression_total,
+        "util": compression_total / 100.0,
+        "capped": False,
+    }
+    combined.update(
+        longitudinal_model_2023=True,
+        longitudinal=tension,
+        longitudinal_candidates=[tension, compression],
+        governing_longitudinal=tension,
+        longitudinal_assessment={
+            "status": "PASS",
+            "ok": True,
+            "util": 1.0,
+            "reason": "required_longitudinal_chords_satisfied",
+            "coverage_complete": True,
+            "governing": tension,
+        },
+        torsion_longitudinal_assessment=(
+            _pub_h01_report_zero_formula_628()
+        ),
+    )
+    combined["overall_longitudinal_assessment"] = (
+        capacity.combined_longitudinal_assessment(combined)
+    )
+    assert combined["overall_longitudinal_assessment"]["status"] == (
+        "NOT ASSESSED"
+    )
+
+
+def _pub_h01_2023_retained_pair(*, ftd_v=40.0, m_rd=100.0):
+    """Complete retained 8.51/8.52 operands for canonical validation units."""
+    combined = _pub_h01_report_current_direct(
+        "none_container", model_2023=True, child_fails=False,
+    )
+    tension = combined["longitudinal"]
+    tension_total = 40.0 + ftd_v * 0.25
+    tension_util = tension_total / m_rd
+    tension.update(
+        ftd_v=ftd_v, mv=ftd_v * 0.25, m_total=tension_total,
+        m_rd=m_rd, util=tension_util, capped=False,
+        status="PASS" if tension_util <= 1.0 else "FAIL", ok=tension_util <= 1.0,
+    )
+    compression_total = max(-20.0 + ftd_v * 0.25, 0.0)
+    compression_util = compression_total / m_rd
+    compression = {
+        **tension, "tension_low": False, "chord_role": "flexural_compression",
+        "chord_formula": "8.52", "m_ed": 20.0, "face_m_ed_signed": -20.0,
+        "m_total": compression_total, "util": compression_util,
+        "status": "PASS" if compression_util <= 1.0 else "FAIL",
+        "ok": compression_util <= 1.0,
+    }
+    candidates = [tension, compression]
+    combined.update(
+        longitudinal_candidates=candidates, governing_longitudinal=tension,
+        longitudinal_all_conditional=True, longitudinal_fallback=None,
+        t_ed=0.0, asl_torsion=0.0, torsion_subdivided=False, torsion_subtubes=None,
+        torsion_longitudinal_assessment=_pub_h01_report_zero_formula_628(),
+        longitudinal_assessment=capacity.longitudinal_chord_assessment(
+            {"model_2023": True, "chord_candidates": candidates},
+            shear_axis="x", shear_tension_low=True, shear_live=True,
+            torsion_live=False, torsion_subdivided=False,
+        ),
+    )
+    combined.pop("overall_longitudinal_assessment", None)
+    assert combined["longitudinal_assessment"]["coverage_complete"] is True
+    assert all(capacity._combined_longitudinal_candidate(item) is item for item in candidates)
+    return combined
+
+
+@pytest.mark.parametrize(
+    "child_state",
+    ["missing_list", "none_sibling", "malformed_status", "none_container", "empty_list", "mapping_container"],
+)
+def test_retained_2023_chord_failure_survives_incomplete_siblings(child_state):
+    combined = _pub_h01_report_current_direct(child_state, model_2023=True)
+    before = pickle.dumps(combined)
+    direct = combined["longitudinal"]
+    assert direct["chord_formula"] == "8.51"
+    assert (direct["m_ed"], direct["mv"], direct["mt"], direct["m_total"]) == (40.0, 10.0, 0.0, 50.0)
+    assert direct["ftd_v"] * direct["z"] == 10.0
+    assert direct["m_total"] / direct["m_rd"] == pytest.approx(1.2392531643)
+    assert direct["status"] == "FAIL" and direct["ok"] is False
+    assert combined["overall_longitudinal_assessment"]["status"] == "NOT ASSESSED"
+    assert combined["overall_longitudinal_assessment"]["util"] is None
+    actual = capacity.combined_longitudinal_assessment(combined)
+    assert actual["status"] == "FAIL" and actual["ok"] is False
+    assert actual["util"] == pytest.approx(1.2392531643)
+    assert actual["governing"] is direct
+    assert actual["governing_source"] == "combined_chord"
+    assert actual["coverage_complete"] is False
+    assert math.isfinite(actual["util"])
+    # All profile-specific 123.9%/FAIL presentation assertions remain in
+    # test_pub_h01_2005_component_rendering_retains_failure_with_incomplete_siblings.
+    assert result_presentation._percent(actual["util"]) == "123.9 %"
+    assert pickle.dumps(combined) == before
+
+
+def test_retained_2023_chord_incomplete_container_never_promotes_pass():
+    combined = _pub_h01_2023_retained_pair(m_rd=62.5)
+    positive = capacity.combined_longitudinal_assessment(combined)
+    assert positive["status"] == "PASS" and positive["ok"] is True
+    assert positive["util"] == pytest.approx(0.80)
+    assert positive["coverage_complete"] is True
+    assert [item["util"] for item in combined["longitudinal_candidates"]] == [0.80, 0.0]
+    original_direct = pickle.dumps(combined["longitudinal"])
+    combined["longitudinal_candidates"] = None
+    actual = capacity.combined_longitudinal_assessment(combined)
+    assert actual["status"] == "NOT ASSESSED" and actual["ok"] is None
+    assert actual["util"] is None and actual["coverage_complete"] is False
+    assert actual["chord_status"] == "NOT ASSESSED"
+    assert pickle.dumps(combined["longitudinal"]) == original_direct
+    # Preserve the original compound retained case as a separate invariant.
+    original = _pub_h01_report_current_direct(
+        "none_container", model_2023=True, child_fails=False,
+    )
+    original_assessment = capacity.combined_longitudinal_assessment(original)
+    assert original_assessment["status"] == "NOT ASSESSED"
+    assert original_assessment["util"] is None
+
+
+@pytest.mark.parametrize("attack", ["headroom_cap", "face_overflow"])
+def test_retained_2023_chord_arithmetic_rejects_targeted_poison(attack):
+    combined = _pub_h01_2023_retained_pair(ftd_v=300.0 if attack == "headroom_cap" else 40.0)
+    tension, compression = combined["longitudinal_candidates"]
+    positive = capacity.combined_longitudinal_assessment(combined)
+    if attack == "headroom_cap":
+        assert (tension["mv"], tension["m_total"], tension["util"]) == (75.0, 115.0, 1.15)
+        assert (compression["m_total"], compression["util"]) == (55.0, 0.55)
+        assert positive["status"] == "FAIL" and positive["util"] == pytest.approx(1.15)
+    else:
+        assert (tension["mv"], tension["m_total"], tension["util"]) == (10.0, 50.0, 0.50)
+        assert (compression["m_total"], compression["util"]) == (0.0, 0.0)
+        assert positive["status"] == "PASS" and positive["util"] == pytest.approx(0.50)
+    assert positive["coverage_complete"] is True
+    assert positive["governing"] is tension
+    assert tension["chord_formula"] == "8.51"
+    assert compression["chord_formula"] == "8.52"
+    sibling_before = pickle.dumps(compression)
+    formula_before = pickle.dumps(combined["torsion_longitudinal_assessment"])
+    if attack == "headroom_cap":
+        tension.update(mv=60.0, m_total=100.0, util=1.0, status="PASS", ok=True, capped=True)
+        combined["longitudinal_assessment"].update(
+            status="PASS", ok=True, util=1.0, reason="required_longitudinal_chords_satisfied",
+        )
+        assert combined["longitudinal_assessment"]["governing"] is tension
+    else:
+        tension["face_m_ed_signed"] = 10**1000
+    assert combined["governing_longitudinal"] is tension
+    assert combined["longitudinal"] is tension
+    assert capacity._combined_longitudinal_candidate(tension) is None
+    assert capacity._combined_longitudinal_candidate(compression) is compression
+    assert compression["face_m_ed_signed"] == -20.0
+    assert pickle.dumps(compression) == sibling_before
+    assert pickle.dumps(combined["torsion_longitudinal_assessment"]) == formula_before
+    actual = capacity.combined_longitudinal_assessment(combined)
+    assert actual["status"] == "NOT ASSESSED"
+    assert actual["util"] is None and actual["chord_util"] is None
+    assert actual["chord_status"] == "NOT ASSESSED" and actual["torsion_status"] == "PASS"
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.xdist_group("native-member-report")
+def test_native_base_en_report_rejects_unsupported_2023_combined_marker(
+    native_base_en_report_case, profile, tmp_path,
+):
+    @result_presentation.publication_calculation_scope()
+    def check_reports():
+        inp, out = copy.deepcopy(native_base_en_report_case)
+        original = pickle.dumps((inp, out))
+        combined = out["combined"]
+        assert out["plastic_cases"][0]["results"]["combined"] is combined
+        signature = tuple(out["plastic_cases"][0]["signature"])
+        contexts = result_presentation._worked_case_contexts(inp, out, "combined")
+        selected_contexts = [item for item in contexts if item[0] == "PL-01"]
+        assert len(selected_contexts) == 1
+        assert selected_contexts[0][2]["combined"] is combined
+        assert selected_contexts[0][3] is True
+        case_inp, case_out = selected_contexts[0][1:3]
+        assert result_presentation.combined_publication_evidence_is_current(case_inp, case_out) == (True, None)
+        assert result_presentation.combined_bending_assessment_blocker(case_out, case_inp) is None
+        assert result_presentation.combined_publication_scope_note(combined) is None
+        assert result_presentation.combined_publication_evidence_is_current(inp, out) == (True, None)
+        all_positive_rows = result_presentation.multi_case_summary_rows(inp, out)
+        positive_rows = [
+            row for row in all_positive_rows
+            if str(row["overview_key"]).startswith("combined:")
+        ]
+        assert len(positive_rows) == 3
+        assert {row["case"] for row in positive_rows} == {"PL-01"}
+        assert any(row["status"] in {"PASS", "FAIL"} for row in positive_rows)
+        visible_positive = result_presentation.governing_result_rows(
+            result_presentation.governing_summary_rows(all_positive_rows)
+        )
+        unaffected_checks = [
+            row for row in visible_positive
+            if not str(row["overview_key"]).startswith("combined:")
+            and row["status"] in {"PASS", "FAIL"}
+            and row["util"] is not None and row["result"] != "-"
+        ]
+        assert unaffected_checks
+
+        def text_pattern(value):
+            return re.escape(str(value)).replace(r"\ ", r"\s+").replace(r"\-", r"-\s*")
+
+        def row_pattern(row, keys=("check", "case", "status", "result")):
+            return r"\s+".join(
+                text_pattern(row[key]) for key in keys
+            )
+
+        positive_pdf = _build_report_from_completed_payload({}, inp, out, figures=False, profile=profile)
+        (tmp_path / f"native-combined-scope-positive-{profile}.pdf").write_bytes(positive_pdf)
+        positive_text = " ".join(_pdf_text(positive_pdf).split())
+        assert all(re.search(row_pattern(row), positive_text) for row in positive_rows)
+        assert all(re.search(row_pattern(row), positive_text) for row in unaffected_checks)
+        if profile != "Brief":
+            assert "Supported Base-EN physical interactions" in positive_text
+        poisoned = copy.deepcopy(out)
+        candidate = poisoned["combined"]
+        assert poisoned["plastic_cases"][0]["results"]["combined"] is candidate
+        companions = {key: pickle.dumps(poisoned[key]) for key in ("plastic", "shear", "torsion")}
+        candidate_before = copy.deepcopy(candidate)
+        candidate["longitudinal_model_2023"] = True
+        assert {key for key in candidate if pickle.dumps(candidate[key]) != pickle.dumps(candidate_before.get(key))} == {"longitudinal_model_2023"}
+        assert all(pickle.dumps(poisoned[key]) == value for key, value in companions.items())
+        assert tuple(poisoned["plastic_cases"][0]["signature"]) == signature
+        poisoned_contexts = [
+            item for item in result_presentation._worked_case_contexts(inp, poisoned, "combined")
+            if item[0] == "PL-01"
+        ]
+        assert len(poisoned_contexts) == 1
+        assert poisoned_contexts[0][2]["combined"] is candidate
+        assert poisoned_contexts[0][3] is True
+        scope_note = (
+            "NOT ASSESSED: 2023 Combined bending, shear and torsion is outside "
+            "the supported release scope. Use the separate 2023 shear chord "
+            "check or a supported shared edition for Combined."
+        )
+        assert result_presentation.combined_publication_scope_note(candidate) == scope_note
+        assert result_presentation.combined_bending_assessment_blocker(poisoned, inp) == scope_note
+        assert result_presentation.combined_publication_evidence_is_current(inp, poisoned) == (False, scope_note)
+        poisoned_case_inp, poisoned_case_out = poisoned_contexts[0][1:3]
+        assert result_presentation.combined_bending_assessment_blocker(poisoned_case_out, poisoned_case_inp) == scope_note
+        assert result_presentation.combined_publication_evidence_is_current(poisoned_case_inp, poisoned_case_out) == (False, scope_note)
+        all_negative_rows = result_presentation.multi_case_summary_rows(inp, poisoned)
+        assert [row for row in all_negative_rows if not str(row["overview_key"]).startswith("combined:")] == [
+            row for row in all_positive_rows if not str(row["overview_key"]).startswith("combined:")
+        ]
+        blocked = [
+            row for row in all_negative_rows
+            if str(row["overview_key"]).startswith("combined:")
+        ]
+        assert len(blocked) == 1
+        target = blocked[0]
+        assert target["overview_key"] == "combined:physical"
+        assert target["case"] == "PL-01"
+        assert target["status"] == "NOT ASSESSED" and target["util"] is None
+        assert target["result"] == "-" and target["note"] == scope_note
+        frozen_poisoned = pickle.dumps(poisoned)
+        pdf = _build_report_from_completed_payload({}, inp, poisoned, figures=False, profile=profile)
+        (tmp_path / f"native-combined-scope-blocked-{profile}.pdf").write_bytes(pdf)
+        text = " ".join(_pdf_text(pdf).split())
+        source = str(target.get("source") or "").strip()
+        case_type = str(target.get("case_type") or "").strip()
+        source_note = (
+            "Source: " + source + "; " + scope_note if source not in {"", "-"}
+            else case_type + "; " + scope_note if case_type not in {"", "-"}
+            else scope_note
+        )
+        assert re.search(
+            row_pattern(target, ("check", "case", "status", "result", "criterion"))
+            + r"\s+" + text_pattern(source_note), text,
+        )
+        assert all(re.search(row_pattern(row), text) is None for row in positive_rows)
+        visible_rows = result_presentation.governing_result_rows(
+            result_presentation.governing_summary_rows(all_negative_rows)
+        )
+        assert all(row in visible_rows for row in unaffected_checks)
+        assert all(re.search(row_pattern(row), text) for row in unaffected_checks)
+        assert all(
+            re.search(row_pattern(row), text) for row in visible_rows
+            if not str(row["overview_key"]).startswith("combined:")
+        )
+        assert "Supported Base-EN physical interactions" not in text
+        if profile != "Brief":
+            assert re.search(
+                text_pattern("Combined Base-EN components: NOT ASSESSED. " + scope_note), text,
+            )
+        # Axis-parallel neutral axes have infinite intercepts in the
+        # unchanged Plastic chapter. The Combined poison must add none.
+        def nonfinite_contexts(document_text):
+            return [
+                document_text[max(0, match.start() - 80):match.end() + 80]
+                for match in re.finditer(r"\b(?:nan|inf|-inf)\b", document_text, re.IGNORECASE)
+            ]
+
+        positive_contexts = nonfinite_contexts(positive_text)
+        if profile == "Brief":
+            assert positive_contexts == []
+        else:
+            assert positive_contexts
+        assert nonfinite_contexts(text) == positive_contexts
+        assert pickle.dumps(poisoned) == frozen_poisoned
+        assert pickle.dumps((inp, out)) == original
+
+    check_reports()
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 def test_report_pub_h01_missing_off_axis_torsion_never_publishes_chord_pass(
@@ -8528,7 +9278,7 @@ def test_report_pub_h01_missing_off_axis_torsion_never_publishes_chord_pass(
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {},
                 inp,
                 {"plastic": _out()["plastic"], "combined": combined},
@@ -8554,9 +9304,10 @@ def test_report_pub_h01_missing_off_axis_torsion_never_publishes_chord_pass(
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 @pytest.mark.parametrize("parent_state", ["stale_mapping", "non_mapping"])
-def test_report_pub_h01_exact_longitudinal_failure_is_consistent(
+def test_pub_h01_2005_component_rendering_retains_exact_longitudinal_failure(
     profile,
     parent_state,
+    tmp_path,
 ):
     inp = _inp()
     inp.update(
@@ -8641,15 +9392,22 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(
     assert stale_overall["status"] == "FAIL"
     stale_overall["reason"] = "stale retained summary"
     combined["overall_longitudinal_assessment"] = stale_overall
-    out = {"plastic": _out()["plastic"], "combined": combined}
-
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    component = next(
+        item for item in result_presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
     )
+    assert component["status"] == "FAIL"
+    assert component["util"] == pytest.approx(1.2392531643)
+    pdf, overview_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-2005-{profile}-{parent_state}.pdf").write_bytes(pdf)
+    actual = next(row for row in overview_rows
+                  if row[0] == "Combined longitudinal reinforcement")
+    assert actual[:5] == (
+        "Combined longitudinal reinforcement", "PL-TEST", "FAIL",
+        "123.9 %", "<= 100 %",
+    )
+    assert actual[5].startswith("Source: Combination register C1;")
+    text = " ".join(_pdf_text(pdf).split())
 
     if profile == "Brief":
         assert re.search(
@@ -8670,6 +9428,81 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(
         assert "100.000 kNm" in text
 
 
+@pytest.mark.xdist_group("native-member-report")
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@result_presentation.publication_calculation_scope()
+def test_native_combined_report_rejects_incomplete_root_candidate_inventory(
+    native_member_report_cases, profile, tmp_path,
+):
+    """Keep native publication authority separate from retained row formatting."""
+    inp, out = copy.deepcopy(native_member_report_cases["two-face"])
+    original = pickle.dumps((inp, out))
+    assert result_presentation.combined_publication_evidence_is_current(inp, out) == (True, None)
+    assert out["plastic_cases"][0]["results"]["combined"] is out["combined"]
+    candidates = out["combined"]["longitudinal_candidates"]
+    assert len(candidates) == 4
+    assert {(item["axis"], item["tension_low"]) for item in candidates} == {
+        ("x", True), ("x", False), ("y", True), ("y", False),
+    }
+    failed = next(item for item in candidates if item["status"] == "FAIL")
+    assert (failed["axis"], failed["tension_low"]) == ("x", False)
+    assert failed["m_total"] / failed["m_rd"] == pytest.approx(failed["util"])
+    # Frozen native V=30 kN / T=180 kNm regression, separate from the 123.9% unit vector.
+    assert failed["util"] == pytest.approx(2.059941571055692)
+    rows = result_presentation.multi_case_summary_rows(inp, out)
+    target = next(row for row in rows
+                  if row.get("overview_key") == "combined:longitudinal")
+    assert (target["case"], target["status"], target["result"]) == (
+        "PL-01", "FAIL", "206.0 %",
+    )
+
+    def row_pattern(row):
+        return r"\s+".join(
+            re.escape(str(row[key])).replace(r"\ ", r"\s+").replace(r"\-", r"-\s*")
+            for key in ("check", "case", "status", "result")
+        )
+
+    pdf = _build_report_from_completed_payload({}, inp, out, figures=False, profile=profile)
+    (tmp_path / f"native-current-{profile}.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
+    assert re.search(row_pattern(target), text)
+    assert pickle.dumps((inp, out)) == original
+
+    incomplete = copy.deepcopy(out)
+    shear_before = pickle.dumps(incomplete["shear"])
+    root = incomplete["combined"]
+    root["longitudinal_candidates"] = list(root["longitudinal_candidates"])
+    removed = root["longitudinal_candidates"].pop()
+    assert (removed["axis"], removed["tension_low"], removed["status"]) == (
+        "y", False, "PASS",
+    )
+    assert len(root["longitudinal_candidates"]) == 3
+    assert pickle.dumps(incomplete["shear"]) == shear_before
+    # A retained failed child does not establish the missing publication inventory.
+    physical = next(item for item in result_presentation.combined_physical_components(root)
+                    if item["key"] == "longitudinal")
+    assert physical["status"] == "FAIL"
+    assert result_presentation.combined_publication_evidence_is_current(inp, incomplete) == (
+        False, "combined component evidence is unavailable",
+    )
+    blocked = [row for row in result_presentation.multi_case_summary_rows(inp, incomplete)
+               if str(row.get("overview_key", "")).startswith("combined")]
+    assert blocked
+    assert all(row["status"] == "NOT ASSESSED" and row["result"] == "-"
+               and row["util"] is None for row in blocked)
+    incomplete_before = pickle.dumps(incomplete)
+    pdf = _build_report_from_completed_payload(
+        {}, inp, incomplete, figures=False, profile=profile,
+    )
+    (tmp_path / f"native-incomplete-{profile}.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
+    assert all(re.search(row_pattern(row), text) for row in blocked)
+    assert not re.search(row_pattern(target), text)
+    assert "Governing combined worked example" not in text
+    assert pickle.dumps(incomplete) == incomplete_before
+    assert pickle.dumps((inp, out)) == original
+
+
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 @pytest.mark.parametrize(
     "child_state",
@@ -8682,11 +9515,10 @@ def test_report_pub_h01_exact_longitudinal_failure_is_consistent(
         "mapping_container",
     ],
 )
-@pytest.mark.parametrize("model_2023", [False, True], ids=["2005", "2023"])
-def test_report_pub_h01_current_failure_survives_incomplete_siblings(
+def test_pub_h01_2005_component_rendering_retains_failure_with_incomplete_siblings(
     profile,
     child_state,
-    model_2023,
+    tmp_path,
 ):
     inp = _inp()
     inp.update(
@@ -8698,17 +9530,28 @@ def test_report_pub_h01_current_failure_survives_incomplete_siblings(
     )
     combined = _pub_h01_report_current_direct(
         child_state,
-        model_2023=model_2023,
+        model_2023=False,
     )
-    out = {"plastic": _out()["plastic"], "combined": combined}
-
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    canonical = capacity.combined_longitudinal_assessment(combined)
+    assert canonical["status"] == "FAIL"
+    assert canonical["util"] == pytest.approx(1.2392531643)
+    component = next(
+        item
+        for item in result_presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
     )
+    assert component["status"] == "FAIL"
+    assert component["util"] == pytest.approx(1.2392531643)
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-sibling-{child_state}-{profile}.pdf").write_bytes(pdf)
+    assert next(
+        row for row in actual_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[:5] == (
+        "Combined longitudinal reinforcement", "PL-TEST", "FAIL",
+        "123.9 %", "<= 100 %",
+    )
+    text = " ".join(_pdf_text(pdf).split())
 
     if profile == "Brief":
         assert re.search(
@@ -8723,11 +9566,12 @@ def test_report_pub_h01_current_failure_survives_incomplete_siblings(
     assert "No valid longitudinal chord check" not in text
 
 
+
+
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-@pytest.mark.parametrize("model_2023", [False, True], ids=["2005", "2023"])
-def test_report_pub_h01_malformed_container_never_promotes_direct_pass(
+def test_pub_h01_2005_component_rendering_never_promotes_incomplete_direct_pass(
     profile,
-    model_2023,
+    tmp_path,
 ):
     inp = _inp()
     inp.update(
@@ -8739,18 +9583,29 @@ def test_report_pub_h01_malformed_container_never_promotes_direct_pass(
     )
     combined = _pub_h01_report_current_direct(
         "none_container",
-        model_2023=model_2023,
+        model_2023=False,
         child_fails=False,
     )
-    out = {"plastic": _out()["plastic"], "combined": combined}
-
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    # A retained direct PASS cannot establish complete chord coverage.
+    assert combined["longitudinal"]["status"] == "PASS"
+    assert combined["longitudinal"]["util"] == pytest.approx(0.80)
+    component = next(
+        item
+        for item in result_presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
     )
+    assert component["status"] == "NOT ASSESSED"
+    assert component["util"] is None
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-incomplete-pass-{profile}.pdf").write_bytes(pdf)
+    assert next(
+        row for row in actual_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[:5] == (
+        "Combined longitudinal reinforcement", "PL-TEST", "NOT ASSESSED",
+        "-", "<= 100 %",
+    )
+    text = " ".join(_pdf_text(pdf).split())
 
     assert re.search(
         r"Combined longitudinal reinforcement\s+PL-TEST\s+"
@@ -8762,11 +9617,15 @@ def test_report_pub_h01_malformed_container_never_promotes_direct_pass(
         text,
     ) is None
     assert "Longitudinal chord assessment: PASS" not in text
+    if profile in {"Standard", "Audit"}:
+        assert "Longitudinal chord assessment: NOT ASSESSED" in text
+
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_pub_h01_roleless_torsion_failure_with_zero_owner_is_not_published(
+def test_pub_h01_2005_component_rendering_rejects_roleless_torsion_with_zero_owner(
     profile,
+    tmp_path,
 ):
     inp = _inp()
     inp.update(
@@ -8777,6 +9636,15 @@ def test_report_pub_h01_roleless_torsion_failure_with_zero_owner_is_not_publishe
         torsion_on=True,
     )
     combined = _pub_h01_report_combined()
+    positive_pdf, positive_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-live-owner-{profile}.pdf").write_bytes(positive_pdf)
+    assert next(
+        row for row in positive_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[:5] == (
+        "Combined longitudinal reinforcement", "PL-TEST", "FAIL",
+        "123.9 %", "<= 100 %",
+    )
     combined.update(
         longitudinal_candidates=None,
         t_ed=0.0,
@@ -8791,15 +9659,23 @@ def test_report_pub_h01_roleless_torsion_failure_with_zero_owner_is_not_publishe
     assert combined["overall_longitudinal_assessment"]["status"] == (
         "NOT ASSESSED"
     )
-    out = {"plastic": _out()["plastic"], "combined": combined}
-
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    component = next(
+        item
+        for item in result_presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
     )
+    assert component["status"] == "NOT ASSESSED"
+    assert component["util"] is None
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-zero-owner-{profile}.pdf").write_bytes(pdf)
+    assert next(
+        row for row in actual_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[:5] == (
+        "Combined longitudinal reinforcement", "PL-TEST", "NOT ASSESSED",
+        "-", "<= 100 %",
+    )
+    text = " ".join(_pdf_text(pdf).split())
 
     assert re.search(
         r"Combined longitudinal reinforcement\s+PL-TEST\s+"
@@ -8814,9 +9690,10 @@ def test_report_pub_h01_roleless_torsion_failure_with_zero_owner_is_not_publishe
 @pytest.mark.parametrize(
     "hostile", ["stale_alias", "non_finite_operand", "overflowing_real"]
 )
-def test_report_pub_h01_inconsistent_longitudinal_evidence_fails_closed(
+def test_pub_h01_2005_component_rendering_rejects_inconsistent_longitudinal_evidence(
     profile,
     hostile,
+    tmp_path,
 ):
     inp = _inp()
     inp.update(
@@ -8827,6 +9704,25 @@ def test_report_pub_h01_inconsistent_longitudinal_evidence_fails_closed(
         torsion_on=True,
     )
     combined = _pub_h01_report_combined()
+    positive = next(
+        item
+        for item in result_presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
+    )
+    assert positive["status"] == "FAIL"
+    assert positive["util"] == pytest.approx(1.2392531643)
+    positive_pdf, positive_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-positive-{profile}.pdf").write_bytes(positive_pdf)
+    assert next(
+        row for row in positive_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[:5] == (
+        "Combined longitudinal reinforcement",
+        "PL-TEST",
+        "FAIL",
+        "123.9 %",
+        "<= 100 %",
+    )
     combined.pop("overall_longitudinal_assessment", None)
     if hostile == "stale_alias":
         combined["governing_longitudinal"] = {
@@ -8850,17 +9746,26 @@ def test_report_pub_h01_inconsistent_longitudinal_evidence_fails_closed(
         "NOT ASSESSED"
     )
 
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {},
-                inp,
-                {"plastic": _out()["plastic"], "combined": combined},
-                figures=False,
-                profile=profile,
-            )
-        ).split()
+    component = next(
+        item
+        for item in result_presentation.combined_physical_components(combined)
+        if item["key"] == "longitudinal"
     )
+    assert component["status"] == "NOT ASSESSED"
+    assert component["util"] is None
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-{hostile}-{profile}.pdf").write_bytes(pdf)
+    assert next(
+        row for row in actual_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[:5] == (
+        "Combined longitudinal reinforcement",
+        "PL-TEST",
+        "NOT ASSESSED",
+        "-",
+        "<= 100 %",
+    )
+    text = " ".join(_pdf_text(pdf).split())
 
     assert re.search(
         r"Combined longitudinal reinforcement\s+PL-TEST\s+"
@@ -8924,7 +9829,7 @@ def test_report_base_en_keeps_biaxial_directions_without_dkna_aggregate(profile)
     }
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -8968,7 +9873,7 @@ def test_report_base_en_missing_biaxial_direction_fails_closed(
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -8994,8 +9899,9 @@ def test_report_base_en_missing_biaxial_direction_fails_closed(
         (math.inf, True),
     ),
 )
-def test_report_base_en_invalid_utilisations_are_not_published(
+def test_base_en_2005_component_rendering_rejects_invalid_utilisations(
     profile,
+    tmp_path,
     retained,
     transverse_retained,
 ):
@@ -9007,7 +9913,21 @@ def test_report_base_en_invalid_utilisations_are_not_published(
         shear_on=True,
         torsion_on=True,
     )
-    combined = _base_en_combined_out()
+    # This coherent retained positive has finite strut/stirrup/chord values and
+    # an actual overall longitudinal FAIL at 200%, before any invalid operand.
+    combined = _base_en_formula_628_governing_out()
+    positive_components = result_presentation.combined_physical_components(combined)
+    assert all(
+        item["status"] in {"PASS", "FAIL"} and math.isfinite(item["util"])
+        for item in positive_components
+    )
+    positive_pdf, positive_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / f"retained-base-en-valid-utilisations-{profile}.pdf").write_bytes(positive_pdf)
+    assert next(
+        row for row in positive_rows
+        if row[0] == "Combined longitudinal reinforcement"
+    )[2:4] == ("FAIL", "200.0 %")
+    assert all(row[3] != "-" for row in positive_rows if row[0].startswith("Combined "))
     combined["transverse"].update(
         u_crush=transverse_retained,
         u_stirrup=transverse_retained,
@@ -9025,13 +9945,15 @@ def test_report_base_en_invalid_utilisations_are_not_published(
     }
     out = {"plastic": _out()["plastic"], "combined": combined}
 
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    pdf, actual_rows = _pub_h01_2005_component_unit_pdf(
+        inp, out["combined"], profile,
     )
+    (tmp_path / f"retained-base-en-invalid-utilisations-{profile}.pdf").write_bytes(pdf)
+    assert len(actual_rows) >= 4
+    component_rows = [row for row in actual_rows if row[0].startswith("Combined ")]
+    assert len(component_rows) == 3
+    assert all(row[2:4] == ("NOT ASSESSED", "-") for row in component_rows)
+    text = " ".join(_pdf_text(pdf).split())
 
     assert "NOT ASSESSED" in text
     assert re.search(r"100[.,]0\s*%", text) is None
@@ -9051,6 +9973,154 @@ def test_report_base_en_invalid_utilisations_are_not_published(
     assert "DK NA" not in text
 
 
+def _dkna_2005_component_unit_pdf(inp, combined, profile):
+    """Render a retained DK NA leaf; this does not exercise report scheduling."""
+    assert inp["combined_method"] == combined["method"] == codes.EC2_2005_DKNA.label
+    assert result_presentation.combined_publication_scope_note(combined) is None
+    original = pickle.dumps((inp, combined))
+    components = result_presentation.combined_physical_components(combined)
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(
+        buffer, {}, inp, {"combined": combined}, figures=False, profile=profile,
+    )
+    builder._h1("Retained 2005 DK NA component formatting")
+    builder._combined_direction(combined, include_case_heading=False)
+
+    def tables_in(items):
+        for item in items:
+            if isinstance(item, sector_report.KeepTogether):
+                yield from tables_in(item._content)
+            elif isinstance(item, sector_report.Table):
+                yield item
+
+    matches = []
+    for table in tables_in(builder.flow):
+        header = getattr(table, "_sector_header_row", None)
+        if header is None:
+            continue
+        rows = [
+            tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+                  for cell in row)
+            for row in table._cellvalues
+        ]
+        if rows[header] == ("Component", "Utilisation", "Status", "QA note"):
+            matches.append((table, rows))
+    assert len(matches) == 1
+    table, rows = matches[0]
+    actual = rows[table._sector_data_start:]
+    assert [row[:3] for row in actual] == [
+        (item["label"], sector_report._pct(item["util"]), item["status"])
+        for item in components
+    ]
+    sector_report.SimpleDocTemplate(
+        buffer, pagesize=sector_report.A4,
+        leftMargin=20 * sector_report.mm, rightMargin=20 * sector_report.mm,
+        topMargin=25 * sector_report.mm, bottomMargin=20 * sector_report.mm,
+    ).build(list(builder.flow))
+    assert pickle.dumps((inp, combined)) == original
+    return buffer.getvalue(), actual
+
+
+def _retained_2005_component_pdf(inp, combined, profile):
+    """Dispatch only the two supported retained 2005 formatting unit seams."""
+    assert result_presentation.combined_publication_scope_note(combined) is None
+    components = result_presentation.combined_physical_components(combined)
+    if combined["method"] == codes.EC2_2005.label:
+        assert inp["combined_method"] == codes.EC2_2005.label
+        pdf, rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+        for item in components:
+            matching = [row for row in rows if row[0] == "Combined " + item["label"].lower()]
+            assert len(matching) == 1
+            assert matching[0][2:4] == (item["status"], sector_report._pct(item["util"]))
+    else:
+        assert combined["method"] == codes.EC2_2005_DKNA.label
+        pdf, rows = _dkna_2005_component_unit_pdf(inp, combined, profile)
+    return pdf
+
+
+def _assert_retained_component_positive(combined):
+    """Name the actual assessed components without promoting overall torsion."""
+    components = {item["key"]: item for item in result_presentation.combined_physical_components(combined)}
+    assert components["concrete"]["status"] == "PASS"
+    assert components["concrete"]["util"] == pytest.approx(40.0 / 88.7 + 150.0 / 650.0)
+    assert components["concrete"]["angle_valid"] is True
+    assert components["concrete"]["cot"] == pytest.approx(1.0)
+    assert components["concrete"]["theta_deg"] == pytest.approx(45.0)
+    assert components["stirrup"]["status"] == "PASS"
+    assert components["stirrup"]["util"] == pytest.approx(0.28 + 0.30)
+    assert components["longitudinal"]["chord_status"] == "PASS"
+    assert components["longitudinal"]["chord_util"] == pytest.approx(0.60)
+    assert components["longitudinal"]["status"] == "NOT ASSESSED"
+    assert components["longitudinal"]["util"] is None
+    assert components["longitudinal"]["governing"] is combined["longitudinal"]
+    assert all(capacity._combined_longitudinal_candidate(item) is item
+               for item in combined["longitudinal_candidates"])
+    return components
+
+
+def _assert_retained_component_positive_pdf(pdf, method, profile):
+    """Require an actual positive equation and the real common-angle note."""
+    text = " ".join(_pdf_text(pdf).split())
+    if method == codes.EC2_2005_DKNA.label or profile != "Brief":
+        assert "Concrete compression strut (6.29)" in text
+        assert re.search(r"68[.,]2\s*%\s*\(PASS\)", text)
+        assert "ONE member strut angle shared" in text
+    if method == codes.EC2_2005_DKNA.label:
+        assert re.search(r"closed-stirrup utilisation = 58\s*%\s*\(PASS\)", text)
+        assert re.search(r"utilisation = 60\s*%\s*\(PASS\)", text)
+    return text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_dkna_2005_component_rendering_withholds_incomplete_chord_utilisation(profile, tmp_path):
+    inp = _inp()
+    inp.update(
+        mode="Plastic", combined_on=True, combined_method=codes.EC2_2005_DKNA.label,
+        shear_on=True, torsion_on=True,
+    )
+    combined = _dkna_complete_combined_out()
+    _assert_retained_component_positive(combined)
+    complete = capacity.combined_longitudinal_assessment(combined)
+    assert complete["chord_status"] == "PASS" and complete["chord_coverage_complete"] is True
+    primary = combined["longitudinal"]
+    assert complete["chord_governing"] is primary
+    positive_pdf = _retained_2005_component_pdf(inp, combined, profile)
+    (tmp_path / f"retained-complete-chord-{profile}.pdf").write_bytes(positive_pdf)
+    positive_text = _assert_retained_component_positive_pdf(positive_pdf, combined["method"], profile)
+    assert re.search(r"utilisation = 60\s*%\s*\(PASS\)", positive_text)
+    candidates = combined["longitudinal_candidates"]
+    assert {(item["role"], item["axis"], item["tension_low"]) for item in candidates} == {
+        ("shear_axis", "x", True), ("shear_axis", "x", False),
+        ("off_axis", "y", True), ("off_axis", "y", False),
+    }
+    removed = next(item for item in candidates
+                   if (item["role"], item["axis"], item["tension_low"]) == ("off_axis", "y", False))
+    candidates.remove(removed)
+    assert len(candidates) == 3
+    assert all(capacity._combined_longitudinal_candidate(item) is item for item in candidates)
+    assert combined["longitudinal"] is combined["governing_longitudinal"] is primary
+    combined["longitudinal_assessment"] = capacity.longitudinal_chord_assessment(
+        {"model_2023": False, "chord_candidates": candidates},
+        shear_axis="x", shear_tension_low=True, shear_live=True,
+        torsion_live=True, torsion_subdivided=False,
+    )
+    combined.pop("overall_longitudinal_assessment", None)
+    actual = capacity.combined_longitudinal_assessment(combined)
+    assert actual["chord_status"] == "NOT ASSESSED"
+    assert actual["chord_util"] is None and actual["chord_coverage_complete"] is False
+    assert result_presentation.required_chord_fallback(combined) is None
+    component = next(item for item in result_presentation.combined_physical_components(combined)
+                     if item["key"] == "longitudinal")
+    assert component["governing"] is primary
+    assert capacity._combined_longitudinal_candidate(primary) is primary
+    pdf = _retained_2005_component_pdf(inp, combined, profile)
+    (tmp_path / f"retained-missing-chord-{profile}.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
+    assert "utilisation = - (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)" in text
+    assert re.search(r"utilisation = 60\s*%\s*\(PASS\)", text) is None
+    assert "utilisation = - (EXCEEDED)" not in text
+
+
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 @pytest.mark.parametrize(
     ("retained", "transverse_retained"),
@@ -9061,10 +10131,11 @@ def test_report_base_en_invalid_utilisations_are_not_published(
         (math.inf, True),
     ),
 )
-def test_report_dkna_worked_details_share_invalid_utilisation_boundary(
+def test_dkna_2005_component_rendering_rejects_invalid_utilisation(
     profile,
     retained,
     transverse_retained,
+    tmp_path,
 ):
     inp = _inp()
     inp.update(
@@ -9075,6 +10146,17 @@ def test_report_dkna_worked_details_share_invalid_utilisation_boundary(
         torsion_on=True,
     )
     combined = _dkna_complete_combined_out()
+    # These four original vectors intentionally poison several retained fields.
+    # The positive separates the chord PASS from the unverified overall result.
+    _assert_retained_component_positive(combined)
+    frozen_input = pickle.dumps(inp)
+    unchanged_dkna = {
+        key: pickle.dumps(combined[key])
+        for key in ("action_alone", "dkna_selection", "dkna_sum")
+    }
+    positive_pdf = _retained_2005_component_pdf(inp, combined, profile)
+    (tmp_path / f"retained-invalid-util-positive-{profile}.pdf").write_bytes(positive_pdf)
+    _assert_retained_component_positive_pdf(positive_pdf, combined["method"], profile)
     combined["transverse"].update(
         u_crush=transverse_retained,
         u_stirrup=transverse_retained,
@@ -9092,13 +10174,17 @@ def test_report_dkna_worked_details_share_invalid_utilisation_boundary(
     }
     out = {"plastic": _out()["plastic"], "combined": combined}
 
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    assert pickle.dumps(inp) == frozen_input
+    assert all(pickle.dumps(combined[key]) == value for key, value in unchanged_dkna.items())
+    assert capacity._combined_longitudinal_candidate(combined["longitudinal"]) is None
+    components = {item["key"]: item for item in result_presentation.combined_physical_components(combined)}
+    assert all(item["status"] == "NOT ASSESSED" and item["util"] is None
+               for item in components.values())
+    assert components["longitudinal"]["chord_status"] == "NOT ASSESSED"
+    assert components["longitudinal"]["chord_util"] is None
+    pdf = _retained_2005_component_pdf(inp, combined, profile)
+    (tmp_path / f"retained-invalid-util-blocked-{profile}.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
 
     assert "NOT ASSESSED" in text
     assert re.search(r"100[.,]0\s*%", text) is None
@@ -9117,10 +10203,6 @@ def test_report_dkna_worked_details_share_invalid_utilisation_boundary(
             "NOT ASSESSED: recalculate the shared closed-stirrup check"
             in text
         )
-        assert (
-            "utilisation = - (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
-            in text
-        )
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
@@ -9129,10 +10211,11 @@ def test_report_dkna_worked_details_share_invalid_utilisation_boundary(
     [codes.EC2_2005.label, codes.EC2_2005_DKNA.label],
 )
 @pytest.mark.parametrize("conflict", ["utilisation", "angle", "theta"])
-def test_report_conflicting_formula_629_evidence_fails_closed(
+def test_retained_2005_component_rendering_rejects_formula_629_conflicts(
     profile,
     method,
     conflict,
+    tmp_path,
 ):
     inp = _inp()
     inp.update(
@@ -9147,6 +10230,15 @@ def test_report_conflicting_formula_629_evidence_fails_closed(
         if method == codes.EC2_2005.label
         else _dkna_complete_combined_out()
     )
+    positive_components = _assert_retained_component_positive(combined)
+    frozen_input = pickle.dumps(inp)
+    untouched_companions = {
+        key: pickle.dumps(value) for key, value in combined.items()
+        if key not in {"transverse", "crushing"}
+    }
+    positive_pdf = _retained_2005_component_pdf(inp, combined, profile)
+    (tmp_path / f"retained-629-positive-{conflict}-{profile}.pdf").write_bytes(positive_pdf)
+    _assert_retained_component_positive_pdf(positive_pdf, method, profile)
     if conflict == "utilisation":
         combined["transverse"]["u_crush"] = True
         combined["crushing"]["value"] = 0.50
@@ -9159,9 +10251,24 @@ def test_report_conflicting_formula_629_evidence_fails_closed(
         combined["crushing"]["theta_deg"] = 60.0
     out = {"plastic": _out()["plastic"], "combined": combined}
 
-    text = " ".join(_pdf_text(sector_report.build_report(
-        {}, inp, out, figures=False, profile=profile,
-    )).split())
+    assert pickle.dumps(inp) == frozen_input
+    assert all(pickle.dumps(combined[key]) == value for key, value in untouched_companions.items())
+    components = {item["key"]: item for item in result_presentation.combined_physical_components(combined)}
+    assert components["concrete"]["status"] == "NOT ASSESSED"
+    assert components["concrete"]["util"] is None
+    assert components["longitudinal"] == positive_components["longitudinal"]
+    if conflict == "utilisation":
+        assert components["concrete"]["angle_valid"] is True
+        assert components["stirrup"] == positive_components["stirrup"]
+    else:
+        assert components["concrete"]["angle_valid"] is False
+        assert components["concrete"]["cot"] is None
+        assert components["concrete"]["theta_deg"] is None
+        assert components["stirrup"]["status"] == "NOT ASSESSED"
+        assert components["stirrup"]["util"] is None
+    pdf = _retained_2005_component_pdf(inp, combined, profile)
+    (tmp_path / f"retained-629-blocked-{conflict}-{profile}.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
 
     assert "NOT ASSESSED" in text
     assert "Concrete compression strut 50.0 % PASS" not in text
@@ -9357,7 +10464,7 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -9415,7 +10522,7 @@ def test_report_combined_zero_2023_chord_candidates_stays_not_assessed(
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {},
                 inp,
                 out,
@@ -9519,7 +10626,7 @@ def test_report_publishes_only_governing_transverse_family_worked_examples():
         ]
     }
 
-    flat = " ".join(_pdf_text(sector_report.build_report(
+    flat = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, qa_appendix=False,
     )).split())
 
@@ -9678,7 +10785,7 @@ def test_report_main_torsion_worked_example_requires_applicable_case(profile):
 
     flat = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, profile=profile, figures=False,
             )
         ).split()
@@ -9694,7 +10801,7 @@ def test_report_includes_combined_section():
     out["combined"] = _combined_out()
     inp = _inp()
     inp.update(strut_cot_min=1.0, strut_cot_max=2.5)
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
     flat = " ".join(txt.split())
     assert "Combined bending" in txt or "M-V-T" in txt
     assert "6.3.2(6)" in txt                        # the DK NA combined rule
@@ -9714,18 +10821,15 @@ def test_report_includes_combined_section():
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_profiles_share_dkna_value_and_status(profile):
+def test_dkna_retained_sum_profiles_share_value_and_status(profile, tmp_path):
     out = _out()
     out["combined"] = _combined_out()
     inp = _inp()
     inp.update(combined_on=True, shear_on=True, torsion_on=True)
-    txt = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    unit_inp = _retained_dkna_unit_input(inp, out["combined"])
+    pdf, actual_row = _retained_dkna_sum_unit_pdf(unit_inp, out["combined"], profile)
+    (tmp_path / "retained-dkna-sum.pdf").write_bytes(pdf)
+    txt = " ".join(_pdf_text(pdf).split())
     assert "Combined M-V-T" in txt
     assert "DK NA sum" in txt
     assert "130.0 %" in txt
@@ -9738,9 +10842,10 @@ def test_report_profiles_share_dkna_value_and_status(profile):
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 @pytest.mark.parametrize("torsion_status", ["NOT ASSESSED", "FAIL"])
-def test_report_combined_status_retains_longitudinal_torsion_gate(
+def test_retained_report_combined_status_keeps_longitudinal_torsion_gate(
     profile,
     torsion_status,
+    tmp_path,
 ):
     out = _out()
     torsion = _torsion_out()
@@ -9788,6 +10893,10 @@ def test_report_combined_status_retains_longitudinal_torsion_gate(
             "longitudinal_assessment"
         ],
     )
+    # Match the original real 0.2 + 0.2 + 0.2 selection with its
+    # action-alone ledger; all retained torsion/status stimulus stays intact.
+    for key in ("m", "v", "t"):
+        combined["action_alone"][key].update(demand=0.2, resistance=1.0)
     out["combined"] = combined
     inp = _inp()
     inp.update(
@@ -9797,32 +10906,29 @@ def test_report_combined_status_retains_longitudinal_torsion_gate(
         shear_links=True,
     )
 
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    pdf, actual_row = _retained_dkna_sum_unit_pdf(
+        _retained_dkna_unit_input(inp, combined), combined, profile,
     )
+    assert actual_row[2] == torsion_status
+    (tmp_path / "retained-dkna-torsion-status.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
 
     assert torsion_status in text
     assert "60.0 %" in text
     assert "numerical component evidence" in text
-    assert "not an overall M-V-T verdict" in text
+    # PDF line wrapping may split this fixed abbreviation after a hyphen.
+    import re
+    assert re.search(r"not an overall M-\s*V-\s*T verdict", text)
     assert f"Overall {torsion_status}: {torsion_status}" not in text
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_definite_dkna_failure_outranks_unverified_torsion(profile):
+def test_dkna_retained_sum_failure_outranks_unverified_torsion(profile, tmp_path):
     out = _out()
     torsion = _torsion_out()
     out["torsion"] = torsion
-    combined = _combined_out(mv_independent=True)
+    combined = _retained_dkna_sum_with_moment(80.0, mv_independent=True)
     combined.update(
-        dkna_sum=1.10,
-        dkna_limit_satisfied=False,
-        dkna_status="FAIL",
-        dkna_ok=False,
         torsion_assessment_status="NOT ASSESSED",
         torsion_assessment_reason=(
             "longitudinal_torsion_reinforcement_not_verified"
@@ -9830,12 +10936,6 @@ def test_report_definite_dkna_failure_outranks_unverified_torsion(profile):
         torsion_longitudinal_assessment=torsion[
             "longitudinal_assessment"
         ],
-    )
-    combined["dkna_selection"].update(
-        utilisation=1.10,
-        limit_satisfied=False,
-        status="FAIL",
-        ok=False,
     )
     out["combined"] = combined
     inp = _inp()
@@ -9847,13 +10947,10 @@ def test_report_definite_dkna_failure_outranks_unverified_torsion(profile):
         shear_links=True,
     )
 
-    text = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    unit_inp = _retained_dkna_unit_input(inp, out["combined"])
+    pdf, actual_row = _retained_dkna_sum_unit_pdf(unit_inp, out["combined"], profile)
+    (tmp_path / "retained-dkna-sum.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
 
     assert "FAIL" in text
     assert "definite combined failure governs" in text
@@ -9861,18 +10958,15 @@ def test_report_definite_dkna_failure_outranks_unverified_torsion(profile):
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_profiles_label_independent_dkna_route_truthfully(profile):
+def test_dkna_retained_sum_labels_independent_route_truthfully(profile, tmp_path):
     out = _out()
     out["combined"] = _combined_out(mv_independent=True)
     inp = _inp()
     inp.update(combined_on=True, shear_on=True, torsion_on=True)
-    txt = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    unit_inp = _retained_dkna_unit_input(inp, out["combined"])
+    pdf, actual_row = _retained_dkna_sum_unit_pdf(unit_inp, out["combined"], profile)
+    (tmp_path / "retained-dkna-sum.pdf").write_bytes(pdf)
+    txt = " ".join(_pdf_text(pdf).split())
     assert "max(N+M+T, N+V+T)" in txt
     assert "CONDITIONAL" in txt
     assert "design assumption" in txt
@@ -9882,7 +10976,7 @@ def test_report_profiles_label_independent_dkna_route_truthfully(profile):
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_separate_mv_over_limit_fails_even_under_assumption(profile):
+def test_dkna_retained_sum_over_limit_fails_even_under_assumption(profile, tmp_path):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -9891,27 +10985,12 @@ def test_report_separate_mv_over_limit_fails_even_under_assumption(profile):
     )
     base_out = _out()
     out = {"plastic": base_out["plastic"]}
-    combined = _combined_out(mv_independent=True)
-    combined.update(
-        dkna_sum=1.30,
-        dkna_limit_satisfied=False,
-        dkna_status="FAIL",
-        dkna_ok=False,
-    )
-    combined["dkna_selection"].update(
-        utilisation=1.30,
-        limit_satisfied=False,
-        status="FAIL",
-        ok=False,
-    )
+    combined = _retained_dkna_sum_with_moment(100.0, mv_independent=True)
     out["combined"] = combined
-    txt = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    unit_inp = _retained_dkna_unit_input(inp, out["combined"])
+    pdf, actual_row = _retained_dkna_sum_unit_pdf(unit_inp, out["combined"], profile)
+    (tmp_path / "retained-dkna-sum.pdf").write_bytes(pdf)
+    txt = " ".join(_pdf_text(pdf).split())
 
     assert re.search(
         r"Combined M-V-T - DK NA sum PL-TEST FAIL 130\.0 %",
@@ -9941,7 +11020,7 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
     )
 
     txt = " ".join(_pdf_text(
-        sector_report.build_report({}, _inp(), out, figures=False)
+        _build_report_with_selection({}, _inp(), out, figures=False)
     ).split())
 
     assert "are assessed separately" in txt
@@ -9955,14 +11034,13 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
     assert "1.250" in txt and "1.750" in txt
 
 
-def test_report_dkna_independent_route_keeps_n_and_t_in_both_branches():
+def test_dkna_retained_sum_keeps_n_and_t_in_both_branches(tmp_path):
     out = _out()
     out["combined"] = _combined_out(mv_independent=True)
-    txt = " ".join(
-        _pdf_text(
-            sector_report.build_report({}, _inp(), out, figures=False)
-        ).split()
-    )
+    unit_inp = _retained_dkna_unit_input(_inp(), out["combined"])
+    pdf, actual_row = _retained_dkna_sum_unit_pdf(unit_inp, out["combined"], "Audit")
+    (tmp_path / "retained-dkna-sum.pdf").write_bytes(pdf)
+    txt = " ".join(_pdf_text(pdf).split())
     assert "rN + rM + rT" in txt
     assert "rN + rV + rT" in txt
     assert "N and T remain in both independent checks" in txt
@@ -9970,9 +11048,13 @@ def test_report_dkna_independent_route_keeps_n_and_t_in_both_branches():
     assert "Verify the reinforcement area, distribution and anchorage" in txt
 
 
-def test_report_unavailable_action_alone_resistance_is_not_assessed():
+def test_dkna_retained_sum_unavailable_action_resistance_is_not_assessed(tmp_path):
     out = _out()
     combined = _combined_out()
+    positive_inp = _retained_dkna_unit_input(_inp(), combined)
+    positive_pdf, positive_row = _retained_dkna_sum_unit_pdf(positive_inp, combined, "Audit")
+    (tmp_path / "retained-dkna-complete-action.pdf").write_bytes(positive_pdf)
+    assert positive_row[2:4] == ("FAIL", "130.0 %")
     selection = combined_core.dkna_interaction_result(
         0.0,
         None,
@@ -10001,18 +11083,20 @@ def test_report_unavailable_action_alone_resistance_is_not_assessed():
         ),
     )
     out["combined"] = combined
-    txt = " ".join(
-        _pdf_text(
-            sector_report.build_report({}, _inp(), out, figures=False)
-        ).split()
-    )
+    unit_inp = _retained_dkna_unit_input(_inp(), out["combined"])
+    pdf, actual_row = _retained_dkna_sum_unit_pdf(unit_inp, out["combined"], "Audit")
+    (tmp_path / "retained-dkna-sum.pdf").write_bytes(pdf)
+    txt = " ".join(_pdf_text(pdf).split())
+    assert actual_row[2:4] == ("NOT ASSESSED", "-")
+    assert out["combined"]["dkna_status"] == "FAIL"
+    assert out["combined"]["dkna_limit_satisfied"] is False
     assert "DK NA interaction: NOT ASSESSED" in txt
     assert "No PASS or FAIL verdict is given" in txt
     assert "complete Plastic bending sweep" in txt
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_unassessed_combined_retains_selected_separate_route(profile):
+def test_dkna_retained_sum_unassessed_keeps_selected_separate_route(profile, tmp_path):
     inp = _inp()
     inp.update(
         combined_on=True,
@@ -10031,13 +11115,10 @@ def test_report_unassessed_combined_retains_selected_separate_route(profile):
         "biaxial": True,
         "directions": {},
     }
-    txt = " ".join(
-        _pdf_text(
-            sector_report.build_report(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    unit_inp = _retained_dkna_unit_input(inp, out["combined"])
+    pdf, actual_row = _retained_dkna_sum_unit_pdf(unit_inp, out["combined"], profile)
+    (tmp_path / "retained-dkna-sum.pdf").write_bytes(pdf)
+    txt = " ".join(_pdf_text(pdf).split())
 
     assert "max(N+M+T, N+V+T)" in txt
     assert "N+M+V+T" not in txt
@@ -10104,7 +11185,7 @@ def test_report_combined_out_of_range_withholds_values_and_verdicts(profile):
     inp = _inp()
     inp.update(combined_on=True, shear_on=True, torsion_on=True)
     txt = _pdf_text(
-        sector_report.build_report(
+        _build_report_with_selection(
             {}, inp, out, figures=False, profile=profile
         )
     )
@@ -10151,7 +11232,7 @@ def test_report_combined_longitudinal_check():
         capacity.combined_longitudinal_assessment(c)
     )
     out["combined"] = c
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Longitudinal reinforcement" in txt
     assert "6.2.3(7)" in txt                        # the shear-shift cap clause
     assert "tension chord" in txt
@@ -10169,52 +11250,222 @@ def test_report_combined_longitudinal_biaxial_fallback_warns():
                              m_off=90.0, conditional=False)
     _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     folded = " ".join(txt.casefold().split())
     assert "required x-axis negative face" in folded
     assert "pure-axis substitute" in folded
 
 
-def test_report_withholds_verdict_for_preserved_non_governing_fallback():
-    out = _out()
-    c = _combined_out()
-    exact = dict(
-        valid=True, axis="x", z=0.5, m_ed=20.0, m_rd=250.0,
-        ftd_v=187.5, ftd_t=100.0, mv=60.0, mt=25.0, m_total=105.0,
-        util=105.0 / 250.0, ok=True, capped=False,
-        tension_low=False, conditional=True,
-    )
-    fallback = dict(
-        exact,
-        util=0.20,
-        tension_low=True,
-        conditional=False,
-    )
-    off_axis = dict(
-        valid=True, axis="y", z=0.4, m_ed=20.0, m_rd=100.0,
-        ftd_v=0.0, ftd_t=65.0, mv=0.0, mt=13.0, m_total=33.0,
-        util=0.33, ok=True, capped=False,
-        tension_low=True, m_off=20.0, conditional=True,
-    )
-    c["longitudinal"] = exact
-    c["chord_off"] = off_axis
-    _retain_combined_chords(c, fallback, exact, off_axis)
-    out["combined"] = c
+@pytest.mark.xdist_group("native-member-report")
+@result_presentation.publication_calculation_scope()
+def test_report_withholds_verdict_for_preserved_non_governing_fallback(
+    native_member_report_cases, monkeypatch, tmp_path,
+):
+    import sector_app
 
-    txt = " ".join(_pdf_text(sector_report.build_report(
-        {}, _inp(), out, figures=False
-    )).split())
+    inp, out = copy.deepcopy(native_member_report_cases["biaxial"])
+    original_bytes = pickle.dumps((inp, out))
+    assert len(inp["plastic_cases"]) == 1
+    assert result_presentation.combined_publication_evidence_is_current(inp, out) == (True, None)
+    candidates = out["shear"]["links"]["chord_candidates"]
+    assert len(candidates) == 4
+    assert {(item["axis"], item["tension_low"]) for item in candidates} == {
+        ("x", True), ("x", False), ("y", True), ("y", False),
+    }
+    assert all(item["valid"] and item["conditional"] for item in candidates)
+    target = next(item for item in candidates
+                  if item["role"] == "shear_axis" and item.get("gets_shift") is True)
+    target_identity = target["axis"], target["tension_low"]
+    assert target["util"] < max(item["util"] for item in candidates)
+    original_conditional = capacity.conditional_capacity
+    failures = []
 
-    assert "pure-axis substitute" in txt
-    assert (
-        "utilisation = 42 % "
-        "(NOT ASSESSED - ANOTHER FACE USES A SUBSTITUTE)"
-        in txt
+    def fail_target(section, concrete, steel, n_ed, axis, tension_low, m_off, **kwargs):
+        if ((axis, tension_low) == target_identity
+                and n_ed == -inp["P_pl"]
+                and m_off == target["m_off"]
+                and kwargs.get("own_moment_offset", 0.0)
+                == target.get("moment_reference_shift", 0.0)):
+            failures.append((axis, tension_low, m_off))
+            return 0.0, False
+        return original_conditional(
+            section, concrete, steel, n_ed, axis, tension_low, m_off, **kwargs,
+        )
+
+    baseline_pdf = _build_report_with_selection({}, inp, out, figures=False)
+    (tmp_path / "current-biaxial.pdf").write_bytes(baseline_pdf)
+    assert "pure-axis substitute" not in " ".join(_pdf_text(baseline_pdf).split())
+    monkeypatch.setattr(capacity, "conditional_capacity", fail_target)
+
+    def runner(case_input, **kwargs):
+        return sector_app._run_single_analysis(
+            case_input, reuse_plastic=out["plastic"],
+        )
+
+    fallback = copy.deepcopy(out)
+    fallback.update(case_analysis.run_case_tables(dict(inp, mode="Plastic"), runner))
+    assert failures
+    retained = fallback["shear"]["links"]["chord_candidates"]
+    assert len(retained) == 4
+    assert {(item["axis"], item["tension_low"]) for item in retained} == {
+        ("x", True), ("x", False), ("y", True), ("y", False),
+    }
+    substitute = next(item for item in retained
+                      if (item["axis"], item["tension_low"]) == target_identity)
+    assert substitute["conditional"] is False
+    assert substitute["valid"] and substitute["m_rd"] > 0.0
+    assert substitute["m_ed"] == target["m_ed"]
+    assert substitute["m_off"] == target["m_off"]
+    assert substitute["util"] < max(item["util"] for item in retained)
+    assert sum(item["conditional"] is False for item in retained) == 1
+    assert result_presentation.combined_publication_evidence_is_current(
+        inp, fallback,
+    ) == (True, None)
+    assessment = capacity.combined_longitudinal_assessment(fallback["combined"])
+    assert assessment["chord_status"] == "NOT ASSESSED"
+    assert assessment["chord_util"] is None
+    assert assessment["chord_coverage_complete"] is False
+    assert assessment["chord_reason"]
+    assert result_presentation.directional_shear_publication_evidence_is_current(
+        inp, fallback["shear"], plastic_result=fallback["plastic"],
+    ) == (True, None)
+    # Malformed inventory must remain unavailable even when all derived aliases
+    # and the retained NOT ASSESSED aggregate are synchronized with the mutation.
+    for mutation in (
+        "zero-substitute", "missing-off-flag", "not-solved-off-flag",
+        "subdivided-off-flag", "invalid-biaxial", "duplicate-face",
+        "missing-face", "unshifted-substitute", "invalid-force",
+    ):
+        altered_shear = copy.deepcopy(fallback["shear"])
+        altered_links = altered_shear["links"]
+        altered_candidates = altered_links["chord_candidates"]
+        altered = next(item for item in altered_candidates
+                       if (item["axis"], item["tension_low"]) == target_identity)
+        if mutation == "zero-substitute":
+            altered.update(combined_core.longitudinal_check(
+                altered["m_ed"], 0.0, altered["ftd_v"], altered["ftd_t"],
+                altered["z"], cap_shear_force=True,
+            ))
+        elif mutation == "missing-off-flag":
+            altered.pop("off_not_evaluated")
+        elif mutation.endswith("off-flag"):
+            altered["off_not_evaluated"] = (
+                "not_solved" if mutation == "not-solved-off-flag" else "subdivided"
+            )
+        elif mutation == "invalid-biaxial":
+            altered["biaxial"] = 1
+        elif mutation == "duplicate-face":
+            altered_candidates[1] = copy.deepcopy(altered_candidates[0])
+        elif mutation == "missing-face":
+            altered_candidates.pop()
+        elif mutation == "unshifted-substitute":
+            altered["gets_shift"] = False
+        else:
+            altered_links["longitudinal_shear_force"] = float("nan")
+        altered_links["longitudinal_fallback"] = altered
+        altered_links["governing_longitudinal"] = max(altered_candidates, key=lambda c: c["util"])
+        for alias, role in (("chord", "shear_axis"), ("chord_off", "off_axis")):
+            altered_links[alias] = max(
+                (item for item in altered_candidates if item["role"] == role),
+                key=lambda c: c["util"],
+            )
+        altered_links["longitudinal_assessment"] = capacity.longitudinal_chord_assessment(
+            altered_links, shear_axis=altered_shear["axis"],
+            shear_tension_low=altered_shear["tension_low"],
+            shear_live=True, torsion_live=True, torsion_subdivided=False,
+        )
+        altered_before = pickle.dumps(altered_shear)
+        assert result_presentation._retained_fallback_angle_candidates(altered_shear) is None, mutation
+        assert result_presentation._current_member_angle_selection(
+            inp, altered_shear, fallback["torsion"],
+        ) is None, mutation
+        assert pickle.dumps(altered_shear) == altered_before
+
+    with monkeypatch.context() as unavailable:
+        unavailable.setattr(result_presentation, "_current_link_chord_candidate", lambda *a, **k: None)
+        assert result_presentation.combined_publication_evidence_is_current(inp, fallback)[0] is False
+    for item in retained:
+        if (item["axis"], item["tension_low"]) != target_identity:
+            assert item["valid"] and item["conditional"]
+    equations = []
+    original_formula = sector_report.ReportBuilder._formula
+
+    def capture_formula(builder, expression, *args, **kwargs):
+        result = original_formula(builder, expression, *args, **kwargs)
+        equations.append(copy.deepcopy(kwargs))
+        return result
+
+    monkeypatch.setattr(sector_report.ReportBuilder, "_formula", capture_formula)
+    before = pickle.dumps((inp, fallback))
+    pdf = _build_report_with_selection({}, inp, fallback, figures=False)
+    (tmp_path / "required-non-governing-fallback.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
+    assert "pure-axis substitute" in text
+    face = "negative" if target["tension_low"] else "positive"
+    assert f"required {target['axis']}-axis {face} face" in text
+    chord_demand = next(item for item in equations
+                        if item["equation_key"] == "combined.chord.demand")
+    chord_comparison = next(item for item in equations
+                            if item["equation_key"] == "combined.chord.utilisation")
+    canonical = next(item for item in result_presentation.combined_physical_components(
+        fallback["combined"]
+    ) if item["key"] == "longitudinal")
+    assert canonical["governing"] is None and canonical["valid"] is False
+    assert canonical["chord_status"] == "NOT ASSESSED" and canonical["chord_util"] is None
+    governing = fallback["combined"]["governing_longitudinal"]
+    assert governing["conditional"] is True and governing["role"] == "off_axis"
+    assert governing["util"] == max(item["util"] for item in retained)
+    assert "largest available conditional face" in text
+    assert "retained conditional chord is the off-axis face" in text
+    assert chord_demand["result"] == (
+        f"M<sub>Ed,total</sub> = {sector_report._fmt(governing['m_total'], 1)} kNm"
     )
-    assert (
-        "utilisation = 33 % (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
-        in txt
+    assert chord_comparison["subst"] == (
+        f"{sector_report._fmt(governing['m_total'], 1)} / "
+        f"{sector_report._fmt(governing['m_rd'], 1)}"
     )
+    assert "NOT ASSESSED" in chord_comparison["result"]
+    assert "%" not in chord_comparison["result"]
+    if fallback["combined"]["dkna_status"] == "FAIL":
+        dkna = next(item for item in equations
+                    if item["equation_key"] == "combined.dk-na.sum")
+        assert "EXCEEDED" in dkna["result"] or "FAIL" in dkna["result"]
+    assert pickle.dumps((inp, fallback)) == before
+    assert pickle.dumps((inp, out)) == original_bytes
+    with monkeypatch.context() as unavailable:
+        unavailable.setattr(result_presentation, "combined_publication_evidence_is_current",
+                            lambda *a, **k: (False, "current reconstruction unavailable"))
+        builder = sector_report.ReportBuilder(io.BytesIO(), {}, inp, fallback,
+                                              figures=False, profile="Audit")
+        equations.clear()
+        builder._h1("Unavailable diagnostic probe")
+        builder._combined_direction(fallback["combined"])
+        assert not any(item["equation_key"] in {
+            "combined.chord.demand", "combined.chord.utilisation",
+        } for item in equations)
+    # Isolate report routing from physics: a wrapper's currentness decision must
+    # receive the intact case, and must never authorize an unowned child copy.
+    for foreign_child, component in ((False, None), (True, None), (False, "vx")):
+        child = fallback["combined"]
+        owner = dict(fallback, combined={"biaxial": True, "directions": {child["component"]: child}})
+        builder = sector_report.ReportBuilder(io.BytesIO(), {}, inp, owner,
+                                              figures=False, profile="Audit")
+        authority_calls = []
+        with monkeypatch.context() as authority:
+            def current_case(case_input, case_out):
+                authority_calls.append((case_input, case_out))
+                return True, None
+            authority.setattr(result_presentation, "combined_publication_evidence_is_current", current_case)
+            equations.clear()
+            builder._h1("Diagnostic ownership probe")
+            builder._combined_direction(copy.deepcopy(child) if foreign_child else child, component=component)
+        emitted = {item["equation_key"] for item in equations}
+        if foreign_child or component is not None:
+            assert not authority_calls
+            assert not {"combined.chord.demand", "combined.chord.utilisation"} & emitted
+        else:
+            assert authority_calls and all(case_out is owner for _inp, case_out in authority_calls)
+            assert {"combined.chord.demand", "combined.chord.utilisation"} <= emitted
 
 
 def test_report_combined_longitudinal_conditional_mrd():
@@ -10256,7 +11507,7 @@ def test_report_combined_longitudinal_conditional_mrd():
     )
     out["combined"] = c
     # Collapse the PDF's line wrapping so multi-word phrases can be asserted.
-    txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
+    txt = " ".join(_pdf_text(_build_report_with_selection({}, _inp(), out,
                                                         figures=False)).split())
     assert "conditional on the coexisting My = 90.0 kNm" in txt
     assert "Biaxial bending" not in txt
@@ -10277,7 +11528,7 @@ def test_report_off_axis_skip_disclosed_uniaxially():
                              off_not_evaluated="subdivided")
     _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
-    txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
+    txt = " ".join(_pdf_text(_build_report_with_selection({}, _inp(), out,
                                                         figures=False)).split())
     assert "per sub-tube" in txt                     # the subdivided disclosure fired
     assert (
@@ -10318,7 +11569,7 @@ def test_report_partial_torsion_face_coverage_disclosed():
         capacity.combined_longitudinal_assessment(c)
     )
     out["combined"] = c
-    txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
+    txt = " ".join(_pdf_text(_build_report_with_selection({}, _inp(), out,
                                                         figures=False)).split())
     assert "may not be the critical face" in txt
     assert (
@@ -10345,7 +11596,7 @@ def test_report_off_axis_chord_block():
                           z_src="circular_fitted_section")
     _retain_combined_chords(c, c["longitudinal"], c["chord_off"])
     out["combined"] = c
-    txt = " ".join(_pdf_text(sector_report.build_report({}, _inp(), out,
+    txt = " ".join(_pdf_text(_build_report_with_selection({}, _inp(), out,
                                                         figures=False)).split())
     assert "Off-axis chord (about y" in txt          # header now names the governing face
     assert "conditional on the coexisting Mx = 20.0 kNm" in txt
@@ -10356,7 +11607,7 @@ def test_report_off_axis_chord_block():
 def test_report_combined_independent_uses_max_form():
     out = _out()
     out["combined"] = _combined_out(mv_independent=True)
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "separately" in txt                      # M & V checked separately
 
 
@@ -10369,7 +11620,7 @@ def test_report_combined_transverse_shows_shear_credit():
                            shear_credited=True, vrd_c=120.0, v_ed=40.0)
     c["crushing"].update(cot=2.0, theta_deg=26.6, value=0.4)
     out["combined"] = c
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Shared stirrup" in txt
     assert "concrete carries the shear" in txt      # the VRd,c credit note
     assert "Physical resistance components" in txt
@@ -10385,7 +11636,7 @@ def test_report_skips_invalid_combined():
     out = _out()
     out["combined"] = {"valid": False, "have_m": True, "have_v": False,
                        "have_t": False, "method": "x"}
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Combined bending" not in txt
 
 
@@ -10497,7 +11748,7 @@ def test_report_profiles_retain_h06_circular_and_duct_result(
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -10541,7 +11792,7 @@ def test_report_profiles_fail_closed_for_missing_circular_shear_geometry(
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -10568,7 +11819,7 @@ def test_report_profiles_fail_closed_for_invalid_circular_off_axis_arm(
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -10607,7 +11858,7 @@ def test_report_directional_shear_table_retains_chord_assessment_status(
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -10631,7 +11882,7 @@ def test_report_includes_shear_links_section():
     inp, sh, _transverse = _native_sparse_link_report_fixture()
     out = _out()
     out["shear"] = sh
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
     assert "Shear reinforcement (links)" in txt
     assert "6.8" in txt and "6.9" in txt           # the two clause formulae
     assert "29.452" in txt                         # VRd,s / VRd
@@ -10669,7 +11920,7 @@ def test_report_with_unavailable_calculated_link_arm_fails_closed():
     inp = _inp()
     inp.update(shear_on=True, shear_links=True)
 
-    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
     normalized = " ".join(txt.split())
 
     assert "NOT ASSESSED" in txt
@@ -10681,7 +11932,7 @@ def test_report_with_unavailable_calculated_link_arm_fails_closed():
 
 def test_report_includes_2023_shear_links_stress_checks(h06_circular_report_results):
     inp, out = copy.deepcopy(h06_circular_report_results["complete"])
-    text = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
+    text = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
     assert "8.42" in text and "8.44" in text
     assert "8.50" not in text
     assert "no longitudinal shear force is applied" in text
@@ -10753,7 +12004,7 @@ def test_report_profiles_fail_closed_for_2023_links_under_axial_compression(
 
     text = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -10806,7 +12057,7 @@ def test_report_shear_links_out_of_limits_are_not_assessed(profile):
     inp = _inp()
     inp.update(shear_on=True, shear_links=True)
     txt = _pdf_text(
-        sector_report.build_report(
+        _build_report_with_selection(
             {}, inp, out, figures=False, profile=profile
         )
     )
@@ -10854,7 +12105,7 @@ def test_report_omits_hostile_optional_strut_angle_operands(profile):
 
     flat = " ".join(
         _pdf_text(
-            sector_report.build_report(
+            _build_report_with_selection(
                 {}, inp, out, figures=False, profile=profile
             )
         ).split()
@@ -10902,7 +12153,7 @@ def test_report_torsion_out_of_limits_withholds_values_and_verdict(profile):
     inp = _inp()
     inp.update(torsion_on=True, shear_links=True)
     txt = _pdf_text(
-        sector_report.build_report(
+        _build_report_with_selection(
             {}, inp, out, figures=False, profile=profile
         )
     )
@@ -10952,13 +12203,13 @@ def test_report_fails_when_a_requested_figure_cannot_be_exported(monkeypatch):
     monkeypatch.setattr(sector_report, "_fig_png",
                         lambda fig, width, height: (None, False))
     with pytest.raises(sector_report.ReportFigureError, match="report not created"):
-        sector_report.build_report({}, _inp(), _out(), figures=True)
+        _build_report_with_selection({}, _inp(), _out(), figures=True)
 
 
 def test_report_prints_public_one_based_concrete_point_without_conversion():
     out = _out()
     out["elastic"]["max_conc_point"] = 1
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "point 1" in txt
     assert "point 0" not in txt
 
@@ -11053,12 +12304,13 @@ def _combined_longitudinal(theta_mode):
 
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
-def test_report_no_load_longitudinal_note_states_resistance_optimum(profile):
+def test_retained_report_no_load_longitudinal_note_states_resistance_optimum(profile, tmp_path):
     # theta_mode == "resistance": no live shear or torsion, so there is no live
     # member-angle objective and the capacity result uses its resistance optimum.
-    txt = " ".join(_pdf_text(sector_report.build_report(
+    txt = " ".join(_pdf_text(_retained_angle_note_pdf(
         {}, _inp(), _combined_longitudinal("resistance"), figures=False,
         profile=profile,
+        artifact_path=tmp_path / "retained-angle-note.pdf",
     )).split())
     assert "No shear or torsion is acting" in txt
     assert "resistance-optimum" in txt
@@ -11066,11 +12318,12 @@ def test_report_no_load_longitudinal_note_states_resistance_optimum(profile):
 
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
-def test_report_shared_longitudinal_note_states_the_common_angle(profile):
+def test_retained_report_shared_longitudinal_note_states_the_common_angle(profile, tmp_path):
     # theta_mode == "utilisation" is the normal case: one admissible member angle.
-    txt = " ".join(_pdf_text(sector_report.build_report(
+    txt = " ".join(_pdf_text(_retained_angle_note_pdf(
         {}, _inp(), _combined_longitudinal("utilisation"), figures=False,
         profile=profile,
+        artifact_path=tmp_path / "retained-angle-note.pdf",
     )).split())
     assert "ONE member strut angle shared" in txt
     assert "minimise the governing utilisation" in txt
@@ -11078,14 +12331,204 @@ def test_report_shared_longitudinal_note_states_the_common_angle(profile):
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
 @pytest.mark.parametrize("theta_mode", [None, "unknown"])
-def test_report_unknown_longitudinal_angle_mode_uses_neutral_note(
+def test_retained_report_unknown_longitudinal_angle_mode_uses_neutral_note(
     profile,
     theta_mode,
+    tmp_path,
 ):
-    txt = " ".join(_pdf_text(sector_report.build_report(
+    txt = " ".join(_pdf_text(_retained_angle_note_pdf(
         {}, _inp(), _combined_longitudinal(theta_mode), figures=False,
         profile=profile,
+        artifact_path=tmp_path / "retained-angle-note.pdf",
     )).split())
     assert "does not identify how the member strut angle was selected" in txt
     assert "No shear or torsion is acting" not in txt
     assert "resistance-optimum" not in txt
+
+
+
+def _retained_dkna_sum_with_moment(moment, *, mv_independent):
+    """Build a coherent retained action-alone screen, without native claims."""
+    combined = _combined_out(mv_independent=mv_independent)
+    combined["action_alone"]["m"]["demand"] = moment
+    selection = combined_core.dkna_interaction_result(
+        0.0, None, moment, 100.0, 40.0, 100.0, 30.0, 100.0,
+        m_v_independent=mv_independent,
+    )
+    combined.update(
+        r_n=selection.r_n, r_m=selection.r_m, r_v=selection.r_v, r_t=selection.r_t,
+        dkna_sum=selection.utilisation, dkna_valid=selection.valid,
+        dkna_conditional=selection.conditional,
+        dkna_limit_satisfied=selection.limit_satisfied,
+        dkna_status=selection.status, dkna_ok=selection.ok,
+        dkna_selection=asdict(selection),
+    )
+    return combined
+
+
+def _retained_dkna_unit_input(template, combined):
+    """Declare matching route/actions for this retained formatting unit only."""
+    inp = copy.deepcopy(template)
+    inp.update(
+        mode="Plastic", combined_on=True,
+        combined_method=codes.EC2_2005_DKNA.label,
+        combined_mv_independent=combined["m_v_independent"],
+    )
+    if combined.get("valid") is True:
+        records = combined["action_alone"]
+        inp.update(
+            P_pl=records["n"]["demand"], Mx_pl=records["m"]["demand"], My_pl=0.0,
+            shear_on=True, shear_V=records["v"]["demand"],
+            shear_Vx=0.0, shear_Vy=records["v"]["demand"],
+            torsion_on=True, torsion_T=records["t"]["demand"],
+        )
+    return inp
+
+
+def _retained_dkna_sum_unit_pdf(inp, combined, profile):
+    """Format declared DK NA overview evidence and the unchanged real leaf.
+
+    This unit does not exercise native currentness or report scheduling.
+    The sole overview provider substitution ends before the real leaf runs.
+    """
+    assert inp["combined_method"] == combined["method"] == codes.EC2_2005_DKNA.label
+    assert result_presentation.combined_publication_scope_note(combined) is None
+    original = pickle.dumps((inp, combined))
+    assert inp["combined_mv_independent"] is combined["m_v_independent"]
+    if combined.get("valid") is True:
+        records = combined["action_alone"]
+        assert (inp["P_pl"], inp["Mx_pl"], inp["My_pl"], inp["shear_Vx"], inp["shear_Vy"], inp["torsion_T"]) == (
+            records["n"]["demand"], records["m"]["demand"], 0.0, 0.0,
+            records["v"]["demand"], records["t"]["demand"],
+        )
+        assert set(records) == {"n", "m", "v", "t"}
+        operands = [value for key in ("n", "m", "v", "t")
+                    for value in (records[key]["demand"], records[key]["resistance"])]
+        rebuilt = combined_core.dkna_interaction_result(
+            *operands, m_v_independent=combined["m_v_independent"],
+        )
+        assert combined["dkna_selection"] == asdict(rebuilt)
+        for key in ("r_n", "r_m", "r_v", "r_t"):
+            assert combined[key] == getattr(rebuilt, key)
+        assert combined["dkna_sum"] == rebuilt.utilisation
+        assert combined["dkna_valid"] is rebuilt.valid
+        if rebuilt.valid:
+            assert combined["dkna_conditional"] is rebuilt.conditional
+            assert combined["dkna_limit_satisfied"] is rebuilt.limit_satisfied
+            assert combined["dkna_status"] == rebuilt.status
+            assert combined["dkna_ok"] is rebuilt.ok
+        else:
+            # Preserve the unavailable-action compound vector's stale verdict
+            # aliases. The actual public status must still reject the screen.
+            assert result_presentation.combined_dkna_status(combined) == "NOT ASSESSED"
+    else:
+        assert combined.get("dkna_sum") is None
+    status = result_presentation.combined_dkna_status(combined)
+    note = "DK NA screen: " + result_presentation.combined_dkna_screen_label(combined)
+    assumption_note = result_presentation.combined_dkna_assumption_note(combined)
+    if assumption_note:
+        note += "; " + assumption_note
+    governing_note = result_presentation.combined_governing_assessment_note(combined)
+    if governing_note:
+        note += " " + governing_note
+    row = result_presentation._summary_row(
+        "Combined M-V-T - DK NA sum", "plastic", status,
+        result_presentation._percent(combined.get("dkna_sum")), "<= 100 %",
+        combined.get("dkna_sum"), "M-V-T Combined", note, inp,
+        overview_key="combined:dkna_sum",
+    )
+    frozen_row = pickle.dumps(row)
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(buffer, {}, inp, {"combined": combined}, figures=False, profile=profile)
+    builder._h1("Retained 2005 DK NA sum formatting")
+    original_provider = result_presentation.multi_case_summary_rows
+    calls = []
+
+    def declared_rows(current_inp, current_out):
+        assert current_inp is builder._base_inp and current_out is builder._base_out
+        calls.append(True)
+        return [copy.deepcopy(row)]
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(result_presentation, "multi_case_summary_rows", declared_rows)
+        builder._results_overview()
+    assert result_presentation.multi_case_summary_rows is original_provider
+    assert calls == [True]
+    tables = [item for item in builder.flow if getattr(item, "_sector_results_overview", False)]
+    assert len(tables) == 1
+    actual_rows = [tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+                         for cell in cells) for cells in tables[0]._cellvalues]
+    actual = [item for item in actual_rows if item[0] == row["check"]]
+    assert len(actual) == 1
+    assert row["source"] == "Combination register C1"
+    assert actual[0] == (
+        "Combined M-V-T - DK NA sum", "PL-TEST", status,
+        result_presentation._percent(combined.get("dkna_sum")), "<= 100 %",
+        "Source: Combination register C1; " + note,
+    )
+    if profile != "Brief":
+        builder._combined_direction(combined, include_case_heading=False)
+
+        def tables_in(items):
+            for item in items:
+                if isinstance(item, sector_report.KeepTogether):
+                    yield from tables_in(item._content)
+                elif isinstance(item, sector_report.Table):
+                    yield item
+
+        action_tables = []
+        for table in tables_in(builder.flow):
+            header = getattr(table, "_sector_header_row", None)
+            if header is None:
+                continue
+            data = [tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+                          for cell in cells) for cells in table._cellvalues]
+            if data[header] == ("Action", "SEd", "SRd", "Ratio"):
+                action_tables.append(data[table._sector_data_start:])
+        if combined.get("valid") is True:
+            assert len(action_tables) == 1
+            expected = []
+            for key, label, unit in (("n", "Axial N", "kN"), ("m", "Bending M", "kNm"),
+                                     ("v", "Shear V", "kN"), ("t", "Torsion T", "kNm")):
+                record = combined["action_alone"][key]
+                expected.append((label, f"{record['demand']:.3f} {unit}",
+                                 "-" if record["resistance"] is None else f"{record['resistance']:.3f} {unit}",
+                                 sector_report._pct(combined[f"r_{key}"])))
+            assert action_tables[0] == expected
+        else:
+            assert action_tables == []
+    sector_report.SimpleDocTemplate(
+        buffer, pagesize=sector_report.A4,
+        leftMargin=20 * sector_report.mm, rightMargin=20 * sector_report.mm,
+        topMargin=25 * sector_report.mm, bottomMargin=20 * sector_report.mm,
+    ).build(list(builder.flow))
+    assert pickle.dumps(row) == frozen_row
+    assert pickle.dumps((inp, combined)) == original
+    return buffer.getvalue(), actual[0]
+
+
+
+def _retained_angle_note_pdf(meta, inp, out, *, figures, profile, artifact_path):
+    """Actual Base-EN component formatter; no native report/currentness claim."""
+    assert meta == {} and figures is False
+    assert profile in {"Standard", "Audit"}
+    assert set(out) == {"combined"}
+    combined = out["combined"]
+    assert combined["method"] == codes.EC2_2005.label
+    assert result_presentation.combined_publication_scope_note(combined) is None
+    before = pickle.dumps((inp, out))
+    # This is explicitly the retained Base-EN formatting context.
+    unit_input = dict(inp, combined_on=True, combined_method=combined["method"])
+    components = result_presentation.combined_physical_components(combined)
+    longitudinal = next(item for item in components if item["key"] == "longitudinal")
+    assert longitudinal["chord_status"] == "PASS"
+    assert longitudinal["governing"] is not None
+    pdf, rows = _pub_h01_2005_component_unit_pdf(unit_input, combined, profile)
+    actual = [row for row in rows if row[0] == "Combined longitudinal reinforcement"]
+    assert len(actual) == 1
+    assert actual[0][2:4] == (
+        longitudinal["status"], sector_report._pct(longitudinal["util"]),
+    )
+    assert pickle.dumps((inp, out)) == before
+    artifact_path.write_bytes(pdf)
+    return pdf

@@ -46,7 +46,7 @@ from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
 from sector import __licensee__ as sector_licensee  # noqa: E402
 from sector import __version__ as sector_version  # noqa: E402
-from sector import codes, design_standards  # noqa: E402
+from sector import codes, design_standards, shear_inputs  # noqa: E402
 from sector.build_info import source_revision  # noqa: E402
 from sector.engineer_message import EngineerMessage  # noqa: E402
 from sector.materials import (  # noqa: E402
@@ -5293,14 +5293,14 @@ def _slab_density_face_caption(layout, face):
             f"{series['role']} T{series['diameter_mm']:g} @ "
             f"{series['spacing_mm']:g} mm: "
             f"{series['equivalents_per_layer']:.3f} bar-equivalents/m and "
-            f"Aₛ = {series['area_per_layer_mm2_per_m']:,.3f} mm²/m per layer."
+            f"A\u209b = {series['area_per_layer_mm2_per_m']:,.3f} mm\u00b2/m per layer."
         )
     layers = selected[0]["layers"]
     per_layer = sum(series["area_per_layer_mm2_per_m"] for series in selected)
     total = per_layer * layers
     parts.append(
-        f"{face} total: Aₛ = {per_layer:,.3f} mm²/m per layer and "
-        f"{total:,.3f} mm²/m over {layers} layer{'s' if layers != 1 else ''}."
+        f"{face} total: A\u209b = {per_layer:,.3f} mm\u00b2/m per layer and "
+        f"{total:,.3f} mm\u00b2/m over {layers} layer{'s' if layers != 1 else ''}."
     )
     return " ".join(parts)
 
@@ -5316,8 +5316,8 @@ def _slab_density_preview_caption(layout, face):
     per_layer = sum(series["area_per_layer_mm2_per_m"] for series in selected)
     return (
         f"{face}: {layers} layer{'s' if layers != 1 else ''}; {names}; "
-        f"Aₛ = {per_layer:,.3f} mm²/m per layer and "
-        f"{per_layer * layers:,.3f} mm²/m in total."
+        f"A\u209b = {per_layer:,.3f} mm\u00b2/m per layer and "
+        f"{per_layer * layers:,.3f} mm\u00b2/m in total."
     )
 
 
@@ -7176,8 +7176,8 @@ def build_inputs(host=st):
     shear_section_form = _seeded_selectbox(
         sts,
         "Shear section form",
-        list(shear.SHEAR_SECTION_FORMS),
-        shear.SHEAR_SECTION_AUTO,
+        list(shear_inputs.SHEAR_SECTION_FORMS),
+        shear_inputs.SHEAR_SECTION_AUTO,
         key="shear_section_form",
         disabled=not shear_on,
         help=(
@@ -7186,10 +7186,12 @@ def build_inputs(host=st):
             "geometry."
         ),
     )
-    variable_section = shear_section_form == shear.SHEAR_SECTION_VARIABLE
-    circular_section = shear_section_form == shear.SHEAR_SECTION_CIRCULAR
+    variable_section = shear_section_form == shear_inputs.SHEAR_SECTION_VARIABLE
+    circular_section = shear_section_form == shear_inputs.SHEAR_SECTION_CIRCULAR
     if shear_on and not _shear_2023 and (variable_section or circular_section):
-        sts.warning(
+        _manual_warning(
+            sts,
+            "method-applicability",
             "This section form is not assessed by the selected first-generation "
             "shear method in Sector. Use a separately applicable member calculation."
         )
@@ -7262,8 +7264,8 @@ def build_inputs(host=st):
     shear_duct_case = _seeded_selectbox(
         sts,
         "Web duct condition",
-        list(shear.SHEAR_DUCT_CASES),
-        shear.SHEAR_DUCT_NONE,
+        list(shear_inputs.SHEAR_DUCT_CASES),
+        shear_inputs.SHEAR_DUCT_NONE,
         key="shear_duct_case",
         disabled=not shear_on,
         help=(
@@ -7271,7 +7273,7 @@ def build_inputs(host=st):
             "at the most unfavourable level in each shear direction."
         ),
     )
-    ducts_present = shear_duct_case != shear.SHEAR_DUCT_NONE
+    ducts_present = shear_duct_case != shear_inputs.SHEAR_DUCT_NONE
     ductx, ducty = sts.columns(2)
     shear_vx_duct_sum = _seeded_number(
         ductx,
@@ -10399,7 +10401,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                 o_axis = "y" if l_axis == "x" else "x"
                 other_component = "vy" if o_axis == "x" else "vx"
                 circular_off_axis_geometry = None
-                if inp.get("shear_section_form") == shear.SHEAR_SECTION_CIRCULAR:
+                if inp.get("shear_section_form") == shear_inputs.SHEAR_SECTION_CIRCULAR:
                     circular_off_axis_geometry = (
                         shear.resolve_circular_shear_geometry(
                             bw_mm=inp.get(f"shear_{other_component}_bw"),
@@ -10487,7 +10489,7 @@ def _run_uniaxial_capacity_checks(inp, out):
 
         def _ftd_v_at(cot):
             """Additional longitudinal shear force on the tension chord (kN)."""
-            if not shear_live:
+            if not shear_live or concrete_route_applicable:
                 return 0.0
             factor = 1.0 if links_model_2023 else 0.5
             return factor * v_ed_s * cot
@@ -12110,9 +12112,9 @@ def detailing_view(inp, results, *, global_results=None):
                     )
                     st.caption(
                         "Nominal envelope: achieved governing interval "
-                        f"{float(achieved):g}°"
+                        f"{float(achieved):g}\u00b0"
                         + (
-                            f" for the {float(target):g}° target; "
+                            f" for the {float(target):g}\u00b0 target; "
                             if target is not None
                             else "; "
                         )
@@ -12129,7 +12131,7 @@ def detailing_view(inp, results, *, global_results=None):
                         )
                         st.caption(
                             "Refinement estimate: utilisation interval "
-                            f"{100.0 * float(lower):.4f}–"
+                            f"{100.0 * float(lower):.4f}\u2013"
                             f"{100.0 * float(upper):.4f} %; {convergence}."
                         )
 
@@ -14155,7 +14157,18 @@ def _nominal_shear_record(inp, shear_result, *, torsion_result=None):
     )
 
 
-@presentation.publication_calculation_scope()
+def _publication_calculation(function):
+    """Enter publication scope only when a result surface is actually opened."""
+
+    @functools.wraps(function)
+    def evaluate(*args, **kwargs):
+        with presentation.publication_calculation_scope():
+            return function(*args, **kwargs)
+
+    return evaluate
+
+
+@_publication_calculation
 def shear_view(inp, results, *, global_results=None):
     """Shear resistance without shear reinforcement (VRd,c) and the utilisation.
 

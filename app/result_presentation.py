@@ -879,6 +879,9 @@ def combined_bending_assessment_blocker(results, inp=None):
     results = results or {}
     combined = results.get("combined")
     torsion = results.get("torsion")
+    scope_note = combined_publication_scope_note(combined)
+    if scope_note is not None:
+        return scope_note
     if (
         combined is not None
         and isinstance(torsion, Mapping)
@@ -1838,8 +1841,8 @@ def directional_shear_publication_evidence_is_current(
         and plastic_result_predates_origin_contract(plastic_result)
     )
 
-    def finite_metric(value):
-        metric = _publication_metric(value)
+    def summary_metric(value, *, allow_positive_infinity=False):
+        metric = _publication_metric(value, allow_positive_infinity=allow_positive_infinity)
         return metric if metric is not None and metric >= 0.0 else None
 
     def candidate_input_for(face):
@@ -1882,7 +1885,14 @@ def directional_shear_publication_evidence_is_current(
             value = row.get("util")
             if value is None:
                 continue
-            metric = finite_metric(value)
+            longitudinal = capacity.combined_longitudinal_assessment(combined)
+            infinite_chord_failure = bool(
+                row.get("overview_key") == "combined:longitudinal"
+                and row.get("status") == "FAIL"
+                and longitudinal.get("chord_status") == "FAIL"
+                and _has_valid_zero_capacity_chord_failure(longitudinal, "chord_util")
+            )
+            metric = summary_metric(value, allow_positive_infinity=infinite_chord_failure)
             if metric is None:
                 return None, None
             metrics.append(metric)
@@ -1922,7 +1932,7 @@ def directional_shear_publication_evidence_is_current(
         links = candidate_shear.get("links")
         if nominal.get("valid") is True:
             shear_status = nominal.get("status")
-            shear_metric = finite_metric(nominal.get("utilisation"))
+            shear_metric = summary_metric(nominal.get("utilisation"))
             if shear_status not in allowed_statuses or shear_metric is None:
                 return False, unavailable_reason
             if inp.get("shear_links") is True and isinstance(links, Mapping):
@@ -1936,12 +1946,20 @@ def directional_shear_publication_evidence_is_current(
                     candidate_shear,
                     torsion_result=torsion,
                 )
-                if current_links.valid is not True or longitudinal.get("valid") is not True:
+                if current_links.valid is not True:
                     return False, unavailable_reason
-                if longitudinal.get("status") != "NOT APPLICABLE":
+                longitudinal_status = longitudinal.get("status")
+                if longitudinal.get("valid") is not True:
+                    # The complete native substitute inventory remains current
+                    # context, with its original unavailable longitudinal verdict.
+                    # Current links have already rebuilt every angle participant.
+                    if _retained_fallback_angle_candidates(candidate_shear) is None:
+                        return False, unavailable_reason
+                    longitudinal_status = links["longitudinal_assessment"]["status"]
+                if longitudinal_status != "NOT APPLICABLE":
                     shear_status = capacity.aggregate_assessment_status((
                         str(shear_status),
-                        str(longitudinal.get("status")),
+                        str(longitudinal_status),
                     ))
         else:
             shear_status = str(nominal.get("status") or "NOT ASSESSED").upper()
@@ -1971,7 +1989,7 @@ def directional_shear_publication_evidence_is_current(
             candidate_shear.get("assessment_status") == shear_status,
             candidate_shear.get("assessment_ok") is expected_ok,
             candidate.get("shear_status") == shear_status,
-            finite_metric(candidate.get("shear_metric")) == shear_metric,
+            summary_metric(candidate.get("shear_metric")) == shear_metric,
         )):
             return False, unavailable_reason
 
@@ -2012,7 +2030,7 @@ def directional_shear_publication_evidence_is_current(
                 torsion_status = interaction_assessment_status(
                     current_interaction
                 )
-                torsion_metric = finite_metric(
+                torsion_metric = summary_metric(
                     current_interaction.get("value")
                 )
             minimum = torsion.get("min_reinf") or {}
@@ -2046,7 +2064,7 @@ def directional_shear_publication_evidence_is_current(
             if not minimum.get("applicable"):
                 minimum_metric = 0.0
             else:
-                minimum_metric = finite_metric(current_minimum.get("value"))
+                minimum_metric = summary_metric(current_minimum.get("value"))
             if torsion_metric is None or minimum_metric is None:
                 return False, unavailable_reason
         else:
@@ -2080,7 +2098,12 @@ def directional_shear_publication_evidence_is_current(
             if (
                 status not in allowed_statuses
                 or candidate.get(f"{prefix}_status") != status
-                or finite_metric(candidate.get(f"{prefix}_metric")) != metric
+                or summary_metric(
+                    candidate.get(f"{prefix}_metric"),
+                    allow_positive_infinity=(
+                        prefix == "combined" and status == "FAIL" and metric == math.inf
+                    ),
+                ) != metric
             ):
                 return False, unavailable_reason
         reconciled.append({
@@ -2148,7 +2171,7 @@ def directional_shear_publication_evidence_is_current(
         else:
             cot = None
         if cot is not None:
-            cot = finite_metric(cot)
+            cot = summary_metric(cot)
             if cot is None or cot <= 0.0:
                 return False, unavailable_reason
         expected_domains[domain] = {
@@ -2186,7 +2209,13 @@ def directional_shear_publication_evidence_is_current(
         for field, value in expected.items():
             retained_value = retained.get(field)
             if isinstance(value, Real) and not is_boolean_scalar(value):
-                if finite_metric(retained_value) != float(value):
+                if summary_metric(
+                    retained_value,
+                    allow_positive_infinity=(
+                        key == "combined" and field == "util"
+                        and expected["status"] == "FAIL" and value == math.inf
+                    ),
+                ) != float(value):
                     return False, unavailable_reason
             elif retained_value != value:
                 return False, unavailable_reason
@@ -2637,6 +2666,13 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
         shear_result
     )
     candidates = retained_chords.get("candidates") or ()
+    if links.get("longitudinal_fallback") is not None:
+        # A preserved substitute is not verified longitudinal resistance. It was
+        # nevertheless an input to the native provisional angle search. Rebuild
+        # that same inventory without promoting the strict chord assessment.
+        candidates = _retained_fallback_angle_candidates(shear_result)
+        if candidates is None or not torsion_live or torsion_context.get("subdivide"):
+            return None
     current_candidates = []
     for candidate in candidates:
         rebuilt = _current_link_chord_candidate(
@@ -2681,7 +2717,12 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
                     combined_core.longitudinal_chord_check_2023(
                         rebuilt["m_ed_signed"],
                         rebuilt["m_rd"],
-                        v_ed * cot if shear_live and gets_shift else 0.0,
+                        (
+                            v_ed * cot
+                            if shear_live and gets_shift
+                            and not concrete_route_applicable
+                            else 0.0
+                        ),
                         torsion_force(cot),
                         rebuilt["z"],
                         tension_low=candidate["tension_low"],
@@ -2700,6 +2741,7 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
                         (
                             0.5 * v_ed * cot
                             if shear_live and gets_shift
+                            and not concrete_route_applicable
                             else 0.0
                         ),
                         torsion_force(cot),
@@ -2737,10 +2779,21 @@ def _publication_mapping_contains_current(retained, expected):
             if type(value) is not type(current) or value != current:
                 return False
         elif isinstance(current, Real):
+            infinite_failure = bool(
+                key in {"util", "chord_util"}
+                and expected.get("status") == "FAIL"
+                and expected.get("ok") is False
+                and (key != "chord_util" or expected.get("chord_status") == "FAIL")
+                and not isinstance(value, bool)
+                and isinstance(value, Real)
+                and float(value) == math.inf
+                and float(current) == math.inf
+                and _has_valid_zero_capacity_chord_failure(expected, key)
+            )
             if (
                 type(value) is bool
                 or not isinstance(value, Real)
-                or not math.isfinite(float(value))
+                or (not math.isfinite(float(value)) and not infinite_failure)
                 or not math.isclose(
                     float(value),
                     float(current),
@@ -2755,6 +2808,121 @@ def _publication_mapping_contains_current(retained, expected):
         elif value != current:
             return False
     return True
+
+
+def _has_valid_zero_capacity_chord_failure(record, key):
+    """Allow infinity only with the complete retained zero-capacity arithmetic."""
+
+    candidate = (
+        record if "m_rd" in record else record.get(
+            "chord_governing" if key == "chord_util" else "governing"
+        )
+    )
+    try:
+        verified = capacity._combined_longitudinal_candidate(candidate)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return bool(
+        verified is not None
+        and verified["m_rd"] == 0.0
+        and verified["m_total"] > 0.0
+        and verified["util"] == math.inf
+    )
+
+
+def _retained_fallback_angle_candidates(shear_result):
+    """Validate the complete provisional inventory before current reconstruction."""
+
+    links = shear_result.get("links") or {}
+    candidates = links.get("chord_candidates")
+    axis = shear_result.get("axis")
+    tension_low = shear_result.get("tension_low")
+    if (
+        not isinstance(candidates, (list, tuple)) or len(candidates) != 4
+        or type(axis) is not str or axis not in {"x", "y"}
+        or type(tension_low) is not bool or links.get("model_2023") is not False
+    ):
+        return None
+    other_axis = "y" if axis == "x" else "x"
+    identities = []
+    for candidate in candidates:
+        if (
+            not isinstance(candidate, Mapping)
+            or type(candidate.get("role")) is not str
+            or type(candidate.get("axis")) is not str
+            or type(candidate.get("tension_low")) is not bool
+            or type(candidate.get("conditional")) is not bool
+            or _publication_utilisation(
+                candidate.get("util"), allow_positive_infinity=True,
+            ) is None
+        ):
+            return None
+        identities.append((candidate["role"], candidate["axis"], candidate["tension_low"]))
+    if set(identities) != {
+        ("shear_axis", axis, True), ("shear_axis", axis, False),
+        ("off_axis", other_axis, True), ("off_axis", other_axis, False),
+    }:
+        return None
+    substitutes = [item for item in candidates if item["conditional"] is False]
+    if len(substitutes) != 1:
+        return None
+    substitute = substitutes[0]
+    substitute_capacity = _publication_metric(substitute.get("m_rd"))
+    longitudinal_shear_force = _publication_metric(links.get("longitudinal_shear_force"))
+    if (
+        substitute["role"] != "shear_axis"
+        or substitute["tension_low"] is not tension_low
+        or substitute.get("gets_shift") is not True
+        or substitute_capacity is None or substitute_capacity <= 0.0
+        or links.get("longitudinal_all_conditional") is not False
+        or longitudinal_shear_force is None or longitudinal_shear_force < 0.0
+    ):
+        return None
+    # Reuse the strict arithmetic and complete-face metadata contracts, relaxing
+    # only the already identified substitute's conditional flag in local copies.
+    # The actual inventory remains provisional and is never returned as assessed.
+    structural_candidates = [dict(item, conditional=True) for item in candidates]
+    if any(
+        capacity._combined_longitudinal_candidate(item) is None
+        for item in structural_candidates
+    ) or not capacity.combined_longitudinal_chord_evidence_is_valid(
+        dict(links, chord_candidates=structural_candidates),
+        shear_axis=axis,
+        shear_tension_low=tension_low,
+        shear_live=longitudinal_shear_force > 0.0,
+        torsion_live=True,
+        torsion_subdivided=False,
+    ):
+        return None
+    shear_candidates = [item for item in candidates if item["role"] == "shear_axis"]
+    off_candidates = [item for item in candidates if item["role"] == "off_axis"]
+    expected_aliases = {
+        "longitudinal_fallback": substitute,
+        "governing_longitudinal": max(candidates, key=lambda item: float(item["util"])),
+        "chord": max(shear_candidates, key=lambda item: float(item["util"])),
+        "chord_off": max(off_candidates, key=lambda item: float(item["util"])),
+    }
+    if any(
+        not _publication_mapping_contains_current(links.get(key), expected)
+        or set(links[key]) != set(expected)
+        for key, expected in expected_aliases.items()
+    ):
+        return None
+    derived = capacity.longitudinal_chord_assessment(
+        links,
+        shear_axis=axis,
+        shear_tension_low=tension_low,
+        shear_live=longitudinal_shear_force > 0.0,
+        torsion_live=True,
+        torsion_subdivided=False,
+    )
+    retained = links.get("longitudinal_assessment")
+    if (
+        not _publication_mapping_contains_current(retained, derived)
+        or set(retained) != set(derived)
+    ):
+        return None
+    return tuple(candidates)
 
 
 def _current_torsion_root_state(torsion_context, subtubes):
@@ -3364,6 +3532,45 @@ def torsion_publication_evidence_is_current(inp, shear_result, torsion_result):
     )
 
 
+def combined_publication_scope_note(result):
+    """Withhold a retained 2023 Combined route outside the supported methods."""
+
+    if not isinstance(result, Mapping):
+        return None
+    directions = result.get("directions")
+    members = [result]
+    if isinstance(directions, Mapping):
+        members.extend(directions.values())
+    for member in members:
+        if not isinstance(member, Mapping):
+            continue
+        candidates = [member.get("longitudinal"), member.get("governing_longitudinal")]
+        retained = member.get("longitudinal_candidates")
+        if isinstance(retained, (list, tuple)):
+            candidates.extend(retained)
+        malformed_formula = any(
+            isinstance(candidate, Mapping)
+            and "chord_formula" in candidate
+            and candidate["chord_formula"] is not None
+            and not isinstance(candidate["chord_formula"], str)
+            for candidate in candidates
+        )
+        if malformed_formula:
+            return "NOT ASSESSED: the retained Combined chord formula is invalid."
+        if member.get("longitudinal_model_2023") is True or any(
+            isinstance(candidate, Mapping)
+            and isinstance(candidate.get("chord_formula"), str)
+            and candidate["chord_formula"] in {"8.51", "8.52"}
+            for candidate in candidates
+        ):
+            return (
+                "NOT ASSESSED: 2023 Combined bending, shear and torsion is outside "
+                "the supported release scope. Use the separate 2023 shear chord "
+                "check or a supported shared edition for Combined."
+            )
+    return None
+
+
 def _single_combined_publication_evidence_is_current(
     inp,
     calculation_input,
@@ -3388,6 +3595,9 @@ def _single_combined_publication_evidence_is_current(
         return False, unavailable
     if not isinstance(plastic_result, Mapping):
         return False, unavailable
+    scope_note = combined_publication_scope_note(combined_result)
+    if scope_note is not None:
+        return False, scope_note
     if (
         torsion_result.get("longitudinal_assessment") is not None
         and torsion_longitudinal_assessment(
@@ -3583,6 +3793,9 @@ def combined_publication_evidence_is_current(inp, results):
         return False, unavailable
     if combined.get("method") != inp.get("combined_method"):
         return False, unavailable
+    scope_note = combined_publication_scope_note(combined)
+    if scope_note is not None:
+        return False, scope_note
 
     if combined.get("biaxial") is True:
         directions = combined.get("directions")
@@ -8330,13 +8543,13 @@ def multi_case_summary_rows(inp, results, *, stale=False):
                 )
             else:
                 case_inp = dict(inp)
-            if family == "plastic":
-                # Clear spacing is section-wide and is appended once below.
-                case_inp["clear_spacing_on"] = False
-            else:
-                # Link detailing is a plastic/member check.  An elastic-case
+            # Clear spacing is section-wide and is appended once below.
+            case_inp["clear_spacing_on"] = False
+            if family == "elastic":
+                # Reinforcement detailing is a plastic/member check. An elastic-case
                 # snapshot may retain the global result for convenience, but it
                 # must not manufacture a second PL-case publication row.
+                case_inp["minimum_reinforcement_on"] = False
                 case_inp["transverse_detailing_on"] = False
             if family == "elastic" and "transverse_reinforcement" in case_results:
                 case_results = dict(case_results)

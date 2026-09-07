@@ -215,24 +215,32 @@ def member_checks(
     asw_per_s = link_area / 150.0
     fywd = 500.0 / GAMMA_S
     nu1 = 0.55  # DK NA:2024 selected value for the 2005-family shear branch.
-    # With the shared combined-M-V-T angle, the active objective is
-    # a/cot + b(cot + 1/cot). Its stationary point is sqrt((a+b)/b),
-    # sampled by the retained three-decimal angle search.
-    effective_wall_mm = 60.0
-    ak_m2 = (0.200 - 0.060) * (0.300 - 0.060)
+    # A uniform 80 mm wall satisfies all four reinforcement-derived lower bounds
+    # (60 mm horizontally and 80 mm vertically) without changing the bar cage.
+    effective_wall_mm = 80.0
+    ak_m2 = (0.200 - 0.080) * (0.300 - 0.080)
     nu_torsion = 0.385
-    shear_utilisation_coefficient = (
-        30.0 / (asw_per_s * lever_arm_mm * fywd / 1000.0)
-    )
+    shear_crushing_coefficient = bw_mm * lever_arm_mm * nu1 * FCD_MPA / 1000.0
+    torsion_asw_per_s = math.pi * 10.0**2 / 4.0 / 150.0
+    torsion_yield_coefficient = torsion_asw_per_s * 2.0 * ak_m2 * fywd
     torsion_resistance_coefficient = (
         2.0 * nu_torsion * FCD_MPA * ak_m2 * effective_wall_mm
     )
-    torsion_utilisation_coefficient = 20.0 / torsion_resistance_coefficient
-    cot = round(math.sqrt(
-        (shear_utilisation_coefficient + torsion_utilisation_coefficient)
-        / torsion_utilisation_coefficient
-    ), 3)
-    cot = min(max(cot, 1.0), 2.5)
+    # Concrete carries V, so the shared stirrup objective is E/c. Shared strut
+    # crushing still carries V+T: D*(c+1/c). Their crossing brackets the minimax;
+    # compare both neighboring grid nodes rather than rounding a stationary point
+    # of an unrelated sum. The caller checks every chord against this lower bound.
+    yielding = 20.0 / torsion_yield_coefficient
+    crushing = (20.0 / torsion_resistance_coefficient
+                + 30.0 / shear_crushing_coefficient)
+    crossing = math.sqrt(yielding / crushing - 1.0)
+    grid = (math.floor(crossing * 1000.0) / 1000.0,
+            math.ceil(crossing * 1000.0) / 1000.0)
+
+    def transverse_bound(value):
+        return max(yielding / value, crushing * (value + 1.0 / value))
+
+    cot = min(grid, key=transverse_bound)
     vrd_s = asw_per_s * lever_arm_mm * fywd * cot / 1000.0
     vrd_max = (
         bw_mm * lever_arm_mm * nu1 * FCD_MPA
@@ -240,7 +248,6 @@ def member_checks(
     )
     shear_links_utilisation = 30.0 / min(vrd_s, vrd_max)
 
-    torsion_asw_per_s = math.pi * 10.0**2 / 4.0 / 150.0
     trd_s = torsion_asw_per_s * 2.0 * ak_m2 * fywd * cot
     trd_max = (
         2.0 * nu_torsion * FCD_MPA * ak_m2 * effective_wall_mm
@@ -256,13 +263,29 @@ def member_checks(
     required_spacing = max(20.0, diameter, 16.0 + 5.0)
     minimum_link_ratio = 0.063 * math.sqrt(FCK_MPA) / 500.0
     provided_link_ratio = link_area / (150.0 * bw_mm)
-    torsion_spacing_limit = min(2.0 * (140.0 + 240.0) / 8.0, 200.0)
+    torsion_spacing_limit = min(2.0 * (120.0 + 220.0) / 8.0, 200.0)
+
+    # DK NA interaction uses action-alone capacities. With M=N=0, both possible
+    # shear tension faces are mandatory; the upper cage has only 800 mm2.
+    rho_positive = 800.0 / (bw_mm * d_mm)
+    basic_positive = crdc * k * (100.0 * rho_positive * FCK_MPA) ** (1.0 / 3.0)
+    vrd_positive = max(basic_positive, vmin) * bw_mm * d_mm / 1000.0
+    isolated_vrd = min(vrd_c, vrd_positive)
+    isolated_t_cot = math.sqrt(
+        torsion_resistance_coefficient / torsion_yield_coefficient - 1.0
+    )
+    isolated_trd = min(
+        torsion_yield_coefficient * isolated_t_cot,
+        torsion_resistance_coefficient / (isolated_t_cot + 1.0 / isolated_t_cot),
+    )
 
     return {
         "k": k,
         "rho_l": rho_l,
         "vrd_c_kn": vrd_c,
         "cot_theta": cot,
+        "member_utilisation": transverse_bound(cot),
+        "neighbor_utilisation": max(transverse_bound(value) for value in grid),
         "vrd_s_kn": vrd_s,
         "vrd_max_kn": vrd_max,
         "shear_links_utilisation": shear_links_utilisation,
@@ -272,9 +295,11 @@ def member_checks(
         "torsion_utilisation": torsion_utilisation,
         "combined_sum": (
             bending_utilisation
-            + shear_links_utilisation
-            + torsion_utilisation
+            + 30.0 / isolated_vrd
+            + 20.0 / isolated_trd
         ),
+        "action_alone_vrd_kn": isolated_vrd,
+        "action_alone_trd_knm": isolated_trd,
         "clear_spacing_mm": clear_spacing,
         "required_spacing_mm": required_spacing,
         "minimum_link_ratio": minimum_link_ratio,

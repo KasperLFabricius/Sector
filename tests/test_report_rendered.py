@@ -23,6 +23,8 @@ from tools.report_render_fixture import (
     validate_worked_example_text,
 )
 
+import result_presentation
+
 
 def test_outline_validation_accepts_a_visible_heading_wrapped_by_pdf_layout(
     tmp_path,
@@ -68,7 +70,27 @@ def test_outline_validation_still_rejects_a_destination_on_the_wrong_page(
 
 def test_reference_fixture_engineering_is_internally_consistent():
     inp = _inputs()
-    validate_fixture_engineering(inp, _results(inp))
+    out = _results(inp)
+    validate_fixture_engineering(inp, out)
+    rows = result_presentation.multi_case_summary_rows(inp, out)
+    selected = result_presentation.governing_summary_rows(rows)
+    assert not result_presentation.governing_information_rows(selected)
+    # Both Elastic cases inherit the global detailing toggles. They must not
+    # create extra Plastic NOT RUN rows or repeat the section-wide spacing check.
+    assert len(out["elastic_cases"]) == 2
+    assert [row["case"] for row in rows if row["check"] == "Concrete stress"] == [
+        "EL-QA-1", "EL-QA-2",
+    ]
+    assert inp["minimum_reinforcement_on"] is True
+    assert inp["clear_spacing_on"] is True
+    assert [
+        (row["case"], row["status"]) for row in rows
+        if row.get("overview_key") == "minimum_reinforcement"
+    ] == [("PL-QA-1", "PASS")]
+    assert [
+        (row["case"], row["status"]) for row in rows
+        if row.get("overview_key") == "clear_spacing"
+    ] == [("-", "PASS")]
 
 
 def test_reference_fixture_uses_independent_duration_crack_width_criteria():

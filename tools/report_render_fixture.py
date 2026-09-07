@@ -286,12 +286,29 @@ def _inputs() -> dict:
         "shear_links": True,
         "shear_method": codes.EC2_2005_DKNA.label,
         "shear_gamma_v": 1.40,
+        "shear_section_form": shear.SHEAR_SECTION_AUTO,
+        "shear_duct_case": shear.SHEAR_DUCT_NONE,
+        "shear_hoop_diameter": 0.0,
+        "shear_vx_bw": 0.0,
+        "shear_vy_bw": 0.0,
+        "shear_vx_web_inclination_deg": 0.0,
+        "shear_vy_web_inclination_deg": 0.0,
+        "shear_vx_fitted_z": 0.0,
+        "shear_vy_fitted_z": 0.0,
+        "shear_vx_duct_sum": 0.0,
+        "shear_vy_duct_sum": 0.0,
+        "shear_vx_duct_largest": 0.0,
+        "shear_vy_duct_largest": 0.0,
         "shear_vx_link_legs": 2.0,
         "shear_vy_link_legs": 2.0,
         "shear_link_dia": 10.0,
         "shear_link_s": 150.0,
         "shear_fywk": 500.0,
         "torsion_on": True,
+        "torsion_tef": 60.0,
+        "torsion_nu_v": False,
+        "torsion_subdivide": False,
+        "torsion_subrects": [],
         "torsion_method": codes.EC2_2005_DKNA.label,
         "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
         "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
@@ -361,7 +378,9 @@ def _inputs() -> dict:
         ],
         "tendon_elements": [],
         "concrete": Concrete(fck=30.0, gamma_c=1.5, curve=2),
-        "steel": mild_materials["M1"],
+        # Match native input assembly: the capacity reference follows the selected
+        # material; the per-bar laws below retain the mixed reinforcement cage.
+        "steel": mild_materials[second_id],
         "mild_material_catalog": mild_catalogue,
         "mild_materials": mild_materials,
         "bar_materials": [
@@ -405,99 +424,6 @@ def _inputs() -> dict:
         "v_max": 360.0,
         "v_inc": 90.0,
         "extent": 0.2,
-    }
-
-
-def _plastic_point() -> dict:
-    """Return the retained accepted-state operands for the worked capacity point."""
-    return {
-        "V": 0.0,
-        "Mx": 100.0,
-        "My": 0.0,
-        "na_x": 0.0,
-        "na_y": -0.0075,
-        "eps_c": 0.35,
-        "eps_s": 0.25,
-        "eps_s_comp": -0.1,
-        "eps_cable": 0.0,
-        "kappa": 0.0035 / 0.1575,
-        "comp_force": 250.0,
-        "lever": 0.2,
-        "dx": 0.0,
-        "dy": 0.2,
-        "converged": True,
-        "axial_requested": 0.0,
-        "axial_achieved": 0.0,
-        "axial_residual": 0.0,
-        "axial_tolerance": 1.0e-6,
-        "axial_reachable": True,
-        "compression_depth": 0.1575,
-        "neutral_axis_offset": -0.0075,
-        "strain_gradient_x": 0.0,
-        "strain_gradient_y": 0.0035 / 0.1575,
-        "strain_offset": 1.0 / 6000.0,
-        "search_lower_depth": 0.01,
-        "search_upper_depth": 0.29,
-        "search_lower_axial": -45.0,
-        "search_upper_axial": 62.0,
-        "search_iterations": 8,
-        "concrete_force": 250.0,
-        "concrete_mx": 70.0,
-        "concrete_my": 0.0,
-        "bar_force": -250.0,
-        "bar_mx": 30.0,
-        "bar_my": 0.0,
-        "tendon_force": 0.0,
-        "tendon_mx": 0.0,
-        "tendon_my": 0.0,
-        "compression_mx": 70.0,
-        "compression_my": 0.0,
-        "tension_force": -250.0,
-        "tension_mx": 30.0,
-        "tension_my": 0.0,
-        "concrete_corner_states": [{
-            "point_no": 4,
-            "ring": "Outer",
-            "ring_point_no": 4,
-            "x_mm": -100.0,
-            "y_mm": 150.0,
-            "section_strain_permille": 3.5,
-            "strain_permille": -3.5,
-            "stress_mpa": -20.0,
-        }],
-        "reinforcement_states": [{
-            "element_type": "Bar",
-            "element_no": 1,
-            "element_id": "bar 1",
-            "material_id": "M1",
-            "material_name": "B500",
-            "state": "Tension",
-            "x_mm": 0.0,
-            "y_mm": -120.0,
-            "area_mm2": 500.0,
-            "section_strain_permille": -2.5,
-            "initial_strain_permille": 0.0,
-            "strain_permille": 2.5,
-            "stress_mpa": 500.0,
-            "force_kn": 250.0,
-            "internal_force_kn": -250.0,
-            "internal_mx_knm": 30.0,
-            "internal_my_knm": 0.0,
-        }],
-        "curvature_candidates": [{
-            "mode": "concrete_crushing",
-            "element_index": None,
-            "element_id": None,
-            "strain_limit": 0.0035,
-            "distance_from_na_m": 0.1575,
-            "curvature_per_m": 0.0035 / 0.1575,
-            "selected": True,
-        }],
-        "curvature_selection": {
-            "mode": "concrete_crushing",
-            "element_index": None,
-            "curvature_per_m": 0.0035 / 0.1575,
-        },
     }
 
 
@@ -633,97 +559,13 @@ def _crack() -> dict:
 
 def _results(inp: dict | None = None) -> dict:
     inp = inp or _inputs()
-    code = codes.EC2_2005_DKNA
-    link_dia = 10.0
-    link_spacing = 150.0
-    link_legs = 2.0
-    fywk = 500.0
-    fywd = fywk / 1.15
-    capacity_material = inp["mild_materials"][
-        inp["capacity_steel_material_id"]
-    ]
-    fyd_long = capacity_material.fytk / capacity_material.gamma_y
-    fcd = 30.0 / 1.5
-    gamma_ct = float(inp["torsion_gamma_ct"])
-    fctk_005 = 0.7 * codes.fctm(30.0)
-    fctd = fctk_005 / gamma_ct
-    shear_z_mm = 243.0
-    link_asw = link_legs * math.pi * link_dia ** 2 / 4.0
-    link_asw_over_s = link_asw / link_spacing
-    torsion_asw = math.pi * link_dia ** 2 / 4.0
-    torsion_asw_over_s = torsion_asw / link_spacing
-    tube = torsion.tube_properties_with_reinforcement(
-        inp["outer"],
-        inp.get("holes"),
-        inp.get("bars"),
-        inp.get("torsion_tef", 0.0),
+    # Plastic and every dependent member family come from the actual solver on
+    # this fixture's own geometry, four bars, two materials and named cases.
+    import sector_app
+
+    member_results = case_analysis.run_case_tables(
+        dict(inp, mode="Plastic"), sector_app._run_single_analysis,
     )
-    shear_res = shear.vrd_c(
-        30.0, code, bw_mm=200.0, d_mm=270.0,
-        asl_mm2=500.0, n_ed_comp_kn=0.0, ac_m2=0.06, gamma_c=1.5,
-    )
-
-    @functools.lru_cache(maxsize=4096)
-    def link_at(cot: float) -> dict:
-        return shear.vrd_links(
-            30.0, code, bw_mm=200.0, d_mm=270.0,
-            asw_over_s=link_asw_over_s, fywk=fywk,
-            n_ed_comp_kn=0.0, ac_m2=0.06,
-            cot_min=cot, cot_max=cot, z_mm=shear_z_mm,
-            fcd_mpa=fcd, gamma_s=1.15,
-        )
-
-    @functools.lru_cache(maxsize=4096)
-    def torsion_at(cot: float) -> dict:
-        return capacity.tube_torsion(
-            tube, 25.0, tcode=code, fck=30.0, fcd=fcd, alpha_cw=1.0,
-            fywd=fywd, asw_over_s=torsion_asw_over_s,
-            cot_min=cot, cot_max=cot, nu_detail=False,
-            fctd=fctd, fyd_long=fyd_long,
-            closed_links_present=True,
-        )
-
-    def longitudinal_at(cot: float) -> dict:
-        torsion_result = torsion_at(cot)
-        ftd_t_cot = torsion_result["asl_req"] * fyd_long / 1000.0
-        return combined.longitudinal_check(
-            80.0, 100.0, 0.5 * 30.0 * cot, ftd_t_cot,
-            shear_z_mm / 1000.0,
-        )
-
-    angle_utilisations = [
-        lambda cot: combined.ratio(30.0, link_at(cot)["vrd_s"]),
-        lambda cot: combined.ratio(30.0, link_at(cot)["vrd_max"]),
-        lambda cot: torsion_at(cot)["util"],
-        lambda cot: combined.ratio(25.0, torsion_at(cot)["trd_s"]),
-        lambda cot: combined.crushing_interaction(
-            25.0, torsion_at(cot)["trd_max"],
-            30.0, link_at(cot)["vrd_max"],
-        ),
-        lambda cot: longitudinal_at(cot)["util"],
-    ]
-    member_cot, _ = combined.governing_strut_cot(
-        angle_utilisations, 1.0, 2.5,
-    )
-    plastic = {
-        "mx": [100.0, 0.0, -100.0, 0.0],
-        "my": [0.0, 100.0, 0.0, -100.0],
-        "max_mx": 100.0,
-        "max_my": 100.0,
-        "min_mx": -100.0,
-        "min_my": -100.0,
-        "util": 0.8,
-        "util_valid": True,
-        "util_reason": None,
-        "util_origin_inside_or_on": True,
-        "closed": True,
-        "check_util": True,
-        "applied": (80.0, 0.0),
-        "converged": True,
-        "worked_point_index": 0,
-        "worked_point_basis": "utilisation direction",
-        "points": [_plastic_point()],
-    }
     elastic = {
         "total": [150.0],
         "long": [120.0],
@@ -873,225 +715,6 @@ def _results(inp: dict | None = None) -> dict:
             },
         },
     }
-    shear_payload = {
-        "res": shear_res,
-        "v_ed": 30.0,
-        "util": 30.0 / shear_res["vrd_c"],
-        "axis": "x",
-        "tension_low": True,
-        "bw": 200.0,
-        "bw_auto": 200.0,
-        "bw_user": False,
-        "d": 270.0,
-        "asl": 500.0,
-        "asl_bar_ids": [1],
-        "asl_cg": -0.12,
-        "ac": 0.06,
-        "fck": 30.0,
-        "n_ed": 0.0,
-        "n_prestress": 0.0,
-        "centroid": (0.0, 0.0),
-        "method": code.label,
-        "model_2023": False,
-    }
-    link_resistance = link_at(member_cot)
-    shear_payload["links"] = {
-        "res": link_resistance,
-        "util": 30.0 / link_resistance["vrd"],
-        "asw": link_asw,
-        "asw_over_s": link_asw_over_s,
-        "legs": link_legs,
-        "dia": link_dia,
-        "s": link_spacing,
-        "fywk": fywk,
-        "cot_min": 1.0,
-        "cot_max": 2.5,
-        "delta_ftd": 0.5 * 30.0 * member_cot,
-        "longitudinal_shear_force": 0.5 * 30.0 * member_cot,
-        "cot_limit_lo": 1.0,
-        "cot_limit_hi": 2.5,
-        "z_source": "plastic internal lever arm",
-        "out_of_limits": False,
-        "required": bool(30.0 > shear_res["vrd_c"]),
-        "theta_mode": "utilisation",
-        "chord": None,
-        "chord_off": None,
-    }
-    primary_torsion = torsion_at(member_cot)
-    interaction = {
-        "valid": True,
-        "cot": member_cot,
-        "theta_deg": primary_torsion["theta_deg"],
-        "trd_max": primary_torsion["trd_max"],
-        "vrd_max": link_resistance["vrd_max"],
-        "t_ed": 25.0,
-        "v_ed": 30.0,
-        "value": combined.crushing_interaction(
-            25.0, primary_torsion["trd_max"],
-            30.0, link_resistance["vrd_max"],
-        ),
-    }
-    minimum_interaction = (
-        25.0 / primary_torsion["trd_c"]
-        + 30.0 / shear_res["vrd_c"]
-    )
-    torsion_payload = {
-        "tube": tube,
-        "trd_s": primary_torsion["trd_s"],
-        "trd_max": primary_torsion["trd_max"],
-        "trd": primary_torsion["trd"],
-        "trd_c": primary_torsion["trd_c"],
-        "cot": primary_torsion["cot"],
-        "theta_deg": primary_torsion["theta_deg"],
-        "util": primary_torsion["util"],
-        "asl_req": primary_torsion["asl_req"],
-        "t_ed": 25.0,
-        "t_ed_signed": 25.0,
-        "applicability_blocked": False,
-        "applicability": capacity.torsion_applicability(inp, 25.0),
-        "fcd": fcd,
-        "fywd": fywd,
-        "fyd_long": fyd_long,
-        "nu": primary_torsion["nu"],
-        "alpha_cw": 1.0,
-        "fctk_005": fctk_005,
-        "gamma_ct": gamma_ct,
-        "fctd": fctd,
-        "asw_t": torsion_asw,
-        "asw_over_s": torsion_asw_over_s,
-        "dia": link_dia,
-        "s": link_spacing,
-        "cot_min": 1.0,
-        "cot_max": 2.5,
-        "method": code.label,
-        "governs": primary_torsion["governs"],
-        "valid": True,
-        "cot_limit_lo": 1.0,
-        "cot_limit_hi": 2.5,
-        "out_of_limits": False,
-        "subdivided": False,
-        "theta_mode": "utilisation",
-        "primary": primary_torsion,
-        "subtubes": None,
-        "interaction": interaction,
-        "min_reinf": {
-            "applicable": True,
-            "status": "PASS" if minimum_interaction <= 1.0 else "FAIL",
-            "scope_key": "applicable_first_generation_rectangle",
-            "value": minimum_interaction,
-            "ok": bool(minimum_interaction <= 1.0),
-            "t_ed": 25.0,
-            "trd_c": primary_torsion["trd_c"],
-            "v_ed": 30.0,
-            "vrd_c": shear_res["vrd_c"],
-            "torsion_ratio": 25.0 / primary_torsion["trd_c"],
-            "shear_ratio": 30.0 / shear_res["vrd_c"],
-            "governs": (
-                "torsion"
-                if 25.0 / primary_torsion["trd_c"]
-                >= 30.0 / shear_res["vrd_c"]
-                else "shear"
-            ),
-            "solid": True,
-            "model_2023": False,
-        },
-    }
-    for retained_name in (
-        "angle_selection",
-        "steel_resistance",
-        "strut_resistance",
-        "resistance_selection",
-        "cracking_resistance",
-        "longitudinal_reinforcement",
-    ):
-        torsion_payload[retained_name] = primary_torsion[retained_name]
-    shear_util = shear_payload["links"]["util"]
-    torsion_util = torsion_payload["util"]
-    shear_fraction = (
-        0.0
-        if 30.0 <= shear_res["vrd_c"]
-        else 30.0 / link_resistance["vrd_s"]
-    )
-    torsion_stirrup_fraction = 25.0 / primary_torsion["trd_s"]
-    stirrup_util = shear_fraction + torsion_stirrup_fraction
-    ftd_t = primary_torsion["asl_req"] * fyd_long / 1000.0
-    longitudinal = combined.longitudinal_check(
-        80.0, plastic["max_mx"], shear_payload["links"]["delta_ftd"],
-        ftd_t, shear_z_mm / 1000.0,
-    )
-    longitudinal.update(
-        valid=True,
-        axis="x",
-        tension_low=True,
-        biaxial=False,
-        conditional=True,
-        off_util=0.0,
-        m_off=0.0,
-        has_torsion=True,
-        gets_shift=True,
-        off_not_evaluated=None,
-        theta_mode="utilisation",
-    )
-    dkna_selection = combined.dkna_interaction_result(
-        0.0, None,
-        80.0, 80.0 / plastic["util"],
-        30.0, 30.0 / shear_util,
-        25.0, 25.0 / torsion_util,
-        m_v_independent=False,
-    )
-    action_alone = {
-        "n": capacity._dkna_action_record("N", 0.0, None, valid=True),
-        "m": capacity._dkna_action_record(
-            "M", 80.0, 80.0 / plastic["util"], valid=True
-        ),
-        "v": capacity._dkna_action_record(
-            "V", 30.0, 30.0 / shear_util, valid=True
-        ),
-        "t": capacity._dkna_action_record(
-            "T", 25.0, 25.0 / torsion_util, valid=True
-        ),
-    }
-    combined_payload = {
-        "valid": True,
-        "method": code.label,
-        "r_n": 0.0,
-        "r_m": plastic["util"],
-        "r_v": shear_util,
-        "r_t": torsion_util,
-        "m_v_independent": False,
-        "dkna_sum": dkna_selection.utilisation,
-        "dkna_valid": dkna_selection.valid,
-        "dkna_ok": dkna_selection.ok,
-        "dkna_selection": asdict(dkna_selection),
-        "action_alone": action_alone,
-        "outside_default_range": False,
-        "crushing": interaction,
-        "transverse": {
-            "valid": True,
-            "cot": member_cot,
-            "theta_deg": primary_torsion["theta_deg"],
-            "u_stirrup": stirrup_util,
-            "u_crush": interaction["value"],
-            "governing": max(stirrup_util, interaction["value"]),
-            "governs": (
-                "crushing"
-                if interaction["value"] > stirrup_util
-                else "stirrups"
-            ),
-            "ok": bool(max(stirrup_util, interaction["value"]) <= 1.0),
-            "shear_fraction": shear_fraction,
-            "torsion_fraction": torsion_stirrup_fraction,
-            "shear_credited": bool(shear_fraction == 0.0),
-            "vrd_c": shear_res["vrd_c"],
-            "v_ed": 30.0,
-        },
-        "longitudinal": longitudinal,
-        "asl_torsion": primary_torsion["asl_req"],
-        "delta_ftd": shear_payload["links"]["delta_ftd"],
-        "links": True,
-    }
-    plastic_2 = copy.deepcopy(plastic)
-    plastic_2.update(util=1.25, applied=(125.0, 0.0))
     elastic_2 = copy.deepcopy(elastic)
     elastic_2["show_cw"] = False
     elastic_2["crack"] = None
@@ -1119,94 +742,7 @@ def _results(inp: dict | None = None) -> dict:
     elastic_2["max_steel"] = 245.0
     elastic_2["elements"][0]["total_mpa"] = 245.0
     elastic_2["stress_outputs"]["reinforcement"]["value"] = 245.0
-    minimum_strength_coefficient = 0.26 * 2.9 / 500.0
-    minimum_floor_coefficient = 0.0013
-    minimum_selected_coefficient = max(
-        minimum_strength_coefficient,
-        minimum_floor_coefficient,
-    )
-    minimum_area_mm2 = minimum_selected_coefficient * 200.0 * 270.0
-    minimum = {
-        "status": "PASS",
-        "edition": "DS/EN 1992-1-1:2005 + DK NA:2024",
-        "member_type": detailing.MEMBER_BEAM,
-        "cut_direction": detailing.CUT_TRANSVERSE,
-        "modelled_reinforcement_direction": "longitudinal",
-        "clause": "9.2.1.1(1), Formula (9.1N)",
-        "checks": [{
-            "type": "minimum area", "status": "PASS",
-            "axis": "x", "face": "bottom",
-            "as_provided_mm2": 500.0, "as_min_mm2": minimum_area_mm2,
-            "utilisation": minimum_area_mm2 / 500.0,
-            "bt_mm": 200.0, "d_mm": 270.0,
-            "fctm_mpa": 2.9, "fyk_mpa": 500.0, "bar_ids": ["R1"],
-            "strength_coefficient": minimum_strength_coefficient,
-            "floor_coefficient": minimum_floor_coefficient,
-            "selected_coefficient": minimum_selected_coefficient,
-            "governing_coefficient": "0.26 fctm / fyk",
-            "tension_direction": [0.0, -1.0], "neutral_c_m": 0.0,
-            "neutral_point_m": [0.0, 0.0],
-            "model": "gross-concrete resultant tension half-plane",
-        }],
-        "limitations": [
-            "Prestressing tendons are not credited.",
-            "Ordinary reinforcement is assumed anchored to develop the entered fyk.",
-        ],
-    }
-    spacing = detailing.clear_spacing(
-        [
-            {
-                "id": "R1", "kind": "bar", "x_mm": 0.0, "y_mm": 0.0,
-                "diameter_mm": 25.23,
-            },
-            {
-                "id": "R2", "kind": "bar", "x_mm": 240.0, "y_mm": 0.0,
-                "diameter_mm": 22.57,
-            },
-        ],
-        d_upper_mm=16.0,
-        edition=inp["detailing_edition"],
-        include_tendons=False,
-    )
-    transverse_detailing = detailing.transverse_reinforcement(
-        edition=inp["detailing_edition"],
-        fck_mpa=inp["concrete"].fck,
-        fywk_mpa=fywk,
-        diameter_mm=link_dia,
-        spacing_mm=link_spacing,
-        member_type=inp["detailing_member_type"],
-        shear_directions=[{
-            "component": "vy",
-            "bw_mm": shear_payload["bw"],
-            "d_mm": shear_payload["d"],
-            "legs": link_legs,
-            "transverse_leg_spacing_mm": 0.0,
-            "measurement_axis": "x",
-        }],
-        torsion_tubes=[{
-            "label": "Tube",
-            "valid": tube["valid"],
-            "reason": tube.get("reason"),
-            "tef_mm": tube["tef"],
-            "uk_mm": tube["uk"] * 1000.0,
-            "minimum_dimension_mm": tube["minimum_dimension_mm"],
-        }],
-    )
-    retained_detailing_status = str(transverse_detailing.get("status") or "")
-    if retained_detailing_status not in {"PASS", "FAIL"}:
-        retained_detailing_status = "NOT ASSESSED"
-    torsion_payload["min_reinf"].update(
-        detailing_status=retained_detailing_status,
-        detailing_scope_key=(
-            "separate_detailing_passed"
-            if retained_detailing_status == "PASS"
-            else "separate_detailing_failed"
-            if retained_detailing_status == "FAIL"
-            else "separate_detailing_incomplete"
-        ),
-    )
-    inputs = _inputs()
-    plastic_rows = case_analysis.case_records(inputs, "plastic")
+    inputs = inp
     elastic_rows = case_analysis.case_records(inputs, "elastic")
     fatigue = fatigue_analysis.run_analysis(inputs)
     material_properties = {
@@ -1286,31 +822,11 @@ def _results(inp: dict | None = None) -> dict:
     }
     out = {
         "material_properties": material_properties,
-        "plastic": plastic,
+        **member_results,
         "elastic": elastic,
         "fatigue": fatigue,
-        "shear": shear_payload,
-        "torsion": torsion_payload,
-        "combined": combined_payload,
-        "transverse_reinforcement": transverse_detailing,
-        "clear_spacing": spacing,
+        "clear_spacing": sector_app._clear_spacing_result(inp),
         "heightened_crack_control": heightened_payload,
-        "plastic_cases": [
-            {"name": "PL-QA-1", "actions": plastic_rows[0], "evaluated": True,
-             "signature": case_analysis.case_signature(
-                 plastic_rows[0], load_cases.PLASTIC_TABLE_KEY, inp),
-             "results": {
-                 "plastic": plastic, "shear": shear_payload,
-                 "torsion": torsion_payload,
-                 "combined": combined_payload,
-                 "minimum_reinforcement": minimum,
-                 "transverse_reinforcement": transverse_detailing,
-             }},
-            {"name": "PL-QA-2", "actions": plastic_rows[1], "evaluated": True,
-             "signature": case_analysis.case_signature(
-                 plastic_rows[1], load_cases.PLASTIC_TABLE_KEY, inp),
-             "results": {"plastic": plastic_2}},
-        ],
         "elastic_cases": [
             {"name": "EL-QA-1", "actions": elastic_rows[0], "evaluated": True,
              "signature": case_analysis.case_signature(
@@ -1352,7 +868,7 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
 
     plastic_worked = out["plastic_cases"][1]["results"]["plastic"]
     worked_index = plastic_worked.get("worked_point_index")
-    if worked_index != 0:
+    if type(worked_index) is not int or not 0 <= worked_index < len(plastic_worked["points"]):
         raise AssertionError("the governing plastic worked-point identity is missing")
     point = plastic_worked["points"][worked_index]
     close(
@@ -1385,12 +901,12 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
     close(
         "plastic reported concrete strain",
         point["eps_c"] * 10.0,
-        point["concrete_corner_states"][0]["section_strain_permille"],
+        min(state["strain_permille"] for state in point["concrete_corner_states"]),
     )
     close(
         "plastic reported tensile strain",
         point["eps_s"] * 10.0,
-        point["reinforcement_states"][0]["strain_permille"],
+        max(state["strain_permille"] for state in point["reinforcement_states"]),
     )
     selected_curvature = point["curvature_selection"]["curvature_per_m"]
     curvature_candidate = next(
@@ -1535,9 +1051,11 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
 
     torsion_out = out["torsion"]
     tube = torsion_out["tube"]
-    expected_tube = torsion.tube_properties(
-        inp["outer"], inp.get("holes"), inp.get("torsion_tef", 0.0)
+    expected_tube = torsion.tube_properties_with_reinforcement(
+        inp["outer"], inp.get("holes"), inp["bars"], inp["torsion_tef"],
     )
+    if not expected_tube["valid"]:
+        raise AssertionError("the fixture's physical torsion walls are not established")
     for key in ("A", "u", "tef", "Ak", "uk"):
         close(f"torsion tube {key}", tube[key], expected_tube[key])
     capacity_material = inp["mild_materials"][
@@ -1652,84 +1170,56 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         ),
     )
 
-    @functools.lru_cache(maxsize=4096)
-    def link_at(cot: float) -> dict:
-        return shear.vrd_links(
-            shear_out["fck"], codes.EC2_2005_DKNA,
-            bw_mm=shear_out["bw"], d_mm=shear_out["d"],
-            asw_over_s=links["asw_over_s"], fywk=links["fywk"],
-            n_ed_comp_kn=0.0, ac_m2=shear_out["ac"],
-            cot_min=cot, cot_max=cot, z_mm=lk["z"],
-            fcd_mpa=lk["fcd"], gamma_s=lk["gamma_s"],
-        )
-
-    @functools.lru_cache(maxsize=4096)
-    def torsion_at(cot: float) -> dict:
-        return capacity.tube_torsion(
-            tube, torsion_out["t_ed"], tcode=codes.EC2_2005_DKNA,
-            fck=shear_out["fck"], fcd=torsion_out["fcd"],
-            alpha_cw=torsion_out["alpha_cw"], fywd=torsion_out["fywd"],
-            asw_over_s=torsion_out["asw_over_s"],
-            cot_min=cot, cot_max=cot, nu_detail=False,
-            fctd=torsion_out["fctd"], fyd_long=expected_fyd_long,
-            closed_links_present=True,
-        )
-
-    def longitudinal_util(cot: float) -> float:
-        torsion_result = torsion_at(cot)
-        ftd_t_cot = (
-            torsion_result["asl_req"] * torsion_out["fyd_long"] / 1000.0
-        )
-        return combined.longitudinal_check(
-            result["longitudinal"]["m_ed"],
-            result["longitudinal"]["m_rd"],
-            0.5 * shear_out["v_ed"] * cot,
-            ftd_t_cot,
-            result["longitudinal"]["z"],
-        )["util"]
-
-    member_cot, _ = combined.governing_strut_cot(
-        [
-            lambda cot: combined.ratio(
-                shear_out["v_ed"], link_at(cot)["vrd_s"]
-            ),
-            lambda cot: combined.ratio(
-                shear_out["v_ed"], link_at(cot)["vrd_max"]
-            ),
-            lambda cot: torsion_at(cot)["util"],
-            lambda cot: combined.ratio(
-                torsion_out["t_ed"], torsion_at(cot)["trd_s"]
-            ),
-            lambda cot: combined.crushing_interaction(
-                torsion_out["t_ed"], torsion_at(cot)["trd_max"],
-                shear_out["v_ed"], link_at(cot)["vrd_max"],
-            ),
-            longitudinal_util,
-        ],
-        links["cot_min"],
-        links["cot_max"],
+    member_input = case_analysis.plastic_case_input(inp, case)
+    current_checks = (
+        result_presentation.directional_shear_publication_evidence_is_current(
+            member_input, shear_out, plastic_result=out["plastic"],
+        ),
+        result_presentation.torsion_publication_evidence_is_current(
+            member_input, shear_out, torsion_out,
+        ),
+        result_presentation.combined_publication_evidence_is_current(member_input, out),
     )
-    close("shared member cotangent", lk["cot"], member_cot)
+    if any(check != (True, None) for check in current_checks):
+        raise AssertionError(f"the complete member fixture is not current: {current_checks!r}")
+
+    member_cot = lk["cot"]
     close("torsion member cotangent", torsion_out["cot"], member_cot)
-    close(
-        "longitudinal lever arm",
-        result["longitudinal"]["z"],
-        lk["z"] / 1000.0,
+    candidates = links["chord_candidates"]
+    if len(candidates) != 4 or {
+        (item["axis"], item["tension_low"]) for item in candidates
+    } != {("x", True), ("x", False), ("y", True), ("y", False)}:
+        raise AssertionError("the member fixture must retain all four physical chords")
+    concrete_credit = shear_out["v_ed"] <= shear_out["res"]["vrd_c"]
+    for candidate in candidates:
+        if not candidate["valid"] or not candidate["conditional"]:
+            raise AssertionError("a report fixture chord lost its conditional evidence")
+        ftd_v = (0.0 if concrete_credit or not candidate.get("gets_shift", False)
+                 else 0.5 * shear_out["v_ed"] * member_cot)
+        ftd_t = torsion_out["asl_req"] * torsion_out["fyd_long"] / 1000.0
+        expected_mv = ftd_v * candidate["z"]
+        if candidate["m_rd"] > 0.0:
+            expected_mv = min(expected_mv,
+                              max(candidate["m_rd"] - candidate["m_ed"], 0.0))
+        expected_mt = ftd_t * candidate["z"] / 2.0
+        for key, expected in (
+            ("ftd_v", ftd_v), ("ftd_t", ftd_t),
+            ("mv", expected_mv), ("mt", expected_mt),
+            ("m_total", candidate["m_ed"] + expected_mv + expected_mt),
+        ):
+            close(f"{candidate['axis']}/{candidate['tension_low']} chord {key}",
+                  candidate[key], expected)
+        if candidate["m_rd"] == 0.0:
+            if not math.isinf(candidate["util"]) or candidate["status"] != "FAIL":
+                raise AssertionError("zero chord capacity must retain its definite failure")
+        else:
+            close("physical chord utilisation", candidate["util"],
+                  candidate["m_total"] / candidate["m_rd"])
+    expected_selection = result_presentation._current_member_angle_selection(
+        member_input, shear_out, torsion_out,
     )
-
-    expected_longitudinal = combined.longitudinal_check(
-        result["longitudinal"]["m_ed"],
-        result["longitudinal"]["m_rd"],
-        links["delta_ftd"],
-        torsion_out["asl_req"] * torsion_out["fyd_long"] / 1000.0,
-        result["longitudinal"]["z"],
-    )
-    for key in ("ftd_v", "ftd_t", "mv", "mt", "m_total", "util"):
-        close(
-            f"longitudinal {key}",
-            result["longitudinal"][key],
-            expected_longitudinal[key],
-        )
+    if expected_selection != links["member_angle_selection"]:
+        raise AssertionError("native and publication member-angle selection disagree")
 
 
 @functools.lru_cache(maxsize=8)
@@ -1804,7 +1294,7 @@ def validate_worked_example_text(text: str) -> None:
 def validate_equation_source_colocation(
     page_texts: list[str],
     *,
-    expected_equation_count: int = 88,
+    expected_equation_count: int = 93,
 ) -> None:
     """Require every governed equation identity and source on the same page."""
     equation_count = 0
@@ -2100,16 +1590,19 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
     overview_text = " ".join(
         " ".join(page_texts[index].split()) for index in overview_indexes
     )
+    # This native fixture has no separate stale/unrun governing information rows;
+    # their conditional heading is checked in the information-row report tests.
     for expected in (
         "Checks and comparisons",
         "Calculated outputs",
-        "Scope and calculation state",
         "Plastic bending",
         "Formula (6.31) minimum-reinforcement screen - separate link detailing",
         "DK heightened crack-control minimum",
         "Fatigue",
     ):
-        if expected not in overview_text:
+        # PDF extraction separates words wrapped at their existing hyphens.
+        # Every letter and number in the required label must still be present.
+        if not re.search(re.escape(expected).replace(r"\-", r"-\s*"), overview_text):
             raise AssertionError(
                 f"results-overview content is missing: {expected}"
             )

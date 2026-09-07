@@ -83,9 +83,9 @@ def _visible(markup, *, math=True):
 
 @pytest.mark.parametrize(
     ("catalogue_identity", "contract"),
-    contracts.equation_contract_items(),
+    contracts.supported_equation_contract_items(),
 )
-def test_every_contract_publishes_one_complete_ordered_role_block(
+def test_every_supported_contract_publishes_one_complete_ordered_role_block(
     catalogue_identity, contract
 ):
     builder = _builder()
@@ -141,13 +141,13 @@ def test_every_contract_publishes_one_complete_ordered_role_block(
     assert catalogue_identity in dict(contracts.equation_contract_items())
 
 
-def test_every_contract_identity_passes_semantic_vector_and_raster_qa():
+def test_every_supported_contract_identity_passes_semantic_vector_and_raster_qa():
     builder = _builder()
     builder._h1("Complete equation catalogue")
     equations = []
 
     for index, ((key, variant), contract) in enumerate(
-        contracts.equation_contract_items(), start=1
+        contracts.supported_equation_contract_items(), start=1
     ):
         runtime_key = (
             "materials.steel.fyd-1"
@@ -174,8 +174,8 @@ def test_every_contract_identity_passes_semantic_vector_and_raster_qa():
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     page_texts = [page.extract_text() or "" for page in reader.pages]
 
-    assert len(equations) == 145
-    assert sum(text.count("Mathematical expression:") for text in page_texts) == 419
+    assert len(equations) == 144
+    assert sum(text.count("Mathematical expression:") for text in page_texts) == 416
     for equation in equations:
         math = _math_flowable(equation)
         identity_pages = [

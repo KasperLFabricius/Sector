@@ -529,7 +529,7 @@ def test_all_retained_report_formula_calls_have_code_authored_keys():
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "_formula"
     ]
-    assert len(calls) == 144
+    assert len(calls) == 145
 
     allowed_dynamic = "f'materials.steel.fyd-{material_index + 1}'"
     authored = []
@@ -556,6 +556,7 @@ def test_all_retained_report_formula_calls_have_code_authored_keys():
         "materials.concrete.fcd": 2,
         "shear.links.vrds": 2,
         "shear.links.vrdmax": 2,
+        "combined.crushing.interaction": 2,
         "crack.2005.spacing": 2,
         "crack.effective-area.2005": 2,
         "crack.effective-area.2023": 2,

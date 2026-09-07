@@ -24,12 +24,12 @@ import reproducible_example  # noqa: E402
 import reference_example_oracle as oracle  # noqa: E402
 import result_presentation  # noqa: E402
 import sector_report  # noqa: E402
-from sector import capacity  # noqa: E402
+from sector import capacity, torsion  # noqa: E402
 
 
 APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
-    "4abe12c2474ced4caf6a231c276e81179e3c441240f0efcad11f1f8ac3c2d7e6"
+    "6d0602b9cdb13ae56b8c5d07ed5a0d5f3c2fe2fa49d037c67114c70a3ab54fdd"
 )
 
 
@@ -137,6 +137,15 @@ def test_reference_download_is_current_schema_complete_and_identity_stable():
     assert project_io.input_sha256(tables, scalars) == EXPECTED_INPUT_SHA256
     assert scalars["autosave_on"] is True
     assert scalars["capacity_steel_material_id"] == "M1"
+    assert scalars["torsion_tef"] == 80.0
+    assert (scalars["strut_cot_min"], scalars["strut_cot_max"]) == (1.0, 2.5)
+    authority = scalars[capacity.TORSION_CASE_AUTHORITIES_KEY]["PL-COMPLETE"]
+    assert authority[capacity.TORSION_CASE_DESIGN_BASIS_KEY] == (
+        capacity.TORSION_DESIGN_EQUILIBRIUM
+    )
+    assert authority[capacity.TORSION_CASE_MEMBER_SCOPE_KEY] == (
+        capacity.TORSION_MEMBER_CLOSED
+    )
     assert all(scalars[key] for key in (
         "fatigue_on", "minimum_reinforcement_on", "transverse_detailing_on",
         "clear_spacing_on", "shear_on", "torsion_on", "combined_on",
@@ -144,6 +153,39 @@ def test_reference_download_is_current_schema_complete_and_identity_stable():
     assert len(tables["plastic_cases_base"]) == 1
     assert len(tables["elastic_cases_base"]) == 1
     assert len(tables["fatigue_spectrum_base"]) == 2
+
+
+def test_reference_uniform_wall_respects_every_reinforcement_bound():
+    tables, scalars = project_io.parse_project(reproducible_example.project_json())
+    outer = [(x / 1000.0, y / 1000.0) for x, y in (
+        tables["corners_base"][["x (mm)", "y (mm)"]].itertuples(
+            index=False, name=None
+        )
+    )]
+    bars = [(x / 1000.0, y / 1000.0, area) for x, y, area in (
+        tables["bars_base"][["x (mm)", "y (mm)", "area (mm2)"]].itertuples(
+            index=False, name=None
+        )
+    )]
+    automatic = torsion.tube_properties_with_reinforcement(outer, [], bars)
+    assert automatic["valid"] is False
+    assert automatic["reason"] == "torsion wall automatic thickness varies by wall"
+    assert scalars["torsion_tef"] == 80.0
+    declared = torsion.tube_properties_with_reinforcement(
+        outer, [], bars, scalars["torsion_tef"]
+    )
+    assert declared["valid"] is True
+    assert declared["tef_user"] is True
+    assert declared["tef"] == pytest.approx(80.0)
+    assert declared["Ak"] == pytest.approx((0.2 - 0.08) * (0.3 - 0.08))
+    assert declared["uk"] == pytest.approx(2.0 * (0.12 + 0.22))
+    evidence = declared["wall_evidence"]
+    assert evidence["complete"] is True
+    assert sorted(wall["lower_bound_mm"] for wall in evidence["walls"]) == (
+        pytest.approx([60.0, 60.0, 80.0, 80.0])
+    )
+    assert all(wall["lower_bound_mm"] <= 80.0 + 1e-10
+               for wall in evidence["walls"])
 
 
 def test_complete_example_retains_results_without_trace_payloads(
@@ -303,6 +345,26 @@ def test_member_and_detailing_outputs_match_independent_equations(
     assert shear["res"]["rho_l"] == pytest.approx(expected["rho_l"])
     assert shear["res"]["vrd_c"] == pytest.approx(expected["vrd_c_kn"])
     assert shear["links"]["res"]["cot"] == pytest.approx(expected["cot_theta"])
+    selection = shear["links"]["member_angle_selection"]
+    assert selection["objective_count"] == 9
+    assert selection["governing_objectives"] == ("shared shear-torsion strut",)
+    assert selection["utilisation"] == pytest.approx(expected["member_utilisation"])
+    assert expected["neighbor_utilisation"] > expected["member_utilisation"]
+    candidates = shear["links"]["chord_candidates"]
+    assert len(candidates) == 4
+    assert {(item["axis"], item["tension_low"]) for item in candidates} == {
+        ("x", True), ("x", False), ("y", True), ("y", False),
+    }
+    for candidate in candidates:
+        assert candidate["valid"] and candidate["conditional"]
+        assert candidate["m_rd"] > 0.0 and candidate["z"] > 0.0
+        assert candidate["ftd_v"] == 0.0
+        # Independent demand arithmetic also closes the full minimax proof: all
+        # four genuine conditional faces lie below the transverse lower bound.
+        utilisation = (candidate["m_ed"] + candidate["ftd_t"]
+                       * candidate["z"] / 2.0) / candidate["m_rd"]
+        assert candidate["util"] == pytest.approx(utilisation)
+        assert utilisation < expected["member_utilisation"]
     assert shear["links"]["res"]["vrd_s"] == pytest.approx(expected["vrd_s_kn"])
     assert shear["links"]["res"]["vrd_max"] == pytest.approx(expected["vrd_max_kn"])
     assert shear["links"]["util"] == pytest.approx(
@@ -316,6 +378,13 @@ def test_member_and_detailing_outputs_match_independent_equations(
     assert torsion["util"] == pytest.approx(expected["torsion_utilisation"])
     assert results["combined"]["dkna_sum"] == pytest.approx(
         expected["combined_sum"]
+    )
+    action_alone = results["combined"]["action_alone"]
+    assert action_alone["v"]["resistance"] == pytest.approx(
+        expected["action_alone_vrd_kn"]
+    )
+    assert action_alone["t"]["resistance"] == pytest.approx(
+        expected["action_alone_trd_knm"]
     )
 
     spacing = results["clear_spacing"]["governing"]

@@ -6,6 +6,7 @@ import copy
 import math
 import inspect
 import pathlib
+import pickle
 import sys
 from dataclasses import asdict
 
@@ -16,6 +17,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import result_presentation as presentation  # noqa: E402
+from native_member_report_fixtures import native_formula_631_cases  # noqa: E402,F401
+from native_member_report_fixtures import native_member_report_cases  # noqa: E402,F401
 
 from app import case_analysis, load_cases, modelled_direction  # noqa: E402
 from sector import (  # noqa: E402
@@ -460,30 +463,11 @@ def test_formula_631_status_and_engineer_guidance_are_retained(
     assert note in presentation.minimum_reinforcement_screen_note(check)
 
 
-def test_formula_631_scope_row_remains_in_the_governing_overview():
-    inp = {
-        "mode": "",
-        "torsion_on": True,
-        "plastic_case": {"id": "PL-631", "type": "ULS", "source": "C1"},
-    }
-    torsion = {
-        **_applicable_torsion_evidence(15.0),
-        "valid": True,
-        "tube_valid": True,
-        "transverse_resistance_assessed": True,
-        "closed_links_present": True,
-        "assessment_status": "NOT ASSESSED",
-        "min_reinf": {
-            "applicable": False,
-            "status": "NOT APPLICABLE",
-            "scope_key": "selected_2023_route",
-            "value": None,
-            "ok": None,
-        },
-    }
+def test_formula_631_scope_row_remains_in_the_governing_overview(native_formula_631_cases):
+    inp, out = native_formula_631_cases(scope_context="selected-2023-no-shear")
 
     selected = presentation.governing_summary_rows(
-        presentation.result_summary_rows(inp, {"torsion": torsion})
+        presentation.result_summary_rows(inp, out)
     )
     result_rows = presentation.governing_result_rows(selected)
     information_rows = presentation.governing_information_rows(selected)
@@ -538,6 +522,7 @@ def test_formula_631_overview_keeps_dkna_combined_requirement(
     scope_overrides,
     action,
     value,
+    native_formula_631_cases,
 ):
     inputs = dict(
         t_ed=15.0,
@@ -560,22 +545,14 @@ def test_formula_631_overview_keeps_dkna_combined_requirement(
     minimum = asdict(
         combined_core.minimum_reinforcement_screen_result(**inputs)
     )
-    inp = {
-        "mode": "",
-        "torsion_on": True,
-        "plastic_case": {"id": "PL-DK", "type": "ULS", "source": "C1"},
-    }
-    torsion = {
-        **_applicable_torsion_evidence(15.0),
-        "valid": True,
-        "tube_valid": True,
-        "transverse_resistance_assessed": True,
-        "closed_links_present": True,
-        "assessment_status": "NOT ASSESSED",
-        "min_reinf": minimum,
-    }
-
-    rows = presentation.result_summary_rows(inp, {"torsion": torsion})
+    inp, out = native_formula_631_cases(
+        scope_context=scope_context,
+        n_ed=inputs["n_ed"], mx_ed=inputs["mx_ed"], my_ed=inputs["my_ed"],
+    )
+    native_minimum = out["torsion"]["min_reinf"]
+    assert native_minimum["status"] == minimum["status"]
+    assert native_minimum["scope_key"] == minimum["scope_key"]
+    rows = presentation.result_summary_rows(inp, out)
     screen = next(
         row for row in rows
         if row["check"] == "Formula (6.31) minimum-reinforcement screen"
@@ -607,33 +584,14 @@ def test_formula_631_condition_and_detailing_matrix_remain_separate(
     condition_status,
     detailing_status,
     detailing_scope_key,
+    native_formula_631_cases,
 ):
-    value = 0.8 if condition_status == "PASS" else 1.2
-    minimum = {
-        "applicable": True,
-        "status": condition_status,
-        "scope_key": "applicable_first_generation_rectangle",
-        "value": value,
-        "ok": condition_status == "PASS",
-        "detailing_status": detailing_status,
-        "detailing_scope_key": detailing_scope_key,
-    }
-    inp = {
-        "mode": "",
-        "torsion_on": True,
-        "plastic_case": {"id": "PL-631", "type": "ULS", "source": "C1"},
-    }
-    torsion = {
-        **_applicable_torsion_evidence(),
-        "valid": True,
-        "tube_valid": True,
-        "transverse_resistance_assessed": True,
-        "closed_links_present": True,
-        "assessment_status": "NOT ASSESSED",
-        "min_reinf": minimum,
-    }
-
-    rows = presentation.result_summary_rows(inp, {"torsion": torsion})
+    inp, out = native_formula_631_cases(
+        condition_status=condition_status, detailing_status=detailing_status,
+    )
+    minimum = out["torsion"]["min_reinf"]
+    assert minimum["detailing_scope_key"] == detailing_scope_key
+    rows = presentation.result_summary_rows(inp, out)
     condition = next(
         row for row in rows
         if row.get("overview_key") == "torsion:minimum_reinforcement"
@@ -3216,7 +3174,7 @@ def test_out_of_range_links_keep_angle_free_concrete_route_and_no_link_verdict()
     assert presentation.overall_summary_status(rows) == "NOT ASSESSED"
 
 
-def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
+def test_retained_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
     reason = "selected strut-angle range is outside the permitted method range"
     torsion = {
         **_applicable_torsion_evidence(),
@@ -3248,7 +3206,7 @@ def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
         },
     }
 
-    rows = presentation.result_summary_rows(
+    rows = _unbound_torsion_summary(
         _inp(
             mode="Plastic",
             torsion_on=True,
@@ -3263,7 +3221,7 @@ def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
     assert torsion_row["status"] == "NOT ASSESSED"
     assert torsion_row["result"] == "-"
     assert torsion_row["util"] is None
-    assert "outside the permitted range" in torsion_row["note"]
+    assert "outside the permitted range" in presentation.result_reason(reason, "torsion")
     assert combined_rows
     assert all(row["status"] == "NOT ASSESSED" for row in combined_rows)
     assert all(row["util"] is None for row in combined_rows)
@@ -3286,7 +3244,7 @@ def test_out_of_range_torsion_blocks_stale_torsion_and_combined_values():
         "incomplete-applicable",
     ),
 )
-def test_torsion_applicability_blocker_outranks_poisoned_publication_values(
+def test_retained_torsion_applicability_poison_is_rejected_before_summary(
     retained_blocker, applicability_evidence,
 ):
     applicability = capacity.torsion_applicability(
@@ -3333,27 +3291,17 @@ def test_torsion_applicability_blocker_outranks_poisoned_publication_values(
         torsion.pop("applicability_blocked", None)
     else:
         torsion["applicability_blocked"] = retained_blocker
-    rows = presentation.result_summary_rows(
-        _inp(
-            mode="Plastic",
-            torsion_on=True,
-            combined_on=True,
-            shear_links=True,
-        ),
-        {
-            "plastic": _plastic(),
-            "torsion": torsion,
-            "combined": {
-                "valid": True,
-                "dkna_valid": True,
-                "dkna_sum": 0.01,
-                "dkna_ok": True,
-            },
-        },
-    )
+    inp = _inp(mode='Plastic', torsion_on=True, combined_on=True, shear_links=True)
+    out = {'plastic': _plastic(), 'torsion': torsion, 'combined': {'valid': True, 'dkna_valid': True, 'dkna_sum': 0.01, 'dkna_ok': True}}
+    # The authored payload has no complete native physical companions.
+    # Its root summary must therefore stop at the real currentness guard.
+    current, reason = presentation.torsion_publication_component_is_current(inp, out.get("shear"), torsion)
+    assert current is False and reason
+    rows = presentation.result_summary_rows(inp, out)
     by_check = {row["check"]: row for row in rows}
+    assert "Torsion applicability" not in by_check
 
-    assert by_check["Torsion applicability"]["status"] == "NOT ASSESSED"
+    assert presentation.torsion_applicability_publication_status(torsion) == "NOT ASSESSED"
     assert by_check["Torsion"]["status"] == "NOT ASSESSED"
     assert by_check["Torsion"]["result"] == "-"
     assert by_check["Torsion"]["util"] is None
@@ -3378,7 +3326,7 @@ def test_torsion_applicability_blocker_outranks_poisoned_publication_values(
         "nonfinite-ted",
     ),
 )
-def test_torsion_publication_authority_requires_exact_coherent_route(
+def test_retained_torsion_authority_poison_is_rejected_before_summary(
     authority_case,
 ):
     applicability = capacity.torsion_applicability(
@@ -3402,6 +3350,8 @@ def test_torsion_publication_authority_requires_exact_coherent_route(
         "resistance_status": "PASS",
         "assessment_status": "PASS",
     }
+    # This positive establishes declaration eligibility only, not resistance.
+    assert presentation.torsion_applicability_publication_status(torsion) == "APPLICABLE"
     if authority_case == "stale-blocker":
         torsion["applicability_blocked"] = True
     elif authority_case == "malformed-blocker":
@@ -3423,31 +3373,21 @@ def test_torsion_publication_authority_requires_exact_coherent_route(
     else:
         torsion["t_ed"] = math.nan
 
-    rows = presentation.result_summary_rows(
-        _inp(
-            mode="Plastic",
-            torsion_on=True,
-            combined_on=True,
-            shear_links=True,
-        ),
-        {
-            "plastic": _plastic(),
-            "torsion": torsion,
-            "combined": {
-                "valid": True,
-                "dkna_valid": True,
-                "dkna_sum": 0.01,
-                "dkna_ok": True,
-            },
-        },
-    )
+    inp = _inp(mode='Plastic', torsion_on=True, combined_on=True, shear_links=True)
+    out = {'plastic': _plastic(), 'torsion': torsion, 'combined': {'valid': True, 'dkna_valid': True, 'dkna_sum': 0.01, 'dkna_ok': True}}
+    # The authored payload has no complete native physical companions.
+    # Its root summary must therefore stop at the real currentness guard.
+    current, reason = presentation.torsion_publication_component_is_current(inp, out.get("shear"), torsion)
+    assert current is False and reason
+    rows = presentation.result_summary_rows(inp, out)
     by_check = {row["check"]: row for row in rows}
+    assert "Torsion applicability" not in by_check
 
     assert presentation.torsion_applicability_publication_status(torsion) == (
         "NOT ASSESSED"
     )
-    assert by_check["Torsion applicability"]["status"] == "NOT ASSESSED"
-    assert "not mutually consistent" in by_check["Torsion applicability"]["note"]
+    assert presentation.torsion_applicability_publication_status(torsion) == "NOT ASSESSED"
+    assert "not mutually consistent" in presentation.torsion_applicability_note(torsion)
     assert by_check["Torsion"]["status"] == "NOT ASSESSED"
     assert by_check["Torsion"]["result"] == "-"
     assert by_check["Torsion"]["util"] is None
@@ -3519,7 +3459,7 @@ def test_shear_without_links_retains_concrete_screening_verdict():
     assert presentation.overall_summary_status(rows) == "FAIL"
 
 
-def test_torsion_without_full_resistance_is_not_assessed_on_every_summary():
+def test_retained_torsion_without_full_resistance_is_not_assessed_on_every_summary():
     torsion = {
         **_applicable_torsion_evidence(),
         "tube_valid": True,
@@ -3533,7 +3473,7 @@ def test_torsion_without_full_resistance_is_not_assessed_on_every_summary():
         "util": None,
         "governs": None,
     }
-    rows = presentation.result_summary_rows(
+    rows = _unbound_torsion_summary(
         _inp(
             mode="Plastic",
             torsion_on=True,
@@ -3549,18 +3489,16 @@ def test_torsion_without_full_resistance_is_not_assessed_on_every_summary():
     assert torsion_row["result"] == "-"
     assert torsion_row["criterion"] == "-"
     assert torsion_row["util"] is None
-    assert torsion_row["note"] == (
+    assert presentation.result_reason(torsion["assessment_reason"], "torsion") == (
         "Closed torsion links are required before the transverse/strut "
         "resistance component can be assessed"
     )
 
     combined_row = by_check["Combined M-V-T supported components"]
-    assert combined_row["status"] == "NOT ASSESSED"
+    # The original retained payload contains no Combined calculation.
+    assert combined_row["status"] == "NOT RUN"
     assert combined_row["util"] is None
-    assert combined_row["note"] == (
-        "Closed torsion links are required before the transverse/strut "
-        "resistance component can be assessed"
-    )
+    assert combined_row["note"] == "Calculate required"
 
 
 def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
@@ -3612,34 +3550,32 @@ def _torsion_longitudinal_result(*, status="NOT ASSESSED", ratio=0.47):
     ("status", "ratio"),
     [("NOT ASSESSED", 0.468), ("FAIL", 1.176672)],
 )
-def test_torsion_summary_separates_component_and_longitudinal_status(
+def test_retained_torsion_summary_separates_component_and_longitudinal_status(
     status,
     ratio,
 ):
     torsion = _torsion_longitudinal_result(status=status, ratio=ratio)
-    rows = presentation.result_summary_rows(
+    rows = _unbound_torsion_summary(
         _inp(mode="Plastic", torsion_on=True, shear_links=True),
         {"plastic": _plastic(), "torsion": torsion},
     )
     by_check = {row["check"]: row for row in rows}
 
-    assert by_check["Torsion"]["status"] == status
+    assert by_check["Torsion"]["status"] == "NOT ASSESSED"
     assert by_check["Torsion"]["util"] is None
-    assert (
-        by_check["Torsion transverse/strut resistance"]["status"]
-        == "PASS"
-    )
-    assert by_check["Torsion transverse/strut resistance"]["util"] == (
-        pytest.approx(0.523548)
-    )
-    longitudinal = by_check["Torsion longitudinal reinforcement"]
+    # These rounded scalars remain retained units; native bar-size cases
+    # separately prove the actual component and longitudinal display rows.
+    assert torsion["resistance_status"] == "PASS"
+    assert torsion["util"] == pytest.approx(0.523548)
+    longitudinal = presentation.torsion_longitudinal_assessment(torsion)
+    assert longitudinal["evidence_consistent"] is True
     assert longitudinal["status"] == status
-    assert longitudinal["util"] == pytest.approx(ratio)
-    assert "1177 /" in longitudinal["result"]
-    assert presentation.overall_summary_status(rows) == status
+    assert longitudinal["demand_ratio"] == pytest.approx(ratio)
+    assert longitudinal["required_asl_mm2"] == pytest.approx(1176.672)
+    assert presentation.torsion_assessment_status(torsion) == status
 
 
-def test_torsion_summary_rebuilds_formula_628_before_publishing_pass():
+def test_retained_torsion_summary_rebuilds_formula_628_before_publishing_pass():
     torsion = _torsion_longitudinal_result(status="NOT ASSESSED", ratio=0.50)
     torsion.update(
         t_ed=0.0,
@@ -3669,7 +3605,7 @@ def test_torsion_summary_rebuilds_formula_628_before_publishing_pass():
         area_sufficient=True,
     )
 
-    rows = presentation.result_summary_rows(
+    rows = _unbound_torsion_summary(
         _inp(mode="Plastic", torsion_on=True, shear_links=True),
         {"plastic": _plastic(), "torsion": torsion},
     )
@@ -3679,7 +3615,7 @@ def test_torsion_summary_rebuilds_formula_628_before_publishing_pass():
     sanitized = presentation.torsion_longitudinal_assessment(torsion)
     assert sanitized["evidence_consistent"] is False
     assert sanitized["status"] == "NOT ASSESSED"
-    assert by_check["Torsion"]["status"] == "NOT APPLICABLE"
+    assert by_check["Torsion"]["status"] == "NOT ASSESSED"
     assert "Torsion longitudinal reinforcement" not in by_check
 
 
@@ -3916,8 +3852,8 @@ def test_stale_combined_cannot_bypass_unassessed_torsion_prerequisite():
     )
 
 
-def test_torsion_geometry_failure_remains_distinct_from_missing_links():
-    rows = presentation.result_summary_rows(
+def test_retained_torsion_geometry_failure_remains_distinct_from_missing_links():
+    rows = _unbound_torsion_summary(
         _inp(mode="Plastic", torsion_on=True, shear_links=True),
         {
             "plastic": _plastic(),
@@ -3934,15 +3870,15 @@ def test_torsion_geometry_failure_remains_distinct_from_missing_links():
     )
     torsion_row = next(row for row in rows if row["check"] == "Torsion")
 
-    assert torsion_row["status"] == "INVALID"
-    assert torsion_row["note"] == (
+    assert torsion_row["status"] == "NOT ASSESSED"
+    assert presentation.result_reason("compound outline requires subdivision", "torsion") == (
         "The compound outline requires subdivision before torsion can be assessed"
     )
 
 
-def test_torsion_wall_evidence_failure_is_not_assessed_without_stale_value():
+def test_retained_torsion_wall_evidence_failure_is_not_assessed_without_stale_value():
     raw_reason = "torsion wall reinforcement mapping is incomplete"
-    rows = presentation.result_summary_rows(
+    rows = _unbound_torsion_summary(
         _inp(mode="Plastic", torsion_on=True, shear_links=True),
         {
             "plastic": _plastic(),
@@ -3965,7 +3901,7 @@ def test_torsion_wall_evidence_failure_is_not_assessed_without_stale_value():
     assert torsion_row["result"] == "-"
     assert torsion_row["criterion"] == "-"
     assert torsion_row["util"] is None
-    assert torsion_row["note"] == (
+    assert presentation.result_reason(raw_reason, "torsion") == (
         "Torsion is not assessed because longitudinal reinforcement has not "
         "been established for every equivalent-tube wall"
     )
@@ -5432,3 +5368,198 @@ def test_multi_case_summary_adds_section_wide_spacing_only_once():
         if row["check"].startswith("Longitudinal minimum reinforcement")
     ]
     assert [row["case"] for row in minimum_rows] == ["PL-A", "PL-B"]
+
+
+
+@presentation.publication_calculation_scope()
+def _exercise_native_torsion_summary_variants(bundle, variants, mutate, tmp_path, family):
+    """Prove root-declaration reconciliation without altering native face data."""
+    import json
+
+    inp, out = copy.deepcopy(bundle)
+    original = pickle.dumps((inp, out))
+    torsion = out["torsion"]
+    assert out["plastic_cases"][0]["results"]["torsion"] is torsion
+    original_signature = tuple(out["plastic_cases"][0]["signature"])
+    assert presentation.torsion_publication_component_is_current(inp, out["shear"], torsion) == (True, None)
+    assert presentation.torsion_applicability_publication_status(torsion) == "APPLICABLE"
+    contexts = [item for item in presentation._worked_case_contexts(inp, out, "torsion")
+                if item[0] == "PL-01"]
+    assert len(contexts) == 1 and contexts[0][3] is True
+    assert contexts[0][2]["torsion"] is torsion
+    case_inp, case_out = contexts[0][1:3]
+    assert presentation.torsion_publication_component_is_current(
+        case_inp, case_out["shear"], case_out["torsion"],
+    ) == (True, None)
+    assert presentation.combined_publication_evidence_is_current(inp, out) == (True, None)
+    assert presentation.combined_publication_evidence_is_current(case_inp, case_out) == (True, None)
+    assert presentation.combined_bending_assessment_blocker(out, inp) is None
+    assert presentation.combined_bending_assessment_blocker(case_out, case_inp) is None
+    positive = presentation.multi_case_summary_rows(inp, out)
+    applicability = [row for row in positive
+                     if str(row["overview_key"]).startswith("torsion:applicability:")]
+    assert len(applicability) == 1
+    assert applicability[0]["check"] == "Torsion applicability"
+    assert applicability[0]["status"] == applicability[0]["result"] == "APPLICABLE"
+    assert applicability[0]["case"] == "PL-01"
+    assert applicability[0]["util"] is None
+    assert applicability[0]["criterion"] == "Design basis and member scope"
+    assert applicability[0]["note"] == (
+        "Equilibrium torsion is selected; the entered TEd must be resisted by the section"
+    )
+    resistance = [row for row in positive if row["overview_key"] == "torsion:resistance"]
+    assert len(resistance) == 1 and resistance[0]["case"] == "PL-01"
+    assert resistance[0]["status"] in {"PASS", "FAIL"}
+    assert resistance[0]["util"] is not None and resistance[0]["result"] != "-"
+    positive_combined = [row for row in positive if str(row["overview_key"]).startswith("combined")]
+    assert positive_combined and all(row["case"] == "PL-01" for row in positive_combined)
+    assert any(row["status"] in {"PASS", "FAIL"} and row["util"] is not None
+               and row["result"] != "-" for row in positive_combined)
+    untouched_rows = [row for row in positive
+                      if not str(row["overview_key"]).startswith(("torsion", "combined"))]
+    assert any(row["status"] in {"PASS", "FAIL"} and row["util"] is not None
+               and row["result"] != "-" for row in untouched_rows)
+    evidence = []
+    for variant in variants:
+        poisoned = copy.deepcopy(out)
+        candidate = poisoned["torsion"]
+        assert poisoned["plastic_cases"][0]["results"]["torsion"] is candidate
+        shear_before = pickle.dumps(poisoned["shear"])
+        combined_before = pickle.dumps(poisoned["combined"])
+        primary_before = pickle.dumps(candidate["primary"])
+        other_fields = {key: pickle.dumps(value) for key, value in candidate.items()
+                        if key not in {"applicability", "applicability_blocked", "t_ed"}}
+        candidate["applicability"] = copy.deepcopy(candidate["applicability"])
+        mutate(candidate, variant)
+        assert pickle.dumps(poisoned["shear"]) == shear_before, variant
+        assert pickle.dumps(poisoned["combined"]) == combined_before, variant
+        assert pickle.dumps(candidate["primary"]) == primary_before, variant
+        assert all(pickle.dumps(candidate[key]) == value for key, value in other_fields.items()), variant
+        assert tuple(poisoned["plastic_cases"][0]["signature"]) == original_signature
+        frozen_poisoned = pickle.dumps(poisoned)
+        assert presentation.torsion_applicability_publication_status(candidate) == "NOT ASSESSED", variant
+        current, reason = presentation.torsion_publication_component_is_current(inp, poisoned["shear"], candidate)
+        assert current is False, variant
+        poisoned_contexts = [item for item in presentation._worked_case_contexts(inp, poisoned, "torsion")
+                             if item[0] == "PL-01"]
+        assert len(poisoned_contexts) == 1 and poisoned_contexts[0][3] is True
+        poisoned_case_inp, poisoned_case_out = poisoned_contexts[0][1:3]
+        assert poisoned_case_out["torsion"] is candidate
+        assert presentation.torsion_publication_component_is_current(
+            poisoned_case_inp, poisoned_case_out["shear"], candidate,
+        )[0] is False, variant
+        # Combined still owns unchanged native physical-face arithmetic.
+        # Its publication must nevertheless fail the root torsion prerequisite.
+        assert presentation.combined_publication_evidence_is_current(inp, poisoned) == (True, None), variant
+        assert presentation.combined_publication_evidence_is_current(poisoned_case_inp, poisoned_case_out) == (True, None), variant
+        blocker = "Torsion prerequisite is not assessed: " + presentation.torsion_applicability_note(candidate)
+        assert presentation.combined_bending_assessment_blocker(poisoned, inp) == blocker, variant
+        assert presentation.combined_bending_assessment_blocker(poisoned_case_out, poisoned_case_inp) == blocker, variant
+        negative = presentation.multi_case_summary_rows(inp, poisoned)
+        assert [row for row in negative
+                if not str(row["overview_key"]).startswith(("torsion", "combined"))] == untouched_rows, variant
+        blocked = [row for row in negative if str(row["overview_key"]).startswith(("torsion", "combined"))]
+        assert any(row["overview_key"] == "torsion" for row in blocked), variant
+        assert any(str(row["overview_key"]).startswith("combined") for row in blocked), variant
+        assert all(row["status"] == "NOT ASSESSED" and row["util"] is None
+                   and row["result"] == "-" and row["case"] == "PL-01" for row in blocked), variant
+        assert not any(str(row["overview_key"]).startswith("torsion:applicability:") for row in negative), variant
+        assert not any(row["overview_key"] == "torsion:resistance" for row in negative), variant
+        assert all(row["note"] == blocker for row in blocked
+                   if str(row["overview_key"]).startswith("combined")), variant
+        assert pickle.dumps(poisoned) == frozen_poisoned, variant
+        evidence.append({"variant": variant, "current": current, "reason": reason,
+                         "combined_current": True, "combined_blocker": blocker,
+                         "blocked_rows": [{key: row[key] for key in ("overview_key", "check", "case", "status", "result", "util")}
+                                          for row in blocked]})
+    assert len(evidence) == len(variants)
+    assert pickle.dumps((inp, out)) == original
+    (tmp_path / f"native-torsion-summary-{family}.json").write_text(
+        json.dumps({"family": family, "positive_rows": positive, "variants": evidence}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.xdist_group("native-member-report")
+def test_native_torsion_summary_rejects_scope_declaration_variants(native_member_report_cases, tmp_path):
+    variants = [(kind, flag) for kind in (
+        "canonical-blocked", "missing", "non-mapping", "contradictory-applicable", "incomplete-applicable",
+    ) for flag in (None, False)]
+    assert len(variants) == 10
+
+    def mutate(torsion, variant):
+        kind, flag = variant
+        applicability = capacity.torsion_applicability(
+            {"torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+             "torsion_member_scope": capacity.TORSION_MEMBER_OPEN},
+            torsion["t_ed"],
+        )
+        torsion["applicability"] = applicability
+        if kind == "missing":
+            torsion.pop("applicability")
+        elif kind == "non-mapping":
+            torsion["applicability"] = []
+        elif kind == "contradictory-applicable":
+            torsion["applicability"] = dict(applicability, status="APPLICABLE", reason=None)
+        elif kind == "incomplete-applicable":
+            torsion["applicability"] = {
+                "status": "APPLICABLE", "design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+                "member_scope": capacity.TORSION_MEMBER_CLOSED,
+            }
+        if flag is None:
+            torsion.pop("applicability_blocked", None)
+        else:
+            torsion["applicability_blocked"] = flag
+
+    _exercise_native_torsion_summary_variants(native_member_report_cases["two-face"], variants, mutate, tmp_path, "scope")
+
+
+@pytest.mark.xdist_group("native-member-report")
+def test_native_torsion_summary_rejects_route_declaration_variants(native_member_report_cases, tmp_path):
+    variants = ("stale-blocker", "malformed-blocker", "lowercase-status", "missing-route-entry", "wrong-route",
+                "stale-reason", "text-ted", "boolean-ted", "nonfinite-ted")
+    assert len(variants) == 9
+
+    def mutate(torsion, variant):
+        if variant == "stale-blocker":
+            torsion["applicability_blocked"] = True
+        elif variant == "malformed-blocker":
+            torsion["applicability_blocked"] = "False"
+        elif variant == "lowercase-status":
+            torsion["applicability"]["status"] = "applicable"
+        elif variant == "missing-route-entry":
+            torsion["applicability"].pop("full_resistance_route_entered")
+        elif variant == "wrong-route":
+            torsion["applicability"]["route"] = "compatibility residual full resistance"
+        elif variant == "stale-reason":
+            torsion["applicability"]["reason"] = "open or warping-sensitive torsion requires member analysis"
+        elif variant == "text-ted":
+            torsion["t_ed"] = str(torsion["t_ed"])
+        elif variant == "boolean-ted":
+            torsion["t_ed"] = True
+        else:
+            torsion["t_ed"] = math.nan
+
+    _exercise_native_torsion_summary_variants(native_member_report_cases["two-face"], variants, mutate, tmp_path, "route")
+
+
+def _unbound_torsion_summary(inp, results):
+    """Exercise the real early guard on each untouched incomplete input."""
+    before = pickle.dumps((inp, results), protocol=pickle.HIGHEST_PROTOCOL)
+    current, reason = presentation.torsion_publication_component_is_current(
+        inp, results.get("shear"), results["torsion"],
+    )
+    assert (current, reason) == (False, "torsion result evidence is unavailable")
+    rows = presentation.result_summary_rows(inp, results)
+    by_check = {row["check"]: row for row in rows}
+    root = by_check["Torsion"]
+    assert (root["status"], root["result"], root["criterion"], root["util"]) == (
+        "NOT ASSESSED", "-", "-", None,
+    )
+    assert root["note"] == presentation.result_reason(reason, "torsion")
+    assert not {
+        "Torsion applicability", "Torsion transverse/strut resistance",
+        "Torsion longitudinal reinforcement",
+    }.intersection(by_check)
+    assert pickle.dumps((inp, results), protocol=pickle.HIGHEST_PROTOCOL) == before
+    return rows

@@ -35,6 +35,16 @@ def _brief_text(inp: dict, out: dict) -> str:
     )
 
 
+def _input_inventory_fixture() -> tuple[dict, dict]:
+    """Complete the base case before deliberately editing displayed inputs.
+
+    These tests check input inventory. Currentness validation remains active, so
+    changed member inputs cannot reuse the base case as a calculated verdict.
+    """
+    inp = report_render_fixture._inputs()
+    return inp, report_render_fixture._results(inp)
+
+
 def _set_elastic_result_fields(out: dict, **values) -> None:
     """Keep top-level and retained per-case Elastic evidence in sync."""
 
@@ -250,7 +260,7 @@ def test_brief_retains_only_the_active_concrete_exponent():
 
 
 def test_brief_retains_curve_specific_prestress_inputs():
-    inp = report_render_fixture._inputs()
+    inp, out = _input_inventory_fixture()
     entries = []
     for material_id, curve, values in (
         ("P1", 6, {
@@ -320,7 +330,7 @@ def test_brief_retains_curve_specific_prestress_inputs():
         "prestress": laws["P1"],
     })
 
-    text = _brief_text(inp, report_render_fixture._results(inp))
+    text = _brief_text(inp, out)
     p1 = text[text.index("Prestress / P1"):text.index("Prestress / P2")]
     p2 = text[text.index("Prestress / P2"):text.index("Actions")]
     for expected in (
@@ -407,7 +417,7 @@ def test_brief_retains_fctm_for_minimum_reinforcement_without_crack_checks():
 
 
 def test_brief_retains_2023_link_ductility_without_transverse_detailing():
-    inp = report_render_fixture._inputs()
+    inp, out = _input_inventory_fixture()
     inp.update({
         "shear_on": True,
         "shear_links": True,
@@ -416,12 +426,12 @@ def test_brief_retains_2023_link_ductility_without_transverse_detailing():
         "transverse_detailing_on": False,
         "transverse_ductility_class": "A",
     })
-    text_a = _brief_text(inp, report_render_fixture._results(inp))
+    text_a = _brief_text(inp, out)
     assert "Link reinforcement ductility class A" in text_a
     assert "2023 minimum-ratio ductility reduction" not in text_a
 
     inp["transverse_ductility_class"] = "C"
-    text_c = _brief_text(inp, report_render_fixture._results(inp))
+    text_c = _brief_text(inp, out)
     assert "Link reinforcement ductility class C" in text_c
     assert "Link reinforcement ductility class A" not in text_c
 
@@ -521,7 +531,7 @@ def test_brief_retains_2023_concrete_applicability_and_derived_factor():
 
 
 def test_brief_invalid_fatigue_falls_back_to_assigned_source_catalog():
-    inp = report_render_fixture._inputs()
+    inp, out = _input_inventory_fixture()
     detail_f1 = report_render_fixture.fatigue_inputs.default_entry(
         preset=report_render_fixture.fatigue_inputs.PRESET_2023_BENT_BARS
     )
@@ -535,7 +545,6 @@ def test_brief_invalid_fatigue_falls_back_to_assigned_source_catalog():
     ]
     inp["bar_elements"][0]["fatigue_detail_id"] = "F2"
     inp["bar_elements"][1]["fatigue_detail_id"] = "F1"
-    out = report_render_fixture._results(inp)
     out["fatigue"] = report_render_fixture.fatigue_analysis.invalid_result(
         inp, errors=("deliberate invalid-fatigue fixture",)
     )
@@ -701,7 +710,7 @@ def test_brief_resistance_fields_follow_active_shear_and_detailing_routes():
 
 
 def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
-    inp = report_render_fixture._inputs()
+    inp, out = _input_inventory_fixture()
     inp.update({
         "shear_on": True,
         "shear_links": True,
@@ -715,7 +724,7 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
         "transverse_ductility_class": "C",
         "transverse_apply_ductility_reduction": True,
     })
-    text_2005 = _brief_text(inp, report_render_fixture._results(inp))
+    text_2005 = _brief_text(inp, out)
     assert "Shear aggregate Dlower" not in text_2005
     assert "Link reinforcement ductility class" not in text_2005
     assert "2023 minimum-ratio ductility reduction" not in text_2005
@@ -727,7 +736,7 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
         "torsion_method": report_render_fixture.codes.EC2_2023.label,
         "transverse_detailing_on": False,
     })
-    combined_2023 = _brief_text(inp, report_render_fixture._results(inp))
+    combined_2023 = _brief_text(inp, out)
     assert f"Shear method {report_render_fixture.codes.EC2_2023.label}" in combined_2023
     assert "Shear aggregate Dlower 22.0 mm" in combined_2023
     assert "Shear partial factor " + chr(0x3B3) + "V 1.234" in combined_2023
@@ -739,7 +748,7 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
         "shear_method": report_render_fixture.codes.EC2_2023.label,
         "shear_links": False,
     })
-    no_links_2023 = _brief_text(inp, report_render_fixture._results(inp))
+    no_links_2023 = _brief_text(inp, out)
     assert "Shear aggregate Dlower 22.0 mm" in no_links_2023
     assert "Shear partial factor " + chr(0x3B3) + "V 1.234" in no_links_2023
 
@@ -749,13 +758,13 @@ def test_brief_2023_shear_and_ductility_conditions_use_effective_method():
         "detailing_edition": report_render_fixture.detailing.EC2_2023,
         "transverse_apply_ductility_reduction": True,
     })
-    detailing_2023 = _brief_text(inp, report_render_fixture._results(inp))
+    detailing_2023 = _brief_text(inp, out)
     assert "Link reinforcement ductility class C" in detailing_2023
     assert "2023 minimum-ratio ductility reduction yes" in detailing_2023
 
 
 def test_brief_builtin_prestress_proof_stress_is_fatigue_input_only():
-    inp = report_render_fixture._inputs()
+    inp, out = _input_inventory_fixture()
     entry = report_render_fixture.material_catalog.default_entry(
         "prestress", preset="Curve 1 (built-in)"
     )
@@ -782,7 +791,6 @@ def test_brief_builtin_prestress_proof_stress_is_fatigue_input_only():
         "prestress_materials": {"P1": law},
         "prestress": law,
     })
-    out = report_render_fixture._results(inp)
     text = _brief_text(inp, out)
     assert "built-in fixed curve 1" in text
     assert (
@@ -1007,37 +1015,40 @@ def test_standard_and_audit_output_is_unchanged_by_the_brief_input_inventory():
         assert "Section and materials" in text
 
 
-def test_every_profile_retains_governing_statuses_and_engineering_values():
+def test_every_profile_retains_governing_statuses_and_engineering_values(tmp_path):
     expected = (
-        "Plastic bending PL-QA-2 FAIL 125.0 %",
+        "Plastic bending PL-QA-2 FAIL 220.8 %",
         "Crack width - Long-term EL-QA-1 "
         "EXCEEDS USER-SPECIFIED LIMIT 0.213 mm",
         "Crack width - Short-term EL-QA-1 "
         "EXCEEDS USER-SPECIFIED LIMIT 0.213 mm",
-        "Torsion PL-QA-1 NOT ASSESSED NOT ASSESSED",
-        "Torsion transverse/strut resistance PL-QA-1 FAIL 163.4 %",
-        "Combined M-V-T - DK NA sum PL-QA-1 FAIL 270.5 %",
+        "Torsion PL-QA-1 FAIL FAIL",
+        "Torsion transverse/strut resistance PL-QA-1 FAIL 170.5 %",
+        "Combined M-V-T - DK NA sum PL-QA-1 FAIL 391.1 %",
         "Fatigue Road traffic PASS 46.1 %",
     )
     for profile in ("Brief", "Standard", "Audit"):
         # A narrow table column can make PDF extraction separate the hyphen from
         # USER-SPECIFIED even though the rendered label is unchanged.
+        (tmp_path / (profile.lower() + ".pdf")).write_bytes(_profile_pdf(profile))
         text = _profile_text(profile).replace(
             "USER -SPECIFIED", "USER-SPECIFIED"
         )
         for value in expected:
-            assert value in text
+            # A line may end at an existing hyphen. Require all characters while
+            # allowing PDF extraction to insert whitespace at that boundary.
+            assert re.search(re.escape(value).replace(r"\-", r"-\s*"), text)
 
 
 def test_deeper_profiles_retain_torsion_wall_selection_operands():
     brief = _profile_text("Brief")
-    assert "Torsion PL-QA-1 NOT ASSESSED NOT ASSESSED" in brief
-    assert "Torsion transverse/strut resistance PL-QA-1 FAIL 163.4 %" in brief
+    assert "Torsion PL-QA-1 FAIL FAIL" in brief
+    assert "Torsion transverse/strut resistance PL-QA-1 FAIL 170.5 %" in brief
 
     for profile in ("Standard", "Audit"):
         text = _profile_text(profile)
         assert "Base thickness A/u 60.0 mm" in text
-        assert "60.0 mm (A/u and reinforcement lower bound)" in text
+        assert "60.0 mm (user override)" in text
         assert "Lower bound 2a" in text
         assert "30.0 mm" in text and "60.0 mm" in text
 
@@ -1045,7 +1056,7 @@ def test_deeper_profiles_retain_torsion_wall_selection_operands():
 def test_brief_omits_non_governing_requested_results_and_statuses():
     expected = (
         "Non-governing requested results",
-        "Plastic bending PL-QA-1 PASS 80.0 %",
+        "Plastic bending PL-QA-1 FAIL 141.3 %",
         "Crack width - Long-term EL-QA-2 NOT REQUESTED",
         "Crack width - Short-term EL-QA-2 NOT REQUESTED",
     )
