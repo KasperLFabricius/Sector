@@ -4831,6 +4831,15 @@ class ReportBuilder:
             rows.append([
                 _LiteralReportText(label), _fmt(inp.get("P_pl"), 3), mx, my
             ])
+        elif any(inp.get(key) for key in ("shear_on", "torsion_on", "combined_on")):
+            case = _html_escape(
+                presentation.action_set(inp, "plastic")["id"] or "-"
+            )
+            rows.append([
+                _LiteralReportText(f"{case} - member inputs"),
+                _fmt(inp.get("P_pl"), 3), _fmt(inp.get("Mx_pl"), 3),
+                _fmt(inp.get("My_pl"), 3),
+            ])
         if "elastic" in out:
             case = _html_escape(
                 presentation.action_set(inp, "elastic")["id"] or "-"
@@ -4842,6 +4851,46 @@ class ReportBuilder:
                          _fmt(inp.get("P_el_s"), 3),
                          _fmt(inp.get("Mx_el_s"), 3), _fmt(inp.get("My_el_s"), 3)])
         self._table(rows, [55 * mm, 35 * mm, 38 * mm, 38 * mm])
+
+        # Direct callers have no declared case table to disclose the transverse
+        # actions. Read the same current input fields as the member producer.
+        transverse = [["Action set", "Action", "Value"]]
+        case = _LiteralReportText(_html_escape(
+            presentation.action_set(inp, "plastic")["id"] or "-"
+        ))
+        if inp.get("shear_on"):
+            if any(key in inp for key in (
+                "shear_Vx", "shear_Vy", "shear_components",
+            )):
+                components = inp.get("shear_components") or {}
+                actions = [
+                    (axis, (components.get("v" + axis) or {}).get(
+                        "signed_v_ed", inp.get("shear_V" + axis, 0.0)
+                    ))
+                    for axis in ("x", "y")
+                ]
+            else:
+                component = {"x": "y", "y": "x"}.get(inp.get("shear_axis"), "?")
+                actions = [(component, inp.get("shear_V"))]
+            transverse.extend([
+                [case, f"Shear V<sub>{axis},Ed</sub>", f"{_fmt(value, 3)} kN"]
+                for axis, value in actions
+            ])
+        if inp.get("torsion_on"):
+            torque = presentation._publication_metric(inp.get("torsion_T"))
+            sense = presentation._publication_metric(
+                inp.get("torsion_T_signed", inp.get("torsion_T")),
+            )
+            torque = (
+                math.copysign(abs(torque), sense)
+                if torque is not None and sense is not None else None
+            )
+            transverse.append([
+                case, "Torsion T<sub>Ed</sub>",
+                f"{_fmt(torque, 3)} kNm",
+            ])
+        if len(transverse) > 1:
+            self._table(transverse, [55 * mm, 73 * mm, 38 * mm])
 
     def _settings_block(self):
         # Every input that influences the reported results is documented here so the
@@ -5294,6 +5343,7 @@ class ReportBuilder:
                     case_inp,
                     result,
                     plastic_result=self._plastic_publication_authority(),
+                    torsion_result=(case_out or {}).get("torsion"),
                 )[0]
                 is not True
             ):
@@ -7015,6 +7065,7 @@ class ReportBuilder:
             sh,
             links_selected=self.inp.get("shear_links") is True,
             input_payload=self.inp,
+            torsion_result=self.out.get("torsion"),
         )
         concrete_route_selected = bool(
             nominal.get("valid") is True and nominal.get("route") == "concrete"
@@ -7053,6 +7104,7 @@ class ReportBuilder:
                 aggregate,
                 plastic_result=self._plastic_publication_authority(),
                 validate_directions=False,
+                torsion_result=self.out.get("torsion"),
             )
         )
         if aggregate_current is not True:
@@ -7086,6 +7138,7 @@ class ReportBuilder:
                 item,
                 links_selected=self.inp.get("shear_links") is True,
                 input_payload=self.inp,
+                torsion_result=self.out.get("torsion"),
             )
             if selected_resistance.get("valid") is not True:
                 return _result_reason(
@@ -7109,6 +7162,7 @@ class ReportBuilder:
                 aggregate,
                 links_selected=self.inp.get("shear_links") is True,
                 input_payload=self.inp,
+                torsion_result=self.out.get("torsion"),
             )
             resistance = selected_resistance.get("resistance")
             utilisation = selected_resistance.get("utilisation")
@@ -7212,6 +7266,7 @@ class ReportBuilder:
                 item,
                 links_selected=self.inp.get("shear_links") is True,
                 input_payload=self.inp,
+                torsion_result=self.out.get("torsion"),
             )
             resistance = selected_resistance.get("resistance")
             utilisation = selected_resistance.get("utilisation")
@@ -7321,6 +7376,7 @@ class ReportBuilder:
                 self.inp,
                 sh,
                 plastic_result=self._plastic_publication_authority(),
+                torsion_result=self.out.get("torsion"),
             )
         )
         if input_current is not True:
@@ -7508,7 +7564,9 @@ class ReportBuilder:
                 "face or its governing selection. No face-specific resistance, "
                 "utilisation or PASS/FAIL verdict is published."
             )
-        geometry_basis = presentation.shear_geometry_basis(self.inp, sh)
+        geometry_basis = presentation.shear_geometry_basis(
+            self.inp, sh, torsion_result=self.out.get("torsion"),
+        )
         z_geometry = geometry_basis["z_mm"]
         bw_src = "user input" if sh["bw_user"] else "auto minimum solid width"
         if self.figures:
@@ -7625,6 +7683,7 @@ class ReportBuilder:
             sh,
             links_selected=self.inp.get("shear_links") is True,
             input_payload=self.inp,
+            torsion_result=self.out.get("torsion"),
         )
         concrete_route_selected = bool(
             nominal.get("valid") is True and nominal.get("route") == "concrete"
@@ -7717,6 +7776,7 @@ class ReportBuilder:
         provided_link = presentation.provided_link_publication_assessment(
             self.inp,
             sh,
+            torsion_result=self.out.get("torsion"),
         )
         if provided_link.valid is not True:
             reason = _result_reason(
@@ -13439,6 +13499,7 @@ class ReportBuilder:
         self._small(f"Generated {ts} by Sector {self.version}.")
 
 
+@presentation.publication_calculation_scope()
 def build_report(
     meta,
     inp,

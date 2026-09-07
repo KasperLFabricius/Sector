@@ -8,11 +8,16 @@ alter the retained engineering results.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 import dataclasses
 import functools
 import html
 import math
 from numbers import Real
+import pickle
+import sys
+import threading
 
 import case_analysis
 import fatigue_presentation
@@ -34,6 +39,135 @@ _THETA_DISPLAY_ABS_TOL_DEG = 5.0e-2
 
 _SINGLE_CASE_ID = "__single__"
 _MISSING = object()
+_PUBLICATION_SOLVES = ContextVar("publication_solves", default=None)
+
+
+@dataclasses.dataclass
+class _PublicationSolveScope:
+    thread_id: int
+    cache: dict
+    live: bool = True
+
+
+@contextmanager
+def publication_calculation_scope():
+    """Reuse identical pure solves only within one publication evaluation.
+
+    Every retained operand is still reconciled on every call. Nested consumers
+    share this synchronous evaluation's cache. Independent calls and threads,
+    including copied thread contexts, start fresh.
+    """
+    active = _PUBLICATION_SOLVES.get()
+    if active is not None and active.live and active.thread_id == threading.get_ident():
+        yield
+        return
+    owner = _PublicationSolveScope(threading.get_ident(), {})
+    token = _PUBLICATION_SOLVES.set(owner)
+    try:
+        yield
+    finally:
+        owner.live = False
+        owner.cache.clear()
+        _PUBLICATION_SOLVES.reset(token)
+
+
+def _publication_key_bytes(args, kwargs):
+    """Key supported Section/material values and standard case-table state."""
+    import numpy as np
+    from pandas import DataFrame, Index, NA, RangeIndex, StringDtype
+    from sector.materials import Concrete, MildSteel, Prestress
+    from sector.section import Bar, Section
+
+    # Retain traversed objects: temporary table lists must not have their ids
+    # recycled while this traversal is still checking later custom state.
+    seen = {}
+
+    def supported_dtype(dtype):
+        if isinstance(dtype, np.dtype):
+            return dtype.metadata is None and dtype.fields is None and dtype.kind in "biufcOUS"
+        if type(dtype) is StringDtype:
+            return dtype.storage in {"python", "pyarrow"} and supported(dtype.na_value)
+        return False
+
+    def supported(value):
+        if value is NA:
+            return True
+        kind = type(value)
+        if kind in {type(None), bool, int, float, str, bytes}:
+            return True
+        if id(value) in seen:
+            return True
+        seen[id(value)] = value
+        if kind is dict:
+            return all(supported(key) and supported(item) for key, item in value.items())
+        if kind in {list, tuple}:
+            return all(supported(item) for item in value)
+        if kind in {Bar, Section, Concrete, MildSteel, Prestress}:
+            return supported(vars(value))
+        if kind is np.ndarray:
+            return supported_dtype(value.dtype) and (
+                not value.dtype.hasobject or supported(value.tolist())
+            )
+        if isinstance(value, np.generic) and kind.__module__ == "numpy":
+            return supported(value.item())
+        if kind is DataFrame:
+            if type(value._metadata) is not list or value._metadata:
+                return False
+            if not all(type(axis) in {Index, RangeIndex} for axis in (value.index, value.columns)):
+                return False
+            if not all(supported_dtype(dtype) for dtype in (
+                value.index.dtype, value.columns.dtype, *value.dtypes,
+            )):
+                return False
+            return all(supported(item) for item in (
+                value.attrs, list(value.index), list(value.columns),
+                list(value.index.names), list(value.columns.names),
+                value.to_numpy().tolist(),
+            ))
+        return False
+
+    if not supported((args, kwargs)):
+        raise TypeError("publication solve input has custom or unsupported state")
+    return pickle.dumps((args, kwargs), protocol=5)
+
+
+def _publication_solver_result(solver, *args, **kwargs):
+    active = _PUBLICATION_SOLVES.get()
+    if active is None or not active.live or active.thread_id != threading.get_ident():
+        return solver(*args, **kwargs)
+    cache = active.cache
+
+    def current_key():
+        plastic_module = sys.modules.get("sector.plastic")
+        return (
+            solver, capacity.conditional_capacity, capacity.plastic_capacity_at_angle,
+            getattr(plastic_module, "conditional_capacity", None),
+            getattr(plastic_module, "plastic_capacity_at_angle", None),
+            _publication_key_bytes(args, kwargs),
+        )
+
+    try:
+        # Include the entire typed input, not a selected field list or object
+        # identity. Encoding only: these bytes are never deserialized.
+        key = current_key()
+    except Exception:
+        # Unsupported input objects retain the original calculation behavior.
+        return solver(*args, **kwargs)
+    if key in cache:
+        return cache[key]
+    result = solver(*args, **kwargs)
+    try:
+        unchanged = current_key() == key
+    except Exception:
+        unchanged = False
+    # The two supported helpers return immutable scalar pairs. Do not expose
+    # a shared mutable return if a caller supplies a different solver seam.
+    immutable_pair = type(result) is tuple and len(result) == 2 and all(
+        type(value) in {float, bool, str, type(None)} for value in result
+    )
+    if unchanged and immutable_pair:
+        cache[key] = result
+    return result
 
 _PLASTIC_ACTION_SET_REQUIRED = EngineerMessage(
     "PLASTIC-ACTION-SET",
@@ -2085,6 +2219,7 @@ def _single_shear_publication_input_is_current(
     shear_result,
     *,
     plastic_result=None,
+    torsion_result=None,
 ):
     """Return whether any retained shear operands can be shown for this input.
 
@@ -2121,7 +2256,9 @@ def _single_shear_publication_input_is_current(
             )
             links = shear_result.get("links")
             provided = (
-                provided_link_publication_assessment(inp, shear_result)
+                provided_link_publication_assessment(
+                    inp, shear_result, torsion_result=torsion_result,
+                )
                 if isinstance(links, Mapping)
                 else None
             )
@@ -2154,7 +2291,9 @@ def _single_shear_publication_input_is_current(
     )
     if retained_links.valid is not True:
         return True, None
-    current_links = provided_link_publication_assessment(inp, shear_result)
+    current_links = provided_link_publication_assessment(
+        inp, shear_result, torsion_result=torsion_result,
+    )
     if current_links.valid is not True:
         return False, current_links.reason
     return True, None
@@ -2165,6 +2304,7 @@ def shear_publication_input_is_current(
     shear_result,
     *,
     plastic_result=None,
+    torsion_result=None,
     validate_directions=True,
 ):
     """Reconcile a complete shear family, including its directional wrapper."""
@@ -2185,6 +2325,7 @@ def shear_publication_input_is_current(
             inp,
             shear_result,
             plastic_result=plastic_result,
+            torsion_result=torsion_result,
         )
 
     specs, _spec_reason = _strict_current_directional_shear_specs(
@@ -2225,6 +2366,7 @@ def shear_publication_input_is_current(
                 inp,
                 child,
                 plastic_result=plastic_result,
+                torsion_result=torsion_result,
             )[0] is not True:
                 return False, unavailable_reason
         return True, None
@@ -2242,6 +2384,7 @@ def shear_publication_input_is_current(
         inp,
         shear_result,
         plastic_result=plastic_result,
+        torsion_result=torsion_result,
     )
 
 
@@ -2250,6 +2393,7 @@ def shear_direction_publication_input_is_current(
     shear_result,
     *,
     plastic_result=None,
+    torsion_result=None,
 ):
     """Reconcile one child after its complete directional wrapper was checked."""
 
@@ -2257,6 +2401,7 @@ def shear_direction_publication_input_is_current(
         inp,
         shear_result,
         plastic_result=plastic_result,
+        torsion_result=torsion_result,
     )
 
 
@@ -3524,8 +3669,9 @@ def provided_link_publication_assessment(
             and candidate.get("tension_low") is shear_result.get("tension_low")
             and isinstance(candidate.get("torsion"), Mapping)
         ]
-        if len(matching) == 1:
-            torsion_result = matching[0]["torsion"]
+        # A directional result owns its selected face; a supplied case root
+        # cannot replace missing or ambiguous companion evidence on that face.
+        torsion_result = matching[0]["torsion"] if len(matching) == 1 else None
     expected_angle = _current_member_angle_selection(
         inp,
         shear_result,
@@ -3786,7 +3932,8 @@ def provided_link_publication_assessment(
                 )
             ):
                 return unavailable("calculated link lever-arm evidence is unavailable")
-            expected_z, expected_z_source = capacity.shear_lever_arm(
+            expected_z, expected_z_source = _publication_solver_result(
+                capacity.shear_lever_arm,
                 inp,
                 axis,
                 action["tension_low"],
@@ -3963,7 +4110,8 @@ def _current_link_chord_candidate(
     moment_signed = own_origin + reference_shift
     m_off = other_origin
     try:
-        m_rd, conditional = capacity.shear_face_mrd(
+        m_rd, conditional = _publication_solver_result(
+            capacity.shear_face_mrd,
             inp,
             axis,
             tension_low,
@@ -4007,7 +4155,8 @@ def _current_link_chord_candidate(
                 cy if axis == "x" else cx,
             )
             d_mm = shear_core.effective_depth(outer, axis, tension_low, cg)
-            z_mm, z_source = capacity.shear_lever_arm(
+            z_mm, z_source = _publication_solver_result(
+                capacity.shear_lever_arm,
                 inp,
                 axis,
                 tension_low,
@@ -4221,8 +4370,7 @@ def provided_link_longitudinal_publication_assessment(
             and candidate.get("tension_low") is shear_result.get("tension_low")
             and isinstance(candidate.get("torsion"), Mapping)
         ]
-        if len(matching) == 1:
-            torsion_result = matching[0]["torsion"]
+        torsion_result = matching[0]["torsion"] if len(matching) == 1 else None
     provided = provided_link_publication_assessment(
         inp,
         shear_result,
@@ -4495,6 +4643,7 @@ def _transverse_metric(
             shear_owner,
             plastic_result=plastic_result,
             validate_directions=False,
+            torsion_result=torsion_result,
         )[0]
         is not True
     ):
@@ -4514,6 +4663,7 @@ def _transverse_metric(
     def shear_metric(item):
         if input_payload and shear_direction_publication_input_is_current(
             input_payload, item, plastic_result=plastic_result,
+            torsion_result=torsion_result,
         )[0] is not True:
             return None
         selected = nominal_shear_resistance(
@@ -5120,6 +5270,7 @@ def _torsion_subcheck_selection(inp, out):
     return {key: item[1] for key, item in selected.items()}
 
 
+@publication_calculation_scope()
 def worked_example_selection(inp, out):
     """Build the bounded, family-specific worked-example publication contract.
 
@@ -5508,7 +5659,7 @@ def strut_angle_applicability_publication(value):
     return {**numbers, "method": method}
 
 
-def shear_geometry_basis(inp, shear_result):
+def shear_geometry_basis(inp, shear_result, *, torsion_result=None):
     """Describe the retained ``d``/``z`` values and their calculation roles."""
 
     item = shear_result if isinstance(shear_result, Mapping) else {}
@@ -5555,7 +5706,9 @@ def shear_geometry_basis(inp, shear_result):
             ),
         }
     if links:
-        provided = provided_link_publication_assessment(inp, item)
+        provided = provided_link_publication_assessment(
+            inp, item, torsion_result=torsion_result,
+        )
         z_mm = _publication_metric(link_result.get("z"))
         if provided.valid is not True or z_mm is None or z_mm <= 0.0:
             reason = result_reason(
@@ -6572,6 +6725,7 @@ def non_governing_fatigue_spectrum_rows(inp, results, *, stale=False):
     return rows
 
 
+@publication_calculation_scope()
 def result_summary_rows(inp, results, *, stale=False):
     """Build the shared UI/PDF overview without rerunning any solver."""
     inp = inp or {}
@@ -6976,6 +7130,7 @@ def result_summary_rows(inp, results, *, stale=False):
             shear,
             plastic_result=results.get("plastic"),
             validate_directions=False,
+            torsion_result=shear_torsion,
         )[0] is not True:
             shear = {}
         links_selected = inp.get("shear_links") is True
@@ -6985,6 +7140,7 @@ def result_summary_rows(inp, results, *, stale=False):
             action_label = {"vx": "Vx,Ed", "vy": "Vy,Ed"}.get(component, "VEd")
             if shear_direction_publication_input_is_current(
                 inp, direction, plastic_result=results.get("plastic"),
+                torsion_result=shear_torsion,
             )[0] is not True:
                 direction = {}
             if capacity.validated_signed_shear_demand(direction) is None:
@@ -7030,6 +7186,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 direction,
                 links_selected=links_selected,
                 input_payload=inp,
+                torsion_result=shear_torsion,
             )
             selected_route = selected_resistance.get("route")
             resistance = direction_result.get("vrd_c")
@@ -7164,7 +7321,9 @@ def result_summary_rows(inp, results, *, stale=False):
                     if isinstance(retained_link_result, Mapping)
                     else {}
                 )
-                provided_link = provided_link_publication_assessment(inp, direction)
+                provided_link = provided_link_publication_assessment(
+                    inp, direction, torsion_result=shear_torsion,
+                )
                 if selected_resistance.get("valid") is not True:
                     rows.append(_summary_row(
                         f"Shear{suffix} with links",
@@ -8105,6 +8264,7 @@ def _noncurrent_case_summary_rows(rows):
     return retained
 
 
+@publication_calculation_scope()
 def multi_case_summary_rows(inp, results, *, stale=False):
     """Build one ordered result register across every canonical case row."""
     inp = inp or {}

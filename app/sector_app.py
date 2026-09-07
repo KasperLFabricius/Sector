@@ -14144,16 +14144,18 @@ def _member_material_note(inp):
     st.caption(f"Member-check reinforcing material: {label}{suffix}.")
 
 
-def _nominal_shear_record(inp, shear_result):
+def _nominal_shear_record(inp, shear_result, *, torsion_result=None):
     """Return retained nominal shear-route evidence with a legacy fallback."""
 
     return presentation.nominal_shear_resistance(
         shear_result,
         links_selected=inp.get("shear_links") is True,
         input_payload=inp,
+        torsion_result=torsion_result,
     )
 
 
+@presentation.publication_calculation_scope()
 def shear_view(inp, results, *, global_results=None):
     """Shear resistance without shear reinforcement (VRd,c) and the utilisation.
 
@@ -14185,6 +14187,7 @@ def shear_view(inp, results, *, global_results=None):
             aggregate,
             plastic_result=plastic_authority,
             validate_directions=False,
+            torsion_result=results.get("torsion"),
         )
     )
     if aggregate_current is not True:
@@ -14215,7 +14218,9 @@ def shear_view(inp, results, *, global_results=None):
             if component not in directions:
                 continue
             item = directions[component]
-            nominal = _nominal_shear_record(inp, item)
+            nominal = _nominal_shear_record(
+                inp, item, torsion_result=results.get("torsion"),
+            )
             selected_available = nominal.get("valid") is True
             summary.append({
                 "Component": "Vx,Ed" if component == "vx" else "Vy,Ed",
@@ -14296,6 +14301,7 @@ def shear_view(inp, results, *, global_results=None):
             inp,
             sh,
             plastic_result=plastic_authority,
+            torsion_result=results.get("torsion"),
         )
     )
     if input_current is not True:
@@ -14381,7 +14387,9 @@ def shear_view(inp, results, *, global_results=None):
             "chosen face, or the derived effective depth / web width is zero. "
             r"Add tension bars on that face and check the geometry (or enter $b_w$).",
         )
-    nominal = _nominal_shear_record(inp, sh)
+    nominal = _nominal_shear_record(
+        inp, sh, torsion_result=results.get("torsion"),
+    )
     nominal_valid = nominal.get("valid") is True
     nominal_route = nominal.get("route")
     nominal_resistance = nominal.get("resistance")
@@ -14566,7 +14574,9 @@ def shear_view(inp, results, *, global_results=None):
             "before relying on either face or its governing selection.",
         )
 
-    geometry_basis = presentation.shear_geometry_basis(inp, sh)
+    geometry_basis = presentation.shear_geometry_basis(
+        inp, sh, torsion_result=results.get("torsion"),
+    )
     z_geometry = geometry_basis["z_mm"]
     bw_source = "user input" if sh["bw_user"] else "auto minimum solid width"
     st.plotly_chart(
@@ -14706,7 +14716,9 @@ def shear_view(inp, results, *, global_results=None):
                     f"{angle_publication['permitted_max']:.3f}."
                 )
             return
-        provided_link = presentation.provided_link_publication_assessment(inp, sh)
+        provided_link = presentation.provided_link_publication_assessment(
+            inp, sh, torsion_result=results.get("torsion"),
+        )
         if provided_link.valid is not True:
             reason = presentation.result_reason(
                 provided_link.reason,
