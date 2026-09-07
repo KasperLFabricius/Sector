@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import fatigue_analysis  # noqa: E402
 import fatigue_inputs  # noqa: E402
+import case_analysis  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
 import publication_image_export  # noqa: E402
@@ -98,6 +99,27 @@ def _inp():
         "nl": 15.0, "ns": 200.0 / 33.0, "el_phi": 1.475,
         "sls_fctm": 2.9, "sls_cw": True, "conc_Ec": 33.0,
         "shear_gamma_v": 1.40,
+        "shear_fywk": 500.0,
+        "shear_method": codes.EC2_2005_DKNA.label,
+        "shear_section_form": shear_core.SHEAR_SECTION_AUTO,
+        "shear_vx_bw": 0.0,
+        "shear_vy_bw": 0.0,
+        "shear_vx_web_inclination_deg": 0.0,
+        "shear_vy_web_inclination_deg": 0.0,
+        "shear_hoop_diameter": 0.0,
+        "shear_vx_fitted_z": 0.0,
+        "shear_vy_fitted_z": 0.0,
+        "shear_duct_case": shear_core.SHEAR_DUCT_NONE,
+        "shear_vx_duct_sum": 0.0,
+        "shear_vy_duct_sum": 0.0,
+        "shear_vx_duct_largest": 0.0,
+        "shear_vy_duct_largest": 0.0,
+        "shear_link_dia": 10.0,
+        "shear_link_s": 150.0,
+        "shear_vx_link_legs": 2.0,
+        "shear_vy_link_legs": 2.0,
+        "strut_cot_min": 1.0,
+        "strut_cot_max": 2.5,
         "torsion_gamma_ct": 1.70,
         "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
         "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
@@ -5099,118 +5121,67 @@ def test_report_includes_shear_section():
 
 
 def _native_sparse_link_report_fixture():
-    # The frozen 80/103.417/29.452 route oracle retained no link geometry.
-    # Reverse the native 2005 kernel once to define a reproducible test layout.
-    demand_kn = 80.0
-    concrete_resistance_kn = 103.417
-    link_resistance_kn = 29.452
-    link_diameter_mm = 4.0
-    link_legs = 2.0
-    link_area_mm2 = link_legs * math.pi * link_diameter_mm**2 / 4.0
-    link_arm_mm = 495.0
-    fywk_mpa = 500.0
-    cot_min = 1.0
-    cot_max = 2.5
-    asw_over_s = link_resistance_kn * 1000.0 / (
-        link_arm_mm
-        * (fywk_mpa / codes.EC2_2005_DKNA.gamma_s)
-        * cot_max
-    )
-    link_spacing_mm = link_area_mm2 / asw_over_s
+    """Reproduce the frozen 80/103.417/29.452 kN route with current inputs."""
+    import sector_app
+    from sector.section import Section
 
-    link_result = shear_core.vrd_links(
-        35.0,
-        codes.EC2_2005_DKNA,
-        300.0,
-        550.0,
-        asw_over_s,
-        fywk_mpa,
-        0.0,
-        0.18,
-        cot_min,
-        cot_max,
-        z_mm=link_arm_mm,
-        v_ed_kn=demand_kn,
-    )
-    links = {
-        "res": link_result,
-        "util": demand_kn / link_result["vrd"],
-        "asw": link_area_mm2,
-        "asw_over_s": asw_over_s,
-        "effective_asw_over_s": asw_over_s,
-        "asw_factor": 1.0,
-        "legs": link_legs,
-        "dia": link_diameter_mm,
-        "s": link_spacing_mm,
-        "fywk": fywk_mpa,
-        "cot_min": cot_min,
-        "cot_max": cot_max,
-        "cot_limit_lo": cot_min,
-        "cot_limit_hi": cot_max,
-        "delta_ftd": 0.0,
-        "longitudinal_shear_force": 0.0,
-        "longitudinal_assessment": {
-            "status": "NOT APPLICABLE",
-            "reason": "no_longitudinal_chord_action",
-        },
-        "z_source": "plastic internal lever arm",
-        "z_component": "z_y",
-        "z_source_angle_deg": 90.0,
-        "z_source_case": "PL-TEST",
-        "z_source_axial_kn": 0.0,
-        "out_of_limits": False,
-        "required": False,
-        "shear_geometry": {
-            "bw_mm": 300.0,
-            "resolved_form": "rectangular",
-            "duct_case": "none",
-            "duct_sum_mm": 0.0,
-            "duct_factor_links": 1.0,
-        },
-    }
-
-    transverse = detailing.transverse_reinforcement(
-        edition=detailing.EC2_2005_DKNA,
-        fck_mpa=35.0,
-        fywk_mpa=fywk_mpa,
-        diameter_mm=link_diameter_mm,
-        spacing_mm=link_spacing_mm,
-        shear_directions=[{
-            "component": "vy",
-            "bw_mm": 300.0,
-            "d_mm": 550.0,
-            "legs": link_legs,
-            "transverse_leg_spacing_mm": 300.0,
-            "links_present": True,
-            "links_required": False,
-        }],
-    )
-
-    sh = _shear_out()
-    sh["res"]["vrd_c"] = concrete_resistance_kn
-    sh["util"] = demand_kn / concrete_resistance_kn
-    sh["links"] = links
-    sh["nominal_resistance"] = asdict(
-        capacity.select_nominal_shear_resistance(sh, links_selected=True)
-    )
-    sh.update(
-        resistance_status="PASS",
-        assessment_status="PASS",
-        assessment_ok=True,
-    )
-
+    # The old retained fixture omitted its geometry and invented a 495 mm arm.
+    # These recovered inputs reproduce both frozen resistances through the
+    # native producer, including its calculated 506.448032 mm plastic arm.
+    area_mm2 = 1473.015633825187
     inp = _inp()
     inp.update(
+        outer=[(-0.15, -0.30), (0.15, -0.30),
+               (0.15, 0.30), (-0.15, 0.30)],
+        bars=[(-0.10, -0.25, area_mm2 / 2.0),
+              (0.10, -0.25, area_mm2 / 2.0)],
+        concrete=Concrete(fck=35.0, gamma_c=1.45, curve=2),
+        steel=MildSteel(fytk=500.0, fyck=500.0, futk=500.0,
+                        eut=0.05, gamma_y=1.2, curve=2),
+        P_pl=0.0,
+        Mx_pl=0.0,
+        My_pl=0.0,
         shear_on=True,
         shear_links=True,
         transverse_detailing_on=True,
         shear_method=codes.EC2_2005_DKNA.label,
-        shear_link_legs=link_legs,
-        shear_link_dia=link_diameter_mm,
-        shear_link_s=link_spacing_mm,
+        shear_Vx=0.0,
+        shear_Vy=80.0,
+        shear_face_x="auto",
+        shear_face_y="negative",
+        shear_link_dia=4.0,
+        shear_link_s=450.1826183849374,
+        shear_vx_link_legs=2.0,
+        shear_vy_link_legs=2.0,
+        strut_cot_min=1.0,
+        strut_cot_max=2.5,
+        torsion_on=False,
+        combined_on=False,
+    )
+    inp["section"] = Section.from_polygon(inp["outer"], inp["bars"])
+    out = {}
+    sector_app._run_capacity_checks(inp, out)
+    sh = out["shear"]
+    assert result_presentation.shear_publication_input_is_current(inp, sh)[0]
+    assert sh["res"]["vrd_c"] == pytest.approx(103.417)
+    assert sh["links"]["res"]["vrd"] == pytest.approx(29.452)
+    transverse = detailing.transverse_reinforcement(
+        edition=detailing.EC2_2005_DKNA,
+        fck_mpa=35.0,
+        fywk_mpa=inp["shear_fywk"],
+        diameter_mm=inp["shear_link_dia"],
+        spacing_mm=inp["shear_link_s"],
+        shear_directions=[{
+            "component": "vy",
+            "bw_mm": sh["bw"],
+            "d_mm": sh["d"],
+            "legs": sh["links"]["legs"],
+            "transverse_leg_spacing_mm": sh["bw"],
+            "links_present": True,
+            "links_required": sh["links"]["required"],
+        }],
     )
     return inp, sh, transverse
-
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
 def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(
@@ -5223,7 +5194,7 @@ def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(
         if check["kind"] == "minimum_ratio"
     )
     assert links["res"]["vrd"] == pytest.approx(29.452)
-    assert links["s"] == pytest.approx(440.00644085487903)
+    assert links["s"] == pytest.approx(450.1826183849374)
     assert links["asw_over_s"] == pytest.approx(
         links["asw"] / links["s"]
     )
@@ -5256,15 +5227,16 @@ def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(
     assert "PASS" in text
     assert "77.4 % (VEd / VRd,c)" in text
     assert "Shear with links" in text
-    assert "NOT APPLICABLE" in text
-    assert "271.6 % (non-governing)" in text
+    assert "FAIL" in text
+    assert "271.6 %" in text
     assert "Shear/torsion link detailing" in text
     assert "FAIL" in text
     assert "271.6 % (EXCEEDED)" not in text
     if profile != "Brief":
+        assert "271.6 % (FAIL; non-governing comparison)" in text
         assert "103.417" in text
         assert "29.452" in text
-        assert "2 x 4 / 440 mm" in text
+        assert "2 x 4 / 450 mm" in text
         assert text.count(detailing_utilisation) >= 2
         assert "Separate link detailing assessment: FAIL" in text
         assert "non-governing comparison" in text
@@ -5771,6 +5743,130 @@ def _torsion_out(interaction=False):
             ok=retained.ok,
         )
     return out
+
+
+def _named_plastic_record(name, *, torsion_knm):
+    return {
+        "name": name,
+        "description": f"Action set {name}",
+        "n_ed_kn": 0.0,
+        "mx_ed_knm": 80.0,
+        "my_ed_knm": 0.0,
+        "vx_ed_kn": 0.0,
+        "vy_ed_kn": 50.0,
+        "vx_face": "auto",
+        "vy_face": "auto",
+        "t_ed_knm": torsion_knm,
+        "check_minimum_reinforcement": False,
+    }
+
+
+def _stale_named_torsion_report_payload(*, current_name="PL-SAME"):
+    inp = _inp()
+    inp.update(
+        mode="Plastic",
+        plastic_cases=[
+            _named_plastic_record(current_name, torsion_knm=41.0)
+        ],
+        elastic_cases=[],
+        shear_on=True,
+        torsion_on=True,
+        combined_on=True,
+        shear_links=True,
+        torsion_case_authorities={
+            current_name: {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_EQUILIBRIUM
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                    capacity.TORSION_MEMBER_CLOSED
+                ),
+            },
+        },
+    )
+    retained_action = _named_plastic_record(current_name, torsion_knm=40.0)
+    old_inp = dict(inp, plastic_cases=[retained_action])
+    torsion = _torsion_out()
+    torsion.update(
+        t_ed=40.0,
+        t_ed_signed=40.0,
+        trd=987.654,
+        util=0.622,
+        resistance_status="PASS",
+        assessment_status="PASS",
+    )
+    entry = {
+        "name": current_name,
+        "actions": retained_action,
+        "signature": case_analysis.case_signature(
+            retained_action,
+            load_cases.PLASTIC_TABLE_KEY,
+            old_inp,
+        ),
+        "evaluated": True,
+        "results": {"plastic": _out()["plastic"], "torsion": torsion},
+    }
+    return inp, {"plastic_cases": [entry]}
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_withhold_changed_action_case_values(profile):
+    inp, out = _stale_named_torsion_report_payload()
+
+    text = _pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+        profile=profile,
+    ))
+    text = " ".join(text.split())
+
+    assert "PL-SAME" in text
+    assert "62.2 %" not in text
+    assert "987.654" not in text
+    assert "NOT ASSESSED" in text
+    assert "Recalculate this action set before relying on the result" in text
+    if profile != "Brief":
+        assert "before relying on the torsion result" in text
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_replace_removed_result_case_with_current_case(profile):
+    inp, _out_stale = _stale_named_torsion_report_payload(
+        current_name="PL-NEW"
+    )
+    old_action = _named_plastic_record("PL-OLD-UNSAFE", torsion_knm=40.0)
+    old_inp = dict(inp, plastic_cases=[old_action])
+    out = {
+        "plastic_cases": [{
+            "name": old_action["name"],
+            "actions": old_action,
+            "signature": case_analysis.case_signature(
+                old_action,
+                load_cases.PLASTIC_TABLE_KEY,
+                old_inp,
+            ),
+            "evaluated": True,
+            "results": {
+                "plastic": _out()["plastic"],
+                "torsion": _torsion_out(),
+            },
+        }],
+    }
+
+    text = _pdf_text(sector_report.build_report(
+        {},
+        inp,
+        out,
+        figures=False,
+        profile=profile,
+    ))
+    text = " ".join(text.split())
+
+    assert "PL-NEW" in text
+    assert "PL-OLD-UNSAFE" not in text
+    assert "NOT RUN" in text
 
 
 def test_report_includes_torsion_section():
@@ -6468,7 +6564,7 @@ def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
                 "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
                 "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
             },
-            0.0,
+            -300.0,
         ),
         subdivided=True,
         subtubes=subs,
@@ -10312,121 +10408,92 @@ def _links_out():
             "z_source_angle_deg": 90.0,
             "z_source_case": "PL-TEST",
             "z_source_axial_kn": 0.0,
-            "out_of_limits": False, "required": True}
+            "out_of_limits": False, "required": True,
+            "shear_geometry": {
+                "bw_mm": 300.0,
+                "links_bw_mm": 300.0,
+                "resolved_form": "rectangular",
+                "section_form": "rectangular",
+                "asw_factor": 1.0,
+                "duct_case": "No web ducts",
+                "duct_sum_mm": 0.0,
+                "duct_factor_links": 0.0,
+                "duct_reduction_applied_links": False,
+            }}
 
 
-def _h06_circular_shear_out(*, complete=True):
-    sh = _shear_out_2023()
-    concrete = shear_core.vrd_c_2023(
-        35.0,
-        codes.EC2_2023,
-        400.0,
-        550.0,
-        1473.0,
-        500.0 / 1.15,
-        32.0,
-        n_ed_tension_kn=300.0,
-        m_ed_knm=110.0,
-        v_ed_kn=50.0,
-    )
-    geometry_result = shear_core.resolve_shear_geometry(
-        model_2023=True,
-        solid_rectangle=False,
-        section_form=shear_core.SHEAR_SECTION_CIRCULAR,
-        bw_mm=400.0,
-        bw_user=True,
-        links_present=True,
-        hoop_diameter_mm=600.0 if complete else 0.0,
-        fitted_z_mm=500.0 if complete else 0.0,
-        duct_case=shear_core.SHEAR_DUCT_GROUTED_PLASTIC_THIN,
-        duct_sum_mm=80.0,
-        duct_largest_mm=40.0,
-    )
-    sh.update(
-        res=concrete,
-        util=50.0 / concrete["vrd_c"],
-        bw=400.0,
-        bw_auto=600.0,
-        bw_user=True,
-        shear_geometry=geometry_result,
-    )
-    asw = 2.0 * math.pi * 10.0**2 / 4.0
-    gross = asw / 150.0
-    if complete:
-        link_result = shear_core.vrd_links(
-            35.0,
-            codes.EC2_2023,
-            geometry_result["links_bw_mm"],
-            550.0,
-            gross * geometry_result["asw_factor"],
-            500.0,
-            0.0,
-            0.18,
-            1.0,
-            2.5,
-            z_mm=geometry_result["fitted_z_mm"],
-            fcd_mpa=20.0,
-            gamma_s=1.15,
-            v_ed_kn=50.0,
-        )
-    else:
-        link_result = shear_core.unassessed_links_result(
-            model="2023",
-            reason=geometry_result["links_reason"],
-            bw_mm=400.0,
-            d_mm=550.0,
-            asw_over_s=0.0,
-        )
-    sh["links"] = {
-        "res": link_result,
-        "util": (
-            50.0 / link_result["vrd"] if link_result.get("valid") else None
-        ),
-        "assessment_reason": link_result.get("reason"),
-        "asw": asw,
-        "asw_over_s": gross,
-        "effective_asw_over_s": (
-            gross * geometry_result["asw_factor"] if complete else 0.0
-        ),
-        "asw_factor": geometry_result.get("asw_factor"),
-        "shear_geometry": geometry_result,
-        "legs": 2.0,
-        "dia": 10.0,
-        "s": 150.0,
-        "fywk": 500.0,
-        "cot_min": 1.0,
-        "cot_max": 2.5,
-        "delta_ftd": None,
-        "longitudinal_shear_force": (
-            50.0 * link_result["cot"] if link_result.get("valid") else None
-        ),
-        "cot_limit_lo": 1.0,
-        "cot_limit_hi": 2.5,
-        "angle_limits": {
-            "clause": "DS/EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)"
-        },
-        "model_2023": True,
-        "z_source": (
-            "circular_fitted_section"
-            if complete else shear_core.SHEAR_CIRCULAR_REASON
-        ),
-        "out_of_limits": False,
-        "required": False if complete else None,
-    }
-    return sh
+@pytest.fixture(scope="module")
+def h06_circular_report_results():
+    """Produce circular/duct cases with one unchanged native Plastic solve."""
+    import sector_app
+    from sector import templates
+    from sector.section import Section
 
-
-@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_report_profiles_retain_h06_circular_and_duct_result(profile):
     inp = _inp()
     inp.update(
+        mode="Plastic",
+        outer=templates.circular(0.6),
+        bars=templates.bar_ring(
+            0.0, 0.0, templates.ring_radius(0.6, 0.05), 8, 20.0,
+        ),
+        concrete=Concrete(fck=35.0, gamma_c=1.5, alpha_cc=6.0 / 7.0, curve=2),
+        Mx_pl=0.0,
+        My_pl=0.0,
+        v_inc=15.0,
         shear_on=True,
         shear_links=True,
         shear_method=codes.EC2_2023.label,
+        shear_Vx=0.0,
+        shear_Vy=50.0,
+        shear_face_x="negative",
+        shear_face_y="negative",
+        shear_vx_bw=400.0,
+        shear_vy_bw=400.0,
         shear_section_form=shear_core.SHEAR_SECTION_CIRCULAR,
+        shear_hoop_diameter=600.0,
+        shear_vx_fitted_z=500.0,
+        shear_vy_fitted_z=500.0,
+        shear_duct_case=shear_core.SHEAR_DUCT_GROUTED_PLASTIC_THIN,
+        shear_vx_duct_sum=80.0,
+        shear_vy_duct_sum=80.0,
+        shear_vx_duct_largest=40.0,
+        shear_vy_duct_largest=40.0,
+        shear_dlower=16.0,
+        transverse_ductility_class="B",
+        torsion_on=False,
+        torsion_method=codes.EC2_2005_DKNA.label,
+        torsion_T=40.0,
+        torsion_tef=0.0,
+        torsion_nu_v=False,
+        torsion_subdivide=False,
+        torsion_subrects=[],
+        combined_on=False,
     )
-    shear_out = _h06_circular_shear_out()
-    out = {"shear": shear_out}
+    inp["section"] = Section.from_polygon(inp["outer"], inp["bars"])
+    complete = sector_app._run_single_analysis(inp)
+    assert complete["plastic"]["util_valid"] is True
+    cases = {"complete": (inp, complete)}
+    for name, changes in (
+        ("missing", dict(shear_hoop_diameter=0.0,
+                         shear_vx_fitted_z=0.0, shear_vy_fitted_z=0.0)),
+        ("off-axis", dict(torsion_on=True, shear_vx_fitted_z=700.0)),
+        ("biaxial", dict(torsion_on=True, shear_vx_fitted_z=700.0,
+                         shear_Vx=25.0)),
+    ):
+        case_inp = copy.deepcopy(inp)
+        case_inp.update(changes)
+        # N/M and the section are identical, so the real Plastic result is reusable.
+        case_out = {"plastic": copy.deepcopy(complete["plastic"])}
+        sector_app._run_capacity_checks(case_inp, case_out)
+        cases[name] = (case_inp, case_out)
+    return cases
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_report_profiles_retain_h06_circular_and_duct_result(
+    profile, h06_circular_report_results,
+):
+    inp, out = copy.deepcopy(h06_circular_report_results["complete"])
+    shear_out = out["shear"]
 
     text = " ".join(
         _pdf_text(
@@ -10445,7 +10512,14 @@ def test_report_profiles_retain_h06_circular_and_duct_result(profile):
     assert "Shear with links" in text
     assert f"{100.0 * shear_out['links']['util']:.1f} %" in text
     assert "non-governing" in text
-    assert "link-yield resistance governs" not in text
+    assert (
+        f"Shear without links PL-TEST PASS {100.0 * shear_out['util']:.1f} % "
+        "(VEd / VRd,c)"
+    ) in text
+    assert (
+        "Shear with links PL-TEST PASS "
+        f"{100.0 * shear_out['links']['util']:.1f} % (non-governing)"
+    ) in text
     if profile != "Brief":
         assert "Circular section" in text
         assert "Fitted-section arm z = 500.000 mm" in text
@@ -10459,15 +10533,11 @@ def test_report_profiles_retain_h06_circular_and_duct_result(profile):
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_report_profiles_fail_closed_for_missing_circular_shear_geometry(profile):
-    inp = _inp()
-    inp.update(
-        shear_on=True,
-        shear_links=True,
-        shear_method=codes.EC2_2023.label,
-        shear_section_form=shear_core.SHEAR_SECTION_CIRCULAR,
-    )
-    out = {"shear": _h06_circular_shear_out(complete=False)}
+def test_report_profiles_fail_closed_for_missing_circular_shear_geometry(
+    profile, h06_circular_report_results,
+):
+    inp, out = copy.deepcopy(h06_circular_report_results["missing"])
+    assert out["shear"]["links"]["res"]["valid"] is False
 
     text = " ".join(
         _pdf_text(
@@ -10485,64 +10555,21 @@ def test_report_profiles_fail_closed_for_missing_circular_shear_geometry(profile
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_report_profiles_fail_closed_for_invalid_circular_off_axis_arm(profile):
-    inp = _inp()
-    inp.update(
-        shear_on=True,
-        shear_links=True,
-        torsion_on=True,
-        shear_method=codes.EC2_2023.label,
-        shear_section_form=shear_core.SHEAR_SECTION_CIRCULAR,
-    )
-    shear_out = _h06_circular_shear_out()
-    chord = {
-        "valid": True,
-        "role": "shear_axis",
-        "chord_role": "flexural_tension",
-        "chord_formula": "8.51",
-        "axis": "y",
-        "tension_low": True,
-        "z": 0.5,
-        "m_ed": 0.0,
-        "face_m_ed_signed": 0.0,
-        "m_rd": 400.0,
-        "ftd_v": 100.0,
-        "ftd_t": 80.0,
-        "mv": 50.0,
-        "mt": 20.0,
-        "m_total": 70.0,
-        "util": 0.175,
-        "ok": True,
-        "status": "NOT ASSESSED",
-        "capped": False,
-        "conditional": True,
-        "m_off": 0.0,
-        "has_torsion": True,
-        "gets_shift": True,
-        "theta_mode": "utilisation",
-        "off_not_evaluated": "circular_geometry",
-    }
-    shear_out["links"].update(
-        chord=chord,
-        chord_off=None,
-        chord_candidates=[chord],
-        longitudinal_assessment={
-            "status": "NOT ASSESSED",
-            "ok": None,
-            "util": chord["util"],
-            "coverage_complete": False,
-            "reason": shear_core.SHEAR_CIRCULAR_REASON,
-        },
-    )
-    shear_out.update(
-        assessment_status="NOT ASSESSED",
-        assessment_ok=None,
-    )
+def test_report_profiles_fail_closed_for_invalid_circular_off_axis_arm(
+    profile, h06_circular_report_results,
+):
+    inp, out = copy.deepcopy(h06_circular_report_results["off-axis"])
+    shear_out = out["shear"]
+    assessment = shear_out["links"]["longitudinal_assessment"]
+    assert shear_out["links"]["res"]["valid"] is True
+    assert assessment["status"] == "NOT ASSESSED"
+    assert assessment["coverage_complete"] is False
+    assert assessment["reason"] == shear_core.SHEAR_CIRCULAR_REASON
 
     text = " ".join(
         _pdf_text(
             sector_report.build_report(
-                {}, inp, {"shear": shear_out}, figures=False, profile=profile
+                {}, inp, out, figures=False, profile=profile
             )
         ).split()
     )
@@ -10568,35 +10595,20 @@ def test_report_profiles_fail_closed_for_invalid_circular_off_axis_arm(profile):
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_report_directional_shear_table_retains_chord_assessment_status(profile):
-    inp = _inp()
-    inp.update(
-        shear_on=True,
-        shear_links=True,
-        shear_method=codes.EC2_2023.label,
-        shear_section_form=shear_core.SHEAR_SECTION_CIRCULAR,
-    )
-    direction = _h06_circular_shear_out()
-    direction["component"] = "vy"
-    direction["signed_v_ed"] = direction["v_ed"]
-    direction["status"] = "NOT ASSESSED"
-    direction["assessment_status"] = "NOT ASSESSED"
-    direction["links"]["longitudinal_assessment"] = {
-        "status": "NOT ASSESSED",
-        "ok": None,
-        "util": 0.175,
-        "coverage_complete": False,
-        "reason": shear_core.SHEAR_CIRCULAR_REASON,
-    }
-    aggregate = {
-        "directions": {"vy": direction},
-        "biaxial": False,
-    }
+def test_report_directional_shear_table_retains_chord_assessment_status(
+    profile, h06_circular_report_results,
+):
+    inp, out = copy.deepcopy(h06_circular_report_results["biaxial"])
+    assert set(out["shear"]["directions"]) == {"vx", "vy"}
+    direction = out["shear"]["directions"]["vy"]
+    assert direction["links"]["res"]["valid"] is True
+    assert direction["assessment_status"] == "NOT ASSESSED"
+    assert direction["links"]["longitudinal_assessment"]["coverage_complete"] is False
 
     text = " ".join(
         _pdf_text(
             sector_report.build_report(
-                {}, inp, {"shear": aggregate}, figures=False, profile=profile
+                {}, inp, out, figures=False, profile=profile
             )
         ).split()
     )
@@ -10616,18 +10628,17 @@ def test_report_directional_shear_table_retains_chord_assessment_status(profile)
 
 
 def test_report_includes_shear_links_section():
+    inp, sh, _transverse = _native_sparse_link_report_fixture()
     out = _out()
-    sh = _shear_out()
-    sh["links"] = _links_out()
     out["shear"] = sh
-    txt = _pdf_text(sector_report.build_report({}, _inp(), out, figures=False))
+    txt = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
     assert "Shear reinforcement (links)" in txt
     assert "6.8" in txt and "6.9" in txt           # the two clause formulae
-    assert "540" in txt                            # VRd,s / VRd
+    assert "29.452" in txt                         # VRd,s / VRd
     assert "stirrups" in txt                       # governing mechanism
     assert chr(0x3B8) in txt                       # theta glyph rendered
     normalized = " ".join(txt.split())
-    assert "Calculated arm z = 495.000 mm = |z_y| from PL-TEST" in normalized
+    assert "Calculated arm z = 506.448 mm = |z_y| from PL-TEST" in normalized
     assert "bottom (-y) 90" in normalized
     assert "used in V_Rd,s and V_Rd,max" in normalized
 
@@ -10668,63 +10679,12 @@ def test_report_with_unavailable_calculated_link_arm_fails_closed():
     ) in normalized
 
 
-def test_report_includes_2023_shear_links_stress_checks():
-    from sector import codes as _codes, shear as _shear
-
-    out = _out()
-    sh = _shear_out_2023()
-    demand = 150.0
-    sh["v_ed"] = demand
-    sh["util"] = demand / sh["res"]["vrd_c"]
-    asw = 2.0 * math.pi * 10.0**2 / 4.0
-    result = _shear.vrd_links(
-        35.0,
-        _codes.EC2_2023,
-        300.0,
-        550.0,
-        asw / 150.0,
-        500.0,
-        0.0,
-        0.18,
-        1.0,
-        2.5,
-        z_mm=495.0,
-        fcd_mpa=20.0,
-        gamma_s=1.15,
-        v_ed_kn=demand,
-    )
-    sh["links"] = {
-        "res": result,
-        "util": demand / result["vrd"],
-        "asw": asw,
-        "asw_over_s": asw / 150.0,
-        "legs": 2.0,
-        "dia": 10.0,
-        "s": 150.0,
-        "fywk": 500.0,
-        "cot_min": 1.0,
-        "cot_max": 2.5,
-        "delta_ftd": None,
-        "longitudinal_shear_force": demand * result["cot"],
-        "cot_limit_lo": 1.0,
-        "cot_limit_hi": 2.5,
-        "angle_limits": {
-            "clause": "DS/EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)"
-        },
-        "model_2023": True,
-        "z_source": "0.9 d",
-        "out_of_limits": False,
-        "required": True,
-    }
-    out["shear"] = sh
-    inp = _inp()
-    inp.update(
-        shear_on=True,
-        shear_links=True,
-        shear_method=codes.EC2_2023.label,
-    )
+def test_report_includes_2023_shear_links_stress_checks(h06_circular_report_results):
+    inp, out = copy.deepcopy(h06_circular_report_results["complete"])
     text = _pdf_text(sector_report.build_report({}, inp, out, figures=False))
-    assert "8.42" in text and "8.44" in text and "8.50" in text
+    assert "8.42" in text and "8.44" in text
+    assert "8.50" not in text
+    assert "no longitudinal shear force is applied" in text
     assert "0.500" in text
     assert "not implemented" not in text
 
@@ -10855,6 +10815,54 @@ def test_report_shear_links_out_of_limits_are_not_assessed(profile):
     assert "permitted" in flat
     assert "entered values are used" not in flat.lower()
     assert "540.000" not in flat
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_report_omits_hostile_optional_strut_angle_operands(profile):
+    out = _out()
+    sh = _shear_out()
+    lk = _links_out()
+    hostile = {
+        "active": True,
+        "applicable": False,
+        "method": codes.EC2_2005_DKNA.label,
+        "requested_min": True,
+        "requested_max": ["raw value"],
+        "permitted_min": 1.0,
+        "permitted_max": 2.5,
+    }
+    lk.update(
+        res=shear_core.unassessed_links_result(
+            model="2005",
+            reason=shear_core.STRUT_ANGLE_OUT_OF_RANGE_REASON,
+            bw_mm=300.0,
+            d_mm=550.0,
+            asw_over_s=lk["asw_over_s"],
+            z_mm=495.0,
+        ),
+        util=None,
+        out_of_limits=True,
+        angle_applicability=hostile,
+        assessment_status="NOT ASSESSED",
+        assessment_reason=shear_core.STRUT_ANGLE_OUT_OF_RANGE_REASON,
+    )
+    lk["res"]["angle_applicability"] = hostile
+    sh["links"] = lk
+    out["shear"] = sh
+    inp = _inp()
+    inp.update(shear_on=True, shear_links=True)
+
+    flat = " ".join(
+        _pdf_text(
+            sector_report.build_report(
+                {}, inp, out, figures=False, profile=profile
+            )
+        ).split()
+    )
+
+    assert "NOT ASSESSED" in flat
+    assert "Requested cot theta" not in flat
+    assert "raw value" not in flat
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])

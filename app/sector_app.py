@@ -6089,6 +6089,7 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "combined-edition-scope-v1",
     "compression-strut-applicability-v1",
     "torsion-case-applicability-v1",
+    "provided-link-publication-authority-v2",
 )
 _FATIGUE_RESULT_CONTRACT_TOKEN = (
     "fatigue-result-contract",
@@ -10228,70 +10229,9 @@ def _run_uniaxial_capacity_checks(inp, out):
             tors_ctx is not None
             and all(tb["valid"] for tb in tors_ctx["subtubes"])
         )
-        torsion_angle_active = bool(
-            tors_ctx is not None
-            and tors_ctx["closed_links_present"]
-            and tors_ctx["asw_over_s_t"] > 0.0
-            and torsion_geometry_valid
-            and abs(t_ed_s) > 0.0
+        link_ctx, tors_ctx = capacity.shared_member_angle_contexts(
+            inp, link_ctx, tors_ctx
         )
-        shear_angle_active = bool(
-            link_ctx is not None
-            and (link_ctx.get("shear_geometry") or {}).get("links_valid") is True
-            and link_ctx.get("angle_prerequisites_available") is True
-            and v_ed_s > 0.0
-            and (
-                not concrete_route_applicable
-                or torsion_angle_active
-            )
-        )
-        if shear_angle_active and torsion_angle_active:
-            shear_limits = link_ctx["angle_limits"]
-            torsion_limits = tors_ctx["angle_limits"]
-            shared_limits = {
-                "minimum": max(
-                    shear_limits["minimum"], torsion_limits["minimum"]
-                ),
-                "maximum": min(
-                    shear_limits["maximum"], torsion_limits["maximum"]
-                ),
-                "basis": "shared shear and torsion permitted-range intersection",
-                "clause": (
-                    f"{shear_limits['clause']}; {torsion_limits['clause']}"
-                ),
-            }
-            shared_applicability = shear.strut_angle_applicability(
-                inp["strut_cot_min"],
-                inp["strut_cot_max"],
-                permitted_min=shared_limits["minimum"],
-                permitted_max=shared_limits["maximum"],
-                method=(
-                    f"{inp['shear_method']} with {inp['torsion_method']}"
-                ),
-                basis=shared_limits["basis"],
-                clause=shared_limits["clause"],
-                active=True,
-            )
-            original_links_build = link_ctx["build"]
-            link_ctx = dict(
-                link_ctx,
-                angle_limits=shared_limits,
-                angle_applicability=shared_applicability,
-                build=lambda cot_lo, cot_hi: original_links_build(
-                    cot_lo,
-                    cot_hi,
-                    angle_applicability_override=shared_applicability,
-                ),
-            )
-            tors_ctx = dict(
-                tors_ctx,
-                angle_limits=shared_limits,
-                angle_applicability=shared_applicability,
-                _tk=dict(
-                    tors_ctx["_tk"],
-                    angle_applicability=shared_applicability,
-                ),
-            )
         # Validity probes: a broken links result (no stirrup area / degenerate web)
         # or an invalid tube gives infinite utilisations at EVERY angle, which would
         # otherwise tie the scan and pin the angle at the band edge.
@@ -10858,12 +10798,16 @@ def _run_uniaxial_capacity_checks(inp, out):
                 if lk.get("valid") and (lk.get("vrd") or 0.0) > 0.0
                 else None
             )
+            concrete_route_selected = bool(
+                link_ctx.get("vrd_c") is not None
+                and v_ed <= float(link_ctx["vrd_c"])
+            )
             # Extra longitudinal force from shear: 2005 delta_Ftd = 0.5 VEd cot
             # theta; 2023 NVd = |VEd| cot theta (8.50).
             longitudinal_shear_force = (
                 (1.0 if link_ctx.get("model_2023") else 0.5)
                 * v_ed * lk["cot"]
-                if lk["valid"] and shear_live
+                if lk["valid"] and shear_live and not concrete_route_selected
                 else 0.0
                 if lk["valid"]
                 else None
@@ -10982,6 +10926,15 @@ def _run_uniaxial_capacity_checks(inp, out):
                 ),
                 None,
             )
+            try:
+                z_input_basis = capacity.shear_link_arm_publication_basis(
+                    inp,
+                    link_ctx["axis"],
+                    link_ctx["tension_low"],
+                    link_ctx["z_mm"],
+                )
+            except (capacity.CapacityInputError, TypeError, ValueError, OverflowError):
+                z_input_basis = None
             links_payload = dict(
                 res=lk, util=util_l, asw=link_ctx["asw"],
                 asw_over_s=link_ctx["asw_over_s"],
@@ -11015,6 +10968,7 @@ def _run_uniaxial_capacity_checks(inp, out):
                 z_source_angle_deg=link_ctx["z_source_angle_deg"],
                 z_source_case=link_ctx["z_source_case"],
                 z_source_axial_kn=link_ctx["z_source_axial_kn"],
+                z_input_basis=z_input_basis,
                 assessment_reason=(
                     link_ctx["z_src"]
                     if link_ctx.get("z_mm") is None
@@ -11055,6 +11009,19 @@ def _run_uniaxial_capacity_checks(inp, out):
                     longitudinal_assessment,
                     reason=off_axis_geometry_reason,
                 )
+            if (
+                longitudinal_assessment["status"] == "NOT APPLICABLE"
+                and longitudinal_assessment.get("reason")
+                == "no_longitudinal_chord_action"
+            ):
+                links_payload.update(
+                    chord=None,
+                    chord_off=None,
+                    chord_candidates=[],
+                    governing_longitudinal=None,
+                    longitudinal_fallback=None,
+                    longitudinal_all_conditional=False,
+                )
             links_payload["longitudinal_assessment"] = longitudinal_assessment
             out["shear"].update(links=links_payload)
 
@@ -11067,49 +11034,21 @@ def _run_uniaxial_capacity_checks(inp, out):
             # presentation surface can infer a favourable verdict from geometry
             # alone.
             sh_ms = out.get("shear")
-            _trdc = primary["trd_c"]
-            sh_res = (sh_ms or {}).get("res") or {}
-            selected_shear_method = str(inp.get("shear_method") or "")
-            selected_torsion_method = str(inp.get("torsion_method") or "")
-            selected_shear_code = capacity.selected_shear_code(
-                selected_shear_method
-            )
-            selected_model_2023 = (
-                getattr(selected_shear_code, "shear_model", "2005") == "2023"
-            )
-            out["torsion"]["min_reinf"] = dataclasses.asdict(
-                combined.minimum_reinforcement_screen_result(
-                    t_ed,
-                    _trdc,
-                    (sh_ms or {}).get("v_ed"),
-                    sh_res.get("vrd_c") if sh_res.get("valid") else None,
-                    solid_rectangle=(
-                        geometry.section_is_approximately_solid_rectangle(
-                            inp["outer"], inp.get("holes") or ()
-                        )
-                    ),
-                    subdivided=bool(tors_ctx["subdivide"]),
-                    model_2023=selected_model_2023,
-                    shear_available=bool(sh_ms is not None and sh_res.get("valid")),
-                    dk_na=(
-                        codes.EC2_2005_DKNA.label
-                        in {selected_shear_method, selected_torsion_method}
-                    ),
-                    shear_method=selected_shear_method,
-                    torsion_method=selected_torsion_method,
-                    n_ed=inp.get("P_pl", 0.0),
-                    mx_ed=inp.get("Mx_pl", 0.0),
-                    my_ed=inp.get("My_pl", 0.0),
+            out["torsion"]["min_reinf"] = (
+                capacity.minimum_reinforcement_screen_from_context(
+                    inp,
+                    sh_ms,
+                    tors_ctx,
+                    primary,
                 )
             )
             # Combined shear+torsion concrete crushing (6.29) at the member angle,
             # pairing the shear with the PRIMARY (web) tube's torsion share.
             sh_links = out.get("shear", {}).get("links")
-            p_tube, t_ed_p = primary["tube"], primary["t_ed"]
             if (
                 sh_links is not None
                 and sh_links["res"]["valid"]
-                and p_tube["valid"]
+                and primary["tube"]["valid"]
                 and primary["transverse_resistance_assessed"]
             ):
                 # The member angle when a load drives it; otherwise the
@@ -11120,24 +11059,14 @@ def _run_uniaxial_capacity_checks(inp, out):
                     if cot_star is not None
                     else min(max(1.0, pl_lo), pl_hi)
                 )
-                trdmax_result = torsion.trd_max_result(
-                    tors_ctx["fck"], tors_ctx["tcode"], p_tube["Ak"],
-                    p_tube["tef"], tors_ctx["alpha_cw"], cot_c,
-                    closed_detailing=tors_ctx["nu_detail"],
-                    fcd_mpa=tors_ctx["fcd"])
-                vlk = link_ctx["build"](cot_c, cot_c)
-                inter = combined.crushing_interaction_result(
-                    t_ed_p, trdmax_result.trd_max, v_ed_s, vlk["vrd_max"])
-                out["torsion"]["interaction"] = dict(
-                    valid=True, cot=cot_c,
-                    theta_deg=math.degrees(math.atan2(1.0, cot_c)),
-                    trd_max=trdmax_result.trd_max,
-                    vrd_max=vlk["vrd_max"], t_ed=t_ed_p,
-                    v_ed=v_ed_s, value=inter.utilisation,
-                    torsion_ratio=inter.torsion_ratio,
-                    shear_ratio=inter.shear_ratio,
-                    ok=inter.ok,
-                    torsion_strut=dataclasses.asdict(trdmax_result))
+                interaction = capacity.shear_torsion_crushing_from_context(
+                    sh_ms,
+                    link_ctx,
+                    tors_ctx,
+                    cot_c,
+                )
+                if interaction is not None:
+                    out["torsion"]["interaction"] = interaction
 
     shear_result = out.get("shear")
     if shear_result is not None:
@@ -11268,8 +11197,13 @@ def _combined_direction_assessment(inp, candidate_out):
     Reuse the same result rows as the application summary so the directional
     results view and report cannot disagree about an invalid or failed sub-check.
     """
+    # These are raw face results on the translated magnitude/axis contract.
+    # Signed component authority belongs to the parent assembled afterwards.
+    publication_input = dict(inp)
+    for key in ("shear_Vx", "shear_Vy", "shear_components"):
+        publication_input.pop(key, None)
     rows = [
-        row for row in presentation.result_summary_rows(inp, candidate_out)
+        row for row in presentation.result_summary_rows(publication_input, candidate_out)
         if row.get("view") == "M-V-T Combined"
     ]
     status = presentation.overall_summary_status(rows)
@@ -14210,19 +14144,19 @@ def _member_material_note(inp):
     st.caption(f"Member-check reinforcing material: {label}{suffix}.")
 
 
-def _nominal_shear_record(inp, shear_result):
+def _nominal_shear_record(inp, shear_result, *, torsion_result=None):
     """Return retained nominal shear-route evidence with a legacy fallback."""
 
-    retained = (shear_result or {}).get("nominal_resistance")
-    if isinstance(retained, dict):
-        return retained
-    return dataclasses.asdict(capacity.select_nominal_shear_resistance(
+    return presentation.nominal_shear_resistance(
         shear_result,
         links_selected=inp.get("shear_links") is True,
-    ))
+        input_payload=inp,
+        torsion_result=torsion_result,
+    )
 
 
-def shear_view(inp, results):
+@presentation.publication_calculation_scope()
+def shear_view(inp, results, *, global_results=None):
     """Shear resistance without shear reinforcement (VRd,c) and the utilisation.
 
     Reports the resistance, the derived geometry (effective depth, web width,
@@ -14242,7 +14176,40 @@ def shear_view(inp, results):
             st.info("Press Calculate to run the shear check.")
         return
     aggregate = results["shear"]
-    combined_blocker = presentation.combined_bending_assessment_blocker(results)
+    plastic_authority = presentation.plastic_publication_authority(
+        inp, results, global_results,
+    )
+    if "plastic" not in results and plastic_authority is not None:
+        results = dict(results, plastic=plastic_authority)
+    aggregate_current, aggregate_reason = (
+        presentation.shear_publication_input_is_current(
+            inp,
+            aggregate,
+            plastic_result=plastic_authority,
+            validate_directions=False,
+            torsion_result=results.get("torsion"),
+        )
+    )
+    if aggregate_current is not True:
+        guidance = presentation.result_reason(
+            aggregate_reason,
+            "shear",
+            context="detailed shear family authority",
+        )
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "The shear check is NOT ASSESSED: " + guidance + ".",
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Applied shear", "-")
+        c2.metric(r"Resistance $V_{Rd}$", "-")
+        c3.metric("Assessment", "NOT ASSESSED")
+        return
+    combined_blocker = presentation.combined_bending_assessment_blocker(
+        results,
+        inp,
+    )
     combined_blocked = combined_blocker is not None
     directions = aggregate.get("directions") or {}
     if directions:
@@ -14251,13 +14218,28 @@ def shear_view(inp, results):
             if component not in directions:
                 continue
             item = directions[component]
-            nominal = _nominal_shear_record(inp, item)
+            nominal = _nominal_shear_record(
+                inp, item, torsion_result=results.get("torsion"),
+            )
+            selected_available = nominal.get("valid") is True
             summary.append({
                 "Component": "Vx,Ed" if component == "vx" else "Vy,Ed",
-                "VEd [kN]": item.get("signed_v_ed", item.get("v_ed")),
-                "VRd [kN]": nominal.get("resistance"),
-                "Utilisation": nominal.get("utilisation"),
-                "Status": item.get("status"),
+                "VEd [kN]": (
+                    item.get("signed_v_ed", item.get("v_ed"))
+                    if selected_available
+                    else None
+                ),
+                "VRd [kN]": (
+                    nominal.get("resistance") if selected_available else None
+                ),
+                "Utilisation": (
+                    nominal.get("utilisation") if selected_available else None
+                ),
+                "Status": (
+                    str(nominal.get("status") or "NOT ASSESSED").upper()
+                    if selected_available
+                    else "NOT ASSESSED"
+                ),
                 "Tension face": viz.tension_face_label(
                     item.get("tension_low", True), item.get("axis")
                 ),
@@ -14301,6 +14283,47 @@ def shear_view(inp, results):
         sh = directions[selected or options[0]]
     else:
         sh = aggregate
+    signed_v_ed = capacity.validated_signed_shear_demand(sh)
+    if signed_v_ed is None:
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "The shear check is NOT ASSESSED: recalculate the applied shear "
+            "action and resistance before relying on this result.",
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Applied shear", "-")
+        c2.metric(r"Resistance $V_{Rd}$", "-")
+        c3.metric("Assessment", "NOT ASSESSED")
+        return
+    input_current, input_reason = (
+        presentation.shear_direction_publication_input_is_current(
+            inp,
+            sh,
+            plastic_result=plastic_authority,
+            torsion_result=results.get("torsion"),
+        )
+    )
+    if input_current is not True:
+        guidance = presentation.result_reason(
+            input_reason,
+            "shear",
+            context="detailed shear current-input authority",
+        )
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "The shear check is NOT ASSESSED: " + guidance + ".",
+        )
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Applied shear", "-")
+        c2.metric(r"Resistance $V_{Rd}$", "-")
+        c3.metric("Assessment", "NOT ASSESSED")
+        st.caption(
+            "Recalculate the shear check before relying on resistance, "
+            "utilisation or worked calculation values."
+        )
+        return
     _member_material_note(inp)
     res = sh["res"]
     component = sh.get("component") or ("vy" if sh["axis"] == "x" else "vx")
@@ -14321,7 +14344,6 @@ def shear_view(inp, results):
             "The shear check is NOT ASSESSED: " + reason + ".",
         )
         c1, c2, c3 = st.columns(3)
-        signed_v_ed = float(sh.get("signed_v_ed", sh["v_ed"]))
         c1.metric(f"Applied {action_math}", f"{signed_v_ed:.3f} kN")
         c2.metric(r"Resistance $V_{Rd}$", "-")
         c3.metric("Assessment", "NOT ASSESSED")
@@ -14365,22 +14387,34 @@ def shear_view(inp, results):
             "chosen face, or the derived effective depth / web width is zero. "
             r"Add tension bars on that face and check the geometry (or enter $b_w$).",
         )
-    nominal = _nominal_shear_record(inp, sh)
+    nominal = _nominal_shear_record(
+        inp, sh, torsion_result=results.get("torsion"),
+    )
     nominal_valid = nominal.get("valid") is True
     nominal_route = nominal.get("route")
     nominal_resistance = nominal.get("resistance")
     nominal_util = nominal.get("utilisation")
+    concrete_context_current = bool(
+        not nominal_valid
+        and presentation.concrete_shear_publication_input_is_current(inp, sh)[0]
+        is True
+    )
     m1, m2, m3 = st.columns(3)
-    signed_v_ed = float(sh.get("signed_v_ed", sh["v_ed"]))
     m1.metric(f"Applied {action_math}", f"{signed_v_ed:.3f} kN")
     resistance_symbol = r"$V_{Rd,c}$" if nominal_route == "concrete" else r"$V_{Rd}$"
     displayed_resistance = (
-        nominal_resistance if nominal_valid else res.get("vrd_c")
+        nominal_resistance
+        if nominal_valid
+        else res.get("vrd_c")
+        if concrete_context_current
+        else None
     )
     m2.metric(
         (
             f"Selected resistance {resistance_symbol}"
             if nominal_valid
+            else r"Concrete-only context $V_{Rd,c}$"
+            if concrete_context_current
             else r"Resistance $V_{Rd,c}$"
         ),
         (
@@ -14394,12 +14428,20 @@ def shear_view(inp, results):
         if nominal_route == "concrete" or not nominal_valid
         else r"$|V_{Ed}|/V_{Rd}$"
     )
-    displayed_util = nominal_util if nominal_valid else sh.get("util")
+    displayed_util = (
+        nominal_util
+        if nominal_valid
+        else sh.get("util")
+        if concrete_context_current
+        else None
+    )
     util_txt = _pct(displayed_util) if displayed_util is not None else "-"
     m3.metric(
         (
             f"Nominal utilisation {util_label}"
             if nominal_valid
+            else r"Non-governing concrete utilisation $|V_{Ed}|/V_{Rd,c}$"
+            if concrete_context_current
             else f"Utilisation {util_label}"
         ),
         util_txt,
@@ -14418,10 +14460,15 @@ def shear_view(inp, results):
             else "inverse"
         ),
     )
-    if not nominal_valid:
+    if not nominal_valid and concrete_context_current:
         st.caption(
             r"$V_{Rd,c}$ and its ratio are retained as non-governing "
             "concrete-only context; the nominal shear resistance is NOT ASSESSED."
+        )
+    elif not nominal_valid:
+        st.caption(
+            "The nominal shear resistance is NOT ASSESSED. Recalculate before "
+            "relying on resistance, utilisation or worked calculation values."
         )
     elif nominal_route == "concrete" and inp.get("shear_links") is True:
         st.caption(
@@ -14439,7 +14486,14 @@ def shear_view(inp, results):
             f"centroid: {float(sh.get('associated_moment', 0.0)):.3f} kNm."
         )
 
-    if sh.get("both_faces_evaluated"):
+    face_evidence_current, _face_evidence_reason = (
+        presentation.directional_shear_publication_evidence_is_current(
+            inp,
+            sh,
+            plastic_result=plastic_authority,
+        )
+    )
+    if sh.get("both_faces_evaluated") and face_evidence_current:
         governing_domains = sh.get("governing_domains") or {}
         domain_labels = {
             "shear": "Shear",
@@ -14512,8 +14566,17 @@ def shear_view(inp, results):
             })
         st.markdown("**Independent governing selections**")
         st.dataframe(governing_rows, hide_index=True, width="stretch")
+    elif sh.get("both_faces_evaluated"):
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "The face-specific shear comparison is NOT ASSESSED. Recalculate "
+            "before relying on either face or its governing selection.",
+        )
 
-    geometry_basis = presentation.shear_geometry_basis(inp, sh)
+    geometry_basis = presentation.shear_geometry_basis(
+        inp, sh, torsion_result=results.get("torsion"),
+    )
     z_geometry = geometry_basis["z_mm"]
     bw_source = "user input" if sh["bw_user"] else "auto minimum solid width"
     st.plotly_chart(
@@ -14600,7 +14663,8 @@ def shear_view(inp, results):
     # Shear reinforcement (links): resistance context plus separate detailing.
     links = sh.get("links")
     if links is not None:
-        lk = links["res"]
+        link_mapping = links if isinstance(links, dict) else {}
+        lk = link_mapping.get("res")
         st.divider()
         st.markdown("**Shear reinforcement (links)**")
         transverse = results.get("transverse_reinforcement")
@@ -14615,13 +14679,15 @@ def shear_view(inp, results):
         st.caption(
             "Separate link detailing assessment: " + detailing_status + "."
         )
-        if not lk["valid"]:
-            angle_applicability = lk.get("angle_applicability") or links.get(
+        if not isinstance(lk, dict) or lk.get("valid") is not True:
+            angle_applicability = (lk or {}).get(
+                "angle_applicability"
+            ) or link_mapping.get(
                 "angle_applicability"
             )
             reason = presentation.result_reason(
-                links.get("assessment_reason")
-                or lk.get("reason")
+                link_mapping.get("assessment_reason")
+                or (lk or {}).get("reason")
                 or "invalid reinforced-shear input",
                 "shear",
                 context="reinforced-shear result reason",
@@ -14635,32 +14701,50 @@ def shear_view(inp, results):
                 "Review the reason above; link lever arm, resistance, utilisation "
                 "and status are withheld."
             )
-            if (
-                isinstance(angle_applicability, dict)
-                and angle_applicability.get("applicable") is False
-            ):
+            angle_publication = (
+                presentation.strut_angle_applicability_publication(
+                    angle_applicability
+                )
+            )
+            if angle_publication is not None:
                 st.caption(
                     f"Requested cot {_THETA}: "
-                    f"{angle_applicability['requested_min']:.3f} to "
-                    f"{angle_applicability['requested_max']:.3f}; permitted for "
-                    f"{angle_applicability['method']}: "
-                    f"{angle_applicability['permitted_min']:.3f} to "
-                    f"{angle_applicability['permitted_max']:.3f} "
-                    f"({angle_applicability['clause']})."
+                    f"{angle_publication['requested_min']:.3f} to "
+                    f"{angle_publication['requested_max']:.3f}; permitted for "
+                    f"{angle_publication['method']}: "
+                    f"{angle_publication['permitted_min']:.3f} to "
+                    f"{angle_publication['permitted_max']:.3f}."
                 )
             return
-        req_txt = (r"links are required ($V_{Ed}>V_{Rd,c}$)" if links["required"]
+        provided_link = presentation.provided_link_publication_assessment(
+            inp, sh, torsion_result=results.get("torsion"),
+        )
+        if provided_link.valid is not True:
+            reason = presentation.result_reason(
+                provided_link.reason,
+                "shear",
+                context="provided-link resistance assessment",
+            )
+            _manual_warning(
+                st,
+                "calculation-warning",
+                "The provided-link resistance is NOT ASSESSED: " + reason + ".",
+            )
+            st.caption(
+                "Link resistance, utilisation and status are withheld until the "
+                "reinforced-shear result is recalculated."
+            )
+            return
+        req_txt = (r"links are required ($V_{Ed}>V_{Rd,c}$)" if nominal.get("links_required") is True
                    else r"links are not strictly required ($V_{Ed}\leq V_{Rd,c}$); minimum "
                         "reinforcement rules still apply")
         st.caption(f"For this $V_{{Ed}}$, {req_txt}.")
-        links_bw = float(lk.get("bw", sh["bw"]))
-        util_l = links["util"]
-        displayed_util_l = viz.utilisation_value(util_l)
-        ok_l = (
-            viz.util_ok(displayed_util_l)
-            if displayed_util_l is not None
-            else None
-        )
+        retained_links_bw = lk.get("bw")
+        if retained_links_bw is None:
+            retained_links_bw = sh.get("bw")
+        links_bw = float(retained_links_bw)
+        displayed_util_l = provided_link.utilisation
+        ok_l = provided_link.ok
         c1, c2, c3, c4 = st.columns(4)
         c1.metric(r"$V_{Rd,s}$", f"{lk['vrd_s']:.3f} kN")
         c2.metric(r"$V_{Rd,max}$", f"{lk['vrd_max']:.3f} kN")
@@ -14670,20 +14754,39 @@ def shear_view(inp, results):
         if nominal_route == "links":
             _verdict_metric(c4, r"Utilisation $V_{Ed}/V_{Rd}$", ul_txt, ok_l)
         else:
-            c4.metric(
+            _verdict_metric(
+                c4,
                 r"Provided-link comparison $V_{Ed}/V_{Rd}$",
                 ul_txt,
+                ok_l,
                 help=(
-                    "Non-governing resistance context while the concrete route "
-                    "is applicable. Link detailing is assessed separately."
+                    "Independent provided-link resistance check while the concrete "
+                    "route remains nominal. Link detailing is assessed separately."
                 ),
             )
             st.caption(
-                r"The provided-link comparison is not a shear-capacity verdict "
-                r"while $|V_{Ed}|\leq V_{Rd,c}$."
+                r"The provided-link resistance has its own PASS/FAIL comparison. "
+                r"It does not replace the nominal concrete route while "
+                r"$|V_{Ed}|\leq V_{Rd,c}$, and link detailing is assessed separately."
             )
-        chord_assessment = links.get("longitudinal_assessment")
-        if isinstance(chord_assessment, dict):
+        chord_publication = (
+            presentation.provided_link_longitudinal_publication_assessment(
+                inp,
+                sh,
+                torsion_result=results.get("torsion"),
+            )
+        )
+        chord_assessment = chord_publication.get("assessment")
+        if chord_publication.get("valid") is not True:
+            chord_assessment = {
+                "status": "NOT ASSESSED",
+                "ok": None,
+                "util": None,
+                "reason": "longitudinal chord evidence is unavailable",
+                "coverage_complete": False,
+                "governing": None,
+            }
+        if isinstance(chord_assessment, Mapping):
             chord_status = str(
                 chord_assessment.get("status") or "NOT ASSESSED"
             ).upper()
@@ -14846,7 +14949,7 @@ def shear_view(inp, results):
             )
         # Longitudinal chord under M + V (+ T): the same check the combined view
         # shows, computed at the member strut angle.
-        ch = links.get("chord")
+        ch = chord_publication.get("governing")
         if (
             isinstance(chord_assessment, dict)
             and str(
@@ -14883,7 +14986,7 @@ def shear_view(inp, results):
                       help="bending + longitudinal shear force (+ torsion) as an equivalent "
                            "moment on the governing chord face")
             coverage = ch.get("off_not_evaluated")
-            fallback = presentation.required_chord_fallback(links)
+            fallback = chord_publication.get("fallback")
             fell_back = fallback is not None
             assessment_status = str(
                 (chord_assessment or {}).get("status") or ""
@@ -14932,7 +15035,7 @@ def shear_view(inp, results):
                     + obj_note
                 )
                 chord_rows = []
-                for candidate in links.get("chord_candidates") or ():
+                for candidate in chord_publication.get("candidates") or ():
                     if candidate.get("role") != "shear_axis":
                         continue
                     candidate_face = viz.tension_face_label(
@@ -15015,7 +15118,7 @@ def shear_view(inp, results):
                            "(no torsion is acting), which the biaxial bending "
                            "utilisation already covers.")
             _render_chord_off(
-                links.get("chord_off"),
+                chord_publication.get("chord_off"),
                 assessment_complete=assessment_complete,
             )
         st.plotly_chart(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
@@ -15074,7 +15177,7 @@ def _render_chord_off(och, *, assessment_complete=True):
                + "(SEd/SRd) result governs.")
 
 
-def torsion_view(inp, results):
+def torsion_view(inp, results, *, global_results=None):
     """Torsion resistance from the thin-walled tube (TRd,s / TRd,max / TRd,c), the
     required longitudinal steel, and the combined shear+torsion crushing check."""
     if not results or "torsion" not in results:
@@ -15087,6 +15190,32 @@ def torsion_view(inp, results):
             st.info("Press Calculate to run the torsion check.")
         return
     t = results["torsion"]
+    shear_authority = results.get("shear")
+    current, current_reason = presentation.torsion_publication_component_is_current(
+        inp,
+        shear_authority,
+        t,
+    )
+    if current is not True:
+        guidance = presentation.result_reason(
+            current_reason,
+            "torsion",
+            context="detailed torsion family authority",
+        )
+        _manual_warning(
+            st,
+            "calculation-warning",
+            "The torsion check is NOT ASSESSED: " + guidance + ".",
+        )
+        raw_t_ed = inp.get("torsion_T")
+        t_ed = None
+        if type(raw_t_ed) in {int, float} and math.isfinite(float(raw_t_ed)):
+            t_ed = abs(float(raw_t_ed))
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Applied torsion", "-" if t_ed is None else f"{t_ed:.3f} kNm")
+        c2.metric(r"Resistance $T_{Rd}$", "-")
+        c3.metric("Assessment", "NOT ASSESSED")
+        return
     _member_material_note(inp)
     applicability = t.get("applicability")
     if not isinstance(applicability, dict):
@@ -15159,6 +15288,23 @@ def torsion_view(inp, results):
         min_reinf_rows = []
         for component in ("vx", "vy"):
             item = directional_interactions.get(component)
+            if presentation.torsion_publication_component_is_current(
+                inp, shear_authority, t, component=component,
+            )[0] is not True:
+                rows.append({
+                    "Directional screen": "Vx,Ed + TEd" if component == "vx" else "Vy,Ed + TEd",
+                    "TEd/TRd": None, "6.29 V+T": None, "Status": "NOT ASSESSED",
+                    "Governing face": "-", f"cot {_THETA}": None,
+                })
+                min_reinf_rows.append({
+                    "Directional 6.31 screen": "Vx,Ed + TEd" if component == "vx" else "Vy,Ed + TEd",
+                    "6.31 sum": None, "Status": "NOT ASSESSED",
+                    "Outcome": "Recalculate this directional torsion check",
+                    "Separate detailing": "NOT ASSESSED", "Governing face": "-",
+                    "Scope / guidance": "Recalculate this directional torsion check",
+                    "Detailing guidance": "-",
+                })
+                continue
             if not item:
                 continue
             if transverse_resistance_available:
@@ -15573,8 +15719,8 @@ def torsion_view(inp, results):
             width="stretch",
         )
 
-    overall_status = presentation.torsion_assessment_status(t)
-    overall_note = presentation.torsion_assessment_note(t)
+    overall_status = presentation.torsion_assessment_status(t, input_payload=inp)
+    overall_note = presentation.torsion_assessment_note(t, input_payload=inp)
     if overall_status != "PASS":
         _manual_warning(
             st,
@@ -15582,7 +15728,7 @@ def torsion_view(inp, results):
             f"Overall torsion assessment: {overall_status}. {overall_note}.",
         )
     retained_longitudinal = t.get("longitudinal_assessment")
-    longitudinal = presentation.torsion_longitudinal_assessment(t)
+    longitudinal = presentation.torsion_longitudinal_assessment(t, input_payload=inp)
     if isinstance(retained_longitudinal, dict):
         def _area_text(value):
             return "-" if value is None else f"{float(value):.0f} mm2"
@@ -15624,10 +15770,10 @@ def torsion_view(inp, results):
         subs = t["subtubes"]
         c_tot = sum(s["stiffness"] for s in subs) or 1.0
         if t.get("theta_mode") == "utilisation":
-            angle_clause = (f"every sub-tube is at the ONE member strut angle "
-                            f"(6.3.2(2), cot {_THETA} = {t['cot']:.3f}), shared with "
-                            "the shear check and selected to minimise the governing "
-                            "utilisation")
+            angle_clause = (
+                f"every sub-tube uses cot {_THETA} = {t['cot']:.3f}. "
+                + presentation.torsion_angle_selection_note(t).rstrip(".")
+            )
         else:
             angle_clause = ("each sub-tube is at its OWN resistance-optimum strut angle "
                             "(no single member angle applies -- see the cot column)")
@@ -15712,13 +15858,10 @@ def torsion_view(inp, results):
                    "used by the calculation.")
         st.plotly_chart(viz.subtube_figure(subs), width="stretch")
     else:
-        theta_note = ("the ONE member strut angle (6.3.2(2)), shared with the shear "
-                      "check and selected to minimise the governing utilisation"
-                      if t.get("theta_mode") == "utilisation"
-                      else "auto-optimised for the torsion resistance")
         st.caption(
             f"$\\theta={t['theta_deg']:.1f}^\\circ$ strut "
-            f"($\\cot\\theta={t['cot']:.3f}$, {theta_note}). "
+            f"($\\cot\\theta={t['cot']:.3f}$). "
+            f"{presentation.torsion_angle_selection_note(t)} "
             f"Method: {t['method']}. "
             f"$T_{{Rd,s}}={t['trd_s']:.3f}$ kNm, "
             f"$T_{{Rd,max}}={t['trd_max']:.3f}$ kNm."
@@ -15998,7 +16141,10 @@ def combined_view(inp, results):
             st.info("Enable Plastic utilisation, shear and torsion, then press "
                     "Calculate to run the combined check.")
         return
-    combined_blocker = presentation.combined_bending_assessment_blocker(results)
+    combined_blocker = presentation.combined_bending_assessment_blocker(
+        results,
+        inp,
+    )
     if combined_blocker is not None:
         _manual_warning(
             st,
@@ -16691,7 +16837,14 @@ def _selected_case_context(inp, results, family):
         case_inp = case_analysis.elastic_case_input(inp, actions)
     else:
         case_inp = case_analysis.plastic_case_input(inp, actions)
-    return case_inp, entry.get("results") or {}, entry
+    case_results = entry.get("results") or {}
+    if family == "plastic":
+        primary = presentation.plastic_publication_authority(
+            case_inp, case_results, results,
+        )
+        if "plastic" not in case_results and primary is not None:
+            case_results = dict(case_results, plastic=primary)
+    return case_inp, case_results, entry
 
 
 def _store_completed_analysis(
@@ -17075,9 +17228,9 @@ def _analysis_workspace(inp):
     elif view == "Detailing":
         detailing_view(view_inp, view_results, global_results=visible_results)
     elif view == "Shear":
-        shear_view(view_inp, view_results)
+        shear_view(view_inp, view_results, global_results=visible_results)
     elif view == "Torsion":
-        torsion_view(view_inp, view_results)
+        torsion_view(view_inp, view_results, global_results=visible_results)
     elif view == "M-V-T Combined":
         combined_view(view_inp, view_results)
     else:

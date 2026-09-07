@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from sector import capacity, codes, detailing, shear
+from sector import capacity, codes, combined as combined_core, detailing, shear
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))       # so `import sector_app` works standalone
@@ -1645,7 +1645,12 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
         overview["Check"] == "Shear without links"
     ].iloc[0]
     assert concrete_row["Status"] == "PASS"
-    assert "Shear with links" not in set(overview["Check"])
+    link_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
+    assert link_row["Governing action"] == "PL-01"
+    assert link_row["Status"] == "PASS"
+    assert link_row["Result"] == "13.8 % (non-governing)"
+    assert link_row["Criterion"] == "<= 100 %"
+    assert link_row["View"] == "Shear"
     import result_presentation as _presentation
 
     assert _presentation.result_reason(
@@ -1710,6 +1715,19 @@ def test_app_circular_vx_torsion_rejects_invalid_off_axis_arm_then_recovers():
     assert blocked["assessment_status"] == "NOT ASSESSED"
     assert blocked["assessment_ok"] is None
 
+    import result_presentation as presentation
+
+    current_inp = copy.deepcopy(at.session_state["_latest_inputs"])
+    torsion_result = at.session_state["results"]["torsion"]
+    assert presentation.provided_link_publication_assessment(
+        current_inp, blocked, torsion_result=torsion_result,
+    ).valid is True
+    changed_arm = copy.deepcopy(current_inp)
+    changed_arm["shear_vy_fitted_z"] = 500.0
+    assert presentation.provided_link_publication_assessment(
+        changed_arm, blocked, torsion_result=torsion_result,
+    ).valid is False
+
     _select_view(at, "Shear")
     blocked_visible = " ".join(
         str(item.value)
@@ -1731,8 +1749,9 @@ def test_app_circular_vx_torsion_rejects_invalid_off_axis_arm_then_recovers():
     links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert chord_row["Status"] == "NOT ASSESSED"
     assert chord_row["Result"].endswith(" %")
-    assert links_row["Status"] == "NOT ASSESSED"
-    assert "PASS" not in {chord_row["Status"], links_row["Status"]}
+    assert links_row["Status"] == "PASS"
+    assert links_row["Result"].endswith(" % (non-governing)")
+    assert chord_row["Status"] != "PASS"
 
     _set_and_click(
         at,
@@ -1895,6 +1914,95 @@ def test_app_transverse_detailing_uses_active_direction_and_renders_view():
     )
 
 
+def test_app_case_local_detailing_does_not_inherit_another_case_result():
+    import case_analysis
+    import project_io
+    import result_presentation as _presentation
+
+    at = _fresh()
+    at.run()
+    _set(
+        at,
+        ("checkbox", "transverse_detailing_on", True),
+        ("checkbox", "shear_on", True),
+    )
+    _set(
+        at,
+        ("checkbox", "shear_links", True),
+        ("number_input", "shear_V", 100.0),
+        ("text_input", "pl_case_id", "PL-A"),
+    )
+    tables = {
+        key: at.session_state[key]
+        for key in project_io.PROJECT_TABLE_KEYS if key in at.session_state
+    }
+    cases = tables["plastic_cases_base"].copy(deep=True)
+    cases.loc[1] = cases.loc[0]
+    cases.loc[1, "name"] = "PL-B"
+    cases.loc[1, "mx_ed_knm"] = 20.0
+    tables["plastic_cases_base"] = cases
+    scalars = {
+        key: at.session_state[key]
+        for key in project_io.SCALAR_KEYS if key in at.session_state
+    }
+    at.session_state["_pending_project"] = project_io.dump_project(tables, scalars)
+    at.run()
+    _calculate(at)
+    assert not at.exception
+    results = at.session_state["results"]
+    assert [case["name"] for case in results["plastic_cases"]] == ["PL-A", "PL-B"]
+    current_inputs = at.session_state["_latest_inputs"]
+    for index, entry in enumerate(results["plastic_cases"]):
+        case_inp = case_analysis.plastic_case_input(current_inputs, entry["actions"])
+        local = entry["results"]
+        assert _presentation.plastic_publication_authority(
+            case_inp, local, dict(results, plastic={"util": None}),
+        ) is local["plastic"]
+        missing_local = {key: value for key, value in local.items() if key != "plastic"}
+        expected = results["plastic"] if index == 0 else None
+        assert _presentation.plastic_publication_authority(
+            case_inp, missing_local, results,
+        ) is expected
+        unrelated = results["plastic_cases"][1 - index]["results"]["plastic"]
+        assert unrelated["applied"] != local["plastic"]["applied"]
+        assert _presentation.plastic_publication_authority(
+            case_inp, missing_local, dict(results, plastic=unrelated),
+        ) is None
+        changed_action = dict(case_inp, Mx_pl=case_inp["Mx_pl"] + 1.0)
+        assert _presentation.plastic_publication_authority(
+            changed_action, missing_local, results,
+        ) is None
+        assert _presentation.plastic_publication_authority(
+            case_inp, dict(missing_local, plastic=None), results,
+        ) is None
+    second = results["plastic_cases"][1]
+    second["results"].pop("transverse_reinforcement", None)
+
+    rows = _presentation.multi_case_summary_rows(
+        at.session_state["_latest_inputs"],
+        results,
+    )
+    detailing_rows = [
+        row
+        for row in rows
+        if row["check"] == "Shear/torsion link detailing"
+    ]
+    by_case = {row["case"]: row for row in detailing_rows}
+    assert by_case["PL-A"]["status"] == "PASS"
+    assert by_case["PL-B"]["status"] == "NOT RUN"
+    assert by_case["PL-B"]["result"] == "-"
+
+    _select_view(at, "Detailing")
+    at.selectbox(key="_plastic_result_case_index").set_value(1).run()
+
+    assert not at.exception
+    assert any(
+        "Calculate to evaluate this case" in str(item.value)
+        for item in at.info
+    )
+    assert not any("PASS" in str(item.value) for item in at.success)
+
+
 def test_app_vx_gross_depth_screen_does_not_create_a_false_failure():
     at = _fresh()
     at.run()
@@ -1991,6 +2099,12 @@ def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
 
     assert not at.exception
     sh = at.session_state["results"]["shear"]
+    import result_presentation as presentation
+
+    assert presentation.shear_publication_input_is_current(
+        at.session_state["result_input_snapshot"],
+        sh,
+    ) == (True, None)
     assert set(sh["directions"]) == {"vx", "vy"}
     assert "generic_cross_direction_interaction_calculated" not in sh
     assert "status" not in sh
@@ -2028,6 +2142,87 @@ def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
         )
 
 
+def test_pub_m01_incomplete_biaxial_wrapper_is_value_free_in_ui_and_overview():
+    import result_presentation as presentation
+
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 50.0),
+        ("number_input", "pl_My", 50.0),
+        ("number_input", "shear_Vx", 100.0),
+        ("number_input", "shear_Vy", 150.0),
+        ("checkbox", "shear_links", True),
+    )
+    inp = copy.deepcopy(at.session_state["result_input_snapshot"])
+    results = copy.deepcopy(at.session_state["results"])
+    aggregate = results["shear"]
+    del aggregate["directions"]["vy"]
+
+    assert presentation.shear_publication_input_is_current(
+        inp,
+        aggregate,
+    )[0] is False
+    rows = presentation.result_summary_rows(inp, results)
+    shear_rows = [row for row in rows if row.get("view") == "Shear"]
+    assert shear_rows
+    assert all(row.get("util") is None for row in shear_rows)
+    assert all(row.get("status") == "NOT ASSESSED" for row in shear_rows)
+
+    at.session_state["results"] = results
+    at.session_state["result_input_snapshot"] = inp
+    _select_view(at, "Shear")
+    assert not at.exception
+    assert {metric.label: str(metric.value) for metric in at.metric} == {
+        "Applied shear": "-",
+        "Resistance $V_{Rd}$": "-",
+        "Assessment": "NOT ASSESSED",
+    }
+    assert not any(
+        {"Component", "VEd [kN]", "VRd [kN]", "Utilisation", "Status"}
+        .issubset(frame.value.columns)
+        for frame in at.dataframe
+    )
+
+
+def test_app_biaxial_shear_top_table_fails_closed_for_stale_nominal_alias():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "pl_Mx", 50.0),
+        ("number_input", "pl_My", 50.0),
+        ("number_input", "shear_Vx", 1.0),
+        ("number_input", "shear_Vy", 1.0),
+        ("checkbox", "shear_links", True),
+    )
+    directions = at.session_state["results"]["shear"]["directions"]
+    directions["vx"]["nominal_resistance"]["route"] = "internal route"
+
+    _select_view(at, "Shear")
+
+    assert not at.exception
+    summary = next(
+        frame.value
+        for frame in at.dataframe
+        if {"Component", "VEd [kN]", "VRd [kN]", "Utilisation", "Status"}
+        .issubset(frame.value.columns)
+    ).set_index("Component")
+    assert summary.loc["Vx,Ed", "Status"] == "NOT ASSESSED"
+    assert summary.loc["Vx,Ed", "VRd [kN]"] is None or np.isnan(
+        summary.loc["Vx,Ed", "VRd [kN]"]
+    )
+    assert summary.loc["Vx,Ed", "Utilisation"] is None or np.isnan(
+        summary.loc["Vx,Ed", "Utilisation"]
+    )
+    assert summary.loc["Vy,Ed", "Status"] == "PASS"
+
+
 def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
     at = _fresh()
     at.run()
@@ -2059,6 +2254,257 @@ def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
     assert vy["governing_face"] == (
         "negative" if governing["tension_low"] else "positive"
     )
+
+
+@pytest.fixture(scope="module")
+def pub_m01_signed_2023_cases(tmp_path_factory):
+    """Real signed producer recovered from the inherited +90 native fixture.
+
+    The default 400 x 600 mm section has six bottom and two top diameter-20
+    bars, with their axes 50 mm from the concrete faces. This reconstructed
+    implementation fixture reproduces the reviewer-recorded operands; its
+    geometry is not described as independently frozen by the reviewer.
+    """
+    import result_presentation as presentation
+
+    cases = {}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv(
+            "SECTOR_AUTOSAVE_DIR",
+            str(tmp_path_factory.mktemp("pub-m01-signed") / "autosave"),
+        )
+        at = _fresh()
+        at.run()
+        _set(
+            at,
+            ("checkbox", "shear_on", True),
+            ("checkbox", "torsion_on", True),
+        )
+        for sign in (1, -1):
+            _set_and_click(
+                at,
+                "calculate",
+                ("selectbox", "shear_method", codes.EC2_2023.label),
+                ("checkbox", "shear_links", True),
+                ("number_input", "pl_Mx", sign * 90.0),
+                ("number_input", "shear_Vy", 150.0),
+                ("number_input", "torsion_T", 40.0),
+            )
+            assert not at.exception
+            inp = copy.deepcopy(at.session_state["result_input_snapshot"])
+            results = copy.deepcopy(at.session_state["results"])
+            results["worked_example_selection"] = (
+                presentation.worked_example_selection(inp, results)
+            )
+            _select_view(at, "Shear")
+            assert not at.exception
+            native = next(
+                frame.value.copy(deep=True)
+                for frame in at.dataframe
+                if {"Face", "Chord", "Formula", "Signed Mface"}.issubset(
+                    frame.value.columns
+                )
+            )
+            native_copy = " ".join(
+                str(item.value)
+                for collection in (at.caption, at.markdown, at.warning)
+                for item in collection
+            )
+            native_angle = next(
+                row["Value"]
+                for frame in at.dataframe
+                if {"Quantity", "Value"}.issubset(frame.value.columns)
+                for _, row in frame.value.iterrows()
+                if str(row["Quantity"]).startswith("cot ")
+            )
+            _select_view(at, "Results Overview")
+            assert not at.exception
+            cases[sign] = {
+                "input": inp,
+                "results": results,
+                "native": native,
+                "native_copy": native_copy,
+                "native_angle": native_angle,
+                "overview": at.table[0].value.copy(deep=True),
+            }
+    return cases
+
+
+_PUB_M01_SIGNED_ORACLE = {
+    1: {
+        "cot": 1.801,
+        "tension_total": 332.0955997951,
+        "tension_resistance": 441.4106040825,
+        "tension_util": 0.7523507517,
+        "compression_total": 109.6184821020,
+        "compression_resistance": 155.1863872534,
+        "status": "PASS",
+        "rows": [
+            ["bottom (-y)", "Flexural tension", "(8.51)", "90.0 kNm",
+             "138.0 kNm", "332.1 kNm", "441.4 kNm", "75.2 %", "PASS"],
+            ["top (+y)", "Flexural compression", "(8.52)", "-90.0 kNm",
+             "113.8 kNm", "109.6 kNm", "155.2 kNm", "70.6 %", "PASS"],
+        ],
+    },
+    -1: {
+        "cot": 1.098,
+        "tension_total": 211.6996631583,
+        "tension_resistance": 155.1863872534,
+        "tension_util": 1.3641638736,
+        "compression_total": 63.4463810066,
+        "compression_resistance": 441.4106040825,
+        "status": "FAIL",
+        "rows": [
+            ["top (+y)", "Flexural tension", "(8.51)", "90.0 kNm",
+             "69.4 kNm", "211.7 kNm", "155.2 kNm", "136.4 %", "FAIL"],
+            ["bottom (-y)", "Flexural compression", "(8.52)", "-90.0 kNm",
+             "84.1 kNm", "63.4 kNm", "441.4 kNm", "14.4 %", "PASS"],
+        ],
+    },
+}
+
+
+@pytest.mark.parametrize("sign", (1, -1), ids=("positive", "negative"))
+def test_pub_m01_current_2023_tension_and_compression_chords_publish(
+    pub_m01_signed_2023_cases,
+    sign,
+):
+    import result_presentation as presentation
+
+    case = pub_m01_signed_2023_cases[sign]
+    inp, results = case["input"], case["results"]
+    opposite = pub_m01_signed_2023_cases[-sign]["input"]
+    assert inp["outer"] == opposite["outer"]
+    assert inp["bars"] == opposite["bars"]
+    assert len(inp["bars"]) == 8
+    assert inp["P_pl"] == 0.0
+    assert inp["Mx_pl"] == sign * 90.0
+    assert inp["shear_Vy"] == 150.0
+    assert inp["torsion_T"] == 40.0
+    assert results["worked_example_selection"]["families"]["shear"] == {
+        "case_id": "PL-01", "component": None,
+    }
+    selected = results["plastic_cases"][0]["results"]
+    shear_result = selected["shear"]
+    assert presentation.shear_publication_input_is_current(
+        inp,
+        shear_result,
+        plastic_result=results["plastic"],
+    ) == (True, None)
+    assessment = presentation.provided_link_longitudinal_publication_assessment(
+        inp,
+        shear_result,
+        torsion_result=selected.get("torsion"),
+    )
+    assert assessment["valid"] is True
+    faces = {
+        candidate["chord_formula"]: candidate
+        for candidate in assessment["candidates"]
+        if candidate.get("role") == "shear_axis"
+    }
+    assert set(faces) == {"8.51", "8.52"}
+    oracle = _PUB_M01_SIGNED_ORACLE[sign]
+    assert shear_result["links"]["member_angle_selection"]["cot"] == pytest.approx(
+        oracle["cot"], abs=1e-12,
+    )
+    assert shear_result["assessment_status"] == oracle["status"]
+    assert faces["8.51"]["tension_low"] is (sign > 0)
+    assert faces["8.52"]["tension_low"] is (sign < 0)
+    assert faces["8.51"]["m_total"] == pytest.approx(oracle["tension_total"])
+    assert faces["8.51"]["m_rd"] == pytest.approx(oracle["tension_resistance"])
+    assert faces["8.51"]["util"] == pytest.approx(oracle["tension_util"])
+    assert faces["8.51"]["status"] == oracle["status"]
+    assert faces["8.52"]["m_total"] == pytest.approx(oracle["compression_total"])
+    assert faces["8.52"]["m_rd"] == pytest.approx(oracle["compression_resistance"])
+    assert faces["8.52"]["status"] == "PASS"
+    for candidate in faces.values():
+        assert candidate["m_ed_signed"] == sign * 90.0
+        assert candidate["n_vd"] == pytest.approx(150.0 * oracle["cot"])
+        assert candidate["m_total"] == pytest.approx(
+            max(candidate["face_m_ed_signed"] + candidate["n_vd"] * candidate["z"], 0.0)
+            + candidate["ftd_t"] * candidate["z"] / 2.0
+        )
+        expected_headroom = max(
+            candidate["m_rd"] - max(candidate["face_m_ed_signed"], 0.0),
+            0.0,
+        )
+        assert candidate["shear_headroom"] == pytest.approx(expected_headroom)
+    assert case["native"].values.tolist() == oracle["rows"]
+    assert case["native_angle"] == f"{oracle['cot']:.3f}"
+    overview = case["overview"].set_index("Check")
+    assert overview.loc["Shear longitudinal chords", "Status"] == oracle["status"]
+    assert overview.loc["Shear longitudinal chords", "Result"] == (
+        f"{100.0 * oracle['tension_util']:.1f} %"
+    )
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+@pytest.mark.parametrize("sign", (1, -1), ids=("positive", "negative"))
+def test_pub_m01_signed_2023_reports_keep_current_face_operands(
+    pub_m01_signed_2023_cases,
+    sign,
+    profile,
+    monkeypatch,
+    tmp_path,
+):
+    import io
+
+    from pypdf import PdfReader
+
+    import sector_report
+
+    case = pub_m01_signed_2023_cases[sign]
+    oracle = _PUB_M01_SIGNED_ORACLE[sign]
+    tables = []
+    original_table = sector_report.ReportBuilder._table
+
+    def record_table(self, data, *args, **kwargs):
+        tables.append(copy.deepcopy(data))
+        return original_table(self, data, *args, **kwargs)
+
+    monkeypatch.setattr(sector_report.ReportBuilder, "_table", record_table)
+    pdf = sector_report.build_report(
+        {}, case["input"], case["results"], figures=False, profile=profile,
+    )
+    (tmp_path / f"signed-{sign}-{profile}.pdf").write_bytes(pdf)
+    text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in PdfReader(io.BytesIO(pdf)).pages
+    )
+    summary = (
+        f"Shear longitudinal chords PL-01 {oracle['status']} "
+        f"{100.0 * oracle['tension_util']:.1f} %"
+    )
+    assert summary in text
+    if profile != "Brief":
+        assert (
+            "The member strut angle is shared by shear and torsion under "
+            "6.3.2(2) and minimises the governing utilisation."
+        ) in text
+        action_tables = [
+            rows for rows in tables
+            if rows[0][:2] == ["N<sub>Ed</sub> (kN)", "M<sub>x,Ed</sub> (kNm)"]
+        ]
+        assert action_tables
+        assert all(
+            rows[1] == ["0.000", f"{90.0 * sign:.3f}", "0.000", "0.000", "150.000", "40.000"]
+            for rows in action_tables
+        )
+        assert "The selected nominal resistance is the compression-field" in text
+        assert "The concrete route remains the selected nominal resistance" not in text
+        assert "no longitudinal shear force is applied in the nominal check" not in text
+        face_tables = [
+            rows for rows in tables
+            if rows[0][:3] == ["Face", "Chord", "Formula"]
+        ]
+        assert len(face_tables) == 1
+        assert face_tables[0][1:] == oracle["rows"]
+        assert (
+            f"Selected common member angle: cot theta = {oracle['cot']:.3f}"
+            in text.replace(chr(0x03B8), "theta")
+        )
+        for row in oracle["rows"]:
+            assert " ".join(row) in text
 
 
 def test_legacy_bending_blocks_combined_evidence_in_both_face_shear_view():
@@ -2440,6 +2886,44 @@ def test_app_shear_links_outside_permitted_bounds_are_not_assessed():
     assert link_row["Result"] == "-"
 
 
+def test_app_invalid_strut_angle_caption_omits_hostile_optional_operands():
+    at = _fresh()
+    at.run()
+    at.checkbox(key="shear_on").set_value(True).run()
+    at.checkbox(key="shear_links").set_value(True).run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("number_input", "strut_cot_max", 3.0),
+        ("number_input", "shear_V", 80.0),
+    )
+    links = at.session_state["results"]["shear"]["links"]
+    hostile = {
+        "active": True,
+        "applicable": False,
+        "method": codes.EC2_2005_DKNA.label,
+        "requested_min": True,
+        "requested_max": ["raw value"],
+        "permitted_min": 1.0,
+        "permitted_max": 2.5,
+    }
+    links["angle_applicability"] = hostile
+    links["res"]["angle_applicability"] = hostile
+
+    _select_view(at, "Shear")
+
+    assert not at.exception
+    assert not any(
+        "Requested cot" in str(caption.value) for caption in at.caption
+    )
+    visible = " ".join(
+        str(item.value)
+        for collection in (at.warning, at.caption, at.markdown)
+        for item in collection
+    )
+    assert "raw value" not in visible
+
+
 @pytest.mark.parametrize(
     "method",
     (codes.EC2_2005_DKNA.label, codes.EC2_2023.label),
@@ -2754,6 +3238,127 @@ def test_app_shear_2023_class_a_range_is_enforced_and_recovers_at_equality():
     assert recovered["angle_applicability"]["applicable"] is True
     assert recovered["res"]["valid"] is True
     assert recovered["res"]["vrd"] > 0.0
+
+
+@pytest.mark.parametrize(
+    ("v_ed", "expected_route"),
+    ((50.0, "concrete"), (500.0, "links")),
+)
+def test_2023_ductility_class_mismatch_is_fail_closed_but_concrete_stays_current(
+    v_ed,
+    expected_route,
+):
+    import io
+
+    from pypdf import PdfReader
+
+    import result_presentation as presentation
+    import sector_report
+
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at,
+        "calculate",
+        ("selectbox", "transverse_ductility_class", "A"),
+        ("checkbox", "shear_on", True),
+        ("selectbox", "shear_method", codes.EC2_2023.label),
+        ("checkbox", "shear_links", True),
+        ("number_input", "strut_cot_max", 2.0),
+        ("number_input", "shear_V", v_ed),
+    )
+
+    assert not at.exception
+    state = at.session_state.filtered_state
+    results = copy.deepcopy(state["results"])
+    inp = copy.deepcopy(state["result_input_snapshot"])
+    shear_result = results["shear"]
+    baseline = presentation.nominal_shear_resistance(
+        shear_result,
+        links_selected=True,
+        input_payload=inp,
+    )
+    assert baseline["valid"] is True
+    assert baseline["route"] == expected_route
+    assert presentation.concrete_shear_publication_input_is_current(
+        inp, shear_result
+    )[0] is True
+    assert presentation.provided_link_publication_assessment(
+        inp, shear_result
+    ).valid is True
+
+    current_b = copy.deepcopy(inp)
+    current_b["transverse_ductility_class"] = "B"
+    selected = presentation.nominal_shear_resistance(
+        shear_result,
+        links_selected=True,
+        input_payload=current_b,
+    )
+    provided = presentation.provided_link_publication_assessment(
+        current_b, shear_result
+    )
+    rows = presentation.result_summary_rows(
+        current_b, {"plastic": results["plastic"], "shear": shear_result}
+    )
+    by_check = {row["check"]: row for row in rows}
+
+    assert presentation.concrete_shear_publication_input_is_current(
+        current_b, shear_result
+    )[0] is True
+    assert provided.valid is False
+    assert selected["valid"] is False
+    assert selected["status"] == "NOT ASSESSED"
+    assert selected["resistance"] is None
+    assert selected["utilisation"] is None
+    assert by_check["Shear with links"]["status"] == "NOT ASSESSED"
+    assert by_check["Shear with links"]["result"] == "-"
+    assert by_check["Shear without links"]["result"] != "-"
+    assert by_check["Shear without links"]["status"] == (
+        "PASS" if expected_route == "concrete" else "NOT APPLICABLE"
+    )
+
+    at.session_state["result_input_snapshot"] = current_b
+    at.session_state["result_sig"] = "forced-stale-ductility-class"
+    _select_view(at, "Shear")
+    assert not at.exception
+    assert not any(
+        metric.label == "Provided-link comparison $V_{Ed}/V_{Rd}$"
+        for metric in at.metric
+    )
+    assert any(
+        metric.label
+        == "Non-governing concrete utilisation $|V_{Ed}|/V_{Rd,c}$"
+        for metric in at.metric
+    )
+    assert any(
+        "non-governing concrete-only context" in caption.value
+        for caption in at.caption
+    )
+
+    _select_view(at, "Results Overview")
+    overview = at.table[0].value
+    overview_by_check = {
+        row["Check"]: row for _, row in overview.iterrows()
+    }
+    assert overview_by_check["Shear with links"]["Status"] == "STALE"
+    assert overview_by_check["Shear with links"]["Result"] == "-"
+    assert overview_by_check["Shear without links"]["Status"] == "STALE"
+    assert overview_by_check["Shear without links"]["Result"] != "-"
+
+    old_link_percentage = f"{100.0 * shear_result['links']['util']:.1f} %"
+    for profile in ("Brief", "Standard", "Audit"):
+        pdf = sector_report.build_report(
+            {}, current_b, results, figures=False, profile=profile
+        )
+        text = " ".join(
+            " ".join((page.extract_text() or "").split())
+            for page in PdfReader(io.BytesIO(pdf)).pages
+        )
+        assert "Shear with links" in text
+        assert "NOT ASSESSED" in text
+        if profile != "Brief":
+            assert old_link_percentage not in text
+            assert "Ductility class A" not in text
 
 
 def test_app_shear_2023_axial_tension_range_uses_net_action_and_exact_boundary():
