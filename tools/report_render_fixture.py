@@ -871,6 +871,21 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
     if type(worked_index) is not int or not 0 <= worked_index < len(plastic_worked["points"]):
         raise AssertionError("the governing plastic worked-point identity is missing")
     point = plastic_worked["points"][worked_index]
+    actions = inp["plastic_cases"][1]
+    close("plastic applied Mx", plastic_worked["applied"][0], actions["mx_ed_knm"])
+    close("plastic applied My", plastic_worked["applied"][1], actions["my_ed_knm"])
+    # This fixture has positive uniaxial Mx. Its governing sweep point is on
+    # that same ray, so demand / point resistance independently reproduces util.
+    close("plastic uniaxial input My", actions["my_ed_knm"], 0.0)
+    close("plastic uniaxial resistance My", point["My"], 0.0)
+    if actions["mx_ed_knm"] <= 0.0 or point["Mx"] <= 0.0:
+        raise AssertionError("the fixture requires positive uniaxial Mx")
+    close("plastic demand", plastic_worked["util_demand"], actions["mx_ed_knm"])
+    close("plastic resistance", plastic_worked["util_resistance"], point["Mx"])
+    close(
+        "plastic utilisation", plastic_worked["util"],
+        actions["mx_ed_knm"] / point["Mx"],
+    )
     close(
         "plastic axial equilibrium",
         point["axial_achieved"],
@@ -1501,7 +1516,10 @@ def validate_pdf_content(
         "Longitudinal reinforcement",
         "Torsion (thin-walled tube)",
         "Concrete tensile factor",
-        "125.0 %",
+        # Native PL-QA-2: 125 kNm / 56.6043642884 kNm. The retained 125.0%
+        # formatting vector remains in test_multi_case_report_includes_later_
+        # governing_case_and_all_details; it is not this native calculation.
+        "220.8 %",
         "245.000 MPa",
         "Candidate summary for governing crack example",
         f"Generated 2026-07-19 12:00 by Sector {__version__}",

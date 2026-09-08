@@ -20,7 +20,7 @@ import manual_equation_source as source  # noqa: E402
 
 
 EXPECTED_CONTRACT_SEAL = (
-    "58a99d8ad084f6b3e8a58a3b98c4cf2366ed338f5eff63281edf97402dd1a69d"
+    "3a2d9df2c74904faef0788150734f3a68c448349ee862ec0e17c18554a9ff34b"
 )
 
 EXPECTED_ROWS = (
@@ -160,7 +160,6 @@ EXPECTED_ROWS = (
         "dimensionless interaction check",
         (
             "manual.shear.links-2005",
-            "manual.shear.links-2023",
             "manual.torsion.resistance",
         ),
     ),
@@ -200,7 +199,7 @@ def test_live_manual_binds_exact_independent_semantic_inventory():
     )
     assert sum(len(item.contract.symbols) for item in bound) == 214
     assert sum(len(item.contract.results) for item in bound) == 47
-    assert sum(len(item.contract.uses) for item in bound) == 21
+    assert sum(len(item.contract.uses) for item in bound) == 20
 
 
 def test_complete_contract_catalogue_has_exact_seal():

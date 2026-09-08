@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import io
 
 import pypdf
@@ -91,6 +92,22 @@ def test_reference_fixture_engineering_is_internally_consistent():
         (row["case"], row["status"]) for row in rows
         if row.get("overview_key") == "clear_spacing"
     ] == [("-", "PASS")]
+
+
+def test_reference_fixture_rejects_inconsistent_native_plastic_operands():
+    inp = _inputs()
+    out = _results(inp)
+    validate_fixture_engineering(inp, out)
+    for field, value in (
+        ("util", 1.25),
+        ("applied", (80.0, 0.0)),
+        ("util_demand", 80.0),
+        ("util_resistance", 100.0),
+    ):
+        changed = copy.deepcopy(out)
+        changed["plastic_cases"][1]["results"]["plastic"][field] = value
+        with pytest.raises(AssertionError, match="inconsistent fixture plastic"):
+            validate_fixture_engineering(inp, changed)
 
 
 def test_reference_fixture_uses_independent_duration_crack_width_criteria():

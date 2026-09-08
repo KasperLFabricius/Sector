@@ -330,3 +330,28 @@ def test_heading_anchor_is_level_sensitive_for_duplicate_method_names():
     assert ia.heading_anchor("Grouped fatigue", 1) == "manual-method-fatigue"
     assert ia.heading_anchor("Grouped fatigue", 2) is None
     assert ia.heading_anchor("Fatigue results", 2) == "manual-fatigue-results"
+
+@pytest.mark.parametrize(
+    ("table_key", "label", "prefix"),
+    [("bars_base", "Bar ID", "R"), ("tendons_base", "Tendon ID", "P")],
+)
+def test_manual_reinforcement_ids_are_generated_read_only_text(table_key, label, prefix):
+    definition = fields.field_definition(table_key, "ID")
+    assert definition.label == label
+    assert definition.default == f"next unused {prefix} number"
+    row = next(row for row in manual.editable_field_reference_rows()
+               if row[0] == fields.TABLE_TITLES[table_key] and label in row[1])
+    assert "Sector-generated read-only ID" in row[3]
+    assert "prefixed R for bars or P for tendons" in row[3]
+    assert "finite" not in row[3].casefold()
+    assert "decimal" not in row[3].casefold()
+
+
+def test_manual_numeric_field_retains_decimal_validation():
+    definition = fields.field_definition("bars_base", "x (mm)")
+    assert fields.validation_rule(definition) == (
+        "Finite unambiguous decimal; the field-specific sign rule applies."
+    )
+    row = next(row for row in manual.editable_field_reference_rows()
+               if row[0] == fields.TABLE_TITLES["bars_base"] and "x coordinate" in row[1])
+    assert fields.validation_rule(definition) in row[3]

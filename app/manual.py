@@ -1843,8 +1843,9 @@ def manual_blocks() -> list:
        "$(1-k_t)\\sigma_s/E_s$. **Worked:** $s_{r,m,cal}=134$ mm, $w_k=0.186$ mm.")
     md("The three code options give four method/system results on the same beam and "
        "service moment ($M_x=150$ kNm), because DK/NA evaluates distinct fine and "
-       "coarse reinforcement systems:")
-    table(["Crack-width edition", "$s_{r,max}$ (mm)", "$h_{c,ef}$ (m)", "$w_k$ (mm)"],
+       "coarse reinforcement systems. The spacing column uses $s_{r,max}$ for "
+       "2005/DK NA and $s_{r,m,cal}$ for 2023:")
+    table(["Crack-width edition", "Crack spacing (mm)", "$h_{c,ef}$ (m)", "$w_k$ (mm)"],
           [["EN 1992-1-1:2005", "236", "0.125", "0.188"],
            ["DS/EN + DK NA (fine)", "206", "0.125", "0.164"],
            ["DS/EN + DK NA (coarse)", "184", "0.100", "0.077"],

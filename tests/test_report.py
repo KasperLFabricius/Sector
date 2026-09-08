@@ -29,6 +29,9 @@ import material_catalog  # noqa: E402
 from native_member_report_fixtures import native_member_report_cases  # noqa: E402,F401
 from native_member_report_fixtures import native_formula_631_cases  # noqa: E402,F401
 from native_member_report_fixtures import native_base_en_report_case  # noqa: E402,F401
+from native_member_report_fixtures import native_subdivided_report_case  # noqa: E402,F401
+from native_member_report_fixtures import native_axial_compression_report_cases  # noqa: E402,F401
+from native_member_report_fixtures import native_scheduler_report_cases  # noqa: E402,F401
 import publication_image_export  # noqa: E402
 import result_presentation  # noqa: E402
 import sector_report  # noqa: E402
@@ -2147,7 +2150,7 @@ def test_textbook_report_fails_closed_when_retained_state_is_incomplete():
     assert "converged elastic states are unavailable" in text
 
 
-def test_transverse_textbook_report_fails_closed_without_retained_operands():
+def test_transverse_textbook_report_fails_closed_without_retained_operands(tmp_path):
     out = _out()
     shear = _shear_out()
     shear["links"] = _links_out()
@@ -2158,9 +2161,39 @@ def test_transverse_textbook_report_fails_closed_without_retained_operands():
     combined.pop("dkna_selection")
     out.update(shear=shear, torsion=torsion, combined=combined)
 
-    text = " ".join(_pdf_text(_build_report_with_selection(
-        {}, _inp(), out, figures=False, qa_appendix=False,
-    )).split())
+    inp = _inp()
+    original = pickle.dumps((inp, out))
+    raw_pdf = _build_report_with_selection({}, inp, out, figures=False, qa_appendix=False)
+    (tmp_path / "legacy-missing-terms-full.pdf").write_bytes(raw_pdf)
+    raw_text = " ".join(_pdf_text(raw_pdf).split())
+    assert "NOT ASSESSED" in raw_text
+    assert result_presentation.combined_bending_assessment_blocker(out, inp) is not None
+    assert result_presentation.torsion_publication_component_is_current(inp, shear, torsion)[0] is False
+    assert not any(key in raw_text for key in (
+        "EQ-SHEAR.LINKS.VRDS", "EQ-TORSION.RESISTANCE.GOVERNING", "EQ-COMBINED.DK-NA.SUM",
+    ))
+    (tmp_path / "legacy-missing-terms.pickle").write_bytes(original)
+
+    # Actual retained formatter diagnostics, separate from native authority.
+    # Copy only the original remaining maps; never recreate the missing term.
+    unit_torsion = copy.deepcopy(torsion)
+    terms = ("angle_selection", "steel_resistance", "strut_resistance",
+             "resistance_selection", "cracking_resistance", "longitudinal_reinforcement")
+    assert "primary" not in torsion and "strut_resistance" not in torsion
+    unit_torsion["primary"] = {key:copy.deepcopy(torsion[key]) for key in terms if key in torsion}
+    assert set(unit_torsion["primary"]) == set(terms) - {"strut_resistance"}
+    unit_before = pickle.dumps(unit_torsion)
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(buffer, {}, inp, out, figures=False, profile="Audit")
+    builder._h1("Retained missing-operand formatting")
+    assert builder._shear_link_terms_available(shear["links"]["res"]) is False
+    builder._torsion_components(unit_torsion, critical=True)
+    builder._combined_direction(combined)
+    pdf = _finish_retained_unit_pdf(buffer, builder)
+    (tmp_path / "retained-missing-terms.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
+    assert pickle.dumps(unit_torsion) == unit_before
+    assert pickle.dumps((inp, out)) == original
 
     assert "selected strut-angle terms are missing" in text
     assert "selected torsion terms are unavailable" in text
@@ -2176,10 +2209,24 @@ def test_textbook_report_methods_have_no_engineering_fallbacks():
         inspect.getsource(sector_report.ReportBuilder._elastic_worked),
         inspect.getsource(sector_report.ReportBuilder._shear),
         inspect.getsource(sector_report.ReportBuilder._shear_direction),
+        inspect.getsource(sector_report.ReportBuilder._shear_direction_introduction),
+        inspect.getsource(sector_report.ReportBuilder._shear_2005),
+        inspect.getsource(sector_report.ReportBuilder._shear_2005_utilisation),
+        inspect.getsource(sector_report.ReportBuilder._shear_2023),
         inspect.getsource(sector_report.ReportBuilder._shear_links),
+        inspect.getsource(sector_report.ReportBuilder._shear_link_terms_available),
+        inspect.getsource(sector_report.ReportBuilder._shear_2023_missing_chords),
         inspect.getsource(sector_report.ReportBuilder._torsion),
+        inspect.getsource(sector_report.ReportBuilder._torsion_components),
+        inspect.getsource(sector_report.ReportBuilder._shear_face_tables),
+        inspect.getsource(sector_report.ReportBuilder._shear_directional_summary),
+        inspect.getsource(sector_report.ReportBuilder._combined_directional_summary),
+        inspect.getsource(sector_report.ReportBuilder._torsion_angle_diagnostic),
+        inspect.getsource(result_presentation._torsion_component_summary_rows),
+        inspect.getsource(sector_report.ReportBuilder._torsion_longitudinal_block),
         inspect.getsource(sector_report.ReportBuilder._subtube_section),
         inspect.getsource(sector_report.ReportBuilder._combined),
+        inspect.getsource(sector_report.ReportBuilder._combined_base_en_components),
         inspect.getsource(sector_report.ReportBuilder._combined_direction),
     ))
     forbidden = (
@@ -5150,10 +5197,10 @@ def _shear_out():
             "method": "DS/EN 1992-1-1:2005 + DK NA:2024"}
 
 
-def test_report_includes_shear_section():
+def test_retained_report_includes_shear_section(tmp_path):
     out = _out()
     out["shear"] = _shear_out()
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_shear_unit_pdf({}, _inp(), out, figures=False, unit_kind="concrete", artifact_path=tmp_path / "retained-shear-unit.pdf"))
     assert "Shear resistance" in txt          # the section heading
     assert "6.2.2" in txt                     # the clause reference
     assert "103.4" in txt                     # the VRd,c value
@@ -5227,6 +5274,7 @@ def _native_sparse_link_report_fixture():
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
 def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(
     profile,
+    tmp_path,
 ):
     inp, sh, transverse = _native_sparse_link_report_fixture()
     links = sh["links"]
@@ -5252,17 +5300,12 @@ def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(
     detailing_utilisation = (
         f"{100.0 * transverse['governing_utilisation']:.1f} %"
     )
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {},
-                inp,
-                {"shear": sh, "transverse_reinforcement": transverse},
-                figures=False,
-                profile=profile,
-            )
-        ).split()
+    pdf = _build_report_with_selection(
+        {}, inp, {"shear": sh, "transverse_reinforcement": transverse},
+        figures=False, profile=profile,
     )
+    (tmp_path / "native-sparse-link-report.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
 
     assert "Shear without links" in text
     assert "PASS" in text
@@ -5284,7 +5327,7 @@ def test_report_profiles_keep_sparse_links_separate_from_nominal_capacity(
         assert "no longitudinal shear force is applied" in text
 
 
-def test_report_audits_independent_governing_faces_and_angles():
+def test_retained_report_audits_independent_governing_faces_and_angles(tmp_path):
     out = _out()
     sh = _shear_out()
     negative = copy.deepcopy(sh)
@@ -5314,7 +5357,7 @@ def test_report_audits_independent_governing_faces_and_angles():
     out["shear"] = sh
 
     text = " ".join(_pdf_text(
-        _build_report_with_selection({}, _inp(), out, figures=False)
+        _retained_directional_table_unit_pdf({}, _inp(), out, figures=False, unit_kind="faces", artifact_path=tmp_path / "retained-directional-table.pdf")
     ).split())
     assert "Independent governing selections" in text
     assert "bottom (-y)" in text and "top (+y)" in text
@@ -5453,7 +5496,9 @@ def test_brief_governing_depth_does_not_publish_worked_selection_register():
     assert out["worked_example_selection"] == selection_before
 
 
-def test_audit_appendix_claims_combined_method_only_for_assessable_case():
+@pytest.mark.xdist_group("native-scheduler-report")
+@result_presentation.publication_calculation_scope()
+def test_audit_appendix_claims_combined_method_only_for_assessable_case(native_scheduler_report_cases, tmp_path):
     inp = _inp()
     actions = [
         {
@@ -5509,12 +5554,62 @@ def test_audit_appendix_claims_combined_method_only_for_assessable_case():
 
     assert sentence not in appendix_text(out)
     out["plastic_cases"][1]["results"]["plastic"]["util_valid"] = True
-    assert sentence in appendix_text(out)
+    # A legacy util_valid flag cannot repair absent canonical row fields or
+    # signatures. Keep the exact old compound vector as a rejection control.
+    assert sentence not in appendix_text(out)
     out["plastic_cases"][1]["results"]["plastic"].pop("util_valid")
     assert out == before
 
+    (tmp_path / "legacy-appendix-owner.pickle").write_bytes(pickle.dumps((inp, out)))
+    inp, current = native_scheduler_report_cases("dkna")
+    original = pickle.dumps((inp, current))
+    contexts = _assert_native_scheduler_contexts(inp, current)
+    assert set(contexts) == {"PL-LOW", "PL-GOV"}
+    assert all(result_presentation.combined_bending_assessment_blocker(values[1], values[0]) is None
+               for values in contexts.values())
+    assert sentence in appendix_text(current)
+    pdf = _build_report_with_selection({}, inp, current, figures=False, profile="Audit")
+    (tmp_path / "native-current-appendix.pdf").write_bytes(pdf)
+    assert sentence in " ".join(_pdf_text(pdf).split())
 
-def test_report_biaxial_shear_separates_directions_without_aggregate_interaction():
+    # One eligible case suffices; blocking either case must not suppress the
+    # actual surviving chapter's method reference.
+    origin_blocker = (
+        "The saved bending result cannot confirm that the M-M envelope "
+        "contains the origin. Recalculate before assessing M-V-T interaction."
+    )
+    assert all("valid" not in values[1]["combined"] for values in contexts.values())
+    for blocked_id in contexts:
+        mixed = copy.deepcopy(current)
+        entry = next(item for item in mixed["plastic_cases"] if item["name"] == blocked_id)
+        entry["results"]["plastic"].pop("util_valid")
+        mixed_before = pickle.dumps(mixed)
+        mixed_contexts = _assert_native_scheduler_contexts(inp, mixed, require_component_current=False)
+        for case_id, (case_inp, case_out) in mixed_contexts.items():
+            expected = origin_blocker if case_id == blocked_id else None
+            assert result_presentation.combined_bending_assessment_blocker(case_out, case_inp) == expected
+        assert sentence in appendix_text(mixed)
+        mixed_pdf = _build_report_with_selection({}, inp, mixed, figures=False, profile="Audit")
+        (tmp_path / ("native-mixed-appendix-" + blocked_id + ".pdf")).write_bytes(mixed_pdf)
+        assert sentence in " ".join(_pdf_text(mixed_pdf).split())
+        assert pickle.dumps(mixed) == mixed_before
+
+    rejected = copy.deepcopy(current)
+    for entry in rejected["plastic_cases"]:
+        entry["results"]["plastic"].pop("util_valid")
+    rejected_before = pickle.dumps(rejected)
+    rejected_contexts = _assert_native_scheduler_contexts(inp, rejected, require_component_current=False)
+    assert all(result_presentation.combined_bending_assessment_blocker(values[1], values[0]) == origin_blocker
+               for values in rejected_contexts.values())
+    assert sentence not in appendix_text(rejected)
+    rejected_pdf = _build_report_with_selection({}, inp, rejected, figures=False, profile="Audit")
+    (tmp_path / "native-legacy-bending-appendix.pdf").write_bytes(rejected_pdf)
+    assert sentence not in " ".join(_pdf_text(rejected_pdf).split())
+    assert pickle.dumps(rejected) == rejected_before
+    assert pickle.dumps((inp, current)) == original
+
+
+def test_retained_report_biaxial_shear_separates_directions_without_aggregate_interaction(tmp_path):
     out = _out()
     vx = copy.deepcopy(_shear_out())
     vx.update(component="vx", axis="y", tension_low=True, status="PASS")
@@ -5529,7 +5624,7 @@ def test_report_biaxial_shear_separates_directions_without_aggregate_interaction
     )
 
     txt = " ".join(_pdf_text(
-        _build_report_with_selection({}, _inp(), out, figures=False)
+        _retained_directional_table_unit_pdf({}, _inp(), out, figures=False, unit_kind="shear-directions", artifact_path=tmp_path / "retained-directional-table.pdf")
     ).split())
 
     assert "Vx,Ed" in txt and "Vy,Ed" in txt
@@ -5557,11 +5652,11 @@ def _shear_out_2023(gamma_v=1.40):
             "centroid": (0.0, 0.0)}
 
 
-def test_report_shear_2023_section():
+def test_retained_report_shear_2023_section(tmp_path):
     out = _out()
     sh = _shear_out_2023()
     out["shear"] = sh
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_shear_unit_pdf({}, _inp(), out, figures=False, unit_kind="concrete", artifact_path=tmp_path / "retained-shear-unit.pdf"))
     assert "8.27" in txt and "8.20" in txt          # the 2023 clauses
     assert "8.30" in txt and "8.31" in txt          # action/axial modification
     assert "8.2.2" in txt                            # the 2023 section reference
@@ -5577,7 +5672,7 @@ def test_report_shear_2023_section():
 
 
 @pytest.mark.parametrize("profile", ("Standard", "Audit"))
-def test_report_shear_2023_reproduces_selected_gamma_v_and_references(profile):
+def test_retained_report_shear_2023_reproduces_selected_gamma_v_and_references(profile, tmp_path):
     inp = _inp()
     inp.update({
         "shear_on": True,
@@ -5588,8 +5683,8 @@ def test_report_shear_2023_reproduces_selected_gamma_v_and_references(profile):
     out["shear"] = _shear_out_2023(gamma_v=1.234)
 
     txt = _pdf_text(
-        _build_report_with_selection(
-            {}, inp, out, figures=False, profile=profile
+        _retained_shear_unit_pdf(
+            {}, inp, out, figures=False, unit_kind="concrete", artifact_path=tmp_path / "retained-shear-unit.pdf", profile=profile
         )
     )
 
@@ -5601,23 +5696,23 @@ def test_report_shear_2023_reproduces_selected_gamma_v_and_references(profile):
     assert "8.2.2" in txt
 
 
-def test_report_shear_shows_prestress_precompression():
+def test_retained_report_shear_shows_prestress_precompression(tmp_path):
     # F1: a prestressed section adds a tendon-precompression row (sigma_cp credit).
     out = _out()
     sh = _shear_out()
     sh["n_prestress"] = 900.0
     sh["res"]["sigma_cp"] = 4.5
     out["shear"] = sh
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_shear_unit_pdf({}, _inp(), out, figures=False, unit_kind="concrete", artifact_path=tmp_path / "retained-shear-unit.pdf"))
     assert "Tendon precompression" in txt
     assert "900" in txt
 
 
-def test_report_shear_2023_documents_axial_factor():
+def test_retained_report_shear_2023_documents_axial_factor(tmp_path):
     out = _out()
     sh = _shear_out_2023()
     out["shear"] = sh
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_shear_unit_pdf({}, _inp(), out, figures=False, unit_kind="concrete", artifact_path=tmp_path / "retained-shear-unit.pdf"))
     assert "Formula (8.31)" in txt
     assert f"{sh['res']['k_vp']:.4f}" in txt
     assert "parallel to the member axis" in txt
@@ -5636,12 +5731,12 @@ def test_report_shear_2023_invalid_is_reportable():
     assert pdf[:4] == b"%PDF"
 
 
-def test_report_shear_flags_exceeded():
+def test_retained_report_shear_flags_exceeded(tmp_path):
     out = _out()
     sh = _shear_out()
     sh["v_ed"], sh["util"] = 200.0, 200.0 / 103.4
     out["shear"] = sh
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_shear_unit_pdf({}, _inp(), out, figures=False, unit_kind="utilisation", artifact_path=tmp_path / "retained-shear-unit.pdf"))
     assert "EXCEEDED" in txt
 
 
@@ -5889,10 +5984,10 @@ def test_report_profiles_replace_removed_result_case_with_current_case(profile):
     assert "NOT RUN" in text
 
 
-def test_report_includes_torsion_section():
+def test_retained_report_includes_torsion_section(tmp_path):
     out = _out()
     out["torsion"] = _torsion_out()
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_torsion_component_unit_pdf({}, _inp(), out, figures=False, unit_kind="components", artifact_path=tmp_path / "retained-torsion-unit.pdf"))
     assert "Torsion" in txt
     assert "6.30" in txt and "6.28" in txt          # the clause formulae
     assert "76.4" in txt                            # TRd
@@ -6522,7 +6617,11 @@ def test_audit_drops_stale_torsion_subchecks_when_applicability_is_blocked():
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_report_profiles_identify_each_plastic_case_torsion_authority(profile):
+@pytest.mark.xdist_group("native-scheduler-report")
+@result_presentation.publication_calculation_scope()
+def test_report_profiles_identify_each_plastic_case_torsion_authority(
+    profile, native_scheduler_report_cases, tmp_path,
+):
     inp = _inp()
     inp.update(
         torsion_on=True,
@@ -6592,30 +6691,56 @@ def test_report_profiles_identify_each_plastic_case_torsion_authority(profile):
         ]
     }
 
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    original = pickle.dumps((inp, out))
+    legacy_contexts = result_presentation._worked_case_contexts(inp, out, "torsion")
+    actual_legacy = [item for item in legacy_contexts if item[2].get("torsion") is not None]
+    assert len(actual_legacy) == 2 and all(item[3] is False for item in actual_legacy)
+    (tmp_path / "legacy-torsion-authority-labels.pickle").write_bytes(original)
+    retained_pdf = _torsion_applicability_unit_pdf(
+        {}, inp, {"torsion": blocked}, profile=profile,
+        expected_allowed=False, include_case_authority=True,
     )
+    (tmp_path / "retained-torsion-authority-labels.pdf").write_bytes(retained_pdf)
 
-    assert "Torsion design basis - EQ-01" in text
-    assert "Torsion member scope - EQ-01" in text
-    assert "Torsion design basis - COMP-01" in text
-    assert capacity.TORSION_DESIGN_EQUILIBRIUM in text
-    assert capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER in text
-    assert "NOT ASSESSED" in text
+    def assert_authority_text(text):
+        assert "Torsion design basis - EQ-01" in text
+        assert "Torsion member scope - EQ-01" in text
+        assert "Torsion design basis - COMP-01" in text
+        assert capacity.TORSION_DESIGN_EQUILIBRIUM in text
+        assert capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER in text
+        assert "NOT ASSESSED" in text
+
+    assert_authority_text(" ".join(_pdf_text(retained_pdf).split()))
+    assert pickle.dumps((inp, out)) == original
+
+    inp, out = native_scheduler_report_cases("authority-labels")
+    original = pickle.dumps((inp, out))
+    contexts = _assert_native_scheduler_contexts(
+        inp, out, unavailable_torsion_cases=("COMP-01",),
+    )
+    for case_id, torque, basis in (
+        ("EQ-01", 40.0, capacity.TORSION_DESIGN_EQUILIBRIUM),
+        ("COMP-01", -40.0, capacity.TORSION_DESIGN_COMPATIBILITY_MEMBER),
+    ):
+        case_input, case_out = contexts[case_id]
+        assert case_input["torsion_T_signed"] == torque
+        assert case_input["torsion_design_basis"] == basis
+        assert case_input["torsion_member_scope"] == capacity.TORSION_MEMBER_CLOSED
+        assert case_out["torsion"]["t_ed_signed"] == torque
+    pdf = sector_report.build_report({}, inp, out, figures=False, profile=profile)
+    (tmp_path / "native-torsion-authority-labels-full.pdf").write_bytes(pdf)
+    assert_authority_text(" ".join(_pdf_text(pdf).split()))
+    assert pickle.dumps((inp, out)) == original
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_profiles_publish_torsion_wall_selection_evidence(profile):
+def test_retained_report_profiles_publish_torsion_wall_selection_evidence(profile, tmp_path):
     torsion = _torsion_out()
     inp = _inp()
     inp.update(torsion_on=True, shear_links=True)
 
-    pdf = _build_report_with_selection(
-        {}, inp, {"torsion": torsion}, figures=False, profile=profile
+    pdf = _retained_torsion_component_unit_pdf(
+        {}, inp, {"torsion": torsion}, figures=False, unit_kind="wall-summary", artifact_path=tmp_path / "retained-wall-summary.pdf", profile=profile
     )
     text = " ".join(_pdf_text(pdf).split())
 
@@ -6648,7 +6773,7 @@ def test_report_profiles_publish_torsion_wall_selection_evidence(profile):
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_profiles_fail_closed_for_incomplete_torsion_wall_evidence(profile):
+def test_retained_report_profiles_fail_closed_for_incomplete_torsion_wall_evidence(profile, tmp_path):
     torsion = _torsion_out()
     raw_reason = "torsion wall reinforcement mapping is incomplete"
     torsion.update(
@@ -6693,8 +6818,8 @@ def test_report_profiles_fail_closed_for_incomplete_torsion_wall_evidence(profil
 
     text = " ".join(
         _pdf_text(
-            _build_report_with_selection(
-                {}, inp, {"torsion": torsion}, figures=False, profile=profile
+            _retained_torsion_component_unit_pdf(
+                {}, inp, {"torsion": torsion}, figures=False, unit_kind="components", artifact_path=tmp_path / "retained-torsion-unit.pdf", profile=profile
             )
         ).split()
     )
@@ -6719,10 +6844,11 @@ def test_report_profiles_fail_closed_for_incomplete_torsion_wall_evidence(profil
         ("Audit", "FAIL", 1000.0),
     ],
 )
-def test_report_profiles_share_longitudinal_torsion_status(
+def test_retained_report_profiles_share_longitudinal_torsion_status(
     profile,
     status,
     provided,
+    tmp_path,
 ):
     out = _out()
     t = _torsion_out()
@@ -6749,13 +6875,9 @@ def test_report_profiles_share_longitudinal_torsion_status(
     inp = _inp()
     inp.update(torsion_on=True, shear_links=True)
 
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    pdf = _retained_torsion_quantity_unit_pdf(inp, out["torsion"], profile)
+    (tmp_path / "retained-torsion-longitudinal-quantities.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
 
     assert "Torsion" in text
     assert status in text
@@ -6854,7 +6976,7 @@ def test_report_profiles_rebuild_formula_628_before_publishing_pass(profile):
     assert "0 / 250 mm2" not in text
 
 
-def test_report_withholds_full_torsion_verdict_without_current_closed_links():
+def test_retained_report_withholds_full_torsion_verdict_without_current_closed_links(tmp_path):
     torsion = _torsion_out()
     stale_full_resistance = 999.123
     torsion.update(
@@ -6899,11 +7021,11 @@ def test_report_withholds_full_torsion_verdict_without_current_closed_links():
     for profile in ("Brief", "Standard", "Audit"):
         text = " ".join(
             _pdf_text(
-                _build_report_with_selection(
+                _retained_torsion_component_unit_pdf(
                     {},
                     inp,
                     {"torsion": torsion},
-                    figures=False,
+                    figures=False, unit_kind="no-links", artifact_path=tmp_path / f"retained-no-links-{profile}.pdf",
                     profile=profile,
                 )
             ).split()
@@ -6935,7 +7057,7 @@ def test_report_withholds_full_torsion_verdict_without_current_closed_links():
         assert "T Rd = min" not in text
 
 
-def test_report_directional_vt_outside_permitted_range_withholds_verdicts():
+def test_retained_report_directional_vt_outside_permitted_range_withholds_verdicts(tmp_path):
     out = _out()
     torsion = _torsion_out(interaction=True)
     applicability = shear_core.strut_angle_applicability(
@@ -6983,7 +7105,7 @@ def test_report_directional_vt_outside_permitted_range_withholds_verdicts():
     inp.update(torsion_on=True, shear_on=True, shear_links=True)
 
     text = " ".join(_pdf_text(
-        _build_report_with_selection({}, inp, out, figures=False)
+        _retained_directional_table_unit_pdf({}, inp, out, figures=False, unit_kind="torsion-angle", artifact_path=tmp_path / "retained-directional-table.pdf")
     ).split())
     assert "Torsion NOT ASSESSED" in text
     assert "outside the permitted range" in text
@@ -6991,7 +7113,7 @@ def test_report_directional_vt_outside_permitted_range_withholds_verdicts():
     assert "Directional minimum-reinforcement screens" not in text
 
 
-def test_report_compound_torsion_requires_subdivision():
+def test_retained_report_compound_torsion_requires_subdivision(tmp_path):
     out = _out()
     t = _torsion_out()
     t["valid"] = False
@@ -6999,7 +7121,7 @@ def test_report_compound_torsion_requires_subdivision():
     t["reason"] = "compound outline requires subdivision"
     t["compound_detected"] = True
     out["torsion"] = t
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_torsion_component_unit_pdf({}, _inp(), out, figures=False, unit_kind="components", artifact_path=tmp_path / "retained-torsion-unit.pdf"))
     assert "Torsion not evaluated" in txt
     assert "6.3.1(3)" in txt
     assert "Enable sub-tubes" in txt
@@ -7070,7 +7192,7 @@ def _subtube(
     )
 
 
-def test_report_torsion_subdivided():
+def test_retained_report_torsion_subdivided(tmp_path):
     out = _out()
     t = _torsion_out(interaction=True)               # subdivided run with shear links
     subs = [_subtube(300, 600, 100.0, 0.10, 0.0037, 24.6, 90.0, 24.6 / 90.0,
@@ -7108,7 +7230,7 @@ def test_report_torsion_subdivided():
         ),
     }
     out["torsion"] = t
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_torsion_component_unit_pdf({}, _inp(), out, figures=False, unit_kind="subdivided", artifact_path=tmp_path / "retained-torsion-unit.pdf"))
     assert "Sub-tubes" in txt                        # the compound-section heading
     assert "6.3.1(3)" in txt                         # the sub-division clause
     assert "web" in txt
@@ -7125,7 +7247,7 @@ def test_report_torsion_subdivided():
     assert all(f"Wall {wall}\n {wall + 4}" in txt for wall in range(1, 5))
 
 
-def test_report_invalid_subtube_partition_withholds_verdict():
+def test_retained_report_invalid_subtube_partition_withholds_verdict(tmp_path):
     out = _out()
     t = _torsion_out()
     t["valid"] = False
@@ -7135,7 +7257,7 @@ def test_report_invalid_subtube_partition_withholds_verdict():
     t["subdivision_valid"] = False
     t["subdivision_reason"] = "sub-rectangle 1 extends outside"
     out["torsion"] = t
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_torsion_component_unit_pdf({}, _inp(), out, figures=False, unit_kind="components", artifact_path=tmp_path / "retained-torsion-unit.pdf"))
     flat = " ".join(txt.split())
     assert "Torsion not assessed" in flat
     assert "sub-tubes do not partition the concrete section" in flat
@@ -7144,10 +7266,10 @@ def test_report_invalid_subtube_partition_withholds_verdict():
     assert "checks are not calculated" in flat
 
 
-def test_report_torsion_shows_combined_interaction():
+def test_retained_report_torsion_shows_combined_interaction(tmp_path):
     out = _out()
     out["torsion"] = _torsion_out(interaction=True)
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_torsion_component_unit_pdf({}, _inp(), out, figures=False, unit_kind="interaction", artifact_path=tmp_path / "retained-torsion-unit.pdf"))
     assert "6.29" in txt                            # the combined crushing clause
     assert "Combined shear" in txt
 
@@ -8147,7 +8269,7 @@ def test_base_en_2005_component_rendering_rejects_ambiguous_shear_cap(profile, t
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_stale_2023_single_face_pass_is_not_assessed(profile):
+def test_report_stale_2023_single_face_pass_is_not_assessed(profile, tmp_path):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -8160,26 +8282,27 @@ def test_report_stale_2023_single_face_pass_is_not_assessed(profile):
         "plastic": _out()["plastic"],
         "combined": _base_en_stale_2023_single_face_out(),
     }
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    before_report = pickle.dumps((inp, out))
+    pdf = _build_report_with_selection({}, inp, out, figures=False, profile=profile)
+    (tmp_path / "unsupported-2023-single-face.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
+    assert pickle.dumps((inp, out)) == before_report
 
-    assert re.search(
-        r"Combined longitudinal reinforcement\s+PL-TEST\s+"
-        r"NOT ASSESSED\s+-",
-        text,
-    )
-    if profile in {"Standard", "Audit"}:
-        assert "Longitudinal chord assessment: NOT ASSESSED" in text
-        assert (
-            "Recalculate the combined longitudinal reinforcement assessment "
-            "before relying on its status"
-            in text
-        )
+    # The old component-specific row and recalculation captions belonged to
+    # an unsupported 2023 Combined route. Keep that exact malformed vector,
+    # assert its independent chord rejection, and bind normal publication to
+    # the current supported-scope explanation.
+    candidate = out["combined"]
+    before = pickle.dumps((inp, out))
+    assert candidate["longitudinal_assessment"]["status"] == "PASS"
+    assert candidate["longitudinal_assessment"]["util"] == 0.50
+    assert len(candidate["longitudinal_candidates"]) == 1
+    actual = capacity.combined_longitudinal_assessment(candidate)
+    assert actual["status"] == "NOT ASSESSED" and actual["util"] is None
+    assert actual["coverage_complete"] is False
+    _assert_unsupported_2023_combined_rows(inp, out, text)
+    assert "Combined longitudinal reinforcement PL-TEST PASS" not in text
+    assert pickle.dumps((inp, out)) == before
 
 
 def _pub_h01_report_combined(parent_state="stale_mapping"):
@@ -8388,7 +8511,7 @@ def _pub_h01_report_current_direct(
     return combined
 
 
-def _pub_h01_2005_component_unit_pdf(inp, combined, profile):
+def _pub_h01_2005_component_unit_pdf(inp, combined, profile, *, bind_positive_chord=False):
     """Render retained 2005 component arithmetic and declared overview rows.
 
     This is a formatting unit document, not a completed calculation report.
@@ -8437,8 +8560,41 @@ def _pub_h01_2005_component_unit_pdf(inp, combined, profile):
     ]
     assert sum(row[0] == "Combined longitudinal reinforcement"
                for row in actual_rows) == 1
+    positive_operand_pattern = None
     if profile != "Brief":
         builder._combined_base_en_direction(combined)
+        if bind_positive_chord:
+            longitudinal = next(item for item in components if item["key"] == "longitudinal")
+            assert longitudinal["chord_status"] == "PASS"
+            chord = longitudinal["governing"]
+            assert chord is not None and chord["valid"] is True
+
+            def tables_in(items):
+                for item in items:
+                    if isinstance(item, sector_report.KeepTogether):
+                        yield from tables_in(item._content)
+                    elif isinstance(item, sector_report.Table):
+                        yield item
+
+            header = ("MEd", "Shear shift", "Torsion share", "MEd,total", "MRd", "Chord utilisation")
+            expected = tuple(
+                f"{sector_report._fmt(chord[key], 3)} kNm"
+                for key in ("m_ed", "mv", "mt", "m_total", "m_rd")
+            ) + (sector_report._pct(longitudinal["chord_util"]) + " PASS",)
+            operands = []
+            for table in tables_in(builder.flow):
+                h = getattr(table, "_sector_header_row", None)
+                if h is None:
+                    continue
+                data = [tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+                              for cell in row) for row in table._cellvalues]
+                if data[h] == header:
+                    operands.append(data[table._sector_data_start:])
+            assert operands == [[expected]]
+            positive_operand_pattern = r"\s+".join(
+                re.escape(value).replace(r"\ ", r"\s+")
+                for value in (*header, *expected)
+            )
     sector_report.SimpleDocTemplate(
         buffer, pagesize=sector_report.A4,
         leftMargin=20 * sector_report.mm, rightMargin=20 * sector_report.mm,
@@ -8446,7 +8602,12 @@ def _pub_h01_2005_component_unit_pdf(inp, combined, profile):
     ).build(list(builder.flow))
     assert pickle.dumps(rows) == rows_before
     assert pickle.dumps((inp, combined)) == original
-    return buffer.getvalue(), actual_rows
+    pdf = buffer.getvalue()
+    if positive_operand_pattern is not None:
+        positive_text = " ".join(_pdf_text(pdf).split())
+        assert re.search(positive_operand_pattern, positive_text)
+        assert "Longitudinal chord assessment: NOT ASSESSED" not in positive_text
+    return pdf, actual_rows
 
 
 def _pub_h01_report_zero_formula_628():
@@ -9242,8 +9403,9 @@ def test_native_base_en_report_rejects_unsupported_2023_combined_marker(
     check_reports()
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_pub_h01_missing_off_axis_torsion_never_publishes_chord_pass(
+def test_retained_report_pub_h01_missing_off_axis_torsion_never_publishes_chord_pass(
     profile,
+    tmp_path,
 ):
     inp = _inp()
     inp.update(
@@ -9255,6 +9417,16 @@ def test_report_pub_h01_missing_off_axis_torsion_never_publishes_chord_pass(
     )
     combined = _pub_h01_report_four_face_torsion()
     assert combined["overall_longitudinal_assessment"]["chord_status"] == "PASS"
+    positive = next(item for item in result_presentation.combined_physical_components(combined)
+                    if item["key"] == "longitudinal")
+    assert positive["chord_status"] == "PASS"
+    assert positive["governing"] is not None and positive["chord_util"] is not None
+    positive_pdf, positive_rows = _pub_h01_2005_component_unit_pdf(
+        inp, combined, profile, bind_positive_chord=True,
+    )
+    (tmp_path / "retained-off-axis-complete-companion.pdf").write_bytes(positive_pdf)
+    positive_row = next(row for row in positive_rows if row[0] == "Combined longitudinal reinforcement")
+    assert positive_row[2:4] == (positive["status"], sector_report._pct(positive["util"]))
     for candidate in combined["longitudinal_candidates"]:
         if candidate["role"] != "off_axis":
             continue
@@ -9276,17 +9448,12 @@ def test_report_pub_h01_missing_off_axis_torsion_never_publishes_chord_pass(
         "NOT ASSESSED"
     )
 
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {},
-                inp,
-                {"plastic": _out()["plastic"], "combined": combined},
-                figures=False,
-                profile=profile,
-            )
-        ).split()
+    pdf, rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
+    (tmp_path / "retained-off-axis-torsion-missing.pdf").write_bytes(pdf)
+    assert next(row for row in rows if row[0] == "Combined longitudinal reinforcement")[2:4] == (
+        "NOT ASSESSED", "-",
     )
+    text = " ".join(_pdf_text(pdf).split())
 
     assert re.search(
         r"Combined longitudinal reinforcement\s+PL-TEST\s+"
@@ -9797,15 +9964,16 @@ def test_pub_h01_pdf_validator_rejects_disconnected_failure_tokens(monkeypatch):
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_pub_h01_render_fixture_binds_row_operands_and_member_angle(profile):
+def test_pub_h01_render_fixture_binds_row_operands_and_member_angle(profile, tmp_path):
     from tools import pub_h01_render_fixture
 
-    pdf = pub_h01_render_fixture._report_pdf(profile)
+    pdf = pub_h01_render_fixture._report_pdf(profile, evidence_path=tmp_path / "retained-pub-h01-evidence.json")
+    (tmp_path / "retained-pub-h01-report.pdf").write_bytes(pdf)
     pub_h01_render_fixture._validate_report(pdf, profile)
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_base_en_keeps_biaxial_directions_without_dkna_aggregate(profile):
+def test_retained_report_base_en_keeps_biaxial_directions_without_dkna_aggregate(profile, tmp_path):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -9827,13 +9995,9 @@ def test_report_base_en_keeps_biaxial_directions_without_dkna_aggregate(profile)
             "directions": {"vx": vx, "vy": vy},
         },
     }
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    pdf = _retained_base_en_direction_unit_pdf(inp, out, profile)
+    (tmp_path / "retained-base-en-directions.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
 
     assert "Vx+T" in text
     assert "Vy+T" in text
@@ -9847,8 +10011,8 @@ def test_report_base_en_keeps_biaxial_directions_without_dkna_aggregate(profile)
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 @pytest.mark.parametrize("malformed_vy", ["missing", "empty"])
-def test_report_base_en_missing_biaxial_direction_fails_closed(
-    profile, malformed_vy
+def test_retained_report_base_en_missing_biaxial_direction_fails_closed(
+    profile, malformed_vy, tmp_path
 ):
     inp = _inp()
     inp.update(
@@ -9871,13 +10035,18 @@ def test_report_base_en_missing_biaxial_direction_fails_closed(
     if malformed_vy == "empty":
         out["combined"]["directions"]["vy"] = {}
 
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    # The complete companion proves the strict parser accepts this retained
+    # direction contract before the original missing/empty-vy attack.
+    complete = copy.deepcopy(out)
+    complete["combined"]["directions"]["vy"] = copy.deepcopy(vx)
+    complete["combined"]["directions"]["vy"]["component"] = "vy"
+    assert result_presentation.base_en_combined_direction_items(complete["combined"]) is not None
+    assert result_presentation.base_en_combined_direction_items(out["combined"]) is None
+    positive_pdf = _retained_base_en_direction_unit_pdf(inp, complete, profile)
+    (tmp_path / "retained-base-en-complete-companion.pdf").write_bytes(positive_pdf)
+    pdf = _retained_base_en_direction_unit_pdf(inp, out, profile)
+    (tmp_path / "retained-base-en-missing-direction.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
 
     assert "NOT ASSESSED" in text
     if profile == "Brief":
@@ -9973,7 +10142,7 @@ def test_base_en_2005_component_rendering_rejects_invalid_utilisations(
     assert "DK NA" not in text
 
 
-def _dkna_2005_component_unit_pdf(inp, combined, profile):
+def _dkna_2005_component_unit_pdf(inp, combined, profile, *, include_input_context=False):
     """Render a retained DK NA leaf; this does not exercise report scheduling."""
     assert inp["combined_method"] == combined["method"] == codes.EC2_2005_DKNA.label
     assert result_presentation.combined_publication_scope_note(combined) is None
@@ -9984,6 +10153,9 @@ def _dkna_2005_component_unit_pdf(inp, combined, profile):
         buffer, {}, inp, {"combined": combined}, figures=False, profile=profile,
     )
     builder._h1("Retained 2005 DK NA component formatting")
+    if include_input_context:
+        builder._case_heading("Combined bending + shear + torsion (M-V-T)", "plastic")
+        builder._settings_block()
     builder._combined_direction(combined, include_case_heading=False)
 
     def tables_in(items):
@@ -10294,7 +10466,11 @@ def test_retained_2005_component_rendering_rejects_formula_629_conflicts(
 
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
-def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
+@pytest.mark.xdist_group("native-scheduler-report")
+@result_presentation.publication_calculation_scope()
+def test_report_base_en_keeps_only_the_governing_combined_worked_case(
+    profile, native_scheduler_report_cases, tmp_path,
+):
     inp = _inp()
     inp.update(
         mode="Plastic",
@@ -10451,34 +10627,67 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(profile):
         assert result["longitudinal"]["m_ed"] == pytest.approx(
             abs(action[moment_key])
         )
-    assert out["worked_example_selection"]["families"]["combined"] == {
-        "case_id": "PL-GOV",
-        "component": None,
-    }
-
-    builder = sector_report.ReportBuilder(
-        io.BytesIO(), {}, inp, out, figures=False, profile=profile
-    )
+    raw_before = pickle.dumps((inp, out))
+    assert "combined" not in out["worked_example_selection"]["families"]
+    (tmp_path / "legacy-base-en-scheduler.pickle").write_bytes(raw_before)
+    builder = sector_report.ReportBuilder(io.BytesIO(), {}, inp, out, figures=False, profile=profile)
     assert builder._needs_diagnostic_chapter("combined", low) is False
     assert builder._needs_diagnostic_chapter("combined", incomplete) is True
-
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
-    assert "Combined bending + shear + torsion (M-V-T) - PL-LOW" not in text
-    assert "Combined bending + shear + torsion (M-V-T) - PL-GOV" in text
-    assert "Combined bending + shear + torsion (M-V-T) - PL-INCOMPLETE" in text
+    # Preserve fixed cot=1.000 and missing-candidate captions as actual
+    # retained component formatting; these vectors have no member authority.
+    retained_pdf = _retained_base_en_direction_unit_pdf(inp, {"combined": incomplete}, profile)
+    (tmp_path / "retained-base-en-incomplete-direction.pdf").write_bytes(retained_pdf)
+    text = " ".join(_pdf_text(retained_pdf).split())
     assert "Representative Base-EN directional calculation: Vy+T" in text
     assert "Representative Base-EN directional calculation: Vx+T" not in text
     assert f"V-T crushing at cot {chr(0x03B8)} = 1.00" in text
     assert f"Common member angle cot {chr(0x03B8)} = 1.000" in text
     assert "Complete both required longitudinal chord checks" in text
+    assert pickle.dumps((inp, out)) == raw_before
+
+    inp, out = native_scheduler_report_cases("base-en")
+    original = pickle.dumps((inp, out))
+    contexts = _assert_native_scheduler_contexts(inp, out)
+    assert set(contexts) == {"PL-LOW", "PL-GOV", "PL-INCOMPLETE"}
+    assert out["worked_example_selection"]["families"]["combined"] == {
+        "case_id": "PL-GOV",
+        "component": None,
+    }
+
+    low = contexts["PL-LOW"][1]["combined"]
+    governing = contexts["PL-GOV"][1]["combined"]
+    incomplete = contexts["PL-INCOMPLETE"][1]["combined"]
+    builder = sector_report.ReportBuilder(io.BytesIO(), {}, inp, out, figures=False, profile=profile)
+    assert builder._needs_diagnostic_chapter("combined", low) is False
+    assert builder._needs_diagnostic_chapter("combined", incomplete) is True
+    assert result_presentation._transverse_metric("combined", low) is not None
+    assert result_presentation._transverse_metric("combined", governing) is not None
+    assert result_presentation._transverse_metric("combined", incomplete) is None
+    assert governing["governing_cot"] == pytest.approx(1.491)
+    assert all(result_presentation.combined_bending_assessment_blocker(co, ci) is None for ci,co in contexts.values())
+    pdf = sector_report.build_report({}, inp, out, figures=False, profile=profile)
+    (tmp_path / "native-base-en-scheduler-full.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
+    assert "Combined bending + shear + torsion (M-V-T) - PL-LOW" not in text
+    assert "Combined bending + shear + torsion (M-V-T) - PL-GOV" in text
+    assert "Combined bending + shear + torsion (M-V-T) - PL-INCOMPLETE" in text
     assert "The complete combined M-V-T worked example is published only" not in text
     assert "DK NA sum" not in text
+
+    assert f"Common member angle cot {chr(0x03B8)} = 1.491" in text
+    # Audit repeats headings in its contents page; inspect the actual chapter
+    # flow to establish one representative calculation, then bind it to the PDF.
+    chapter = sector_report.ReportBuilder(io.BytesIO(), {}, inp, out, figures=False, profile=profile)
+    chapter.inp, chapter.out = next((ci,co) for ci,co in chapter._case_contexts("plastic")
+                                   if result_presentation.action_set(ci,"plastic")["id"] == "PL-INCOMPLETE")
+    chapter._combined()
+    actual_headings = [item.getPlainText() for item in chapter.flow
+                       if hasattr(item,"getPlainText") and "Representative Base-EN directional calculation:" in item.getPlainText()]
+    assert len(actual_headings) == 1
+    assert "Representative Base-EN directional calculation: Vx+T" in actual_headings[0]
+    assert "Representative Base-EN directional calculation: Vx+T" in text
+    assert "NOT ASSESSED" in text
+    assert pickle.dumps((inp, out)) == original
 
 
 def _retain_combined_chords(payload, *candidates):
@@ -10501,7 +10710,7 @@ def _retain_combined_chords(payload, *candidates):
 
 @pytest.mark.parametrize("profile", ("Standard", "Audit"))
 def test_report_combined_zero_2023_chord_candidates_stays_not_assessed(
-    profile,
+    profile, tmp_path,
 ):
     inp = _inp()
     inp.update(combined_on=True, shear_on=True, torsion_on=True)
@@ -10520,27 +10729,41 @@ def test_report_combined_zero_2023_chord_candidates_stays_not_assessed(
     )
     out["combined"] = combined_result
 
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {},
-                inp,
-                out,
-                figures=False,
-                profile=profile,
-            )
-        ).split()
-    )
+    before_report = pickle.dumps((inp, out))
+    pdf = _build_report_with_selection({}, inp, out, figures=False, profile=profile)
+    (tmp_path / "unsupported-2023-zero-chords.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
+    assert pickle.dumps((inp, out)) == before_report
 
-    assert "Required 2023 longitudinal chord faces" in text
-    assert "Longitudinal chord assessment: NOT ASSESSED" in text
-    assert "Complete both required longitudinal chord checks" in text
+    # Normal Combined publication remains outside scope. Preserve the old
+    # missing-face diagnostic as a separately declared actual shear formatter,
+    # whose production caller still derives its own chord assessment.
+    before = pickle.dumps((inp, out))
+    _assert_unsupported_2023_combined_rows(inp, out, text)
+    assert combined_result["longitudinal_model_2023"] is True
+    assert combined_result["longitudinal_assessment"]["coverage_complete"] is False
+    assert not combined_result.get("longitudinal_candidates")
+    actual = capacity.combined_longitudinal_assessment(combined_result)
+    assert actual["chord_status"] == "NOT ASSESSED" and actual["chord_util"] is None
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(buffer, {}, inp, out, figures=False, profile=profile)
+    builder._h1("Retained separate 2023 shear chord diagnostic")
+    builder._shear_2023_missing_chords(combined_result["longitudinal_assessment"])
+    diagnostic_pdf = _finish_retained_unit_pdf(buffer, builder)
+    (tmp_path / "retained-missing-shear-chords.pdf").write_bytes(diagnostic_pdf)
+    shear_text = " ".join(_pdf_text(diagnostic_pdf).split())
+    assert pickle.dumps((inp, out)) == before
+    assert "Required 2023 longitudinal chord faces" in shear_text
+    assert "Longitudinal chord assessment: NOT ASSESSED" in shear_text
+    assert "Complete both required longitudinal chord checks" in shear_text
     assert "Enable shear links for the full utilisation check" not in text
     assert "both beyond the bending steel" not in text
     assert "SHEAR-LONGITUDINAL" not in text
 
 
-def test_report_publishes_only_governing_transverse_family_worked_examples():
+@pytest.mark.xdist_group("native-scheduler-report")
+@result_presentation.publication_calculation_scope()
+def test_report_publishes_only_governing_transverse_family_worked_examples(native_scheduler_report_cases, tmp_path):
     inp = _inp()
     rows = [
         {
@@ -10626,9 +10849,30 @@ def test_report_publishes_only_governing_transverse_family_worked_examples():
         ]
     }
 
-    flat = " ".join(_pdf_text(_build_report_with_selection(
-        {}, inp, out, figures=False, qa_appendix=False,
-    )).split())
+    # Retain the original compound values as a stale named-case negative.
+    raw_before = pickle.dumps((inp, out))
+    raw_selection = result_presentation.worked_example_selection(inp, out)
+    assert not any(family in raw_selection["families"] for family in ("shear", "torsion", "combined"))
+    (tmp_path / "legacy-transverse-owner.pickle").write_bytes(raw_before)
+    assert pickle.dumps((inp, out)) == raw_before
+    inp, out = native_scheduler_report_cases("dkna")
+    before = pickle.dumps((inp, out))
+    contexts = _assert_native_scheduler_contexts(inp, out)
+    assert set(contexts) == {"PL-LOW", "PL-GOV"}
+    selected = result_presentation.worked_example_selection(inp, out)
+    assert {family:selected["families"][family] for family in ("shear", "torsion", "combined")} == {
+        "shear":{"case_id":"PL-GOV","component":"vy"},
+        "torsion":{"case_id":"PL-GOV","component":None},
+        "combined":{"case_id":"PL-GOV","component":"vy"},
+    }
+    for family in ("shear", "combined"):
+        aggregate = contexts["PL-GOV"][1][family]
+        assert aggregate["biaxial"] is True
+        assert set(aggregate["directions"]) == {"vx", "vy"}
+    pdf = _build_report_with_selection({}, inp, out, figures=False, qa_appendix=False)
+    (tmp_path / "native-governing-transverse.pdf").write_bytes(pdf)
+    flat = " ".join(_pdf_text(pdf).split())
+    assert pickle.dumps((inp, out)) == before
 
     assert "PL-LOW" in flat and "PL-GOV" in flat
     assert "Shear resistance - PL-LOW" not in flat
@@ -10643,7 +10887,11 @@ def test_report_publishes_only_governing_transverse_family_worked_examples():
     assert "Vx+T" in flat and "Vy+T" in flat
 
 
-def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
+@pytest.mark.xdist_group("native-scheduler-report")
+@result_presentation.publication_calculation_scope()
+def test_transverse_worked_selector_uses_only_valid_applicable_final_checks(
+    native_scheduler_report_cases, tmp_path,
+):
     inp = _inp()
     actions = [
         {
@@ -10707,19 +10955,89 @@ def test_transverse_worked_selector_uses_only_valid_applicable_final_checks():
         ]
     }
 
-    selected = result_presentation.worked_example_selection(inp, out)
+    raw_before = pickle.dumps((inp, out))
+    rejected = result_presentation.worked_example_selection(inp, out)
+    assert rejected["families"] == {} and rejected["torsion_subchecks"] == {}
+    (tmp_path / "legacy-independent-selector.pickle").write_bytes(raw_before)
+    assert pickle.dumps((inp, out)) == raw_before
+
+    # Explicit retained scalar units, with no case-input/currentness claim.
+    # The actual metric API selects final links/torsion/DK sums rather than
+    # concrete context, unrelated screens or invalid infinity.
+    selected = {"families": {}}
+    expected_metrics = {"shear": (0.40, 0.80), "torsion": (0.40, 0.75), "combined": (0.60, 0.90)}
+    metrics = {}
+    for family, values in expected_metrics.items():
+        measured = tuple(result_presentation._transverse_metric(family, item[family]) for item in (first, second))
+        assert measured == pytest.approx(values)
+        assert result_presentation._transverse_metric(family, invalid[family]) is None
+        metrics[family] = measured
+        selected["families"][family] = {"case_id": ("PL-A", "PL-B")[max(range(2), key=measured.__getitem__)]}
+    assert first["shear"]["util"] == 0.99 and second["shear"]["util"] == 0.85
+    assert first["torsion"]["interaction"]["value"] == 8.0
+    assert first["torsion"]["min_reinf"]["value"] == 9.0
+    assert first["combined"]["crushing"]["value"] == 7.0
 
     assert selected["families"]["shear"]["case_id"] == "PL-B"
     assert selected["families"]["torsion"]["case_id"] == "PL-B"
     assert selected["families"]["combined"]["case_id"] == "PL-B"
+    assert pickle.dumps((inp, out)) == raw_before
+    # Real current inputs deliberately give the larger bending/Combined case
+    # a lower shear action. Independent subcheck maxima must remain in PL-A.
+    inp, out = native_scheduler_report_cases("independent-subchecks")
+    original = pickle.dumps((inp, out))
+    contexts = _assert_native_scheduler_contexts(inp, out)
+    selected = result_presentation.worked_example_selection(inp, out)
+    assert contexts["PL-A"][0]["Mx_pl"] == 0.0
+    assert contexts["PL-A"][0]["shear_Vy"] == 80.0
+    assert contexts["PL-B"][0]["Mx_pl"] == 400.0
+    assert contexts["PL-B"][0]["shear_Vy"] == 20.0
+    assert all(ci["torsion_T_signed"] == 180.0 for ci,co in contexts.values())
+    assert selected["families"]["combined"]["case_id"] == "PL-B"
+    assert selected["families"]["shear"]["case_id"] == "PL-A"
+    assert selected["families"]["torsion"]["case_id"] == "PL-A"
     assert selected["torsion_subchecks"]["interaction"]["case_id"] == "PL-A"
     assert selected["torsion_subchecks"]["minimum_reinforcement"][
         "case_id"
     ] == "PL-A"
 
+    native_metrics = {}
+    for case_id,(ci,co) in contexts.items():
+        torsion = co["torsion"]
+        assert result_presentation.torsion_applicability_publication_status(torsion) == "APPLICABLE"
+        assert torsion["interaction"]["valid"] is True
+        minimum = torsion["min_reinf"]
+        if case_id == "PL-A":
+            assert minimum["applicable"] is True and minimum["status"] == "FAIL"
+        else:
+            assert minimum["applicable"] is False
+            assert minimum["status"] == "NOT APPLICABLE"
+            assert minimum["scope_key"] == "dkna_combined_normal_or_moment"
+            assert minimum["normal_or_moment_active"] is True
+            assert minimum["value"] is None
+        native_metrics[case_id] = {
+            "combined": result_presentation._transverse_metric("combined", co["combined"]),
+            "interaction": torsion["interaction"]["value"],
+            "minimum_reinforcement": torsion["min_reinf"]["value"],
+        }
+    assert native_metrics["PL-B"]["combined"] > native_metrics["PL-A"]["combined"]
+    assert native_metrics["PL-A"]["interaction"] > native_metrics["PL-B"]["interaction"]
+    assert native_metrics["PL-A"]["minimum_reinforcement"] > 1.0
+    assert native_metrics["PL-B"]["minimum_reinforcement"] is None
+    import json
+    (tmp_path / "native-independent-selector-evidence.json").write_text(json.dumps({
+        "retained_final_metrics": metrics, "native_metrics": native_metrics,
+        "native_selection": selected,
+    }, indent=2))
+    assert pickle.dumps((inp, out)) == original
+
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
-def test_report_main_torsion_worked_example_requires_applicable_case(profile):
+@pytest.mark.xdist_group("native-scheduler-report")
+@result_presentation.publication_calculation_scope()
+def test_report_main_torsion_worked_example_requires_applicable_case(
+    profile, native_scheduler_report_cases, tmp_path,
+):
     inp = _inp()
     actions = [
         {
@@ -10783,25 +11101,78 @@ def test_report_main_torsion_worked_example_requires_applicable_case(profile):
         "heightened_crack_control": None,
     }
 
-    flat = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, profile=profile, figures=False,
-            )
-        ).split()
+    legacy_before = pickle.dumps((inp, out))
+    assert "torsion" not in result_presentation.worked_example_selection(inp, out)["families"]
+    stale_selection = copy.deepcopy(out["worked_example_selection"])
+    (tmp_path / "legacy-torsion-owner.pickle").write_bytes(legacy_before)
+    assert pickle.dumps((inp, out)) == legacy_before
+
+    inp, native_out = native_scheduler_report_cases("authority")
+    native_before = pickle.dumps((inp, native_out))
+    contexts = _assert_native_scheduler_contexts(
+        inp, native_out, unavailable_torsion_cases=("PL-BLOCKED",),
     )
+    assert contexts["PL-BLOCKED"][0]["torsion_T_signed"] == -180.0
+    assert contexts["PL-APPLICABLE"][0]["torsion_T_signed"] == 180.0
+    expected = {"case_id": "PL-APPLICABLE", "component": None}
+    assert native_out["worked_example_selection"]["families"]["torsion"] == expected
+    out = copy.deepcopy(native_out)
+    out["worked_example_selection"] = stale_selection
+    original = pickle.dumps((inp, out))
+    # Exercise normal validation of a structurally valid stale saved selection.
+    pdf = sector_report.build_report({}, inp, out, profile=profile, figures=False)
+    (tmp_path / "native-torsion-authority-full.pdf").write_bytes(pdf)
+    flat = " ".join(_pdf_text(pdf).split())
 
     assert "Torsion (thin-walled tube) - PL-APPLICABLE" in flat
     assert "Torsion (thin-walled tube) - PL-BLOCKED" in flat
     assert "900.0 %" not in flat
 
+    evidence = []
+    def equations(items):
+        for item in items:
+            if hasattr(item, "_sector_equation_key"):
+                yield item._sector_equation_key
+            elif isinstance(item, sector_report.KeepTogether):
+                yield from equations(item._content)
 
-def test_report_includes_combined_section():
+    for case_id in contexts:
+        buffer = io.BytesIO()
+        builder = sector_report.ReportBuilder(buffer, {}, inp, out, figures=False, profile=profile)
+        assert builder._selected_families["torsion"] == expected
+        matches = [(ci, co) for ci, co in builder._case_contexts("plastic")
+                   if result_presentation.action_set(ci, "plastic")["id"] == case_id]
+        assert len(matches) == 1
+        builder.inp, builder.out = matches[0]
+        assert builder.inp["_report_case_current"] is True
+        selected = builder._selected_family("torsion", builder.inp)
+        assert selected == (expected if case_id == "PL-APPLICABLE" else None)
+        builder._torsion()
+        actual_keys = list(equations(builder.flow))
+        if case_id == "PL-APPLICABLE":
+            assert "torsion.resistance.governing" in actual_keys
+        else:
+            assert actual_keys == []
+        case_pdf = _finish_retained_unit_pdf(buffer, builder)
+        (tmp_path / ("native-torsion-owner-" + case_id + ".pdf")).write_bytes(case_pdf)
+        case_text = " ".join(_pdf_text(case_pdf).split())
+        if case_id == "PL-BLOCKED":
+            assert "NOT ASSESSED" in case_text
+            assert "900.0 %" not in case_text
+        evidence.append({"case": case_id, "signed_torque": builder.inp["torsion_T_signed"],
+                         "selected": selected, "equations": actual_keys})
+    import json
+    (tmp_path / "native-torsion-ownership-evidence.json").write_text(json.dumps(evidence, indent=2))
+    assert pickle.dumps((inp, out)) == original
+    assert pickle.dumps((inp, native_out)) == native_before
+
+
+def test_retained_report_includes_combined_section(tmp_path):
     out = _out()
     out["combined"] = _combined_out()
     inp = _inp()
     inp.update(strut_cot_min=1.0, strut_cot_max=2.5)
-    txt = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
+    txt = _pdf_text(_retained_dkna_member_component_pdf({}, inp, out, figures=False, artifact_path=tmp_path / "retained-dkna-member-component.pdf", include_input_context=True))
     flat = " ".join(txt.split())
     assert "Combined bending" in txt or "M-V-T" in txt
     assert "6.3.2(6)" in txt                        # the DK NA combined rule
@@ -11000,7 +11371,7 @@ def test_dkna_retained_sum_over_limit_fails_even_under_assumption(profile, tmp_p
     assert "failed numerical check governs regardless" in txt
 
 
-def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict():
+def test_retained_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict(tmp_path):
     out = _out()
     vx = _combined_out(mv_independent=True)
     vy = copy.deepcopy(vx)
@@ -11020,7 +11391,7 @@ def test_report_biaxial_shear_torsion_has_two_screens_and_no_three_way_verdict()
     )
 
     txt = " ".join(_pdf_text(
-        _build_report_with_selection({}, _inp(), out, figures=False)
+        _retained_directional_table_unit_pdf({}, _inp(), out, figures=False, unit_kind="combined-directions", artifact_path=tmp_path / "retained-directional-table.pdf")
     ).split())
 
     assert "are assessed separately" in txt
@@ -11125,7 +11496,9 @@ def test_dkna_retained_sum_unassessed_keeps_selected_separate_route(profile, tmp
     assert "NOT ASSESSED" in txt
 
 
-def test_report_keeps_only_governing_biaxial_combined_worked_block():
+@pytest.mark.xdist_group("native-scheduler-report")
+@result_presentation.publication_calculation_scope()
+def test_report_keeps_only_governing_biaxial_combined_worked_block(native_scheduler_report_cases, tmp_path):
     import io
 
     out = _out()
@@ -11141,9 +11514,30 @@ def test_report_keeps_only_governing_biaxial_combined_worked_block():
     out["worked_example_selection"] = (
         result_presentation.worked_example_selection(_inp(), out)
     )
-    builder = sector_report.ReportBuilder(
-        io.BytesIO(), {}, _inp(), out, figures=False
-    )
+    raw_before = pickle.dumps(out)
+    assert "combined" not in out["worked_example_selection"]["families"]
+    (tmp_path / "legacy-biaxial-owner.pickle").write_bytes(pickle.dumps((_inp(), out)))
+    assert pickle.dumps(out) == raw_before
+    inp, out = native_scheduler_report_cases("dkna")
+    before = pickle.dumps((inp, out))
+    contexts = _assert_native_scheduler_contexts(inp, out)
+    assert out["worked_example_selection"]["families"]["combined"] == {
+        "case_id":"PL-GOV", "component":"vy",
+    }
+    builder = sector_report.ReportBuilder(io.BytesIO(), {}, inp, out, figures=False)
+    actual_contexts = builder._case_contexts("plastic")
+    matching = [
+        values for values in actual_contexts
+        if result_presentation.action_set(values[0], "plastic")["id"] == "PL-GOV"
+    ]
+    assert len(matching) == 1
+    builder.inp, builder.out = matching[0]
+    assert builder.inp.get("_report_case_current") is True
+    assert builder._selected_family("combined", builder.inp)["component"] == "vy"
+    assert builder.out["combined"]["biaxial"] is True
+    assert set(builder.out["combined"]["directions"]) == {"vx", "vy"}
+    assert result_presentation.combined_bending_assessment_blocker(builder.out, builder.inp) is None
+    assert contexts["PL-GOV"][1]["combined"] == builder.out["combined"]
     builder._combined()
 
     screen_blocks = []
@@ -11161,9 +11555,16 @@ def test_report_keeps_only_governing_biaxial_combined_worked_block():
     assert len(screen_blocks) == 1
     assert all(f"{chr(0x2211)}(SEd/SRd)" in text for text in screen_blocks)
 
+    assert "Vy,Ed + TEd" in screen_blocks[0]
+    assert "Vx,Ed + TEd" not in screen_blocks[0]
+    pdf = _build_report_with_selection({}, inp, out, figures=False, profile="Audit")
+    (tmp_path / "native-biaxial-worked-block.pdf").write_bytes(pdf)
+    assert "Governingdirectionalworkedexample:Vy,Ed+TEd" in "".join(_pdf_text(pdf).split())
+    assert pickle.dumps((inp, out)) == before
+
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_combined_out_of_range_withholds_values_and_verdicts(profile):
+def test_retained_report_combined_out_of_range_withholds_values_and_verdicts(profile, tmp_path):
     out = _out()
     c = _combined_out()
     c["outside_default_range"] = True
@@ -11185,8 +11586,8 @@ def test_report_combined_out_of_range_withholds_values_and_verdicts(profile):
     inp = _inp()
     inp.update(combined_on=True, shear_on=True, torsion_on=True)
     txt = _pdf_text(
-        _build_report_with_selection(
-            {}, inp, out, figures=False, profile=profile
+        _retained_directional_table_unit_pdf(
+            {}, inp, out, figures=False, unit_kind="combined-invalid", artifact_path=tmp_path / "retained-directional-table.pdf", profile=profile
         )
     )
     flat = " ".join(txt.split())
@@ -11196,7 +11597,7 @@ def test_report_combined_out_of_range_withholds_values_and_verdicts(profile):
     assert "60.1 %" not in flat
 
 
-def test_report_combined_longitudinal_check():
+def test_retained_report_combined_longitudinal_check(tmp_path):
     out = _out()
     c = _pub_h01_report_four_face_torsion()
     c.update(_combined_out())
@@ -11232,13 +11633,23 @@ def test_report_combined_longitudinal_check():
         capacity.combined_longitudinal_assessment(c)
     )
     out["combined"] = c
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    longitudinal = next(
+        item for item in result_presentation.combined_physical_components(c)
+        if item["key"] == "longitudinal"
+    )
+    assert capacity._combined_longitudinal_candidate(c["longitudinal"]) is c["longitudinal"]
+    assert longitudinal["governing"] is c["longitudinal"]
+    assert longitudinal["chord_status"] == "PASS"
+    assert longitudinal["chord_util"] == c["longitudinal"]["util"]
+    assert longitudinal["status"] == "FAIL"
+    assert c["torsion_longitudinal_assessment"]["status"] == "FAIL"
+    txt = _pdf_text(_retained_dkna_member_component_pdf({}, _inp(), out, figures=False, artifact_path=tmp_path / "retained-dkna-member-component.pdf"))
     assert "Longitudinal reinforcement" in txt
     assert "6.2.3(7)" in txt                        # the shear-shift cap clause
     assert "tension chord" in txt
 
 
-def test_report_combined_longitudinal_biaxial_fallback_warns():
+def test_retained_report_combined_longitudinal_biaxial_fallback_warns(tmp_path):
     # Only the FALLBACK path (conditional solve failed -> pure-axis MRd) warns;
     # a successful conditional MRd is the honest capacity and needs no warning.
     out = _out()
@@ -11250,7 +11661,17 @@ def test_report_combined_longitudinal_biaxial_fallback_warns():
                              m_off=90.0, conditional=False)
     _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    longitudinal = next(
+        item for item in result_presentation.combined_physical_components(c)
+        if item["key"] == "longitudinal"
+    )
+    assert capacity._combined_longitudinal_candidate(c["longitudinal"]) is None
+    assert longitudinal["governing"] is None
+    assert longitudinal["status"] == "NOT ASSESSED"
+    assert longitudinal["util"] is None and longitudinal["chord_util"] is None
+    assert "required x-axis negative face" in longitudinal["note"].casefold()
+    assert "pure-axis substitute" in longitudinal["note"].casefold()
+    txt = _pdf_text(_retained_dkna_member_component_pdf({}, _inp(), out, figures=False, artifact_path=tmp_path / "retained-dkna-member-component.pdf"))
     folded = " ".join(txt.casefold().split())
     assert "required x-axis negative face" in folded
     assert "pure-axis substitute" in folded
@@ -11468,7 +11889,7 @@ def test_report_withholds_verdict_for_preserved_non_governing_fallback(
             assert {"combined.chord.demand", "combined.chord.utilisation"} <= emitted
 
 
-def test_report_combined_longitudinal_conditional_mrd():
+def test_retained_report_combined_longitudinal_conditional_mrd(tmp_path):
     # The conditional MRd states the coexisting off-axis moment it carries; no
     # biaxial warning is printed (the capacity is already honest).
     out = _out()
@@ -11506,15 +11927,25 @@ def test_report_combined_longitudinal_conditional_mrd():
         capacity.combined_longitudinal_assessment(c)
     )
     out["combined"] = c
+    longitudinal = next(
+        item for item in result_presentation.combined_physical_components(c)
+        if item["key"] == "longitudinal"
+    )
+    assert capacity._combined_longitudinal_candidate(c["longitudinal"]) is c["longitudinal"]
+    assert longitudinal["governing"] is c["longitudinal"]
+    assert longitudinal["chord_status"] == "PASS"
+    assert longitudinal["chord_util"] == c["longitudinal"]["util"]
+    assert longitudinal["status"] == "FAIL"
+    assert c["torsion_longitudinal_assessment"]["status"] == "FAIL"
     # Collapse the PDF's line wrapping so multi-word phrases can be asserted.
-    txt = " ".join(_pdf_text(_build_report_with_selection({}, _inp(), out,
-                                                        figures=False)).split())
+    txt = " ".join(_pdf_text(_retained_dkna_member_component_pdf({}, _inp(), out,
+                                                        figures=False, artifact_path=tmp_path / "retained-dkna-member-component.pdf")).split())
     assert "conditional on the coexisting My = 90.0 kNm" in txt
     assert "Biaxial bending" not in txt
     assert "pure-axis substitute" not in txt
 
 
-def test_report_off_axis_skip_disclosed_uniaxially():
+def test_retained_report_subdivided_chord_withholds_incomplete_value(tmp_path):
     # Codex round-2 P2: a subdivided-section torsion run with NO off-axis bending
     # (biaxial False) must still disclose that the off-axis torsion chord is skipped
     # -- the note must not be gated on biaxial.
@@ -11528,16 +11959,36 @@ def test_report_off_axis_skip_disclosed_uniaxially():
                              off_not_evaluated="subdivided")
     _retain_combined_chords(c, c["longitudinal"])
     out["combined"] = c
-    txt = " ".join(_pdf_text(_build_report_with_selection({}, _inp(), out,
-                                                        figures=False)).split())
-    assert "per sub-tube" in txt                     # the subdivided disclosure fired
-    assert (
-        "utilisation = 57.5 % (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
-        in txt
+    # Preserve the original scalar evidence, but do not publish its obsolete
+    # 57.5 percent caption after the canonical incomplete-evidence boundary.
+    # The original per-sub-tube disclosure is exercised on a genuine current
+    # producer by test_native_subdivided_report_discloses_off_axis_skip below.
+    assert c["longitudinal"]["m_total"] == 100.0 + 100.0 + 30.0 == 230.0
+    assert c["longitudinal"]["util"] == 230.0 / 400.0 == 0.575
+    assert c["longitudinal"]["biaxial"] is False
+    assert c["longitudinal"]["off_not_evaluated"] == "subdivided"
+    assert "status" not in c["longitudinal"]
+    assert capacity._combined_longitudinal_candidate(c["longitudinal"]) is None
+    component = next(item for item in result_presentation.combined_physical_components(c)
+                     if item["key"] == "longitudinal")
+    assert component["status"] == "NOT ASSESSED"
+    assert component["util"] is None and component["chord_util"] is None
+    inp = _inp()
+    original = pickle.dumps((inp, out))
+    pdf, rows = _dkna_2005_component_unit_pdf(
+        dict(inp, combined_method=codes.EC2_2005_DKNA.label), c, "Audit",
     )
+    (tmp_path / "retained-subdivision-rejection.pdf").write_bytes(pdf)
+    assert next(row for row in rows if row[0] == "Longitudinal reinforcement")[1:3] == (
+        "-", "NOT ASSESSED",
+    )
+    text = " ".join(_pdf_text(pdf).split())
+    assert "Longitudinal reinforcement - NOT ASSESSED" in text
+    assert "utilisation = 57.5 %" not in text
+    assert pickle.dumps((inp, out)) == original
 
 
-def test_report_partial_torsion_face_coverage_disclosed():
+def test_retained_report_partial_torsion_face_coverage_disclosed(tmp_path):
     # Codex round-5 P2: when a chord face carrying the torsion share could not be
     # built (not_solved), the governing chord shown may not be the critical face --
     # the report must say so, even for a uniaxial run.
@@ -11569,8 +12020,17 @@ def test_report_partial_torsion_face_coverage_disclosed():
         capacity.combined_longitudinal_assessment(c)
     )
     out["combined"] = c
-    txt = " ".join(_pdf_text(_build_report_with_selection({}, _inp(), out,
-                                                        figures=False)).split())
+    longitudinal = next(
+        item for item in result_presentation.combined_physical_components(c)
+        if item["key"] == "longitudinal"
+    )
+    assert capacity._combined_longitudinal_candidate(c["longitudinal"]) is c["longitudinal"]
+    assert longitudinal["governing"] is c["longitudinal"]
+    assert longitudinal["chord_status"] == "NOT ASSESSED"
+    assert longitudinal["chord_util"] is None
+    assert c["torsion_longitudinal_assessment"]["status"] == "FAIL"
+    txt = " ".join(_pdf_text(_retained_dkna_member_component_pdf({}, _inp(), out,
+                                                        figures=False, artifact_path=tmp_path / "retained-dkna-member-component.pdf")).split())
     assert "may not be the critical face" in txt
     assert (
         "utilisation = - (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
@@ -11579,7 +12039,7 @@ def test_report_partial_torsion_face_coverage_disclosed():
     assert "utilisation = 57.5 %" not in txt
 
 
-def test_report_off_axis_chord_block():
+def test_retained_report_off_axis_chord_block(tmp_path):
     # The off-axis chord check renders with its own formula pair: bending plus
     # the torsion share (no shear shift), against the conditional capacity.
     out = _out()
@@ -11596,8 +12056,30 @@ def test_report_off_axis_chord_block():
                           z_src="circular_fitted_section")
     _retain_combined_chords(c, c["longitudinal"], c["chord_off"])
     out["combined"] = c
-    txt = " ".join(_pdf_text(_build_report_with_selection({}, _inp(), out,
-                                                        figures=False)).split())
+    inp = _inp()
+    original = pickle.dumps((inp, out))
+    assert capacity._combined_longitudinal_candidate(c["longitudinal"]) is None
+    assert capacity._combined_longitudinal_candidate(c["chord_off"]) is None
+    component = next(item for item in result_presentation.combined_physical_components(c)
+                     if item["key"] == "longitudinal")
+    assert component["status"] == "NOT ASSESSED"
+    assert component["chord_util"] is None
+    parent_pdf, rows = _dkna_2005_component_unit_pdf(
+        dict(inp, combined_method=codes.EC2_2005_DKNA.label), c, "Audit",
+    )
+    (tmp_path / "retained-off-axis-parent-rejection.pdf").write_bytes(parent_pdf)
+    assert next(row for row in rows if row[0] == "Longitudinal reinforcement")[1:3] == (
+        "-", "NOT ASSESSED",
+    )
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(buffer, {}, inp, out, figures=False, profile="Audit")
+    builder._h1("Retained off-axis chord formatting - incomplete assessment")
+    builder._chord_off_block(c["chord_off"], assessment_complete=False)
+    pdf = _finish_retained_unit_pdf(buffer, builder)
+    (tmp_path / "retained-off-axis-chord.pdf").write_bytes(pdf)
+    assert pickle.dumps((inp, out)) == original
+    txt = " ".join(_pdf_text(pdf).split())
+    assert "NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE" in txt
     assert "Off-axis chord (about y" in txt          # header now names the governing face
     assert "conditional on the coexisting Mx = 20.0 kNm" in txt
     assert "fitted circular section" in txt
@@ -11611,7 +12093,7 @@ def test_report_combined_independent_uses_max_form():
     assert "separately" in txt                      # M & V checked separately
 
 
-def test_report_combined_transverse_shows_shear_credit():
+def test_retained_report_combined_transverse_shows_shear_credit(tmp_path):
     out = _out()
     c = _combined_out()
     c["transverse"] = dict(valid=True, cot=2.0, theta_deg=26.6, u_stirrup=0.6,
@@ -11620,7 +12102,7 @@ def test_report_combined_transverse_shows_shear_credit():
                            shear_credited=True, vrd_c=120.0, v_ed=40.0)
     c["crushing"].update(cot=2.0, theta_deg=26.6, value=0.4)
     out["combined"] = c
-    txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
+    txt = _pdf_text(_retained_dkna_member_component_pdf({}, _inp(), out, figures=False, artifact_path=tmp_path / "retained-dkna-member-component.pdf"))
     assert "Shared stirrup" in txt
     assert "concrete carries the shear" in txt      # the VRd,c credit note
     assert "Physical resistance components" in txt
@@ -11741,18 +12223,40 @@ def h06_circular_report_results():
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
 def test_report_profiles_retain_h06_circular_and_duct_result(
-    profile, h06_circular_report_results,
+    profile, h06_circular_report_results, tmp_path,
 ):
     inp, out = copy.deepcopy(h06_circular_report_results["complete"])
     shear_out = out["shear"]
 
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
+    with result_presentation.publication_calculation_scope():
+        assert result_presentation.shear_publication_input_is_current(
+            inp, shear_out, plastic_result=out["plastic"],
+            torsion_result=out.get("torsion"),
+        ) == (True, None)
+        rows = result_presentation.multi_case_summary_rows(inp, out)
+    expected = {
+        "shear:without_links": (
+            "Shear without links", f"{100.0 * shear_out['util']:.1f} % (VEd / VRd,c)",
+            shear_out["util"],
+        ),
+        "shear:with_links": (
+            "Shear with links", f"{100.0 * shear_out['links']['util']:.1f} % (non-governing)",
+            shear_out["links"]["util"],
+        ),
+    }
+    for key, (check, result, ratio) in expected.items():
+        matches = [row for row in rows if row.get("overview_key") == key]
+        assert len(matches) == 1
+        row = matches[0]
+        assert (row["check"], row["case"], row["status"], row["result"], row["criterion"]) == (
+            check, "PL-TEST", "PASS", result, "<= 100 %",
+        )
+        assert row["util"] == ratio
+    pdf = _build_report_with_selection(
+        {}, inp, out, figures=False, profile=profile,
     )
+    (tmp_path / "native-h06-circular-duct.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
 
     selected = capacity.select_nominal_shear_resistance(
         shear_out,
@@ -11767,10 +12271,13 @@ def test_report_profiles_retain_h06_circular_and_duct_result(
         f"Shear without links PL-TEST PASS {100.0 * shear_out['util']:.1f} % "
         "(VEd / VRd,c)"
     ) in text
-    assert (
-        "Shear with links PL-TEST PASS "
-        f"{100.0 * shear_out['links']['util']:.1f} % (non-governing)"
-    ) in text
+    assert re.search(
+        re.escape(
+            "Shear with links PL-TEST PASS "
+            f"{100.0 * shear_out['links']['util']:.1f} % (non-governing)"
+        ).replace(r"non\-governing", r"non-\s*governing"),
+        text,
+    )
     if profile != "Brief":
         assert "Circular section" in text
         assert "Fitted-section arm z = 500.000 mm" in text
@@ -11894,7 +12401,7 @@ def test_report_includes_shear_links_section():
     assert "used in V_Rd,s and V_Rd,max" in normalized
 
 
-def test_report_with_unavailable_calculated_link_arm_fails_closed():
+def test_retained_report_with_unavailable_calculated_link_arm_fails_closed(tmp_path):
     out = _out()
     sh = _shear_out()
     links = _links_out()
@@ -11920,7 +12427,7 @@ def test_report_with_unavailable_calculated_link_arm_fails_closed():
     inp = _inp()
     inp.update(shear_on=True, shear_links=True)
 
-    txt = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
+    txt = _pdf_text(_retained_shear_unit_pdf({}, inp, out, figures=False, unit_kind="invalid-links", artifact_path=tmp_path / "retained-shear-unit.pdf"))
     normalized = " ".join(txt.split())
 
     assert "NOT ASSESSED" in txt
@@ -11930,9 +12437,11 @@ def test_report_with_unavailable_calculated_link_arm_fails_closed():
     ) in normalized
 
 
-def test_report_includes_2023_shear_links_stress_checks(h06_circular_report_results):
+def test_report_includes_2023_shear_links_stress_checks(h06_circular_report_results, tmp_path):
     inp, out = copy.deepcopy(h06_circular_report_results["complete"])
-    text = _pdf_text(_build_report_with_selection({}, inp, out, figures=False))
+    pdf = _build_report_with_selection({}, inp, out, figures=False)
+    (tmp_path / "native-2023-link-stress-report.pdf").write_bytes(pdf)
+    text = _pdf_text(pdf)
     assert "8.42" in text and "8.44" in text
     assert "8.50" not in text
     assert "no longitudinal shear force is applied" in text
@@ -11940,9 +12449,10 @@ def test_report_includes_2023_shear_links_stress_checks(h06_circular_report_resu
     assert "not implemented" not in text
 
 
+@pytest.mark.xdist_group("native-shear-demand")
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
 def test_report_profiles_fail_closed_for_2023_links_under_axial_compression(
-    profile,
+    profile, native_axial_compression_report_cases, tmp_path,
 ):
     from sector import codes as _codes, shear as _shear
 
@@ -12002,13 +12512,40 @@ def test_report_profiles_fail_closed_for_2023_links_under_axial_compression(
         shear_method=_codes.EC2_2023.label,
     )
 
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    # Preserve the original real 800 kN kernel vector as declared retained
+    # invalid-links formatting. Its old owner is not native current evidence.
+    retained_before = pickle.dumps((inp, out))
+    retained_text = " ".join(_pdf_text(_retained_shear_unit_pdf(
+        {}, inp, out, figures=False, unit_kind="invalid-links", profile=profile,
+        artifact_path=tmp_path / "retained-800kn-compression.pdf",
+    )).split())
+    assert result["valid"] is False
+    assert result["calculation_state"] == "NOT ASSESSED"
+    assert result["vrd"] is None and sh["n_ed_comp"] == 800.0
+    for required in (
+        "NOT ASSESSED", "Net axial compression is present",
+        "force assigned to the web", "compression-chord depth", "Annex G",
+    ):
+        assert required in retained_text
+    assert "applicability conditions were not demonstrated" not in retained_text
+    assert "No longitudinal chord action requires assessment" not in retained_text
+    assert pickle.dumps((inp, out)) == retained_before
+
+    # Full report assertions below are now bound to an actual native 800/50
+    # action state, while the original kernel payload above remains unchanged.
+    inp, out = native_axial_compression_report_cases(biaxial=False)
+    native_before = pickle.dumps((inp, out))
+    native_shear = out["shear"]
+    assert native_shear["n_ed_comp"] == 800.0
+    assert capacity.validated_signed_shear_demand(native_shear) == 50.0
+    assert native_shear["links"]["res"]["calculation_state"] == "NOT ASSESSED"
+    assert result_presentation.shear_publication_input_is_current(
+        inp, native_shear, plastic_result=out.get("plastic"),
+    )[0] is True
+    pdf = _build_report_with_selection({}, inp, out, figures=False, profile=profile)
+    (tmp_path / "native-800kn-compression.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
+    assert pickle.dumps((inp, out)) == native_before
 
     assert "NOT ASSESSED" in text
     assert "Net axial compression is present" in text
@@ -12023,7 +12560,7 @@ def test_report_profiles_fail_closed_for_2023_links_under_axial_compression(
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_shear_links_out_of_limits_are_not_assessed(profile):
+def test_retained_report_shear_links_out_of_limits_are_not_assessed(profile, tmp_path):
     out = _out()
     sh = _shear_out()
     lk = _links_out()
@@ -12057,8 +12594,8 @@ def test_report_shear_links_out_of_limits_are_not_assessed(profile):
     inp = _inp()
     inp.update(shear_on=True, shear_links=True)
     txt = _pdf_text(
-        _build_report_with_selection(
-            {}, inp, out, figures=False, profile=profile
+        _retained_shear_unit_pdf(
+            {}, inp, out, figures=False, unit_kind="invalid-links", artifact_path=tmp_path / "retained-shear-unit.pdf", profile=profile
         )
     )
     flat = " ".join(txt.split())
@@ -12117,7 +12654,7 @@ def test_report_omits_hostile_optional_strut_angle_operands(profile):
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-def test_report_torsion_out_of_limits_withholds_values_and_verdict(profile):
+def test_retained_report_torsion_out_of_limits_withholds_values_and_verdict(profile, tmp_path):
     out = _out()
     t = _torsion_out()
     applicability = shear_core.strut_angle_applicability(
@@ -12153,8 +12690,8 @@ def test_report_torsion_out_of_limits_withholds_values_and_verdict(profile):
     inp = _inp()
     inp.update(torsion_on=True, shear_links=True)
     txt = _pdf_text(
-        _build_report_with_selection(
-            {}, inp, out, figures=False, profile=profile
+        _retained_torsion_component_unit_pdf(
+            {}, inp, out, figures=False, unit_kind="components", artifact_path=tmp_path / "retained-torsion-unit.pdf", profile=profile
         )
     )
     flat = " ".join(txt.split())
@@ -12532,3 +13069,830 @@ def _retained_angle_note_pdf(meta, inp, out, *, figures, profile, artifact_path)
     assert pickle.dumps((inp, out)) == before
     artifact_path.write_bytes(pdf)
     return pdf
+
+
+def _declared_member_overview_unit(inp, out, rows, profile, title):
+    """Render explicit retained rows; no native currentness/scheduling claim.
+
+    Only the overview provider is substituted, and it is restored before any
+    real component leaf is invoked by the caller.
+    """
+    before = pickle.dumps((inp, out, rows))
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(buffer, {}, inp, out, figures=False, profile=profile)
+    builder._h1(title)
+    original_provider = result_presentation.multi_case_summary_rows
+    calls = []
+
+    def declared_rows(current_inp, current_out):
+        assert current_inp is builder._base_inp and current_out is builder._base_out
+        calls.append(True)
+        return copy.deepcopy(rows)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(result_presentation, "multi_case_summary_rows", declared_rows)
+        builder._results_overview()
+    assert result_presentation.multi_case_summary_rows is original_provider
+    assert calls == [True]
+    tables = [item for item in builder.flow if getattr(item, "_sector_results_overview", False)]
+    assert len(tables) == 1
+    actual = [
+        tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+              for cell in values)
+        for values in tables[0]._cellvalues
+    ]
+    # The real overview selects one governing row per check type. Its
+    # informational rows are printed separately below the comparison table.
+    selected = result_presentation.governing_summary_rows(rows)
+    result_rows = result_presentation.governing_result_rows(selected)
+    information_rows = result_presentation.governing_information_rows(selected)
+    expected = [
+        (row["check"], row["case"], row["status"], row["result"], row["criterion"],
+         "Source: " + row["source"] + "; " + row["note"])
+        for row in result_rows
+    ]
+    body = actual[tables[0]._sector_data_start:]
+    groups = set(tables[0]._sector_overview_groups)
+    actual_results = [item for item in body if item[0] not in groups]
+    assert actual_results == expected
+
+    def paragraphs_in(items):
+        for item in items:
+            if isinstance(item, sector_report.KeepTogether):
+                yield from paragraphs_in(item._content)
+            elif hasattr(item, "getPlainText"):
+                yield item.getPlainText()
+
+    actual_information = list(paragraphs_in(builder.flow))
+    if information_rows:
+        assert actual_information.count("Scope and calculation state") == 1
+    else:
+        assert "Scope and calculation state" not in actual_information
+    for row in information_rows:
+        text = " | ".join(str(row[key]) for key in ("check", "case", "status", "result"))
+        assert actual_information.count(text) == 1
+    assert pickle.dumps((inp, out, rows)) == before
+    return buffer, builder
+
+
+def _finish_retained_unit_pdf(buffer, builder):
+    sector_report.SimpleDocTemplate(
+        buffer, pagesize=sector_report.A4,
+        leftMargin=20 * sector_report.mm, rightMargin=20 * sector_report.mm,
+        topMargin=25 * sector_report.mm, bottomMargin=20 * sector_report.mm,
+    ).build(list(builder.flow))
+    return buffer.getvalue()
+
+
+def _retained_torsion_quantity_unit_pdf(inp, torsion, profile):
+    """Input-bound Formula 6.28 assessor and unchanged quantity formatter.
+
+    The historical scalar owner remains a retained component unit. Its declared
+    bar/material context matches its original quantities, without claiming
+    native wall geometry, member currentness or verified reinforcement detailing.
+    """
+    original = pickle.dumps((inp, torsion))
+    retained = torsion["longitudinal_assessment"]
+    unit_input = copy.deepcopy(inp)
+    material = MildSteel(fytk=416.67, fyck=416.67, gamma_y=1.0, curve=2)
+    unit_input.update(
+        bars=((0.0, 0.0, retained["provided_gross_area_mm2"]),),
+        steel=material, bar_materials=(material,),
+    )
+    derived = capacity.torsion_longitudinal_assessment(
+        unit_input, retained["required_by_tube_mm2"],
+        resistance_assessed=torsion["valid"] is True,
+    )
+    for key, value in retained.items():
+        if isinstance(value, float):
+            assert derived[key] == pytest.approx(value, rel=1e-12, abs=1e-12), key
+        else:
+            assert derived[key] == value, key
+    verification = (
+        "distribution_verified", "all_perimeter_sides_verified",
+        "bending_reserve_verified", "anchorage_verified", "tube_allocation_verified",
+    )
+    assert all(retained[key] is False and derived[key] is False for key in verification)
+    assert derived["status"] in {"NOT ASSESSED", "FAIL"}
+    # The canonical assessor supplies its own ok field; no stored claim is promoted.
+    unit_torsion = copy.deepcopy(torsion)
+    unit_torsion["longitudinal_assessment"] = derived
+    assessment = result_presentation.torsion_longitudinal_assessment(
+        unit_torsion, input_payload=unit_input,
+    )
+    assert assessment["evidence_consistent"] is True
+    assert assessment["status"] == retained["status"]
+    assert assessment["required_asl_mm2"] == pytest.approx(torsion["asl_req"])
+    assert assessment["provided_equivalent_area_mm2"] == pytest.approx(retained["provided_equivalent_area_mm2"])
+    assert assessment["demand_ratio"] == pytest.approx(retained["demand_ratio"])
+    row = result_presentation._summary_row(
+        "Torsion longitudinal reinforcement", "plastic", assessment["status"],
+        f'{assessment["required_asl_mm2"]:.0f} / {assessment["provided_equivalent_area_mm2"]:.0f} mm2',
+        "Required / modelled upper bound", assessment["demand_ratio"], "Torsion",
+        result_presentation.result_reason(
+            assessment["reason"], "torsion", context="torsion longitudinal summary reason",
+        ), unit_input, overview_key="torsion:longitudinal", overview_parent="torsion",
+    )
+    unit_before = pickle.dumps((unit_input, unit_torsion))
+    buffer, builder = _declared_member_overview_unit(
+        unit_input, {"torsion": unit_torsion}, [row], profile,
+        "Retained torsion longitudinal quantity formatting",
+    )
+    if profile != "Brief":
+        builder._torsion_longitudinal_block(unit_torsion)
+
+        def tables_in(items):
+            for item in items:
+                if isinstance(item, sector_report.KeepTogether):
+                    yield from tables_in(item._content)
+                elif isinstance(item, sector_report.Table):
+                    yield item
+
+        quantities = []
+        for table in tables_in(builder.flow):
+            header = getattr(table, "_sector_header_row", None)
+            if header is None:
+                continue
+            data = [tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+                          for cell in cells) for cells in table._cellvalues]
+            if data[header] == ("Quantity", "Value", "Assessment"):
+                quantities.append(data[table._sector_data_start:])
+        assert len(quantities) == 1
+        assert quantities[0] == [
+            ("Required longitudinal area", f'{assessment["required_asl_mm2"]:.0f} mm2', "Formula (6.28)"),
+            ("All modelled passive bars - gross area",
+             f'{assessment["provided_gross_area_mm2"]:.0f} mm2', "Upper bound before bending demand"),
+            ("All modelled passive bars - equivalent area at selected fyd",
+             f'{assessment["provided_equivalent_area_mm2"]:.0f} mm2', assessment["status"]),
+        ]
+    pdf = _finish_retained_unit_pdf(buffer, builder)
+    assert pickle.dumps((unit_input, unit_torsion)) == unit_before
+    assert pickle.dumps((inp, torsion)) == original
+    return pdf
+
+
+def _retained_base_en_direction_unit_pdf(inp, out, profile):
+    """Exercise real retained Base-EN row and component rendering bodies."""
+    assert inp["combined_method"] == out["combined"]["method"] == codes.EC2_2005.label
+    assert out["combined"]["biaxial"] is True
+    original = pickle.dumps((inp, out))
+    directions = result_presentation.base_en_combined_direction_items(out["combined"])
+    rows = result_presentation._base_en_combined_summary_rows(inp, out["combined"])
+    if directions is None:
+        assert len(rows) == 1
+        assert rows[0]["status"] == "NOT ASSESSED"
+        assert rows[0]["result"] == "-" and rows[0]["util"] is None
+    else:
+        assert tuple(key for key, _item in directions) == ("vx", "vy")
+        assert len(rows) == 7
+        for component, direction in directions:
+            physical = result_presentation.combined_physical_components(direction)
+            label = "Vx+T" if component == "vx" else "Vy+T"
+            for item in physical:
+                row = next(row for row in rows if row["check"] == "Combined " + label + " " + item["label"].lower())
+                assert row["status"] == item["status"]
+                assert row["result"] == result_presentation._percent(item["util"])
+                assert row["util"] == item["util"]
+        assert rows[-1]["status"] == "NOT CALCULATED"
+        assert rows[-1]["util"] is None
+    buffer, builder = _declared_member_overview_unit(
+        inp, out, rows, profile, "Retained Base-EN directional formatting",
+    )
+    if profile != "Brief":
+        builder._case_heading("Combined bending + shear + torsion (M-V-T)", "plastic")
+        builder._combined_base_en_components(out["combined"])
+    pdf = _finish_retained_unit_pdf(buffer, builder)
+    assert pickle.dumps((inp, out)) == original
+    return pdf
+
+
+def _retained_dkna_member_component_pdf(
+    meta, inp, out, *, figures, artifact_path, profile="Audit",
+    include_input_context=False,
+):
+    """Real DK NA component formatter for the original retained vectors.
+
+    Input context is declared formatting context, not native calculation or
+    currentness evidence. All original result mappings remain unchanged.
+    """
+    assert meta == {} and figures is False
+    assert out["combined"]["method"] == codes.EC2_2005_DKNA.label
+    before = pickle.dumps((inp, out))
+    unit_input = dict(inp, combined_method=codes.EC2_2005_DKNA.label, combined_on=True)
+    pdf, actual = _dkna_2005_component_unit_pdf(
+        unit_input, out["combined"], profile, include_input_context=include_input_context,
+    )
+    components = result_presentation.combined_physical_components(out["combined"])
+    assert [row[:3] for row in actual] == [
+        (item["label"], sector_report._pct(item["util"]), item["status"])
+        for item in components
+    ]
+    assert pickle.dumps((inp, out)) == before
+    artifact_path.write_bytes(pdf)
+    return pdf
+
+
+@pytest.mark.xdist_group("native-member-report")
+@result_presentation.publication_calculation_scope()
+def test_native_subdivided_report_discloses_off_axis_skip(
+    native_subdivided_report_case, tmp_path,
+):
+    """The uniaxial disclosure remains on a real current subdivision report."""
+    import json
+
+    inp, out = copy.deepcopy(native_subdivided_report_case)
+    original = pickle.dumps((inp, out))
+    assert inp["Mx_pl"] == 100.0 and inp["My_pl"] == 0.0
+    assert inp["combined_on"] is True and out["torsion"]["subdivided"] is True
+    assert result_presentation.torsion_publication_component_is_current(
+        inp, out["shear"], out["torsion"],
+    ) == (True, None)
+    assert result_presentation.combined_publication_evidence_is_current(inp, out) == (True, None)
+    assert result_presentation.combined_bending_assessment_blocker(out, inp) is None
+    chord = out["combined"]["longitudinal"]
+    assert chord["biaxial"] is False
+    assert chord["off_not_evaluated"] == "subdivided"
+    assert capacity._combined_longitudinal_candidate(chord) is chord
+    component = next(item for item in result_presentation.combined_physical_components(out["combined"])
+                     if item["key"] == "longitudinal")
+    assert component["chord_status"] == "FAIL" and component["chord_util"] > 1.0
+    assert component["status"] == "FAIL"
+    pdf = _build_report_from_completed_payload({}, inp, out, figures=False, profile="Audit")
+    (tmp_path / "native-subdivision-disclosure.pdf").write_bytes(pdf)
+    # Bind the disclosure to the real guarded Combined branch itself, separately
+    # from the same wording that the shear chapter can legitimately contain.
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, inp, out, figures=False, profile="Audit",
+    )
+    contexts = builder._case_contexts("plastic")
+    assert len(contexts) == 1
+    builder.inp, builder.out = contexts[0]
+    assert builder.inp.get("_report_case_current") is True
+    assert builder._selected_family("combined", builder.inp) is not None
+    assert result_presentation.combined_bending_assessment_blocker(builder.out, builder.inp) is None
+    builder._combined()
+
+    def paragraphs(items):
+        for item in items:
+            if isinstance(item, sector_report.KeepTogether):
+                yield from paragraphs(item._content)
+            elif hasattr(item, "getPlainText"):
+                yield item.getPlainText()
+
+    combined_paragraphs = list(paragraphs(builder.flow))
+    disclosures = [p for p in combined_paragraphs if "per sub-tube" in p]
+    assert len(disclosures) == 1
+    assert "the off-axis chord's torsion share is not evaluated" in disclosures[0]
+    assert any("Longitudinal reinforcement: combined M + V + T tension chord" in p
+               for p in combined_paragraphs)
+    text = " ".join(_pdf_text(pdf).split())
+    assert "per sub-tube" in text
+    assert "the off-axis chord's torsion share is not evaluated" in text
+    assert pickle.dumps((inp, out)) == original
+    (tmp_path / "native-subdivision-evidence.json").write_text(
+        json.dumps({
+            "mx": inp["Mx_pl"], "my": inp["My_pl"], "current_combined": True,
+            "current_torsion": True, "biaxial": chord["biaxial"],
+            "coverage": chord["off_not_evaluated"],
+            "chord_status": component["chord_status"], "chord_util": component["chord_util"],
+            "overall_status": component["status"], "overall_util": component["util"],
+            "actual_combined_disclosure": disclosures[0], "payload_unchanged": True,
+        }, indent=2) + "\n", encoding="utf-8",
+    )
+
+
+def _retained_shear_unit_pdf(
+    meta, inp, out, *, figures, unit_kind, artifact_path, profile="Audit",
+):
+    """Render unchanged retained shear equations or invalid-link diagnostics.
+
+    These original scalar vectors have no native current-input authority.
+    The normal callers still use their real signed-action/currentness/nominal
+    gates. Only the EXCEEDED label unit supplies the actual retained selector.
+    """
+    assert meta == {} and figures is False
+    assert unit_kind in {"concrete", "utilisation", "invalid-links"}
+    original = pickle.dumps((inp, out))
+    sh = out["shear"]
+    unit_input = dict(inp, shear_method=sh["method"])
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(
+        buffer, {}, unit_input, {"shear": sh}, figures=False, profile=profile,
+    )
+    builder._h1("Retained shear formatting")
+    builder._case_heading("Shear resistance", "plastic")
+    if unit_kind == "invalid-links":
+        assert sh["links"]["res"].get("valid") is not True
+        builder._shear_links(sh)
+    elif unit_kind == "utilisation":
+        selected = capacity.select_nominal_shear_resistance(sh, links_selected=False)
+        assert selected.valid is True and selected.route == "concrete"
+        assert selected.resistance == 103.4
+        assert selected.utilisation == sh["util"] == 200.0 / 103.4
+        assert selected.status == "FAIL" and selected.ok is False
+        builder._shear_2005_utilisation(sh, sh["res"], asdict(selected))
+    else:
+        builder._shear_direction_introduction(sh, None, sh["v_ed"])
+        basis = result_presentation.shear_geometry_basis(unit_input, sh)
+        builder._small(sector_report._html_escape(basis["statement"]))
+        # Current-input nominal selection remains real inside both actual leaves.
+        if sh.get("model_2023"):
+            builder._shear_2023(sh, sh["res"])
+        else:
+            builder._shear_2005(sh, sh["res"])
+    pdf = _finish_retained_unit_pdf(buffer, builder)
+    assert pickle.dumps((inp, out)) == original
+    artifact_path.write_bytes(pdf)
+    return pdf
+
+
+def _retained_torsion_component_unit_pdf(
+    metadata, inp, out, *, figures, unit_kind, artifact_path, profile="Audit",
+):
+    """Actual component formatters on declared historical kernel evidence.
+
+    These units preserve original operands and diagnostics. They do not claim
+    native member currentness, named-case selection, or complete report coverage.
+    The production caller retains currentness and applicability guards; native
+    report controls separately exercise that caller.
+    """
+    assert metadata == {} and figures is False
+    original = pickle.dumps((inp, out))
+    torsion = out["torsion"]
+    assert result_presentation.torsion_publication_component_is_current(
+        inp, out.get("shear"), torsion,
+    )[0] is not True
+    unit_torsion = copy.deepcopy(torsion)
+    # The legacy fixture owns its six real kernel maps at the root. The worked
+    # formatter consumes the same maps under primary; no terms are regenerated.
+    terms = (
+        "angle_selection", "steel_resistance", "strut_resistance",
+        "resistance_selection", "cracking_resistance", "longitudinal_reinforcement",
+    )
+    assert "primary" not in torsion
+    unit_torsion["primary"] = {name: copy.deepcopy(torsion[name]) for name in terms}
+    assert all(unit_torsion["primary"][name] == torsion[name] for name in terms)
+    unit_before = pickle.dumps(unit_torsion)
+    if unit_kind in {"wall-summary", "no-links"}:
+        rows, tube_valid, transverse_assessed, applicability_blocks = (
+            result_presentation._torsion_component_summary_rows(
+                inp, {"torsion": unit_torsion}, unit_torsion,
+            )
+        )
+        assert tube_valid is True and applicability_blocks is False
+        assert transverse_assessed is (unit_kind == "wall-summary")
+        by_key = {row["overview_key"]: row for row in rows}
+        assert by_key["torsion"]["status"] == "NOT ASSESSED"
+        if unit_kind == "wall-summary":
+            resistance_row = by_key["torsion:resistance"]
+            assert resistance_row["status"] == "PASS"
+            assert resistance_row["result"] == "52.4 %"
+            assert resistance_row["util"] == torsion["t_ed"] / torsion["trd"]
+        else:
+            assert "torsion:resistance" not in by_key
+            for component in ("vx", "vy"):
+                row = by_key[f"torsion:minimum_reinforcement:{component}"]
+                assert row["status"] == "NOT ASSESSED"
+                assert row["result"] == "-" and row["util"] is None
+        buffer, builder = _declared_member_overview_unit(
+            inp, {"torsion": unit_torsion}, rows, profile,
+            "Retained torsion summary and component formatting",
+        )
+    else:
+        buffer = io.BytesIO()
+        builder = sector_report.ReportBuilder(
+            buffer, {}, inp, {"torsion": unit_torsion},
+            figures=False, profile=profile,
+        )
+        builder._h1("Retained torsion component formatting")
+    builder._case_heading("Torsion (thin-walled tube)", "plastic")
+    if unit_kind == "no-links":
+        # The actual directional publication guards reject the old incomplete
+        # owner above and inside _torsion_components. This separate original
+        # Formula 6.31 vector tests only its own retained formatter, not a
+        # current directional PASS.
+        minimum = torsion["directional_interactions"]["vx"]["min_reinf"]
+        assert result_presentation.minimum_reinforcement_screen_status(minimum) == "PASS"
+        assert minimum["value"] == minimum["t_ed"] / minimum["trd_c"] + minimum["v_ed"] / minimum["vrd_c"]
+        assert result_presentation.minimum_reinforcement_detailing_status(minimum) == "NOT RUN"
+        if profile == "Brief":
+            builder._brief_settings_summary()
+        else:
+            builder._settings_block()
+        builder._torsion_minimum_reinforcement_summary(minimum)
+    if unit_kind == "wall-summary" and profile == "Brief":
+        pass
+    elif unit_kind == "interaction":
+        inter = unit_torsion["interaction"]
+        assert inter["valid"] is True
+        assert inter["value"] == pytest.approx(
+            inter["t_ed"] / inter["trd_max"] + inter["v_ed"] / inter["vrd_max"]
+        )
+        builder._crushing_interaction(unit_torsion)
+    else:
+        assert builder._torsion_applicability_block(unit_torsion) is True
+        builder._torsion_components(unit_torsion, critical=True)
+        if unit_kind == "subdivided":
+            assert unit_torsion["subdivided"] is True
+            subs = unit_torsion["subtubes"]
+            assert unit_torsion["util"] == max(item["util"] for item in subs)
+            assert unit_torsion["asl_req"] == sum(item["asl_req"] for item in subs)
+            # Formula 6.29 is a separate actual Audit worked formatter, rather
+            # than an incidental literal in the sub-tube component.
+            builder._crushing_interaction(unit_torsion)
+        else:
+            if unit_kind not in {"wall-summary", "no-links"}:
+                assert unit_kind == "components"
+    pdf = _finish_retained_unit_pdf(buffer, builder)
+    artifact_path.write_bytes(pdf)
+    assert pickle.dumps(unit_torsion) == unit_before
+    assert pickle.dumps((inp, out)) == original
+    return pdf
+
+
+@pytest.mark.parametrize("links_present", (False, True), ids=("no-links", "closed-links"))
+def test_native_torsion_summary_keeps_resistance_and_detailing_separate(
+    links_present, native_formula_631_cases, tmp_path,
+):
+    """The normal current-input report path owns each actual native state."""
+    import json
+    inp, out = native_formula_631_cases(
+        detailing_status="PASS" if links_present else "NOT RUN",
+    )
+    original = pickle.dumps((inp, out))
+    torsion = out["torsion"]
+    current, reason = result_presentation.torsion_publication_component_is_current(
+        inp, out["shear"], torsion,
+    )
+    assert current is True, reason
+    assert inp["shear_links"] is links_present
+    rows = result_presentation.result_summary_rows(inp, out)
+    by_key = {row["overview_key"]: row for row in rows if "overview_key" in row}
+    assert by_key["torsion"]["status"] == "NOT ASSESSED"
+    if links_present:
+        assert torsion["valid"] is True
+        assert by_key["torsion:resistance"]["status"] == "PASS"
+        assert by_key["torsion:resistance"]["util"] == pytest.approx(torsion["util"])
+    else:
+        assert torsion["valid"] is False
+        assert torsion["transverse_resistance_assessed"] is False
+        assert "torsion:resistance" not in by_key
+        assert by_key["torsion"]["result"] == "-"
+    minimum = torsion["min_reinf"]
+    assert minimum["status"] == "PASS"
+    assert minimum["detailing_status"] == ("PASS" if links_present else "NOT RUN")
+    context_builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, inp, out, figures=False, profile="Audit",
+    )
+    contexts = context_builder._case_contexts("plastic")
+    assert len(contexts) == 1
+    case_input, case_output = contexts[0]
+    assert case_input.get("_report_case_current") is True
+    case_id = result_presentation.action_set(case_input, "plastic")["id"]
+    assert case_id == by_key["torsion"]["case"] == "PL-01"
+    assert result_presentation.torsion_publication_component_is_current(
+        case_input, case_output["shear"], case_output["torsion"],
+    ) == (True, None)
+    case_rows = result_presentation.result_summary_rows(case_input, case_output)
+    case_resistance = [
+        row for row in case_rows if row.get("overview_key") == "torsion:resistance"
+    ]
+    if links_present:
+        assert len(case_resistance) == 1
+        assert all(case_resistance[0][key] == by_key["torsion:resistance"][key]
+                   for key in ("case", "check", "status", "result", "util"))
+    else:
+        assert case_resistance == []
+    pdf = _build_report_with_selection({}, inp, out, figures=False, profile="Audit")
+    (tmp_path / "native-torsion-summary.pdf").write_bytes(pdf)
+    text = " ".join(_pdf_text(pdf).split())
+    assert "low-action condition satisfied" in text.casefold()
+    assert "Separate link detailing" in text
+    assessed_row_pattern = (
+        r"Torsion transverse/strut resistance\s+" + re.escape(case_id)
+        + r"\s+(?:PASS|FAIL)\s+[0-9.]+\s*%"
+    )
+    if links_present:
+        row = case_resistance[0]
+        exact_row = " ".join(str(row[key]) for key in ("check", "case", "status", "result"))
+        assert exact_row in text
+        assert len(re.findall(assessed_row_pattern, text)) == 1
+    else:
+        assert re.search(assessed_row_pattern, text) is None
+        absent_row = by_key["torsion"]
+        assert " ".join(str(absent_row[key]) for key in ("check", "case", "status", "result")) in text
+        assert re.search(
+            r"Torsion transverse/strut resistance\s+" + re.escape(case_id)
+            + r"\s+(?:PASS|FAIL)\b", text,
+        ) is None
+    assert "NOT ASSESSED" in text
+    if not links_present:
+        assert "requires current shared links / closed stirrups" in text
+        assert "Concrete cap only" in text
+    (tmp_path / "native-torsion-summary-evidence.json").write_text(
+        json.dumps({"links_present":links_present,"current":current,
+                    "rows":rows,"minimum":minimum}, default=str, indent=2),
+        encoding="utf-8",
+    )
+    assert pickle.dumps((inp, out)) == original
+
+
+@pytest.mark.xdist_group("native-shear-demand")
+@pytest.mark.parametrize("biaxial", (False, True), ids=("single-direction", "biaxial"))
+def test_report_current_unavailable_shear_demand_rejects_changed_actions(
+    biaxial, native_axial_compression_report_cases, tmp_path,
+):
+    """Real table guards retain valid applied loads and reject stale actions."""
+    inp, out = native_axial_compression_report_cases(biaxial=biaxial)
+    original = pickle.dumps((inp, out))
+
+    def table_pdf(inputs, results, name):
+        buffer = io.BytesIO()
+        builder = sector_report.ReportBuilder(
+            buffer, {}, inputs, results, figures=False, profile="Audit",
+        )
+        builder._h1("Shear action evidence check")
+        builder._shear()
+        pdf = _finish_retained_unit_pdf(buffer, builder)
+        (tmp_path / (name + ".pdf")).write_bytes(pdf)
+        return " ".join(_pdf_text(pdf).split())
+
+    positive = table_pdf(inp, out, "current-unavailable-demand")
+    assert "Vy,Ed 50.000 kN - - NOT ASSESSED" in positive
+    if biaxial:
+        assert "Vx,Ed 25.000 kN - - NOT ASSESSED" in positive
+    for attack in ("changed-input", "opposite-signed-result", "unavailable-signed-result", "boolean-signed-result"):
+        bad_inp, bad_out = copy.deepcopy((inp, out))
+        shear = bad_out["shear"]
+        target = shear["directions"]["vy"] if biaxial else shear
+        if attack == "changed-input":
+            bad_inp["shear_Vy"] = 55.0
+        elif attack == "opposite-signed-result":
+            target["signed_v_ed"] = -50.0
+        elif attack == "unavailable-signed-result":
+            target["signed_v_ed"] = None
+        else:
+            target["signed_v_ed"] = True
+        poisoned_before = pickle.dumps((bad_inp, bad_out))
+        assert result_presentation.shear_publication_signed_demand(bad_inp, target) is None
+        negative = table_pdf(bad_inp, bad_out, attack)
+        assert "NOT ASSESSED" in negative
+        assert re.search(r"Vy,Ed -?(?:50|55)\.000 kN", negative) is None
+        assert pickle.dumps((bad_inp, bad_out)) == poisoned_before
+    assert pickle.dumps((inp, out)) == original
+
+
+def _retained_directional_table_unit_pdf(
+    metadata, inp, out, *, figures, unit_kind, artifact_path, profile="Audit",
+):
+    """Original directional display vectors; no native ownership claim."""
+    assert metadata == {} and figures is False
+    original = pickle.dumps((inp, out))
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(
+        buffer, {}, inp, out, figures=False, profile=profile,
+    )
+    builder._h1("Retained directional component formatting")
+    if unit_kind == "faces":
+        sh = out["shear"]
+        assert sh["both_faces_evaluated"] is True
+        assert result_presentation.directional_shear_publication_evidence_is_current(
+            inp, sh, plastic_result=out.get("plastic"),
+        )[0] is not True
+        blocker = result_presentation.combined_bending_assessment_blocker(out, inp)
+        builder._case_heading("Shear resistance", "plastic")
+        builder._shear_face_tables(sh, sh["component"], blocker is not None, blocker)
+    elif unit_kind == "shear-directions":
+        aggregate = out["shear"]
+        assert aggregate["biaxial"] is True
+        assert set(aggregate["directions"]) == {"vx", "vy"}
+        assert result_presentation.shear_publication_input_is_current(
+            inp, aggregate, plastic_result=out.get("plastic"),
+        )[0] is not True
+        builder._case_heading("Shear resistance", "plastic")
+        builder._shear_directional_summary(aggregate, aggregate["directions"])
+    elif unit_kind in {"combined-directions", "combined-invalid"}:
+        combined = out["combined"]
+        assert result_presentation.combined_bending_assessment_blocker(out, inp) is not None
+        if unit_kind == "combined-directions":
+            assert combined["biaxial"] is True
+            directions = combined["directions"]
+            assert set(directions) == {"vx", "vy"}
+        else:
+            assert combined["valid"] is False and combined["outside_default_range"] is True
+            assert result_presentation.combined_dkna_status(combined) == "NOT ASSESSED"
+            directions = {"vy": combined}
+        builder._combined_directional_summary(directions)
+        if unit_kind == "combined-invalid":
+            builder._combined_direction(combined)
+    else:
+        assert unit_kind == "torsion-angle"
+        torsion = out["torsion"]
+        assert torsion["angle_applicability"]["applicable"] is False
+        assert torsion["valid"] is False
+        assert set(torsion["directional_interactions"]) == {"vx", "vy"}
+        for component, child in torsion["directional_interactions"].items():
+            assert child["angle_applicability"]["applicable"] is False
+            assert child["valid"] is False
+            assert result_presentation.torsion_publication_component_is_current(
+                inp, out.get("shear"), torsion, component=component,
+            )[0] is not True
+        # The raw full publication path must reject the incomplete owner and
+        # suppress directional screens independently of the angle text unit.
+        rejected_pdf = _build_report_with_selection({}, inp, out, figures=False, profile=profile)
+        artifact_path.with_name("raw-torsion-range-guard.pdf").write_bytes(rejected_pdf)
+        rejected_text = " ".join(_pdf_text(rejected_pdf).split())
+        assert "NOT ASSESSED" in rejected_text
+        assert "Vx+T" not in rejected_text and "Vy+T" not in rejected_text
+        assert "Directional minimum-reinforcement screens" not in rejected_text
+        builder._case_heading("Torsion (thin-walled tube)", "plastic")
+        builder._torsion_angle_diagnostic(torsion, torsion["angle_applicability"])
+    pdf = _finish_retained_unit_pdf(buffer, builder)
+    artifact_path.write_bytes(pdf)
+    assert pickle.dumps((inp, out)) == original
+    return pdf
+
+
+def _assert_unsupported_2023_combined_rows(inp, out, text):
+    """Bind the actual same-case unsupported-route row and guidance to a PDF."""
+    before = pickle.dumps((inp, out))
+    scope_note = (
+        "NOT ASSESSED: 2023 Combined bending, shear and torsion is outside "
+        "the supported release scope. Use the separate 2023 shear chord "
+        "check or a supported shared edition for Combined."
+    )
+    assert result_presentation.combined_publication_scope_note(out["combined"]) == scope_note
+    assert result_presentation.combined_bending_assessment_blocker(out, inp) == scope_note
+    rows = [
+        row for row in result_presentation.multi_case_summary_rows(inp, out)
+        if str(row.get("overview_key", "")).startswith("combined:")
+    ]
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["case"] == "PL-TEST"
+    assert row["status"] == "NOT ASSESSED"
+    assert row["result"] == "-" and row["util"] is None
+    assert row["note"] == scope_note
+    def token_pattern(value):
+        return re.escape(str(value)).replace(r"\ ", r"\s+").replace(r"\-", r"-\s*")
+    actual_row = r"\s+".join(token_pattern(row[key]) for key in ("check", "case", "status", "result"))
+    assert re.search(actual_row, text)
+    assert scope_note in text
+    assessed_prefix = r"\s+".join(token_pattern(row[key]) for key in ("check", "case")) + r"\s+(?:PASS|FAIL)\b"
+    assert re.search(assessed_prefix, text) is None
+    assert pickle.dumps((inp, out)) == before
+
+
+def _assert_native_scheduler_contexts(
+    inp, out, *, require_component_current=True, unavailable_torsion_cases=(),
+):
+    """Bind row signatures and all component authority to each actual action set."""
+    original = pickle.dumps((inp, out))
+    contexts = result_presentation._worked_case_contexts(inp, out, "combined")
+    records = case_analysis.case_records(inp, "plastic")
+    assert [item[0] for item in contexts] == [row["name"] for row in records]
+    by_case = {}
+    for record, entry, context in zip(records, out["plastic_cases"], contexts, strict=True):
+        case_id, case_input, case_out, current = context
+        assert current is True
+        assert entry["evaluated"] is True
+        assert tuple(entry["signature"]) == case_analysis.case_signature(record, load_cases.PLASTIC_TABLE_KEY, inp)
+        assert case_id == entry["name"] == record["name"]
+        assert tuple(case_input[key] for key in ("P_pl", "Mx_pl", "My_pl", "shear_Vx", "shear_Vy", "torsion_T_signed")) == (
+            record["n_ed_kn"], record["mx_ed_knm"], record["my_ed_knm"],
+            record["vx_ed_kn"], record["vy_ed_kn"], record["t_ed_knm"],
+        )
+        if require_component_current:
+            sh, torsion = case_out["shear"], case_out["torsion"]
+            assert result_presentation.shear_publication_input_is_current(
+                case_input, sh, plastic_result=case_out["plastic"], torsion_result=torsion,
+            ) == (True, None)
+            torsion_current = result_presentation.torsion_publication_component_is_current(case_input, sh, torsion)
+            if case_id in unavailable_torsion_cases:
+                assert torsion_current == (False, "torsion result evidence is unavailable")
+                assert result_presentation.torsion_applicability_publication_status(torsion) == "NOT ASSESSED"
+                assert result_presentation._transverse_metric(
+                    "torsion", torsion, input_payload=case_input, shear_result=sh,
+                ) is None
+                assert "Compatibility torsion requires a separate member or system assessment" in result_presentation.combined_bending_assessment_blocker(case_out, case_input)
+            else:
+                assert torsion_current == (True, None)
+            assert result_presentation.combined_publication_evidence_is_current(case_input, case_out) == (True, None)
+        by_case[case_id] = case_input, case_out
+    assert pickle.dumps((inp, out)) == original
+    return by_case
+
+
+
+@pytest.mark.xdist_group("native-scheduler-report")
+@result_presentation.publication_calculation_scope()
+def test_native_report_rejects_isolated_consumed_transverse_terms(native_scheduler_report_cases, tmp_path):
+    """Actual guarded case chapters show operands, then reject one missing term."""
+    import json
+    inp, out = native_scheduler_report_cases("dkna")
+    original = pickle.dumps((inp, out))
+    contexts = _assert_native_scheduler_contexts(inp, out)
+    assert set(contexts) == {"PL-LOW", "PL-GOV"}
+
+    def equation_records(items):
+        for item in items:
+            if hasattr(item, "_sector_equation_key"):
+                yield {"key": item._sector_equation_key,
+                       "number": item._sector_equation_number,
+                       "text": item.getPlainText()}
+            elif isinstance(item, sector_report.KeepTogether):
+                yield from equation_records(item._content)
+
+    def chapter(payload, family, label, *, shear_component=None):
+        buffer = io.BytesIO()
+        builder = sector_report.ReportBuilder(buffer, {}, inp, payload, figures=False, profile="Audit")
+        matching = [(ci,co) for ci,co in builder._case_contexts("plastic")
+                    if result_presentation.action_set(ci,"plastic")["id"] == "PL-GOV"]
+        assert len(matching) == 1
+        builder.inp,builder.out = matching[0]
+        assert builder.inp["_report_case_current"] is True
+        if shear_component is None:
+            getattr(builder, "_"+family)()
+        else:
+            assert family == "shear" and shear_component == "vy"
+            # This actual directional consumer retains signed-action, current
+            # input, nominal and provided-link guards on the blocked direction.
+            builder._shear_direction(builder.out["shear"]["directions"][shear_component],
+                                     component=shear_component)
+        records = list(equation_records(builder.flow))
+        keys = [item["key"] for item in records]
+        pdf = _finish_retained_unit_pdf(buffer,builder)
+        (tmp_path / (label+".pdf")).write_bytes(pdf)
+        return keys, " ".join(_pdf_text(pdf).split()), builder._selected_families, records
+
+    def authority(ci,co,family):
+        if family == "shear":
+            result = result_presentation.provided_link_publication_assessment(
+                ci,co["shear"]["directions"]["vy"],torsion_result=co["torsion"],
+            )
+            return result.valid,result.reason
+        if family == "torsion":
+            return result_presentation.torsion_publication_component_is_current(ci,co["shear"],co["torsion"])
+        return result_presentation.combined_publication_evidence_is_current(ci,co)
+
+    evidence=[]
+    for family,key,path in (
+        ("shear","shear.links.vrds",("shear","directions","vy","links","res","tan")),
+        ("torsion","torsion.resistance.governing",("torsion","primary","strut_resistance")),
+        ("combined","combined.dk-na.sum",("combined","directions","vy","dkna_selection")),
+    ):
+        ci,co = contexts["PL-GOV"]
+        assert authority(ci,co,family)[0] is True
+        positive_keys,positive_text,positive_selection,positive_records = chapter(out,family,"native-terms-positive-"+family)
+        assert key in positive_keys
+        owned = [item for item in positive_records if item["key"] == key]
+        assert owned
+        for record in owned:
+            assert record["number"] is not None
+            assert "Equation ("+record["number"]+")" in positive_text
+            assert "Numerical substitution:" in record["text"]
+            assert "Result " in record["text"]
+        rejected=copy.deepcopy(out)
+        rejected_source=pickle.dumps(rejected)
+        entry=next(item for item in rejected["plastic_cases"] if item["name"]=="PL-GOV")
+        owner=entry["results"]
+        for part in path[:-1]:owner=owner[part]
+        original_keys=tuple(owner)
+        removed=owner.pop(path[-1])
+        rejected_before=pickle.dumps(rejected)
+        rejected_contexts=_assert_native_scheduler_contexts(inp,rejected,require_component_current=False)
+        current_input,current_output=rejected_contexts["PL-GOV"]
+        rejected_authority=authority(current_input,current_output,family)
+        assert rejected_authority[0] is False
+        negative_keys,negative_text,negative_selection,negative_records = chapter(rejected,family,"native-terms-missing-"+family)
+        normal_negative_records = negative_records
+        if family == "shear":
+            assert positive_selection[family] == {"case_id":"PL-GOV","component":"vy"}
+            assert "Governing worked example: Vy,Ed" in positive_text
+            assert negative_selection[family] == {"case_id":"PL-GOV","component":"vx"}
+            assert "Governing worked example: Vx,Ed" in negative_text
+            assert key in negative_keys  # The unaffected Vx calculation remains valid.
+            assert result_presentation.provided_link_publication_assessment(
+                current_input,current_output["shear"]["directions"]["vx"],
+                torsion_result=current_output["torsion"],
+            ).valid is True
+            negative_keys,negative_text,negative_selection,negative_records = chapter(
+                rejected,family,"native-terms-missing-shear-vy",shear_component="vy",
+            )
+        assert key not in negative_keys
+        assert not any(item["key"] == key for item in negative_records)
+        assert "NOT ASSESSED" in negative_text
+        assert pickle.dumps(rejected)==rejected_before
+        owner[path[-1]]=removed
+        restored_order={name:owner[name] for name in original_keys}
+        owner.clear()
+        owner.update(restored_order)
+        restored=_assert_native_scheduler_contexts(inp,rejected)
+        assert authority(*restored["PL-GOV"],family)[0] is True
+        assert pickle.dumps(rejected)==rejected_source
+        evidence.append({"family":family,"path":path,"rejected_authority":rejected_authority,
+                         "positive_equations":positive_records,"negative_equations":negative_records,
+                         "normal_negative_equations":normal_negative_records,
+                         "positive_selection":positive_selection,"negative_selection":negative_selection})
+    (tmp_path/"native-missing-term-evidence.json").write_text(json.dumps(evidence,indent=2))
+    assert pickle.dumps((inp,out))==original

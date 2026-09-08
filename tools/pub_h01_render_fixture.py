@@ -1,4 +1,4 @@
-"""Render the frozen PUB-H01 Brief, Standard and Audit report evidence."""
+"""Render retained PUB-H01 formatting evidence, separate from native member QA."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ import hashlib
 import io
 import math
 import pathlib
+import pickle
+import json
 import re
 import sys
 
@@ -286,21 +288,63 @@ def _fixture_output(inp: dict) -> dict:
     return out
 
 
-def _report_pdf(profile: str) -> bytes:
+def _report_pdf(profile: str, *, evidence_path: pathlib.Path | None = None) -> bytes:
+    """Exercise the frozen operands through actual retained component formatters."""
     inp = _fixture_input()
-    return sector_report.build_report(
-        {
-            "proj_no": "QA-PUB-H01",
-            "proj_name": "Canonical result publication",
-            "section": "200 x 300 mm reference section",
-            "author": "Sector QA",
-            "calculation_state": "Current calculation",
-        },
-        inp,
-        _fixture_output(inp),
-        figures=False,
-        profile=profile,
-    )
+    out = _fixture_output(inp)
+    original = pickle.dumps((inp,out))
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(buffer, {}, inp, out, figures=False, profile=profile)
+    contexts = builder._case_contexts("plastic")
+    assert [result_presentation.action_set(ci,"plastic")["id"] for ci,co in contexts] == ["PL-QA-1","PL-QA-2"]
+    matching = [(ci,co) for ci,co in contexts if result_presentation.action_set(ci,"plastic")["id"] == "PL-QA-1"]
+    assert len(matching) == 1
+    case_input,case_output = matching[0]
+    assert case_input["_report_case_current"] is True
+    assert case_output["combined"] is out["combined"]
+    assert case_output["torsion"] is out["torsion"]
+    assert result_presentation.action_set(case_input,"plastic")["id"] == "PL-QA-1"
+    current,reason = result_presentation.combined_publication_evidence_is_current(case_input,case_output)
+    assert current is False
+    assert result_presentation.combined_bending_assessment_blocker(case_output,case_input) is not None
+    combined_result = case_output["combined"]
+    rows = result_presentation._base_en_combined_summary_rows(case_input,combined_result)
+    target = next(row for row in rows if row["overview_key"] == "combined:longitudinal")
+    assert target["status"] == "FAIL" and target["case"] == "PL-QA-1"
+    assert math.isclose(target["util"],1.2392531643,rel_tol=1e-8)
+    builder.inp,builder.out = case_input,case_output
+    builder._h1("Retained PUB-H01 formatting fixture - " + profile)
+    builder._p("Frozen component operands for report formatting verification. "
+               "This document is not a current member calculation. Native calculation "
+               "and complete report qualification are performed separately.")
+    fields = ("check","case","status","result")
+    expected_rows = [[str(row[key]) for key in fields] for row in rows]
+    builder._table([["Check","Action set","Status","Result"],*expected_rows],
+                   [85*sector_report.mm,25*sector_report.mm,30*sector_report.mm,30*sector_report.mm])
+    def tables(items):
+        for item in items:
+            if isinstance(item,sector_report.Table):yield item
+            elif isinstance(item,sector_report.KeepTogether):yield from tables(item._content)
+    actual_tables=list(tables(builder.flow))
+    assert len(actual_tables)==1
+    table=actual_tables[0]
+    actual_rows=[[cell.getPlainText() if hasattr(cell,"getPlainText") else str(cell) for cell in row]
+                 for row in table._cellvalues[table._sector_data_start:]]
+    assert actual_rows==expected_rows
+    if profile in {"Standard","Audit"}:
+        builder._combined_base_en_components(combined_result)
+        builder._torsion_components(case_output["torsion"],critical=True)
+    sector_report.SimpleDocTemplate(buffer,pagesize=sector_report.A4,
+        leftMargin=20*sector_report.mm,rightMargin=20*sector_report.mm,
+        topMargin=25*sector_report.mm,bottomMargin=20*sector_report.mm).build(list(builder.flow))
+    assert pickle.dumps((inp,out))==original
+    if evidence_path is not None:
+        evidence_path.write_text(json.dumps({"scope":"Retained formatting only",
+            "native_combined_current":current,"native_rejection_reason":reason,
+            "rows":rows,"canonical_longitudinal":capacity.combined_longitudinal_assessment(combined_result),
+            "retained_input_output_sha256":hashlib.sha256(original).hexdigest()},default=str,indent=2))
+        evidence_path.with_suffix(".pickle").write_bytes(original)
+    return buffer.getvalue()
 
 
 def _flat_pdf_text(pdf: bytes) -> str:
@@ -365,7 +409,7 @@ def write_fixture(output: pathlib.Path) -> list[pathlib.Path]:
     output.mkdir(parents=True, exist_ok=True)
     paths = []
     for profile in ("Brief", "Standard", "Audit"):
-        pdf = _report_pdf(profile)
+        pdf = _report_pdf(profile, evidence_path=output / ("retained-pub-h01-" + profile.casefold() + ".json"))
         _validate_report(pdf, profile)
         path = output / f"pub-h01-{profile.casefold()}-report.pdf"
         path.write_bytes(pdf)

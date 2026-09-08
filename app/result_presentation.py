@@ -1486,6 +1486,19 @@ def _current_shear_action_evidence(inp, shear_result, unavailable_reason):
     }, None
 
 
+def shear_publication_signed_demand(inp, shear_result):
+    """Return the applied load only when its retained action matches the input.
+
+    Demand remains useful when a resistance method is unavailable. It still
+    requires the same method, direction, face and signed-action reconciliation
+    used by the publication guards.
+    """
+    action, _reason = _current_shear_action_evidence(
+        inp, shear_result, "retained shear action evidence is unavailable",
+    )
+    return None if action is None else action["expected_signed_v"]
+
+
 def concrete_shear_publication_input_is_current(inp, shear_result):
     """Reconcile the retained concrete shear route to the current inputs.
 
@@ -6938,6 +6951,351 @@ def non_governing_fatigue_spectrum_rows(inp, results, *, stale=False):
     return rows
 
 
+def _base_en_combined_summary_rows(inp, combined):
+    rows = []
+    biaxial = combined.get("biaxial") is True
+    direction_items = (
+        base_en_combined_direction_items(combined) if biaxial else ()
+    )
+    if biaxial and direction_items is None:
+        rows.append(_summary_row(
+            "Combined M-V-T supported components",
+            "plastic",
+            "NOT ASSESSED",
+            result="-",
+            criterion="Complete Vx+T and Vy+T direction results",
+            util=None,
+            view="M-V-T Combined",
+            note=(
+                "Both directional combined calculations are required. "
+                "Check the actions and component results, then recalculate"
+            ),
+            inp=inp,
+            overview_key="combined:physical",
+        ))
+        physical_items = []
+    elif biaxial:
+        physical_items = [
+            ("Vx+T" if component == "vx" else "Vy+T", item)
+            for component, item in direction_items
+        ]
+    else:
+        physical_items = [("", combined)]
+    for direction_label, item in physical_items:
+        prefix = f"Combined {direction_label} " if direction_label else "Combined "
+        if item.get("valid"):
+            for physical in combined_physical_components(item):
+                rows.append(_summary_row(
+                    prefix + physical["label"].lower(),
+                    "plastic",
+                    physical["status"],
+                    _percent(physical["util"]),
+                    "<= 100 %",
+                    physical["util"],
+                    "M-V-T Combined",
+                    physical["note"],
+                    inp,
+                    overview_key=f"combined:{physical['key']}",
+                ))
+        else:
+            missing = [
+                label
+                for key, label in (
+                    ("have_m", "M"),
+                    ("have_v", "V"),
+                    ("have_t", "T"),
+                )
+                if key in item and not item.get(key)
+            ]
+            note = "Missing prerequisite: " + ", ".join(missing)
+            if item.get("reason"):
+                note += "; " + result_reason(
+                    item["reason"],
+                    "combined",
+                    context="Base EN combined prerequisite reason",
+                )
+            rows.append(_summary_row(
+                prefix + "supported components",
+                "plastic",
+                "NOT ASSESSED",
+                view="M-V-T Combined",
+                note=note,
+                inp=inp,
+                overview_key="combined:physical",
+            ))
+    if biaxial and direction_items is not None:
+        rows.append(_summary_row(
+            "Generic Vx-Vy-T interaction",
+            "plastic",
+            "NOT CALCULATED",
+            result="Independent Vx+T and Vy+T calculations",
+            criterion="Not calculated",
+            view="M-V-T Combined",
+            note="No aggregate cross-direction verdict",
+            inp=inp,
+            overview_key="combined:cross_direction",
+        ))
+    return rows
+
+
+def _torsion_component_summary_rows(inp, results, torsion):
+    """Assemble current torsion components after the caller's authority guard."""
+    rows = []
+    torsion_applicability_status = torsion_applicability_publication_status(
+        torsion
+    )
+    torsion_applicability_blocks = (
+        torsion_applicability_status is not None
+        and torsion_applicability_status != "APPLICABLE"
+    ) or torsion.get("applicability_blocked") is True
+    if torsion_applicability_status is not None:
+        applicability_case = (
+            action_set(inp, "plastic")["id"] or "Unnamed case"
+        )
+        rows.append(_summary_row(
+            "Torsion applicability",
+            "plastic",
+            torsion_applicability_status,
+            torsion_applicability_status,
+            "Design basis and member scope",
+            None,
+            "Torsion",
+            torsion_applicability_note(torsion),
+            inp,
+            overview_key=f"torsion:applicability:{applicability_case}",
+            overview_parent="torsion",
+        ))
+    torsion_tube_valid = (
+        torsion.get("tube_valid") is True
+        if "tube_valid" in torsion
+        else torsion.get("valid") is True
+    )
+    torsion_transverse_resistance_assessed = (
+        torsion.get("transverse_resistance_assessed") is True
+        if "transverse_resistance_assessed" in torsion
+        else torsion.get("full_resistance_assessed") is True
+        if "full_resistance_assessed" in torsion
+        else torsion.get("valid") is True
+    )
+    if torsion_applicability_blocks:
+        torsion_tube_valid = False
+        torsion_transverse_resistance_assessed = False
+    if (
+        "closed_links_present" in torsion
+        and torsion.get("closed_links_present") is not True
+    ):
+        torsion_transverse_resistance_assessed = False
+    if not torsion_tube_valid:
+        if torsion_applicability_blocks:
+            tube_status = (
+                "NOT APPLICABLE"
+                if torsion_applicability_status == "NOT APPLICABLE"
+                else "NOT ASSESSED"
+            )
+            tube_note = torsion_applicability_note(torsion)
+        else:
+            tube_reason = str(torsion.get("reason") or "")
+            tube_status = (
+                "NOT ASSESSED"
+                if tube_reason in _TORSION_WALL_APPLICABILITY_REASONS
+                else "INVALID"
+            )
+            tube_note = result_reason(
+                torsion.get("reason") or "torsion tube evidence is invalid",
+                "torsion",
+                context="torsion summary geometry reason",
+            )
+        rows.append(_summary_row(
+            "Torsion",
+            "plastic",
+            tube_status,
+            "-",
+            "-",
+            None,
+            "Torsion",
+            tube_note,
+            inp,
+            overview_key="torsion",
+        ))
+    elif not torsion_transverse_resistance_assessed:
+        rows.append(_summary_row(
+            "Torsion",
+            "plastic",
+            "NOT ASSESSED",
+            "-",
+            "-",
+            None,
+            "Torsion",
+            result_reason(
+                torsion.get("assessment_reason")
+                or torsion.get("reason")
+                or "full torsion resistance not assessed",
+                "torsion",
+                context="torsion summary assessment reason",
+            ),
+            inp,
+            overview_key="torsion",
+        ))
+    else:
+        overall_status = torsion_assessment_status(torsion, input_payload=inp)
+        rows.append(_summary_row(
+            "Torsion",
+            "plastic",
+            overall_status,
+            overall_status,
+            "Resistance, longitudinal steel and detailing",
+            None,
+            "Torsion",
+            torsion_assessment_note(torsion, input_payload=inp),
+            inp,
+            overview_key="torsion",
+        ))
+        rows.append(_summary_row(
+            "Torsion transverse/strut resistance",
+            "plastic",
+            str(torsion.get("resistance_status") or _util_summary_status(
+                torsion.get("util"),
+                valid=torsion.get("valid") is True,
+            )),
+            _percent(torsion.get("util")),
+            "<= 100 %",
+            torsion.get("util"),
+            "Torsion",
+            result_reason(
+                torsion.get("governs")
+                or torsion.get("reason")
+                or "torsion result is invalid",
+                "torsion",
+                context="torsion resistance-component summary reason",
+            ),
+            inp,
+            overview_key="torsion:resistance",
+            overview_parent="torsion",
+        ))
+        longitudinal = torsion_longitudinal_assessment(torsion, input_payload=inp)
+        if isinstance(torsion.get("longitudinal_assessment"), Mapping):
+            required = longitudinal.get("required_asl_mm2")
+            provided = longitudinal.get("provided_equivalent_area_mm2")
+            result_text = (
+                f"{required:.0f} / {provided:.0f} mm2"
+                if required is not None and provided is not None
+                else "-"
+            )
+            rows.append(_summary_row(
+                "Torsion longitudinal reinforcement",
+                "plastic",
+                str(longitudinal.get("status") or "NOT ASSESSED"),
+                result_text,
+                "Required / modelled upper bound",
+                longitudinal.get("demand_ratio"),
+                "Torsion",
+                result_reason(
+                    longitudinal.get("reason")
+                    or "longitudinal_torsion_reinforcement_not_verified",
+                    "torsion",
+                    context="torsion longitudinal summary reason",
+                ),
+                inp,
+                overview_key="torsion:longitudinal",
+                overview_parent="torsion",
+            ))
+
+    def append_minimum_reinforcement_screen(
+        minimum,
+        *,
+        label="Formula (6.31) minimum-reinforcement screen",
+        overview_key="torsion:minimum_reinforcement",
+    ):
+        if not isinstance(minimum, Mapping):
+            return
+        status = minimum_reinforcement_screen_status(minimum)
+        value = _publication_metric(minimum.get("value"))
+        scope_note = minimum_reinforcement_screen_note(minimum)
+        if status == "PASS":
+            note = (
+                "Low-action condition satisfied; designed shear-and-torsion "
+                "reinforcement beyond the minimum is not required by Formula "
+                "(6.31). This does not verify the required minimum detailing; "
+                + scope_note
+            )
+        elif status == "FAIL":
+            note = (
+                "Low-action condition not satisfied; designed "
+                "shear-and-torsion reinforcement is required; " + scope_note
+            )
+        else:
+            note = scope_note
+        row = _summary_row(
+            label,
+            "plastic",
+            status,
+            _percent(value) if minimum.get("applicable") else "-",
+            (
+                "<= 100 %"
+                if minimum.get("applicable")
+                else "Approximately solid rectangular; first-generation route"
+            ),
+            value if minimum.get("applicable") else None,
+            "Torsion",
+            note,
+            inp,
+            overview_key=overview_key,
+            overview_parent="torsion",
+        )
+        # Applicability is the engineering result of this bounded screen.
+        # Keep its explanation in the shared overview rather than reducing
+        # it to a status-only calculation-state line.
+        row["overview_scope_in_result_table"] = True
+        rows.append(row)
+        detailing_status = minimum_reinforcement_detailing_status(minimum)
+        detailing_row = _summary_row(
+            label + " - separate link detailing",
+            "plastic",
+            detailing_status,
+            detailing_status,
+            "Minimum ratio and spacing",
+            None,
+            "Detailing",
+            minimum_reinforcement_detailing_note(minimum),
+            inp,
+            overview_key=overview_key + ":detailing",
+            overview_parent="torsion",
+        )
+        detailing_row["overview_scope_in_result_table"] = True
+        rows.append(detailing_row)
+
+    if not torsion_applicability_blocks:
+        directional_screens = torsion.get("directional_interactions") or {}
+        if directional_screens:
+            for component, label in (
+                ("vx", "Vx+T Formula (6.31) minimum-reinforcement screen"),
+                ("vy", "Vy+T Formula (6.31) minimum-reinforcement screen"),
+            ):
+                item = directional_screens.get(component) or {}
+                if torsion_publication_component_is_current(
+                    inp, results.get("shear"), torsion, component=component,
+                )[0] is not True:
+                    rows.append(_summary_row(
+                        label, "plastic", "NOT ASSESSED", "-", "-", None,
+                        "Torsion", "Recalculate this directional torsion check", inp,
+                        overview_key=f"torsion:minimum_reinforcement:{component}",
+                        overview_parent="torsion",
+                    ))
+                    continue
+                append_minimum_reinforcement_screen(
+                    item.get("min_reinf"),
+                    label=label,
+                    overview_key=f"torsion:minimum_reinforcement:{component}",
+                )
+        else:
+            append_minimum_reinforcement_screen(torsion.get("min_reinf"))
+
+    return (
+        rows, torsion_tube_valid,
+        torsion_transverse_resistance_assessed, torsion_applicability_blocks,
+    )
+
+
 @publication_calculation_scope()
 def result_summary_rows(inp, results, *, stale=False):
     """Build the shared UI/PDF overview without rerunning any solver."""
@@ -7848,254 +8206,11 @@ def result_summary_rows(inp, results, *, stale=False):
             overview_key="torsion",
         ))
     elif torsion is not None and inp.get("torsion_on"):
-        torsion_applicability_status = torsion_applicability_publication_status(
-            torsion
-        )
-        torsion_applicability_blocks = (
-            torsion_applicability_status is not None
-            and torsion_applicability_status != "APPLICABLE"
-        ) or torsion.get("applicability_blocked") is True
-        if torsion_applicability_status is not None:
-            applicability_case = (
-                action_set(inp, "plastic")["id"] or "Unnamed case"
-            )
-            rows.append(_summary_row(
-                "Torsion applicability",
-                "plastic",
-                torsion_applicability_status,
-                torsion_applicability_status,
-                "Design basis and member scope",
-                None,
-                "Torsion",
-                torsion_applicability_note(torsion),
-                inp,
-                overview_key=f"torsion:applicability:{applicability_case}",
-                overview_parent="torsion",
-            ))
-        torsion_tube_valid = (
-            torsion.get("tube_valid") is True
-            if "tube_valid" in torsion
-            else torsion.get("valid") is True
-        )
-        torsion_transverse_resistance_assessed = (
-            torsion.get("transverse_resistance_assessed") is True
-            if "transverse_resistance_assessed" in torsion
-            else torsion.get("full_resistance_assessed") is True
-            if "full_resistance_assessed" in torsion
-            else torsion.get("valid") is True
-        )
-        if torsion_applicability_blocks:
-            torsion_tube_valid = False
-            torsion_transverse_resistance_assessed = False
-        if (
-            "closed_links_present" in torsion
-            and torsion.get("closed_links_present") is not True
-        ):
-            torsion_transverse_resistance_assessed = False
-        if not torsion_tube_valid:
-            if torsion_applicability_blocks:
-                tube_status = (
-                    "NOT APPLICABLE"
-                    if torsion_applicability_status == "NOT APPLICABLE"
-                    else "NOT ASSESSED"
-                )
-                tube_note = torsion_applicability_note(torsion)
-            else:
-                tube_reason = str(torsion.get("reason") or "")
-                tube_status = (
-                    "NOT ASSESSED"
-                    if tube_reason in _TORSION_WALL_APPLICABILITY_REASONS
-                    else "INVALID"
-                )
-                tube_note = result_reason(
-                    torsion.get("reason") or "torsion tube evidence is invalid",
-                    "torsion",
-                    context="torsion summary geometry reason",
-                )
-            rows.append(_summary_row(
-                "Torsion",
-                "plastic",
-                tube_status,
-                "-",
-                "-",
-                None,
-                "Torsion",
-                tube_note,
-                inp,
-                overview_key="torsion",
-            ))
-        elif not torsion_transverse_resistance_assessed:
-            rows.append(_summary_row(
-                "Torsion",
-                "plastic",
-                "NOT ASSESSED",
-                "-",
-                "-",
-                None,
-                "Torsion",
-                result_reason(
-                    torsion.get("assessment_reason")
-                    or torsion.get("reason")
-                    or "full torsion resistance not assessed",
-                    "torsion",
-                    context="torsion summary assessment reason",
-                ),
-                inp,
-                overview_key="torsion",
-            ))
-        else:
-            overall_status = torsion_assessment_status(torsion, input_payload=inp)
-            rows.append(_summary_row(
-                "Torsion",
-                "plastic",
-                overall_status,
-                overall_status,
-                "Resistance, longitudinal steel and detailing",
-                None,
-                "Torsion",
-                torsion_assessment_note(torsion, input_payload=inp),
-                inp,
-                overview_key="torsion",
-            ))
-            rows.append(_summary_row(
-                "Torsion transverse/strut resistance",
-                "plastic",
-                str(torsion.get("resistance_status") or _util_summary_status(
-                    torsion.get("util"),
-                    valid=torsion.get("valid") is True,
-                )),
-                _percent(torsion.get("util")),
-                "<= 100 %",
-                torsion.get("util"),
-                "Torsion",
-                result_reason(
-                    torsion.get("governs")
-                    or torsion.get("reason")
-                    or "torsion result is invalid",
-                    "torsion",
-                    context="torsion resistance-component summary reason",
-                ),
-                inp,
-                overview_key="torsion:resistance",
-                overview_parent="torsion",
-            ))
-            longitudinal = torsion_longitudinal_assessment(torsion, input_payload=inp)
-            if isinstance(torsion.get("longitudinal_assessment"), Mapping):
-                required = longitudinal.get("required_asl_mm2")
-                provided = longitudinal.get("provided_equivalent_area_mm2")
-                result_text = (
-                    f"{required:.0f} / {provided:.0f} mm2"
-                    if required is not None and provided is not None
-                    else "-"
-                )
-                rows.append(_summary_row(
-                    "Torsion longitudinal reinforcement",
-                    "plastic",
-                    str(longitudinal.get("status") or "NOT ASSESSED"),
-                    result_text,
-                    "Required / modelled upper bound",
-                    longitudinal.get("demand_ratio"),
-                    "Torsion",
-                    result_reason(
-                        longitudinal.get("reason")
-                        or "longitudinal_torsion_reinforcement_not_verified",
-                        "torsion",
-                        context="torsion longitudinal summary reason",
-                    ),
-                    inp,
-                    overview_key="torsion:longitudinal",
-                    overview_parent="torsion",
-                ))
-
-        def append_minimum_reinforcement_screen(
-            minimum,
-            *,
-            label="Formula (6.31) minimum-reinforcement screen",
-            overview_key="torsion:minimum_reinforcement",
-        ):
-            if not isinstance(minimum, Mapping):
-                return
-            status = minimum_reinforcement_screen_status(minimum)
-            value = _publication_metric(minimum.get("value"))
-            scope_note = minimum_reinforcement_screen_note(minimum)
-            if status == "PASS":
-                note = (
-                    "Low-action condition satisfied; designed shear-and-torsion "
-                    "reinforcement beyond the minimum is not required by Formula "
-                    "(6.31). This does not verify the required minimum detailing; "
-                    + scope_note
-                )
-            elif status == "FAIL":
-                note = (
-                    "Low-action condition not satisfied; designed "
-                    "shear-and-torsion reinforcement is required; " + scope_note
-                )
-            else:
-                note = scope_note
-            row = _summary_row(
-                label,
-                "plastic",
-                status,
-                _percent(value) if minimum.get("applicable") else "-",
-                (
-                    "<= 100 %"
-                    if minimum.get("applicable")
-                    else "Approximately solid rectangular; first-generation route"
-                ),
-                value if minimum.get("applicable") else None,
-                "Torsion",
-                note,
-                inp,
-                overview_key=overview_key,
-                overview_parent="torsion",
-            )
-            # Applicability is the engineering result of this bounded screen.
-            # Keep its explanation in the shared overview rather than reducing
-            # it to a status-only calculation-state line.
-            row["overview_scope_in_result_table"] = True
-            rows.append(row)
-            detailing_status = minimum_reinforcement_detailing_status(minimum)
-            detailing_row = _summary_row(
-                label + " - separate link detailing",
-                "plastic",
-                detailing_status,
-                detailing_status,
-                "Minimum ratio and spacing",
-                None,
-                "Detailing",
-                minimum_reinforcement_detailing_note(minimum),
-                inp,
-                overview_key=overview_key + ":detailing",
-                overview_parent="torsion",
-            )
-            detailing_row["overview_scope_in_result_table"] = True
-            rows.append(detailing_row)
-
-        if not torsion_applicability_blocks:
-            directional_screens = torsion.get("directional_interactions") or {}
-            if directional_screens:
-                for component, label in (
-                    ("vx", "Vx+T Formula (6.31) minimum-reinforcement screen"),
-                    ("vy", "Vy+T Formula (6.31) minimum-reinforcement screen"),
-                ):
-                    item = directional_screens.get(component) or {}
-                    if torsion_publication_component_is_current(
-                        inp, results.get("shear"), torsion, component=component,
-                    )[0] is not True:
-                        rows.append(_summary_row(
-                            label, "plastic", "NOT ASSESSED", "-", "-", None,
-                            "Torsion", "Recalculate this directional torsion check", inp,
-                            overview_key=f"torsion:minimum_reinforcement:{component}",
-                            overview_parent="torsion",
-                        ))
-                        continue
-                    append_minimum_reinforcement_screen(
-                        item.get("min_reinf"),
-                        label=label,
-                        overview_key=f"torsion:minimum_reinforcement:{component}",
-                    )
-            else:
-                append_minimum_reinforcement_screen(torsion.get("min_reinf"))
+        (
+            torsion_rows, torsion_tube_valid,
+            torsion_transverse_resistance_assessed, torsion_applicability_blocks,
+        ) = _torsion_component_summary_rows(inp, results, torsion)
+        rows.extend(torsion_rows)
 
     combined = results.get("combined")
     if combined is None and inp.get("combined_on"):
@@ -8171,88 +8286,7 @@ def result_summary_rows(inp, results, *, stale=False):
         and inp.get("combined_on")
         and not combined_uses_dkna(combined)
     ):
-        biaxial = combined.get("biaxial") is True
-        direction_items = (
-            base_en_combined_direction_items(combined) if biaxial else ()
-        )
-        if biaxial and direction_items is None:
-            rows.append(_summary_row(
-                "Combined M-V-T supported components",
-                "plastic",
-                "NOT ASSESSED",
-                result="-",
-                criterion="Complete Vx+T and Vy+T direction results",
-                util=None,
-                view="M-V-T Combined",
-                note=(
-                    "Both directional combined calculations are required. "
-                    "Check the actions and component results, then recalculate"
-                ),
-                inp=inp,
-                overview_key="combined:physical",
-            ))
-            physical_items = []
-        elif biaxial:
-            physical_items = [
-                ("Vx+T" if component == "vx" else "Vy+T", item)
-                for component, item in direction_items
-            ]
-        else:
-            physical_items = [("", combined)]
-        for direction_label, item in physical_items:
-            prefix = f"Combined {direction_label} " if direction_label else "Combined "
-            if item.get("valid"):
-                for physical in combined_physical_components(item):
-                    rows.append(_summary_row(
-                        prefix + physical["label"].lower(),
-                        "plastic",
-                        physical["status"],
-                        _percent(physical["util"]),
-                        "<= 100 %",
-                        physical["util"],
-                        "M-V-T Combined",
-                        physical["note"],
-                        inp,
-                        overview_key=f"combined:{physical['key']}",
-                    ))
-            else:
-                missing = [
-                    label
-                    for key, label in (
-                        ("have_m", "M"),
-                        ("have_v", "V"),
-                        ("have_t", "T"),
-                    )
-                    if key in item and not item.get(key)
-                ]
-                note = "Missing prerequisite: " + ", ".join(missing)
-                if item.get("reason"):
-                    note += "; " + result_reason(
-                        item["reason"],
-                        "combined",
-                        context="Base EN combined prerequisite reason",
-                    )
-                rows.append(_summary_row(
-                    prefix + "supported components",
-                    "plastic",
-                    "NOT ASSESSED",
-                    view="M-V-T Combined",
-                    note=note,
-                    inp=inp,
-                    overview_key="combined:physical",
-                ))
-        if biaxial and direction_items is not None:
-            rows.append(_summary_row(
-                "Generic Vx-Vy-T interaction",
-                "plastic",
-                "NOT CALCULATED",
-                result="Independent Vx+T and Vy+T calculations",
-                criterion="Not calculated",
-                view="M-V-T Combined",
-                note="No aggregate cross-direction verdict",
-                inp=inp,
-                overview_key="combined:cross_direction",
-            ))
+        rows.extend(_base_en_combined_summary_rows(inp, combined))
     elif (
         combined is not None
         and inp.get("combined_on")

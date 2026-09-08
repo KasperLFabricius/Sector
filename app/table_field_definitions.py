@@ -291,6 +291,8 @@ _TABLE_METHOD_DEPENDENCIES = MappingProxyType({
 def validation_rule(definition: FieldDefinition) -> str:
     """Return one explicit manual validation rule from the canonical field role."""
 
+    if definition.key == "ID":
+        return "Sector-generated read-only ID, prefixed R for bars or P for tendons."
     if definition.key == "cycles":
         return "Required finite number greater than zero."
     if definition.key in {"name", "spectrum"}:

@@ -1228,3 +1228,19 @@ def test_sign_convention_figure_has_real_elements():
     assert "neutral axis" in joined                            # V / NA
     # curved arrows + arc are drawn as line traces (not just annotations)
     assert sum(1 for tr in fig.data if getattr(tr, "mode", None) == "lines") >= 3
+
+def test_crack_spacing_comparison_labels_each_edition_without_changing_values():
+    blocks = manual.manual_blocks()
+    table = next(block for block in blocks
+                 if block[0] == "table" and block[1][0] == "Crack-width edition")
+    assert table[1][1] == "Crack spacing (mm)"
+    assert table[2] == [
+        ["EN 1992-1-1:2005", "236", "0.125", "0.188"],
+        ["DS/EN + DK NA (fine)", "206", "0.125", "0.164"],
+        ["DS/EN + DK NA (coarse)", "184", "0.100", "0.077"],
+        ["DS/EN 1992-1-1:2023", "134", "0.175", "0.186"],
+    ]
+    preceding = blocks[blocks.index(table) - 1]
+    assert preceding[0] == "md"
+    assert "$s_{r,max}$ for 2005/DK NA" in preceding[1]
+    assert "$s_{r,m,cal}$ for 2023" in preceding[1]

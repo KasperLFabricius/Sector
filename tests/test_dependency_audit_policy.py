@@ -573,3 +573,11 @@ def test_workflow_checkout_setup_triggers_commands_and_install_are_exact():
     assert _step(workflow, VALIDATE_STEP)["env"] == {
         BASELINE_ENV: BASELINE_EXPRESSION
     }
+
+
+@pytest.mark.parametrize("timeout", [90, 179, 181, None, "180"])
+def test_test_job_rejects_unapproved_execution_timeouts(timeout):
+    workflow = _workflow()
+    workflow["jobs"]["test"]["timeout-minutes"] = timeout
+    with pytest.raises(DependencyAuditError, match="Windows identity or timeout"):
+        validate_workflow(_workflow_text(workflow))
