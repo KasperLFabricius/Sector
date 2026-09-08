@@ -5,6 +5,12 @@ from __future__ import annotations
 import load_cases
 
 
+# Native calculations and report generation have a bounded operation budget.
+# Navigation and ordinary reruns retain each AppTest's default timeout.
+CALCULATION_RUN_TIMEOUT = 300
+REPORT_RUN_TIMEOUT = 300
+
+
 _FIELDS = {
     "pl_case_id": (load_cases.PLASTIC_TABLE_KEY, "name"),
     "pl_P": (load_cases.PLASTIC_TABLE_KEY, "n_ed_kn"),

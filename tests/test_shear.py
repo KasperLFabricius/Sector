@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "app"))       # so `import sector_app` works stand
 APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import (  # noqa: E402
+    CALCULATION_RUN_TIMEOUT,
     apply_widget_changes,
     discard_retired_qs_fragment,
     first_case_value,
@@ -1392,7 +1393,7 @@ def _goto_page(at, page):
 
 def _calculate(at):
     _goto_page(at, "Analysis")
-    at.button(key="calculate").click().run()
+    at.button(key="calculate").click().run(timeout=CALCULATION_RUN_TIMEOUT)
     return at
 
 
@@ -1441,6 +1442,8 @@ def _set_and_click(at, button_key, *changes, run_timeout=None):
     if button_key == "calculate":
         _goto_page(at, "Analysis")
     at.button(key=button_key).click()
+    if run_timeout is None and button_key == "calculate":
+        run_timeout = CALCULATION_RUN_TIMEOUT
     at.run(timeout=run_timeout)
     if button_key in {"qs_apply", "qs_back"}:
         discard_retired_qs_fragment(at)

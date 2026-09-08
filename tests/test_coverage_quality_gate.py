@@ -24,6 +24,8 @@ from tools.verify_coverage_gate import (
     REPORT_RENDER_STEP_NAME,
     VALIDATOR_STEP_NAME,
     CoverageGateContractError,
+    CORE_DOWNLOAD_STEP_NAME,
+    expected_core_job,
     expected_branch_coverage_command,
     expected_coverage_command,
     expected_validator_command,
@@ -73,9 +75,9 @@ def test_exact_contract_and_workflow_are_aligned():
     assert expected_validator_command().endswith(
         "--baseline-ref $env:SECTOR_COVERAGE_BASELINE_REF"
     )
-    assert "--dist loadgroup" in command
-    assert '-m "not real_image_export"' in command
-    assert "--basetemp $coreTemp" in command
+    assert "qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts" in command
+    assert "parallel core shards ($phaseExit)" in command
+    assert _workflow()["jobs"]["core"] == expected_core_job()
     assert command.count("-n 0") == 3
     assert command.count("--cov-append") == 3
     assert "--cov-branch" not in command
@@ -90,6 +92,42 @@ def test_exact_contract_and_workflow_are_aligned():
     assert data["coverage"]["minimum_percent"] == 90
     assert data["branch_coverage"]["minimum_percent"] == 81
     assert data["waivers"] == []
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_shard", "duplicate_shard", "fail_fast", "masked_core", "hidden_data",
+    "stale_attempt", "merged_directories", "unpinned_download", "portable_without_core",
+    "download_stops_serial_phases", "download_failure_not_counted",
+])
+def test_core_matrix_and_exact_artifact_contract_cannot_be_weakened(mutation):
+    workflow = _workflow()
+    core = workflow["jobs"]["core"]
+    download = _step(workflow, CORE_DOWNLOAD_STEP_NAME)
+    if mutation == "missing_shard":
+        core["strategy"]["matrix"]["shard"].pop()
+    elif mutation == "duplicate_shard":
+        core["strategy"]["matrix"]["shard"].append("other")
+    elif mutation == "fail_fast":
+        core["strategy"]["fail-fast"] = True
+    elif mutation == "masked_core":
+        core["continue-on-error"] = True
+    elif mutation == "hidden_data":
+        core["steps"][-1]["with"]["include-hidden-files"] = False
+    elif mutation == "stale_attempt":
+        download["with"]["pattern"] = "sector-core-123-1-*"
+    elif mutation == "merged_directories":
+        download["with"]["merge-multiple"] = True
+    elif mutation == "unpinned_download":
+        download["uses"] = "actions/download-artifact@main"
+    elif mutation == "portable_without_core":
+        workflow["jobs"]["portable"]["needs"] = ["test"]
+    elif mutation == "download_stops_serial_phases":
+        download.pop("continue-on-error")
+    elif mutation == "download_failure_not_counted":
+        step = _step(workflow, COVERAGE_STEP_NAME)
+        step["run"] = step["run"].replace('$phaseFailures += "core artifact download"', '$ignored = "download"')
+    with pytest.raises(CoverageGateContractError):
+        validate_workflow(_contract(), _workflow_text(workflow))
 
 
 def test_raised_accepted_floor_and_targets_cannot_shrink():
