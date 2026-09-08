@@ -477,8 +477,14 @@ def test_vrd_links_2023_axial_compression_fails_before_angle_selection(
         assert applicability["selected_web_force_kn"] is None
 
 
-@pytest.mark.parametrize("n_ed_comp_kn", (-300.0, -0.0, 0.0))
-def test_vrd_links_2023_zero_or_tension_retains_existing_method(n_ed_comp_kn):
+@pytest.mark.parametrize(
+    ("n_ed_comp_kn", "requested_max", "expected_valid"),
+    ((-300.0, 2.5, False), (-300.0, 2.4, True),
+     (-0.0, 2.5, True), (0.0, 2.5, True)),
+)
+def test_vrd_links_2023_zero_or_tension_retains_existing_method(
+    n_ed_comp_kn, requested_max, expected_valid,
+):
     result = shear.vrd_links(
         35.0,
         codes.EC2_2023,
@@ -489,15 +495,23 @@ def test_vrd_links_2023_zero_or_tension_retains_existing_method(n_ed_comp_kn):
         n_ed_comp_kn,
         0.18,
         1.0,
-        2.5,
+        requested_max,
         z_mm=495.0,
         fcd_mpa=20.0,
         gamma_s=1.15,
         v_ed_kn=300.0,
     )
 
-    assert result["valid"] is True
-    assert result["vrd"] > 0.0
+    assert result["valid"] is expected_valid
+    if expected_valid:
+        assert result["vrd"] > 0.0
+    else:
+        assert result["vrd"] is None
+        assert result["calculation_state"] == "NOT ASSESSED"
+        assert result["angle_applicability"]["outside_upper"] is True
+        assert result["angle_applicability"]["permitted_max"] == pytest.approx(2.4)
+        assert "axial_applicability" not in result
+        return
     applicability = result["axial_applicability"]
     assert applicability["compression_present"] is False
     assert applicability["simplified_method_applicable"] is True
@@ -2687,9 +2701,15 @@ def test_app_shear_view_renders_and_shows_utilisation():
     _set_and_click(at, "calculate", ("number_input", "shear_V", 80.0))
     _select_view(at, "Shear")
     assert not at.exception
-    labels = [m.label for m in at.metric]
-    assert any("Utilisation" in lbl for lbl in labels)
-    assert any("VRd,c" in lbl or "Resistance" in lbl for lbl in labels)
+    metrics = {metric.label: metric for metric in at.metric}
+    resistance = at.session_state["results"]["shear"]["res"]["vrd_c"]
+    assert metrics[r"Applied $V_{y,Ed}$"].value == "80.000 kN"
+    assert metrics[r"Selected resistance $V_{Rd,c}$"].value == (
+        f"{resistance:.3f} kN"
+    )
+    utilisation = metrics[r"Nominal utilisation $|V_{Ed}|/V_{Rd,c}$"]
+    assert utilisation.value == f"{100.0 * 80.0 / resistance:.1f} %"
+    assert utilisation.delta == "OK"
     captions = " ".join(item.value for item in at.caption)
     assert "2005 no-links resistance has no z operand" in captions
     shear_figure = next(
@@ -2760,7 +2780,12 @@ def test_app_shear_links_produce_a_resistance():
     assert lk["util"] == pytest.approx(200.0 / lk["res"]["vrd"])
 
 
-def test_app_shear_links_use_the_plastic_lever_arm():
+@pytest.mark.parametrize(
+    ("face", "angle", "face_caption"),
+    (("negative", 90.0, "bottom (-y) 90"),
+     ("positive", 270.0, "top (+y) -90")),
+)
+def test_app_shear_links_use_the_plastic_lever_arm(face, angle, face_caption):
     # z is the internal lever arm the plastic engine computes (compression-tension
     # resultant separation for bending about the shear axis), not the 0.9d default.
     at = _fresh()
@@ -2771,19 +2796,21 @@ def test_app_shear_links_use_the_plastic_lever_arm():
         "calculate",
         ("checkbox", "shear_links", True),
         ("number_input", "shear_V", 100.0),
+        ("selectbox", "shear_face_y", face),
     )
     assert not at.exception
     sh = at.session_state["results"]["shear"]
     lk = sh["links"]
     assert lk["z_source"] == "plastic internal lever arm"
     assert lk["z_component"] == "z_y"
-    assert lk["z_source_angle_deg"] == pytest.approx(270.0)
+    assert sh["tension_low"] is (face == "negative")
+    assert lk["z_source_angle_deg"] == pytest.approx(angle)
     assert lk["z_source_case"] == "PL-01"
     z, d = lk["res"]["z"], sh["d"]
     assert 0.6 * d < z < d                    # a real flexural lever arm below d
     _select_view(at, "Shear")
     captions = " ".join(item.value for item in at.caption)
-    assert "= |z_y| from PL-01, top (+y) 270" in captions
+    assert f"= |z_y| from PL-01, {face_caption}" in captions
     assert "used in V_Rd,s and V_Rd,max" in captions
 
 
@@ -3047,7 +3074,8 @@ def test_app_shear_2023_fyd_from_yield_parameters():
     assert sh["res"]["fyd"] == pytest.approx(fytk / gy)
 
 
-def test_app_shear_2023_links_produce_compression_field_result():
+@pytest.mark.parametrize("demand", (50.0, 150.0))
+def test_app_shear_2023_links_produce_compression_field_result(demand):
     at = _fresh()
     at.run()
     at.checkbox(key="shear_on").set_value(True).run()
@@ -3056,16 +3084,25 @@ def test_app_shear_2023_links_produce_compression_field_result():
         "calculate",
         ("selectbox", "shear_method", codes.EC2_2023.label),
         ("checkbox", "shear_links", True),
-        ("number_input", "shear_V", 50.0),
+        ("number_input", "shear_V", demand),
     )
     assert not at.exception
-    links = at.session_state["results"]["shear"]["links"]
+    shear_result = at.session_state["results"]["shear"]
+    links = shear_result["links"]
     assert links["res"]["valid"]
     assert links["model_2023"]
     assert links["res"]["nu"] == pytest.approx(0.5)
-    assert links["longitudinal_shear_force"] == pytest.approx(
-        50.0 * links["res"]["cot"]
-    )
+    nominal = shear_result["nominal_resistance"]
+    if demand == 50.0:
+        assert demand < shear_result["res"]["vrd_c"]
+        assert nominal["route"] == "concrete"
+        assert links["longitudinal_shear_force"] == pytest.approx(0.0)
+    else:
+        assert demand > shear_result["res"]["vrd_c"]
+        assert nominal["route"] == "links"
+        assert links["longitudinal_shear_force"] == pytest.approx(
+            demand * links["res"]["cot"]
+        )
     assert links["delta_ftd"] is None
     _select_view(at, "Shear")
     assert not any("not yet implemented" in m.value for m in at.info)

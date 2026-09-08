@@ -225,7 +225,7 @@ def test_standard_clear_spacing_table_contains_only_the_retained_governing_pair(
             "first_id": "R-X",
             "second_id": "R-Y",
             "clear_mm": 999.0,
-            "margin_mm": 973.77,
+            "margin_mm": 978.0,
         })
         builder.inp, builder.out = builder._base_inp, builder._base_out
         before = _snapshot(builder._base_out)
@@ -238,9 +238,14 @@ def test_standard_clear_spacing_table_contains_only_the_retained_governing_pair(
         assert _snapshot(builder._base_out) == before
 
     assert len(published["Standard"]) == 2
-    assert published["Standard"][1][0] == "R1 - R2"
+    assert published["Standard"][1][0] == "R1 - R3"
     assert [row[0] for row in published["Audit"][1:]] == [
         "R1 - R2",
+        "R1 - R3",
+        "R1 - R4",
+        "R2 - R3",
+        "R2 - R4",
+        "R3 - R4",
         "R-X - R-Y",
     ]
 
@@ -276,9 +281,9 @@ def test_standard_fatigue_population_tables_keep_only_governing_element_and_fibr
     )
     audit_reinforcement, audit_screens, audit_concrete = published["Audit"]
     assert [row[0] for row in standard_reinforcement[1:]] == ["R1"]
-    assert [row[0] for row in audit_reinforcement[1:]] == ["R1", "R2"]
+    assert [row[0] for row in audit_reinforcement[1:]] == ["R1", "R2", "R3", "R4"]
     assert [row[1] for row in standard_screens[1:]] == ["R1"]
-    assert [row[1] for row in audit_screens[1:]] == ["R1", "R2"]
+    assert [row[1] for row in audit_screens[1:]] == ["R1", "R2", "R3", "R4"]
     assert [row[0] for row in standard_concrete[1:]] == [2]
     assert [row[0] for row in audit_concrete[1:]] == [0, 1, 2, 3, 4]
 
@@ -396,7 +401,7 @@ def test_fixture_retains_multiple_fatigue_candidates_for_depth_test():
     )[0]
     assert [row["element_id"] for row in fatigue_presentation.reinforcement_rows(
         spectrum
-    )] == ["R1", "R2"]
+    )] == ["R1", "R2", "R3", "R4"]
     assert [row["fibre_index"] for row in fatigue_presentation.concrete_rows(
         spectrum
     )] == [0, 1, 2, 3, 4]

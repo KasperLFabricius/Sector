@@ -256,7 +256,7 @@ def test_pdf_publishes_every_number_source_meaning_and_dependency():
         if annotation.get_object().get("/Subtype") == "/Link"
         and annotation.get_object().get("/Dest")
     ]
-    assert len(destination_links) >= 21 + len(manual._PART_SUMMARIES)
+    assert len(destination_links) >= 20 + len(manual._PART_SUMMARIES)
     for equation in _equations():
         assert f"Equation {equation.contract.number}" in text
         assert equation.contract.dimensional_class in text
@@ -276,3 +276,14 @@ def test_source_labels_are_complete_and_unknown_types_fail_closed():
     }
     with pytest.raises(ValueError):
         publication.source_kind_label(object())
+
+def test_combined_danish_2005_relation_uses_only_its_supported_resistance_equations():
+    equations = _equations()
+    combined = next(item for item in equations
+                    if item.contract.key == "manual.combined.utilisation")
+    assert publication.dependency_numbers(combined) == ("C9-4", "C10-1")
+    assert "C9-5" not in manual._manual_equation_dependencies_markdown(combined)
+    shear_2023 = next(item for item in equations
+                      if item.contract.key == "manual.shear.links-2023")
+    assert shear_2023.contract.number == "C9-5"
+    assert len(equations) == 33

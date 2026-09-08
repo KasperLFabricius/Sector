@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import copy
+import functools
+import json
+import pickle
 import math
 import pathlib
 import re
@@ -12,13 +15,19 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 sys.path.insert(0, str(ROOT / "tests"))
 
+import pytest
+
 import material_catalog
 import report_equation_contract as contracts
 import result_presentation
 import sector_report
 import test_report as report_data
 
-from sector import codes, detailing, shear
+from native_member_report_fixtures import (
+    native_member_report_cases, native_subdivided_report_case,
+)
+from test_shear import pub_m01_signed_2023_cases
+from sector import detailing
 from sector.section import Section
 from tools import report_render_fixture
 
@@ -51,7 +60,7 @@ def _build(inp: dict, out: dict, scenario: str) -> bytes:
         inp,
         out,
         figures=False,
-        qa_appendix=False,
+        profile="Audit",
     )
 
 
@@ -75,11 +84,14 @@ def _minimum_2023(inp: dict, *, tension: bool) -> dict:
     )
 
 
-def _fixture_transverse(predicate) -> dict:
+@functools.cache
+def _default_transverse_bundle() -> dict:
     fixture_inp = report_render_fixture._inputs()
-    result = copy.deepcopy(
-        report_render_fixture._results(fixture_inp)["transverse_reinforcement"]
-    )
+    return report_render_fixture._results(fixture_inp)["transverse_reinforcement"]
+
+
+def _fixture_transverse(predicate) -> dict:
+    result = copy.deepcopy(_default_transverse_bundle())
     governing = next(check for check in result["checks"] if predicate(check))
     result["governing"] = copy.deepcopy(governing)
     result["governing_utilisation"] = governing["utilisation"]
@@ -256,198 +268,12 @@ def _set_governing_reinforcement_zero_range(out: dict) -> None:
     fatigue_bin.sn_branch = "zero stress range"
 
 
-def _shear_links_2023() -> dict:
-    area = 2.0 * math.pi * 10.0**2 / 4.0
-    result = shear.vrd_links(
-        35.0,
-        codes.EC2_2023,
-        300.0,
-        550.0,
-        area / 150.0,
-        500.0,
-        0.0,
-        0.18,
-        1.0,
-        2.5,
-        z_mm=495.0,
-        fcd_mpa=20.0,
-        gamma_s=1.15,
-        v_ed_kn=50.0,
-    )
-    return {
-        "res": result,
-        "util": 50.0 / result["vrd"],
-        "asw": area,
-        "asw_over_s": area / 150.0,
-        "legs": 2.0,
-        "dia": 10.0,
-        "s": 150.0,
-        "fywk": 500.0,
-        "cot_min": 1.0,
-        "cot_max": 2.5,
-        "delta_ftd": None,
-        "longitudinal_shear_force": 50.0 * result["cot"],
-        "cot_limit_lo": 1.0,
-        "cot_limit_hi": 2.5,
-        "angle_limits": {
-            "clause": "DS/EN 1992-1-1:2023, 8.2.3(4), Formula (8.41)"
-        },
-        "model_2023": True,
-        "z_source": "0.9 d",
-        "out_of_limits": False,
-        "required": False,
-    }
 
 
-def _add_shear_chord(links: dict, *, model_2023: bool) -> None:
-    force = float(links["longitudinal_shear_force"])
-    lever = float(links["res"]["z"]) / 1000.0
-    moment_increment = force * lever
-    moment = 75.0
-    resistance = 400.0
-    total = moment + moment_increment
-    chord = {
-        "valid": True,
-        "axis": "x",
-        "z": lever,
-        "m_ed": moment,
-        "m_rd": resistance,
-        "ftd_v": force,
-        "ftd_t": 0.0,
-        "mv": moment_increment,
-        "mt": 0.0,
-        "m_total": total,
-        "util": total / resistance,
-        "ok": total <= resistance,
-        "capped": False,
-        "tension_low": True,
-        "m_off": 0.0,
-        "conditional": True,
-        "gets_shift": True,
-        "has_torsion": False,
-        "theta_mode": "utilisation",
-    }
-    links["chord"] = chord
-    links["chord_off"] = None
-    links["chord_candidates"] = [chord]
-    links["model_2023"] = model_2023
 
 
-def _subdivided_torsion() -> dict:
-    torsion = report_data._torsion_out(interaction=True)
-    subtubes = [
-        report_data._subtube(
-            300,
-            600,
-            100.0,
-            0.10,
-            0.0037,
-            24.6,
-            90.0,
-            24.6 / 90.0,
-            "stirrups (TRd,s)",
-            0.0,
-            -100.0,
-        ),
-        report_data._subtube(
-            1000,
-            200,
-            91.0,
-            0.15,
-            0.0023,
-            15.4,
-            20.0,
-            15.4 / 20.0,
-            "crushing (TRd,max)",
-            0.0,
-            300.0,
-        ),
-    ]
-    torsion["subdivided"] = True
-    torsion["subtubes"] = subtubes
-    torsion["trd"] = sum(item["trd"] for item in subtubes)
-    torsion["util"] = max(item["util"] for item in subtubes)
-    torsion["governing_sub"] = max(
-        range(len(subtubes)), key=lambda index: subtubes[index]["util"]
-    )
-    torsion["asl_req"] = 1400.0
-    stiffness_sum = sum(item["stiffness"] for item in subtubes)
-    torsion["torque_distribution"] = {
-        "applied_torque": 40.0,
-        "positive_stiffness_sum": stiffness_sum,
-        "shares": tuple(
-            {
-                "index": index,
-                "stiffness": item["stiffness"],
-                "fraction": item["stiffness"] / stiffness_sum,
-                "torque": item["t_ed"],
-            }
-            for index, item in enumerate(subtubes)
-        ),
-    }
-    return torsion
 
 
-def _add_combined_chords(out: dict) -> None:
-    combined = report_data._combined_out()
-    combined["transverse"] = {
-        "valid": True,
-        "cot": 2.0,
-        "theta_deg": 26.6,
-        "u_stirrup": 0.6,
-        "u_crush": 0.4,
-        "governing": 0.6,
-        "governs": "stirrups",
-        "ok": True,
-        "shear_fraction": 0.0,
-        "torsion_fraction": 0.6,
-        "shear_credited": True,
-        "vrd_c": 120.0,
-        "v_ed": 40.0,
-    }
-    combined["longitudinal"] = {
-        "valid": True,
-        "axis": "x",
-        "z": 0.5,
-        "m_ed": 20.0,
-        "m_rd": 250.0,
-        "ftd_v": 187.5,
-        "ftd_t": 100.0,
-        "mv": 60.0,
-        "mt": 25.0,
-        "m_total": 105.0,
-        "util": 105.0 / 250.0,
-        "ok": True,
-        "capped": False,
-        "tension_low": True,
-        "off_util": 0.4,
-        "biaxial": True,
-        "m_off": 90.0,
-        "conditional": True,
-        "has_torsion": True,
-    }
-    combined["chord_off"] = {
-        "valid": True,
-        "axis": "y",
-        "z": 0.3,
-        "m_ed": 90.0,
-        "m_rd": 180.0,
-        "ftd_v": 0.0,
-        "ftd_t": 100.0,
-        "mv": 0.0,
-        "mt": 15.0,
-        "m_total": 105.0,
-        "util": 105.0 / 180.0,
-        "ok": True,
-        "capped": False,
-        "tension_low": True,
-        "m_off": 20.0,
-        "conditional": True,
-    }
-    report_data._retain_combined_chords(
-        combined, combined["longitudinal"], combined["chord_off"]
-    )
-    out["combined"] = combined
 
 
 def _scenario_1() -> tuple[dict, dict]:
@@ -468,13 +294,6 @@ def _scenario_1() -> tuple[dict, dict]:
         lambda check: check["kind"] == "minimum_ratio"
         and check.get("bw_mm") is not None,
     )
-    shear_out = report_data._shear_out()
-    links = report_data._links_out()
-    _add_shear_chord(links, model_2023=False)
-    shear_out["links"] = links
-    out["shear"] = shear_out
-    out["torsion"] = _subdivided_torsion()
-    _add_combined_chords(out)
     return _complete(inp, out)
 
 
@@ -497,11 +316,6 @@ def _scenario_2() -> tuple[dict, dict]:
         lambda check: check["kind"] == "minimum_ratio"
         and check.get("tef_mm") is not None,
     )
-    shear_out = report_data._shear_out_2023()
-    links = _shear_links_2023()
-    _add_shear_chord(links, model_2023=True)
-    shear_out["links"] = links
-    out["shear"] = shear_out
     _set_governing_concrete_life(out, "constant compression")
     _set_governing_reinforcement_zero_range(out)
     return _complete(inp, out)
@@ -545,58 +359,102 @@ def _scenario_4() -> tuple[dict, dict]:
     return _complete(inp, out)
 
 
+
+
+def _verify_native_members(inp, out, *, combined):
+    rows = out.get("plastic_cases") or ()
+    assert rows
+    for row in rows:
+        case_input = report_data.case_analysis.plastic_case_input(inp, row["actions"])
+        members = row["results"]
+        shear = members["shear"]
+        torsion = members["torsion"]
+        assert result_presentation.directional_shear_publication_evidence_is_current(
+            case_input, shear, plastic_result=members["plastic"],
+        ) == (True, None)
+        assert result_presentation.torsion_publication_evidence_is_current(
+            case_input, shear, torsion,
+        ) == (True, None)
+        if combined:
+            assert result_presentation.combined_publication_evidence_is_current(
+                case_input, members,
+            ) == (True, None)
+
+
+@pytest.mark.xdist_group("native-member-report")
+@result_presentation.publication_calculation_scope()
 def test_normal_report_routes_cover_the_complete_equation_catalogue(
-    monkeypatch,
+    monkeypatch, tmp_path, native_member_report_cases,
+    native_subdivided_report_case, pub_m01_signed_2023_cases,
 ):
     calls: list[tuple[str, str | None]] = []
     original_formula = sector_report.ReportBuilder._formula
 
     def capture(self, expression, *args, **kwargs):
-        calls.append(
-            (str(kwargs["equation_key"]), kwargs.get("equation_variant"))
-        )
-        return original_formula(self, expression, *args, **kwargs)
+        value = original_formula(self, expression, *args, **kwargs)
+        calls.append((str(kwargs["equation_key"]), kwargs.get("equation_variant")))
+        return value
 
     monkeypatch.setattr(sector_report.ReportBuilder, "_formula", capture)
+    scenarios = {}
+    inp = report_render_fixture._inputs()
+    out = report_render_fixture._results(inp)
+    report_render_fixture.validate_fixture_engineering(inp, out)
+    scenarios["S0"] = (inp, out)
+    for name, factory in (("S1", _scenario_1), ("S2", _scenario_2),
+                          ("S3", _scenario_3), ("S4", _scenario_4)):
+        scenarios[name] = factory()
+    scenarios["S5-native-2005"] = copy.deepcopy(native_member_report_cases["biaxial"])
+    scenarios["S5-native-2005-zero-bending"] = copy.deepcopy(native_member_report_cases["two-face"])
+    for sign, label in ((1, "positive"), (-1, "negative")):
+        native = pub_m01_signed_2023_cases[sign]
+        scenarios["S6-native-2023-" + label] = copy.deepcopy((native["input"], native["results"]))
+    scenarios["S7-native-subdivided"] = copy.deepcopy(native_subdivided_report_case)
+    for name, (inp, out) in scenarios.items():
+        if name.startswith(("S5-", "S6-", "S7-")):
+            _verify_native_members(inp, out, combined=name.startswith("S5-"))
 
-    def run(build) -> tuple[tuple[str, str | None], ...]:
+    raw = {}
+    actual = {}
+    for name, (inp, out) in scenarios.items():
+        _complete(inp, out)
+        before = pickle.dumps((inp, out))
         calls.clear()
-        pdf = build()
+        pdf = _build(inp, out, name)
+        (tmp_path / (name + ".pdf")).write_bytes(pdf)
         assert pdf.startswith(b"%PDF")
-        return tuple(calls)
+        raw[name] = tuple(calls)
+        actual[name] = {_canonical(identity) for identity in calls}
+        (tmp_path / (name + "-equations.json")).write_text(json.dumps({
+            "raw": raw[name], "canonical": sorted(actual[name], key=repr),
+        }, indent=2), encoding="utf-8")
+        assert pickle.dumps((inp, out)) == before
 
-    report_render_fixture.build_fixture_pdf.cache_clear()
-    raw = {
-        "S0": run(
-            lambda: report_render_fixture.build_fixture_pdf(figures=False)
-        ),
-        "S1": run(lambda: _build(*_scenario_1(), "S1")),
-        "S2": run(lambda: _build(*_scenario_2(), "S2")),
-        "S3": run(lambda: _build(*_scenario_3(), "S3")),
-        "S4": run(lambda: _build(*_scenario_4(), "S4")),
-    }
-    actual = {
-        scenario: {_canonical(identity) for identity in identities}
-        for scenario, identities in raw.items()
-    }
-    expected = {
-        identity for identity, _contract in contracts.equation_contract_items()
-    }
-
-    # S0 intentionally retains a pre-origin-contract plastic payload, so the
-    # report suppresses its stale Combined worked blocks. Its governing overview
-    # now publishes current equation families that previously appeared first in
-    # S1. S1 still owns the remaining current routes, including the prestress
-    # threshold.
-    assert len(raw["S0"]) == 88
-    assert len(actual["S0"]) == 87
-    assert len(expected - actual["S0"]) == 57
-
-    covered = set(actual["S0"])
-    for scenario, expected_increment in zip(
-        ("S1", "S2", "S3", "S4"), (32, 21, 3, 1), strict=True
-    ):
-        increment = actual[scenario] - covered
-        assert len(increment) == expected_increment
-        covered.update(actual[scenario])
-    assert covered == expected
+    supported = {identity for identity, _ in contracts.supported_equation_contract_items()}
+    deferred = {identity for identity, _ in contracts.deferred_equation_contract_items()}
+    catalogue = {identity for identity, _ in contracts.equation_contract_items()}
+    covered = set().union(*actual.values())
+    (tmp_path / "coverage.json").write_text(json.dumps({
+        "counts": {name: {"raw": len(raw[name]), "unique": len(identities)}
+                   for name, identities in actual.items()},
+        "supported": sorted(supported, key=repr),
+        "covered": sorted(covered, key=repr),
+        "missing": sorted(supported - covered, key=repr),
+        "extra": sorted(covered - supported, key=repr),
+        "deferred": sorted(deferred, key=repr),
+    }, indent=2), encoding="utf-8")
+    assert len(catalogue) == 145 and len(supported) == 144
+    assert deferred == {("combined.chord.demand", "2023")}
+    assert supported.isdisjoint(deferred) and supported | deferred == catalogue
+    assert all(any(key.startswith(family + ".") for key, _ in actual["S0"])
+               for family in ("shear", "torsion", "combined"))
+    assert {("combined.chord.demand", None), ("combined.chord.utilisation", None)} <= actual["S5-native-2005"]
+    assert ("torsion.minimum-reinforcement.screen", None) in actual["S5-native-2005-zero-bending"]
+    for name in ("S6-native-2023-positive", "S6-native-2023-negative"):
+        assert {("shear.chord.demand", "2023"), ("shear.2023.vrdc", None)} <= actual[name]
+    assert {("torsion.subtube." + suffix, None) for suffix in (
+        "governing-utilisation", "stiffness-share", "torque-share",
+    )} <= actual["S7-native-subdivided"]
+    assert not covered & deferred
+    assert covered == supported, {"missing": sorted(supported - covered, key=repr),
+                                  "extra": sorted(covered - supported, key=repr)}

@@ -24,6 +24,13 @@ _PUBLICATION_ID = r"(?:\d+\.\d+|[A-Z]\d+-\d+)"
 _PUBLICATION_REFERENCE = re.compile(
     rf"\bSee ((?:Table|Figure) {_PUBLICATION_ID})\.(?![\d-])"
 )
+# Aggregate extraction may concatenate separate positioned text objects, e.g.
+# "GlossarySee Table D3-1.". Count those references conservatively; positioning
+# still requires the strict word boundary in each actual visitor text object.
+# Equality of both inventories prevents an embedded "NeverSee" from passing.
+_AGGREGATE_PUBLICATION_REFERENCE = re.compile(
+    rf"See ((?:Table|Figure) {_PUBLICATION_ID})\.(?![\d-])"
+)
 _PUBLICATION_CAPTION = re.compile(
     rf"(?<!See )\b((?:Table|Figure) {_PUBLICATION_ID})\.(?![\d-])"
 )
@@ -87,7 +94,7 @@ def validate_caption_colocation(page_texts: list[str]) -> tuple[str, ...]:
     references = {}
     captions = {}
     for number, page_text in enumerate(page_texts, start=1):
-        for match in _PUBLICATION_REFERENCE.finditer(page_text):
+        for match in _AGGREGATE_PUBLICATION_REFERENCE.finditer(page_text):
             references.setdefault(match.group(1), []).append(number)
         for match in _PUBLICATION_CAPTION.finditer(page_text):
             captions.setdefault(match.group(1), []).append(number)
@@ -298,7 +305,8 @@ def validate_publication_links(
         zip(reader.pages, page_texts), start=1
     ):
         expected = Counter(
-            match.group(1) for match in _PUBLICATION_REFERENCE.finditer(text)
+            match.group(1)
+            for match in _AGGREGATE_PUBLICATION_REFERENCE.finditer(text)
         )
         occurrences = positioned_references(page, number)
         actual = Counter(item.label for item in occurrences)

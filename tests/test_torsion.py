@@ -1746,7 +1746,7 @@ def test_duplicate_case_authority_edits_do_not_transfer_after_name_resolution():
     assert not at.exception
 
 
-def test_app_torsion_without_current_closed_links_is_not_assessed():
+def test_app_torsion_without_current_closed_links_is_not_assessed(tmp_path):
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
@@ -1767,6 +1767,13 @@ def test_app_torsion_without_current_closed_links_is_not_assessed():
     assert t["trd_c"] > 0.0
     assert t["asl_req"] > 0.0
     assert t["theta_mode"] == "transparency"
+
+    _, _, proof = _native_torsion_summary_snapshot(at, tmp_path, "no-links")
+    _assert_native_torsion_unavailable(
+        proof, current=True, status="NOT ASSESSED",
+        note="Closed torsion links are required before the transverse/strut "
+        "resistance component can be assessed",
+    )
     _select_view(at, "Torsion")
     assert any("NOT ASSESSED" in item.value for item in at.warning)
     labels = [metric.label for metric in at.metric]
@@ -1816,7 +1823,7 @@ def test_app_torsion_produces_a_resistance_with_current_closed_links():
     assert t["asl_req"] > 0.0                       # torsion needs longitudinal steel
 
 
-def test_app_reference_torsion_never_promotes_component_pass_to_overall_pass():
+def test_app_reference_torsion_never_promotes_component_pass_to_overall_pass(tmp_path):
     at = _fresh()
     at.run()
     _apply_rectangle(at, bar_dia=20.0)
@@ -1849,6 +1856,11 @@ def test_app_reference_torsion_never_promotes_component_pass_to_overall_pass():
     assert longitudinal["bending_reserve_verified"] is False
     assert longitudinal["anchorage_verified"] is False
 
+    _, native_reference, reference_proof = _native_torsion_summary_snapshot(
+        at, tmp_path, "reference-bars-20",
+    )
+    _assert_native_torsion_longitudinal_rows(native_reference, reference_proof, "NOT ASSESSED")
+
     _select_view(at, "Torsion")
     warnings = " ".join(item.value for item in at.warning)
     captions = " ".join(item.value for item in at.caption)
@@ -1878,13 +1890,19 @@ def test_app_reference_torsion_never_promotes_component_pass_to_overall_pass():
         < insufficient["asl_req"]
     )
     assert insufficient["longitudinal_assessment"]["status"] == "FAIL"
+
+    _, native_insufficient, insufficient_proof = _native_torsion_summary_snapshot(
+        at, tmp_path, "reference-bars-8",
+    )
+    _assert_native_torsion_longitudinal_rows(native_insufficient, insufficient_proof, "FAIL")
+    assert native_reference["torsion"]["longitudinal_assessment"] == longitudinal
     _select_view(at, "Torsion")
     warnings = " ".join(item.value for item in at.warning)
     assert "Overall torsion assessment: FAIL" in warnings
     assert "below the Formula (6.28) longitudinal torsion demand" in warnings
 
 
-def test_app_stale_formula_628_pass_is_not_published_in_torsion_views():
+def test_app_stale_formula_628_pass_is_not_published_in_torsion_views(tmp_path):
     at = _fresh()
     at.run()
     _apply_rectangle(at, bar_dia=20.0)
@@ -1901,6 +1919,12 @@ def test_app_stale_formula_628_pass_is_not_published_in_torsion_views():
     )
     _calculate(at)
     assert not at.exception
+
+
+    native_input, native_baseline, baseline_proof = _native_torsion_summary_snapshot(
+        at, tmp_path, "formula-628-loaded-baseline",
+    )
+    _assert_native_torsion_longitudinal_rows(native_baseline, baseline_proof, "NOT ASSESSED")
 
     retained = copy.deepcopy(at.session_state["results"])
     torsion_result = retained["torsion"]
@@ -1924,6 +1948,28 @@ def test_app_stale_formula_628_pass_is_not_published_in_torsion_views():
         area_sufficient=True,
     )
     at.session_state["results"] = retained
+
+    poisoned_input, native_poison, proof = _native_torsion_summary_snapshot(
+        at, tmp_path, "formula-628-stale-pass",
+    )
+    import pickle
+    assert pickle.dumps(poisoned_input) == pickle.dumps(native_input)
+    physical_keys = set(native_baseline["torsion"]) - {
+        "assessment_status", "assessment_ok", "overall_reason", "longitudinal_assessment",
+    }
+    assert pickle.dumps({k: native_poison["torsion"][k] for k in sorted(physical_keys)}) == (
+        pickle.dumps({k: native_baseline["torsion"][k] for k in sorted(physical_keys)})
+    )
+    assert proof["current"] is True
+    assert proof["current_reason"] is None
+    assert proof["longitudinal"]["evidence_consistent"] is False
+    assert proof["longitudinal"]["status"] == "NOT ASSESSED"
+    rows = {r["check"]: r for r in proof["rows"] if r["view"] == "Torsion"}
+    assert rows["Torsion"]["status"] == "NOT ASSESSED"
+    assert rows["Torsion transverse/strut resistance"]["status"] == "PASS"
+    assert rows["Torsion longitudinal reinforcement"]["status"] == "NOT ASSESSED"
+    assert rows["Torsion longitudinal reinforcement"]["result"] == "-"
+    assert rows["Torsion longitudinal reinforcement"]["util"] is None
 
     _select_view(at, "Torsion")
     assert not at.exception
@@ -1957,7 +2003,7 @@ def test_app_stale_formula_628_pass_is_not_published_in_torsion_views():
     assert longitudinal_row["Result"] == "-"
 
 
-def test_app_combined_without_links_withholds_torsion_dependent_verdicts():
+def test_app_combined_without_links_withholds_torsion_dependent_verdicts(tmp_path):
     at = _fresh()
     at.run()
     _set(
@@ -2000,6 +2046,12 @@ def test_app_combined_without_links_withholds_torsion_dependent_verdicts():
     assert "dkna_sum" not in combined_result
     assert "crushing" not in combined_result
     assert "transverse" not in combined_result
+
+    _, _, proof = _native_torsion_summary_snapshot(at, tmp_path, "combined-no-links")
+    note = ("Closed torsion links are required before the transverse/strut "
+            "resistance component can be assessed")
+    _assert_native_torsion_unavailable(proof, current=True, status="NOT ASSESSED", note=note)
+    _assert_native_torsion_combined_blocker(proof, note)
 
 
 def test_app_hollow_override_above_real_wall_is_not_assessed_then_recovers():
@@ -2798,7 +2850,7 @@ def test_pre_m05_contract_with_changed_spacing_hides_old_spacing_until_recalcula
     )
 
 
-def test_app_incomplete_torsion_wall_evidence_blocks_dependent_mvt_and_recovers():
+def test_app_incomplete_torsion_wall_evidence_blocks_dependent_mvt_and_recovers(tmp_path):
     import result_presentation as presentation
 
     at = _fresh()
@@ -2824,6 +2876,11 @@ def test_app_incomplete_torsion_wall_evidence_blocks_dependent_mvt_and_recovers(
     assert accepted["torsion"]["valid"] is True
     assert "combined" in accepted
 
+    accepted_input, native_accepted, accepted_proof = _native_torsion_summary_snapshot(
+        at, tmp_path, "walls-complete",
+    )
+    _assert_native_torsion_assessed_components(accepted_proof)
+
     incomplete = [bar for bar in complete if bar[0] < 120.0 - 1.0e-12]
     _replace_bar_points(at, incomplete)
     _calculate(at)
@@ -2832,6 +2889,15 @@ def test_app_incomplete_torsion_wall_evidence_blocks_dependent_mvt_and_recovers(
     assert rejected["torsion"]["trd"] is None
     assert rejected["torsion"]["util"] is None
     assert rejected["torsion"]["asl_req"] is None
+
+    _, _, rejected_proof = _native_torsion_summary_snapshot(at, tmp_path, "walls-incomplete")
+    wall_note = ("Torsion is not assessed because longitudinal reinforcement has not "
+                 "been established for every equivalent-tube wall")
+    _assert_native_torsion_unavailable(
+        rejected_proof, current=False, status="NOT ASSESSED",
+        note=presentation.result_reason("torsion result evidence is unavailable", "torsion"),
+    )
+    _assert_native_torsion_combined_blocker(rejected_proof, wall_note)
     assert presentation.combined_bending_assessment_blocker(rejected) == (
         "Torsion prerequisite is not assessed: Torsion is not assessed because "
         "longitudinal reinforcement has not been established for every "
@@ -2863,6 +2929,14 @@ def test_app_incomplete_torsion_wall_evidence_blocks_dependent_mvt_and_recovers(
     assert recovered["torsion"]["valid"] is True
     assert "combined" in recovered
     assert presentation.combined_bending_assessment_blocker(recovered) is None
+
+    recovered_input, native_recovered, recovered_proof = _native_torsion_summary_snapshot(
+        at, tmp_path, "walls-recovered",
+    )
+    _assert_native_torsion_assessed_components(recovered_proof)
+    assert native_accepted["torsion"]["valid"] is True
+    assert native_recovered["torsion"]["valid"] is True
+    assert accepted_input["signature"] == recovered_input["signature"]
 
 
 def _subdivided(at, b0=300.0, h0=600.0, b1=1000.0, h1=200.0, T=40.0):
@@ -3018,7 +3092,7 @@ def test_app_subdivision_override_blocks_and_preserves_completed_result():
     assert any("override to 0 mm" in item.value for item in at.error)
 
 
-def test_app_compound_torsion_requires_subdivision():
+def test_app_compound_torsion_requires_subdivision(tmp_path):
     at = _fresh()
     at.run()
     _apply_t_section(at)
@@ -3030,6 +3104,12 @@ def test_app_compound_torsion_requires_subdivision():
     assert t["compound_detected"] is True
     assert t["valid"] is False
     assert t["reason"] == "compound outline requires subdivision"
+
+    _, _, proof = _native_torsion_summary_snapshot(at, tmp_path, "compound-unsubdivided")
+    _assert_native_torsion_unavailable(
+        proof, current=True, status="INVALID",
+        note="The compound outline requires subdivision before torsion can be assessed",
+    )
     _select_view(at, "Torsion")
     assert any(
         "compound outline" in w.value
@@ -3164,7 +3244,8 @@ def test_app_torsion_subdivided_uses_the_shared_member_angle():
     assert "each sub-tube is at its OWN" not in caps
 
 
-def test_app_torsion_subdivided_combined_pairs_web():
+@pytest.mark.parametrize("web_established", (True, False))
+def test_app_torsion_subdivided_combined_pairs_web(web_established):
     # The combined V+T crushing must use the WEB sub-tube's torsion SHARE, not full TEd.
     at = _fresh(); at.run()
     at.checkbox(key="shear_on").set_value(True).run()
@@ -3174,6 +3255,12 @@ def test_app_torsion_subdivided_combined_pairs_web():
         ("number_input", "shear_V", 150.0),
     )
     _subdivided(at)
+    if web_established:
+        _set(
+            at,
+            ("selectbox", "shear_section_form", "Constant-width web"),
+            ("number_input", "shear_bw", 300.0),
+        )
     _set_and_click(
         at,
         "calculate",
@@ -3182,6 +3269,17 @@ def test_app_torsion_subdivided_combined_pairs_web():
     )
     assert not at.exception
     to = at.session_state["results"]["torsion"]
+    assert to["valid"] is True and to["subdivided"] is True
+    shear_result = at.session_state["results"]["shear"]
+    if not web_established:
+        assert shear_result["res"]["valid"] is False
+        assert shear_result["res"]["reason"] == (
+            "the governing shear section geometry was not established"
+        )
+        assert "interaction" not in to
+        return
+    assert shear_result["links"]["res"]["valid"] is True
+    assert shear_result["bw"] == pytest.approx(300.0)
     inter = to["interaction"]
     assert inter["t_ed"] == pytest.approx(to["subtubes"][0]["t_ed"])     # web share
     assert inter["t_ed"] < to["t_ed"]                                    # < full TEd
@@ -4029,7 +4127,7 @@ def test_app_torsion_nu_v_toggle_raises_trd_max():
     assert t["trd_max"] > base
 
 
-def test_app_torsion_outside_permitted_range_withholds_verdict():
+def test_app_torsion_outside_permitted_range_withholds_verdict(tmp_path):
     at = _fresh()
     at.run()
     at.checkbox(key="torsion_on").set_value(True).run()
@@ -4058,6 +4156,16 @@ def test_app_torsion_outside_permitted_range_withholds_verdict():
     assert t["assessment_ok"] is None
     assert t["angle_applicability"]["requested_max"] == 3.0
     assert t["angle_applicability"]["permitted_max"] == 2.5
+
+    _, _, proof = _native_torsion_summary_snapshot(at, tmp_path, "angle-outside-range")
+    import result_presentation as presentation
+    _assert_native_torsion_unavailable(
+        proof, current=True, status="NOT ASSESSED",
+        note=presentation.result_reason(t["assessment_reason"], "torsion"),
+    )
+    assert "outside the permitted range" in next(
+        r["note"] for r in proof["rows"] if r["check"] == "Torsion"
+    )
     detailing = at.session_state["results"]["transverse_reinforcement"]
     torsion_detailing = [
         check for check in detailing["checks"]
@@ -4208,3 +4316,97 @@ def test_torsion_detailing_requires_literal_geometry_validity(
             and check["utilisation"] is None
             for check in result["checks"]
         )
+
+
+def _native_torsion_summary_snapshot(at, tmp_path, stage):
+    """Save actual same-Calculate evidence before any subsequent changes."""
+    import json
+    import pickle
+    import result_presentation as presentation
+
+    inp, out = copy.deepcopy((
+        at.session_state["result_input_snapshot"], at.session_state["results"],
+    ))
+    before = pickle.dumps((inp, out), protocol=pickle.HIGHEST_PROTOCOL)
+    (tmp_path / f"native-summary-state-{stage}.pickle").write_bytes(before)
+    with presentation.publication_calculation_scope():
+        current, reason = presentation.torsion_publication_component_is_current(
+            inp, out.get("shear"), out["torsion"],
+        )
+        longitudinal = presentation.torsion_longitudinal_assessment(
+            out["torsion"], input_payload=inp,
+        )
+        rows = presentation.result_summary_rows(inp, out)
+        blocker = presentation.combined_bending_assessment_blocker(out, inp)
+    unchanged = pickle.dumps((inp, out), protocol=pickle.HIGHEST_PROTOCOL) == before
+    proof = {
+        "stage": stage, "current": current, "current_reason": reason,
+        "longitudinal": longitudinal, "combined_blocker": blocker,
+        "rows": rows, "input_and_result_unchanged": unchanged,
+    }
+    (tmp_path / f"native-summary-state-{stage}.json").write_text(
+        json.dumps(proof, indent=2, default=str) + "\n", encoding="utf-8",
+    )
+    assert unchanged
+    return inp, out, proof
+
+
+def _assert_native_torsion_unavailable(proof, *, current, status, note):
+    assert proof["current"] is current
+    assert proof["current_reason"] == (None if current else "torsion result evidence is unavailable")
+    rows = {r["check"]: r for r in proof["rows"] if r["view"] == "Torsion"}
+    root = rows["Torsion"]
+    assert (root["status"], root["result"], root["criterion"], root["util"]) == (
+        status, "-", "-", None,
+    )
+    assert root["note"] == note
+    assert "Torsion transverse/strut resistance" not in rows
+    assert "Torsion longitudinal reinforcement" not in rows
+    if not current:
+        assert "Torsion applicability" not in rows
+
+
+def _assert_native_torsion_combined_blocker(proof, note):
+    expected = "Torsion prerequisite is not assessed: " + note
+    assert proof["combined_blocker"] == expected
+    rows = [r for r in proof["rows"] if r["view"] == "M-V-T Combined"]
+    assert rows
+    assert all(r["status"] == "NOT ASSESSED" for r in rows)
+    assert all(r["result"] == "-" and r["util"] is None for r in rows)
+    assert all(r["note"] == expected for r in rows)
+
+
+def _assert_native_torsion_longitudinal_rows(out, proof, status):
+    import result_presentation as presentation
+
+    assert proof["current"] is True
+    assert proof["current_reason"] is None
+    rows = {r["check"]: r for r in proof["rows"] if r["view"] == "Torsion"}
+    assert rows["Torsion"]["status"] == status
+    assert rows["Torsion"]["util"] is None
+    resistance = rows["Torsion transverse/strut resistance"]
+    assert resistance["status"] == "PASS"
+    assert resistance["util"] == pytest.approx(0.5235479567)
+    longitudinal = rows["Torsion longitudinal reinforcement"]
+    native = out["torsion"]["longitudinal_assessment"]
+    assert proof["longitudinal"]["evidence_consistent"] is True
+    assert longitudinal["status"] == status
+    assert longitudinal["util"] == pytest.approx(
+        native["required_asl_mm2"] / native["provided_equivalent_area_mm2"],
+    )
+    assert "1177 /" in longitudinal["result"]
+    assert presentation.overall_summary_status(list(rows.values())) == status
+    assert presentation.overall_summary_status(proof["rows"]) == status
+    for key in ("distribution_verified", "bending_reserve_verified", "anchorage_verified"):
+        assert native[key] is False
+
+
+def _assert_native_torsion_assessed_components(proof):
+    assert proof["current"] is True
+    assert proof["current_reason"] is None
+    assert proof["combined_blocker"] is None
+    trows = [r for r in proof["rows"] if r["check"] == "Torsion transverse/strut resistance"]
+    crows = [r for r in proof["rows"] if r["view"] == "M-V-T Combined" and r["util"] is not None]
+    assert trows and crows
+    assert all(r["status"] in {"PASS", "FAIL"} and r["result"] != "-" and r["util"] is not None
+               for r in trows + crows)

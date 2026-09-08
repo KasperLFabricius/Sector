@@ -18,11 +18,10 @@ import numpy as np
 from deferred_import import deferred_module
 
 from app.engineer_messages import EngineerValidationError
-from sector import capacity
+from sector import capacity, plastic_sweep
 from sector.engineer_message import EngineerMessage
 
 sls_core = deferred_module("sector.sls")
-plastic_core = deferred_module("sector.plastic")
 
 _PLASTIC_RESULT_KEYS = (
     "plastic", "shear", "torsion", "combined", "minimum_reinforcement",
@@ -364,10 +363,10 @@ def plastic_sweep_error(inp: Mapping) -> EngineerMessage | None:
     if v_inc <= 0.0:
         return _PLASTIC_SWEEP_INCREMENT
     try:
-        plastic_core.plastic_sweep_angles(v_min, v_max, v_inc)
-    except plastic_core.PlasticSweepSpanError:
+        plastic_sweep.plastic_sweep_angles(v_min, v_max, v_inc)
+    except plastic_sweep.PlasticSweepSpanError:
         return _PLASTIC_SWEEP_SPAN
-    except plastic_core.PlasticSweepResolutionError:
+    except plastic_sweep.PlasticSweepResolutionError:
         return _PLASTIC_SWEEP_RESOLUTION
     return None
 

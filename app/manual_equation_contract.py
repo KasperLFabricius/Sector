@@ -637,7 +637,6 @@ MANUAL_EQUATION_CONTRACTS = (
         "dimensionless interaction check",
         (
             "manual.shear.links-2005",
-            "manual.shear.links-2023",
             "manual.torsion.resistance",
         ),
     ),

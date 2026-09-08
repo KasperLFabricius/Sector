@@ -311,10 +311,12 @@ def test_renderer_compilation_failures_leave_publication_state_atomic(
     assert builder._equation_number == number_before
 
 
-def test_literal_result_compiler_is_whitelisted_to_exact_stress_plane_identities():
+def test_literal_result_compiler_is_whitelisted_to_exact_text_result_identities():
     expected = frozenset({
         ("elastic.long.stress-plane", None),
         ("elastic.instantaneous.stress-plane", None),
+        ("torsion.utilisation", None),
+        ("torsion.subtube.governing-utilisation", None),
     })
     assert sector_report._LITERAL_REPORT_RESULT_IDENTITIES == expected
 
@@ -529,7 +531,7 @@ def test_all_retained_report_formula_calls_have_code_authored_keys():
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "_formula"
     ]
-    assert len(calls) == 144
+    assert len(calls) == 145
 
     allowed_dynamic = "f'materials.steel.fyd-{material_index + 1}'"
     authored = []
@@ -556,6 +558,7 @@ def test_all_retained_report_formula_calls_have_code_authored_keys():
         "materials.concrete.fcd": 2,
         "shear.links.vrds": 2,
         "shear.links.vrdmax": 2,
+        "combined.crushing.interaction": 2,
         "crack.2005.spacing": 2,
         "crack.effective-area.2005": 2,
         "crack.effective-area.2023": 2,

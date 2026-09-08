@@ -12,7 +12,7 @@ import material_catalog
 import project_io
 import reinforcement_table
 from sector import __version__
-from sector import codes, detailing
+from sector import capacity, codes, detailing, shear_inputs
 from sector.design_standards import DesignBasisKey
 
 
@@ -231,6 +231,17 @@ def project_scalars() -> dict:
         "transverse_apply_ductility_reduction": False,
         "shear_on": True,
         "shear_method": DK_PRESET,
+        "shear_section_form": shear_inputs.SHEAR_SECTION_AUTO,
+        "shear_duct_case": shear_inputs.SHEAR_DUCT_NONE,
+        "shear_hoop_diameter": 0.0,
+        "shear_vx_web_inclination_deg": 0.0,
+        "shear_vy_web_inclination_deg": 0.0,
+        "shear_vx_fitted_z": 0.0,
+        "shear_vy_fitted_z": 0.0,
+        "shear_vx_duct_largest": 0.0,
+        "shear_vy_duct_largest": 0.0,
+        "shear_vx_duct_sum": 0.0,
+        "shear_vy_duct_sum": 0.0,
         "shear_vx_bw": 0.0,
         "shear_vy_bw": 0.0,
         "shear_dlower": 16.0,
@@ -247,7 +258,21 @@ def project_scalars() -> dict:
         "strut_cot_max": 2.5,
         "torsion_on": True,
         "torsion_method": DK_PRESET,
-        "torsion_tef": 0.0,
+        "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+        "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+        capacity.TORSION_CASE_AUTHORITIES_KEY: {
+            "PL-COMPLETE": {
+                capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                    capacity.TORSION_DESIGN_EQUILIBRIUM
+                ),
+                capacity.TORSION_CASE_MEMBER_SCOPE_KEY: (
+                    capacity.TORSION_MEMBER_CLOSED
+                ),
+            },
+        },
+        # Uniform 80 mm satisfies both 2a=60 mm horizontal-wall and 2a=80 mm
+        # vertical-wall lower bounds for the original reinforcement positions.
+        "torsion_tef": 80.0,
         "torsion_nu_v": False,
         "torsion_gamma_ct": 1.70,
         "torsion_subdivide": False,
@@ -367,18 +392,29 @@ def checking_pack() -> str:
           As,min=68.75023549 mm2 versus As,provided=1000 mm2: PASS.
         - Link area/s = 157.07963268/150=1.047197551 mm2/mm.
           rho_w=0.005235987756 versus rho_w,min=0.000690130422: PASS.
-        - Torsion link spacing limit=min(uk/8,minimum dimension)=95 mm;
-          150/95=1.578947368: FAIL. This is the genuine detailing verdict.
+        - Torsion link spacing limit=min(uk/8,minimum dimension)=85 mm;
+          150/85=1.764705882: FAIL. This is the genuine detailing verdict.
         - Concrete shear resistance VRd,c=47.59286047 kN; 30/VRd,c
           gives utilisation 0.630346647: PASS.
         - With retained plastic lever arm z=242.58799301 mm and optimum
-          cot(theta)=1.206, VRd,s=127.653869995 kN and
-          VRd,max=271.275663689 kN. Link utilisation=0.2350105015.
-        - For tef=60 mm, Ak=0.0336 m2, TRd,s=17.680883454 kNm,
-          TRd,max=15.780839433 kNm and TRd,c=4.808818657 kNm.
-          Torsion utilisation=1.2673597045: FAIL (crushing governs).
-        - Combined sum=0.741235999+0.235010501+1.267359704
-          =2.243606205: FAIL.
+          cot(theta)=1.295, VRd,s=137.074429223 kN and
+          VRd,max=267.074596285 kN. Link utilisation=0.2188592006.
+        - The explicit uniform wall tef=80 mm satisfies the reinforcement-derived
+          lower bounds of 60 mm horizontally and 80 mm vertically. It gives
+          Ak=0.0264 m2, uk=0.68 m, TRd,s=14.917329117 kNm,
+          TRd,max=16.276283020 kNm and TRd,c=5.037810022 kNm.
+          Torsion utilisation=1.3407225813: FAIL (stirrups govern).
+        - The shared stirrup/strut minimax lower bound is
+          max(1.73623574282/c, 0.648756504103*(c+1/c)). Its crossing is
+          c=1.294701421; neighboring grid nodes 1.294 and 1.295 give
+          1.341758688 and 1.341109946. All four conditional chord objectives
+          are lower at 1.295, proving the full member optimum on the 0.001 grid.
+          Concrete shear credit gives zero longitudinal shear increment.
+        - DK NA combined interaction uses action-alone resistances: the positive
+          shear face governs with VRd=44.181297943 kN, while isolated torsion
+          balances yielding and crushing at c=1.385965124, TRd=15.965172124 kNm.
+          Combined sum=0.741235999+0.679020341+1.252726863
+          =2.672983203: FAIL.
 
         ## Fatigue
 

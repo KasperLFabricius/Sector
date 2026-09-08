@@ -36,6 +36,8 @@ class EquationContract:
     substitution_role: str = "none"
     publication_role: str = "theory"
     applicability_note_required: bool = False
+    publication_scope: str = "supported"
+    scope_reason: str | None = None
 
     @property
     def expects_result(self) -> bool:
@@ -63,6 +65,8 @@ def _result(
     *rows: tuple[str, str] | tuple[str, str, str],
     substitution_role: str = "numerical",
     applicability_note_required: bool = False,
+    publication_scope: str = "supported",
+    scope_reason: str | None = None,
 ) -> EquationContract:
     return EquationContract(
         _symbols(*rows),
@@ -71,6 +75,8 @@ def _result(
         substitution_role=substitution_role,
         publication_role="calculation",
         applicability_note_required=applicability_note_required,
+        publication_scope=publication_scope,
+        scope_reason=scope_reason,
     )
 
 
@@ -917,6 +923,11 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("N<sub>Vd</sub>", "shear-induced longitudinal force", "kN"),
         ("F<sub>td,T</sub>", "distributed torsion longitudinal force", "kN"),
         ("z", "internal lever arm", "m"),
+        publication_scope="deferred",
+        scope_reason=(
+            "2023 Combined bending, shear and torsion is outside the supported "
+            "release scope. The separate 2023 shear chord check remains supported."
+        ),
     ),
     ("combined.chord.utilisation", None): _result(
         "utilisation", "dimensionless",
@@ -1208,6 +1219,13 @@ def _validate_catalogue() -> None:
             f"Expected 145 report equation contracts, got {len(_CONTRACTS)}."
         )
     for (key, variant), contract in _CONTRACTS.items():
+        if contract.publication_scope not in {"supported", "deferred"}:
+            raise RuntimeError(f"Invalid equation publication scope: {key!r}.")
+        if contract.publication_scope == "deferred":
+            if not isinstance(contract.scope_reason, str) or not contract.scope_reason.strip():
+                raise RuntimeError(f"Deferred equation {key!r} requires a scope reason.")
+        elif contract.scope_reason is not None:
+            raise RuntimeError(f"Supported equation {key!r} has a deferred scope reason.")
         if key != _MATERIAL_TEMPLATE_KEY and not _KEY_RE.fullmatch(key):
             raise RuntimeError(f"Invalid equation-contract key: {key!r}.")
         if variant is not None and not _KEY_RE.fullmatch(variant):
@@ -1251,7 +1269,7 @@ _validate_catalogue()
 def equation_contract(
     equation_key: str, variant: str | None = None
 ) -> EquationContract:
-    """Return the exact contract for a validated live equation key and variant."""
+    """Inspect an exact inventory definition, including explicitly deferred ones."""
 
     key = str(equation_key)
     lookup_key = _MATERIAL_TEMPLATE_KEY if _MATERIAL_KEY_RE.fullmatch(key) else key
@@ -1281,6 +1299,11 @@ def validate_equation_payload(
 ) -> None:
     """Fail atomically when a live call disagrees with its frozen contract."""
 
+    if contract.publication_scope != "supported":
+        raise ValueError(
+            f"Equation {equation_key!r} is not supported for publication: "
+            f"{contract.scope_reason or contract.publication_scope}"
+        )
     if not isinstance(expression, str) or not expression.strip():
         raise ValueError(f"Equation {equation_key} requires a symbolic expression.")
     has_substitution = isinstance(substitution, str) and bool(substitution.strip())
@@ -1314,3 +1337,25 @@ def equation_contract_items() -> tuple[
     """Return the immutable catalogue in authored insertion order for QA."""
 
     return tuple(_CONTRACTS.items())
+
+
+def supported_equation_contract_items() -> tuple[
+    tuple[tuple[str, str | None], EquationContract], ...
+]:
+    """Return every executable identity without altering the full QA inventory."""
+
+    return tuple(
+        item for item in _CONTRACTS.items()
+        if item[1].publication_scope == "supported"
+    )
+
+
+def deferred_equation_contract_items() -> tuple[
+    tuple[tuple[str, str | None], EquationContract], ...
+]:
+    """Keep unavailable historical definitions and their explicit scope reasons."""
+
+    return tuple(
+        item for item in _CONTRACTS.items()
+        if item[1].publication_scope == "deferred"
+    )

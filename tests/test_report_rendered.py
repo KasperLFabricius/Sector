@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import io
 
 import pypdf
@@ -22,6 +23,10 @@ from tools.report_render_fixture import (
     validate_results_overview_pagination,
     validate_worked_example_text,
 )
+
+import result_presentation
+import case_analysis
+import load_cases
 
 
 def test_outline_validation_accepts_a_visible_heading_wrapped_by_pdf_layout(
@@ -68,7 +73,82 @@ def test_outline_validation_still_rejects_a_destination_on_the_wrong_page(
 
 def test_reference_fixture_engineering_is_internally_consistent():
     inp = _inputs()
-    validate_fixture_engineering(inp, _results(inp))
+    out = _results(inp)
+    validate_fixture_engineering(inp, out)
+    for entry, actions in zip(out["elastic_cases"], inp["elastic_cases"]):
+        assert entry["actions"] == actions
+        assert entry["evaluated"] is True and entry["reused"] is False
+        assert entry["signature"] == case_analysis.case_signature(
+            actions, load_cases.ELASTIC_TABLE_KEY, inp,
+        )
+    first, second = [entry["results"]["elastic"] for entry in out["elastic_cases"]]
+    assert second["max_steel"] > first["max_steel"]
+    assert second["max_conc"] > first["max_conc"]
+    assert second["lambda_cr"] < first["lambda_cr"]
+    selection = result_presentation.worked_example_selection(inp, out)
+    assert selection["families"]["elastic"]["case_id"] == "EL-QA-2"
+    assert selection["cracking_threshold"] == {"case_id": "EL-QA-2"}
+    assert selection["crack_examples"] == [
+        {"case_id": "EL-QA-1", "system": "fine", "branch": "crack_short",
+         "label": "short-term (fine)"},
+        {"case_id": "EL-QA-1", "system": "coarse", "branch": "crack_short_coarse",
+         "label": "short-term (coarse)"},
+    ]
+    assert first["crack_short"]["wk"] > first["crack"]["wk"]
+    assert first["crack_short_coarse"]["wk"] > first["crack_coarse"]["wk"]
+    assert first["crack_output"]["short_term"]["ratio"] > first["crack_output"]["long_term"]["ratio"]
+    assert selection["crack_comparison"] == {"case_id": "EL-QA-1", "duration": "short_term"}
+    assert inp["elastic_cases"][1]["calculate_crack_width"] is False
+    assert second["show_cw"] is False
+    assert all(second.get(key) is None for key in ("crack", "crack_short", "crack_coarse", "crack_short_coarse"))
+    for duration in ("long_term", "short_term"):
+        output = second["crack_output"][duration]
+        assert output["calculation_state"] == "NOT REQUESTED"
+        assert output["value"] is None and output["ratio"] is None
+        assert output["governing"] is None and output["case"] is None
+    rows = result_presentation.multi_case_summary_rows(inp, out)
+    selected = result_presentation.governing_summary_rows(rows)
+    assert not result_presentation.governing_information_rows(selected)
+    output_checks = {"Concrete stress", "Reinforcement stress", "Cracking threshold/state"}
+    governing_outputs = [row for row in selected if row["check"] in output_checks]
+    assert len(governing_outputs) == 3
+    assert {row["case"] for row in governing_outputs} == {"EL-QA-2"}
+    assert all(row["status"] == "CALCULATED" and row["util"] is None
+               and row["criterion"] == "Output only" for row in governing_outputs)
+    complement = result_presentation.non_governing_summary_rows(rows)
+    assert {row["case"] for row in complement if row["check"] in output_checks} == {"EL-QA-1"}
+    # Both Elastic cases inherit the global detailing toggles. They must not
+    # create extra Plastic NOT RUN rows or repeat the section-wide spacing check.
+    assert len(out["elastic_cases"]) == 2
+    assert [row["case"] for row in rows if row["check"] == "Concrete stress"] == [
+        "EL-QA-1", "EL-QA-2",
+    ]
+    assert inp["minimum_reinforcement_on"] is True
+    assert inp["clear_spacing_on"] is True
+    assert [
+        (row["case"], row["status"]) for row in rows
+        if row.get("overview_key") == "minimum_reinforcement"
+    ] == [("PL-QA-1", "PASS")]
+    assert [
+        (row["case"], row["status"]) for row in rows
+        if row.get("overview_key") == "clear_spacing"
+    ] == [("-", "PASS")]
+
+
+def test_reference_fixture_rejects_inconsistent_native_plastic_operands():
+    inp = _inputs()
+    out = _results(inp)
+    validate_fixture_engineering(inp, out)
+    for field, value in (
+        ("util", 1.25),
+        ("applied", (80.0, 0.0)),
+        ("util_demand", 80.0),
+        ("util_resistance", 100.0),
+    ):
+        changed = copy.deepcopy(out)
+        changed["plastic_cases"][1]["results"]["plastic"][field] = value
+        with pytest.raises(AssertionError, match="inconsistent fixture plastic"):
+            validate_fixture_engineering(inp, changed)
 
 
 def test_reference_fixture_uses_independent_duration_crack_width_criteria():
@@ -93,6 +173,44 @@ def test_reference_fixture_uses_independent_duration_crack_width_criteria():
         )
 
 
+def test_native_fixture_rejects_elastic_case_stress_and_contributor_mismatches():
+    inp = _inputs()
+    out = _results(inp)
+    paths_and_values = (
+        (("elastic_cases", 1, "results", "elastic", "accepted_states", "long_term", "equilibrium", "target", "mx"), -80.0),
+        (("elastic_cases", 1, "results", "elastic", "elements", 0, "total_mpa"), 245.0),
+        (("elastic_cases", 1, "results", "elastic", "elements", 0, "dif_mpa"), 30.0),
+        (("elastic_cases", 1, "results", "elastic", "max_conc"), 12.0),
+        (("elastic_cases", 1, "results", "elastic", "max_conc_point"), 1),
+        (("elastic_cases", 1, "results", "elastic", "superposition", "neutralising_resultant", "n"), 29.797979798),
+        (("heightened_crack_control", "contributions", 0, "area_mm2"), 500.0),
+        (("heightened_crack_control", "bar_diameter_mm"), 25.23),
+        (("elastic_cases", 0, "results", "elastic", "crack_short", "governing_candidate", "mean_strain_operands", "sigma_s"), 150.0),
+        (("elastic_cases", 0, "results", "elastic", "crack_short_coarse", "governing_candidate", "spacing_operands", "selected_spacing"), 235.0),
+        (("elastic_cases", 0, "results", "elastic", "crack_short", "candidates", 1, "sigma_s"), 150.0),
+        (("elastic_shared", "creep_coefficient"), 0.0),
+        (("elastic_shared", "materials", 0, "short_term"), 6.0),
+        (("elastic_cases", 1, "results", "elastic", "superposition", "long_term_modular_ratio"), 15.0),
+    )
+    for path, value in paths_and_values:
+        changed = copy.deepcopy(out)
+        target = changed
+        for key in path[:-1]:
+            target = target[key]
+        target[path[-1]] = value
+        with pytest.raises(AssertionError, match="inconsistent fixture"):
+            validate_fixture_engineering(inp, changed)
+    for key, value in (("ns", 6.0), ("nl", 15.0), ("el_phi", 0.0)):
+        changed_input = copy.deepcopy(inp)
+        changed_input[key] = value
+        with pytest.raises(AssertionError, match="inconsistent fixture input"):
+            validate_fixture_engineering(changed_input, out)
+    changed = copy.deepcopy(out)
+    changed["elastic_cases"][0]["results"]["elastic"]["crack_short"]["candidates"].pop()
+    with pytest.raises(AssertionError, match="crack candidate inventory"):
+        validate_fixture_engineering(inp, changed)
+
+
 def test_reference_fixture_retains_governing_worked_chains_without_figures():
     """Check the textbook payload and PDF text without launching a browser."""
     pdf = build_fixture_pdf(figures=False)
@@ -100,6 +218,16 @@ def test_reference_fixture_retains_governing_worked_chains_without_figures():
     page_texts = [page.extract_text() or "" for page in reader.pages]
     text = "\n".join(page_texts)
     validate_worked_example_text(text)
+    for heading in (
+        "Elastic section response and stresses - EL-QA-2",
+        "Cracking threshold - EL-QA-2",
+        "Governing crack width - EL-QA-1",
+        "Crack width worked - governing case (short-term (fine))",
+        "Crack width worked - governing case (short-term (coarse))",
+        "User-specified crack-width comparison - critical short-term case",
+    ):
+        assert heading in " ".join(text.split())
+    assert "governing crack width - el-qa-2" not in " ".join(text.split()).casefold()
     assert "Candidate summary for governing crack example" in text
     heading_pages = [
         page_text

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import math
 import pathlib
@@ -469,30 +470,72 @@ def test_probe_encloses_every_top_level_streamlit_message():
 
 def test_all_fragment_owners_are_explicit_and_bounded():
     source = pathlib.Path(APP).read_text(encoding="utf-8")
-    expected = {"inputs", "save_load", "report", "quick_section", "analysis"}
+    tree = ast.parse(source)
+    expected = {
+        "_save_load_panel": ("save_load", 3),
+        "_report_workspace": ("report", 1),
+        "_quick_section_viewport": ("quick_section", 3),
+        "_input_workspace": ("inputs", 1),
+        # Missing input snapshots and stale capacity contracts both return early.
+        "_analysis_workspace": ("analysis", 3),
+    }
+    assert set(app_run_probe.FRAGMENT_NAMES) == {
+        name for name, _count in expected.values()
+    }
 
-    assert set(app_run_probe.FRAGMENT_NAMES) == expected
-    assert {
-        name
-        for name in expected
-        if f'open_fragment_run(st.session_state, "{name}")' in source
-    } == expected
-    assert source.count("app_run_probe.open_fragment_run") == len(expected)
-    assert source.count("app_run_probe.close_fragment_run") == 9
+    def is_call(node, function):
+        return isinstance(node, ast.Call) and ast.unparse(node.func) == function
 
-    for marker in (
-        'def _save_load_panel()',
-        'def _report_workspace(inp)',
-        'def _quick_section_viewport()',
-        'def _input_workspace()',
-        'def _analysis_workspace(inp)',
-    ):
-        body = source[source.index(marker):]
-        next_definition = body.find("\ndef ", 1)
-        if next_definition >= 0:
-            body = body[:next_definition]
-        assert "app_run_probe.open_fragment_run" in body
-        assert "app_run_probe.close_fragment_run" in body
+    def is_close(node):
+        return isinstance(node, ast.Expr) and is_call(
+            node.value, "app_run_probe.close_fragment_run"
+        )
+
+    def is_exit(node):
+        return isinstance(node, ast.Return) or (
+            isinstance(node, ast.Expr) and is_call(node.value, "st.rerun")
+        )
+
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    owned_opens = []
+    owned_closes = []
+    for function, (name, close_count) in expected.items():
+        body = functions[function]
+        opens = [node for node in ast.walk(body) if is_call(
+            node, "app_run_probe.open_fragment_run"
+        )]
+        closes = [node for node in ast.walk(body) if is_close(node)]
+        assert len(opens) == 1
+        assert ast.literal_eval(opens[0].args[1]) == name
+        assert len(closes) == close_count
+        assert is_close(body.body[-1])
+        owned_opens.extend(opens)
+        owned_closes.extend(node.value for node in closes)
+        for block in ast.walk(body):
+            for _field, statements in ast.iter_fields(block):
+                if not isinstance(statements, list):
+                    continue
+                for index, statement in enumerate(statements):
+                    if is_exit(statement):
+                        assert index > 0 and is_close(statements[index - 1]), (
+                            function, statement.lineno
+                        )
+                    if is_close(statement) and statement is not body.body[-1]:
+                        assert index + 1 < len(statements)
+                        assert is_exit(statements[index + 1])
+
+    assert set(owned_opens) == {
+        node for node in ast.walk(tree) if is_call(
+            node, "app_run_probe.open_fragment_run"
+        )
+    }
+    assert set(owned_closes) == {
+        node for node in ast.walk(tree) if is_call(
+            node, "app_run_probe.close_fragment_run"
+        )
+    }
 
 
 def test_phase_labels_and_structural_placement_are_frozen():

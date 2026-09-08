@@ -105,6 +105,8 @@ _DERIVED_EQUATION_SOURCE = (
 _LITERAL_REPORT_RESULT_IDENTITIES = frozenset({
     ("elastic.long.stress-plane", None),
     ("elastic.instantaneous.stress-plane", None),
+    ("torsion.utilisation", None),
+    ("torsion.subtube.governing-utilisation", None),
 })
 _EQUATION_DECIMAL_PLACES = 3
 _EQUATION_DECIMAL_QUANTUM = decimal.Decimal(1).scaleb(
@@ -880,8 +882,8 @@ def _styles():
         leftIndent=0, firstLineIndent=0, spaceBefore=2, spaceAfter=2,
     )
     out["toc_h2"] = ParagraphStyle(
-        "toc-h2", parent=out["small"], fontSize=8.2, leading=10,
-        leftIndent=14, firstLineIndent=0, spaceBefore=1, spaceAfter=1,
+        "toc-h2", parent=out["small"], fontSize=8.2, leading=11,
+        leftIndent=14, firstLineIndent=0, spaceBefore=0, spaceAfter=0,
     )
     out["formula_symbol"] = ParagraphStyle(
         "fs", parent=ss["Normal"], fontSize=8.1, leading=11,
@@ -1674,9 +1676,13 @@ class ReportBuilder:
         body = ParagraphStyle(
             "summary-cell", parent=self.s["body"], fontSize=summary_font,
             fontName=_FONT, leading=summary_font + 1.6,
+            embeddedHyphenation=2,
         )
         head = ParagraphStyle(
             "summary-head", parent=body, fontName=_FONT_BOLD,
+        )
+        status_body = ParagraphStyle(
+            "summary-status", parent=body, embeddedHyphenation=0,
         )
         formatted = []
         for index, row in enumerate(data):
@@ -1684,7 +1690,11 @@ class ReportBuilder:
                 index == group_index for group_index, _label in group_rows
             ) else body
             formatted.append([
-                Paragraph(_greek(str(cell)), style) for cell in row
+                Paragraph(
+                    _greek(str(cell)),
+                    status_body if column == 2 and style is body else style,
+                )
+                for column, cell in enumerate(row)
             ])
         table_item = self._publication_counter.issue(
             "Table", "Results overview across calculated checks"
@@ -1709,8 +1719,8 @@ class ReportBuilder:
         table = _ResultsOverviewTable(
             formatted,
             colWidths=[
-                36 * mm, 22 * mm, 25 * mm,
-                28 * mm, 30 * mm, 29 * mm,
+                36 * mm, 18 * mm, 27 * mm,
+                23 * mm, 24 * mm, 42 * mm,
             ],
             repeatRows=1 + context_count + 1,
             hAlign="LEFT",
@@ -4062,10 +4072,8 @@ class ReportBuilder:
         self._h2("Concrete", reserve=320)
         self._concrete_block()
         if inp.get("bars") or inp.get("shear_on") or inp.get("torsion_on"):
-            start = len(self.flow)
             self._h2("Reinforcement")
             self._steel_block()
-            self._keep_from(start)
         if inp.get("tendons") and inp.get("prestress") is not None:
             start = len(self.flow)
             self._h2("Prestressing steel")
@@ -4446,7 +4454,7 @@ class ReportBuilder:
                 self._fig(viz.steel_curve_figure(
                     st, title=f"{material_id} - {item.get('name', '')}"
                 ), 130, 80)
-            self._keep_from(block_start)
+            self._keep_measured_calculation_from(block_start)
 
     def _prestress_block(self):
         catalogue = (self.inp.get("prestress_material_catalog") or {}).get(
@@ -7098,6 +7106,60 @@ class ReportBuilder:
         if sh.get("links") is not None:
             self._shear_links(sh)
 
+    def _shear_directional_summary(self, aggregate, directions):
+        rows = [["Direction", "V<sub>Ed</sub>", "V<sub>Rd</sub>",
+                 "Utilisation", "Status", "Tension face"]]
+        for component in ("vx", "vy"):
+            if component not in directions:
+                continue
+            item = directions[component]
+            links = item.get("links") or {}
+            selected_resistance = presentation.nominal_shear_resistance(
+                item,
+                links_selected=self.inp.get("shear_links") is True,
+                input_payload=self.inp,
+                torsion_result=self.out.get("torsion"),
+            )
+            resistance = selected_resistance.get("resistance")
+            utilisation = selected_resistance.get("utilisation")
+            selected_unavailable = (
+                selected_resistance.get("valid") is not True
+                or capacity.validated_signed_shear_demand(item) is None
+            )
+            applied_demand = presentation.shear_publication_signed_demand(
+                self.inp, item,
+            )
+            retained_status = str(
+                item.get("status")
+                or item.get("assessment_status")
+                or selected_resistance.get("status")
+                or "NOT ASSESSED"
+            ).upper()
+            rows.append([
+                "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>",
+                (
+                    "-" if applied_demand is None
+                    else f"{_fmt(applied_demand, 3)} kN"
+                ),
+                (
+                    "-" if selected_unavailable
+                    else f"{_fmt(resistance, 3)} kN"
+                ),
+                "-" if selected_unavailable else _pct(utilisation),
+                (
+                    "NOT ASSESSED" if selected_unavailable
+                    else retained_status
+                ),
+                viz.tension_face_label(item.get("tension_low", True), item.get("axis")),
+            ])
+        self._table(rows, [25 * mm, 27 * mm, 27 * mm, 27 * mm, 28 * mm, 38 * mm])
+        if aggregate.get("biaxial"):
+            self._small(
+                "V<sub>x</sub> and V<sub>y</sub> are calculated independently. "
+                "Generic cross-direction interaction is not calculated and no "
+                "aggregate shear verdict is issued."
+            )
+
     def _shear(self):
         aggregate = self.out["shear"]
         aggregate_current, aggregate_reason = (
@@ -7172,6 +7234,9 @@ class ReportBuilder:
                 selected_resistance.get("valid") is not True
                 or capacity.validated_signed_shear_demand(aggregate) is None
             )
+            applied_demand = presentation.shear_publication_signed_demand(
+                self.inp, aggregate,
+            )
             retained_status = str(
                 aggregate.get("assessment_status")
                 or selected_resistance.get("status")
@@ -7188,8 +7253,8 @@ class ReportBuilder:
                     [
                         action,
                         (
-                            "-" if selected_unavailable
-                            else f"{_fmt(capacity.validated_signed_shear_demand(aggregate), 3)} kN"
+                            "-" if applied_demand is None
+                            else f"{_fmt(applied_demand, 3)} kN"
                         ),
                         (
                             "-" if selected_unavailable
@@ -7257,55 +7322,7 @@ class ReportBuilder:
                 145,
                 100,
             )
-        rows = [["Direction", "V<sub>Ed</sub>", "V<sub>Rd</sub>",
-                 "Utilisation", "Status", "Tension face"]]
-        for component in ("vx", "vy"):
-            if component not in directions:
-                continue
-            item = directions[component]
-            links = item.get("links") or {}
-            selected_resistance = presentation.nominal_shear_resistance(
-                item,
-                links_selected=self.inp.get("shear_links") is True,
-                input_payload=self.inp,
-                torsion_result=self.out.get("torsion"),
-            )
-            resistance = selected_resistance.get("resistance")
-            utilisation = selected_resistance.get("utilisation")
-            selected_unavailable = (
-                selected_resistance.get("valid") is not True
-                or capacity.validated_signed_shear_demand(item) is None
-            )
-            retained_status = str(
-                item.get("status")
-                or item.get("assessment_status")
-                or selected_resistance.get("status")
-                or "NOT ASSESSED"
-            ).upper()
-            rows.append([
-                "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>",
-                (
-                    "-" if selected_unavailable
-                    else f"{_fmt(capacity.validated_signed_shear_demand(item), 3)} kN"
-                ),
-                (
-                    "-" if selected_unavailable
-                    else f"{_fmt(resistance, 3)} kN"
-                ),
-                "-" if selected_unavailable else _pct(utilisation),
-                (
-                    "NOT ASSESSED" if selected_unavailable
-                    else retained_status
-                ),
-                viz.tension_face_label(item.get("tension_low", True), item.get("axis")),
-            ])
-        self._table(rows, [25 * mm, 27 * mm, 27 * mm, 27 * mm, 28 * mm, 38 * mm])
-        if aggregate.get("biaxial"):
-            self._small(
-                "V<sub>x</sub> and V<sub>y</sub> are calculated independently. "
-                "Generic cross-direction interaction is not calculated and no "
-                "aggregate shear verdict is issued."
-            )
+        self._shear_directional_summary(aggregate, directions)
         if any(
             (item.get("links") or {}).get("out_of_limits")
             or item.get("out_of_limits")
@@ -7355,6 +7372,115 @@ class ReportBuilder:
             component=component,
         )
 
+    def _shear_face_tables(self, sh, component, combined_blocked, combined_blocker):
+        face_rows = [["Candidate face", "V<sub>Rd,c</sub>",
+                      "|V<sub>Ed</sub>|/V<sub>Rd,c</sub>",
+                      "|V<sub>Ed</sub>|/V<sub>Rd</sub>",
+                      "Shear", "V+T", "Combined"]]
+        for candidate in sh.get("face_candidates", []):
+            candidate_shear = candidate.get("shear") or {}
+            candidate_links = candidate_shear.get("links") or {}
+            face_rows.append([
+                viz.tension_face_label(
+                    candidate.get("tension_low", True), sh["axis"]
+                ),
+                f"{_fmt((candidate_shear.get('res') or {}).get('vrd_c'), 3)} kN",
+                _pct(candidate_shear.get("util")),
+                ("-" if candidate_links.get("util") is None
+                 else _pct(candidate_links.get("util"))),
+                candidate.get("shear_status", "NOT ASSESSED"),
+                candidate.get("torsion_status", "NOT RUN"),
+                (
+                    "NOT ASSESSED"
+                    if combined_blocked
+                    else candidate.get("combined_status", "NOT RUN")
+                ),
+            ])
+        domain_subject = (
+            "Shear and V+T"
+            if combined_blocked
+            else "Shear, V+T and combined"
+        )
+        self._small(
+            "The associated bending moment is effectively zero; both faces are "
+            f"mandatory. {domain_subject} checks may govern on different faces."
+        )
+        self._table(
+            face_rows,
+            [30 * mm, 23 * mm, 26 * mm, 23 * mm, 21 * mm, 21 * mm, 26 * mm],
+            font=5.8,
+        )
+        governing_domains = sh.get("governing_domains") or {}
+        labels = {
+            "shear": "Shear",
+            "vt": "V+T (6.29)",
+            "minimum_reinforcement": "Minimum reinf. (6.31)",
+            "combined": "Combined",
+        }
+        governing_rows = [["Check", "Governing face", "cot theta",
+                           "Value / util.", "Status / outcome",
+                           "Separate detailing"]]
+        for key in ("shear", "vt", "minimum_reinforcement", "combined"):
+            domain = governing_domains.get(key)
+            if not domain:
+                continue
+            if key == "combined" and combined_blocked:
+                governing_rows.append([
+                    labels[key], "-", "-", "-", "NOT ASSESSED", "-",
+                ])
+                continue
+            status = domain.get("status")
+            if key == "minimum_reinforcement":
+                status = presentation.minimum_reinforcement_screen_outcome(
+                    domain
+                )
+            governing_rows.append([
+                labels[key],
+                viz.directional_face_label(component, domain.get("face")),
+                _fmt(domain.get("cot"), 3),
+                _pct(domain.get("util")),
+                status,
+                (
+                    presentation.minimum_reinforcement_detailing_status(
+                        domain
+                    )
+                    if key == "minimum_reinforcement" else "-"
+                ),
+            ])
+        self._h2("Independent governing selections")
+        self._table(
+            governing_rows,
+            [29 * mm, 30 * mm, 20 * mm, 25 * mm, 43 * mm, 33 * mm],
+            font=6.5,
+        )
+        if combined_blocked:
+            self._small(combined_blocker)
+
+    def _shear_direction_introduction(self, sh, component, signed_action):
+        component = component or sh.get("component") or (
+            "vy" if sh["axis"] == "x" else "vx"
+        )
+        axis = ("Vy along y, paired with Mx" if component == "vy"
+                else "Vx along x, paired with My")
+        action = "V<sub>y,Ed</sub>" if component == "vy" else "V<sub>x,Ed</sub>"
+        face = viz.tension_face_label(sh["tension_low"], sh["axis"])
+        clause = "8.2.2" if sh.get("model_2023") else "6.2.2(1)"
+        self._p(f"Design shear resistance V<sub>Rd,c</sub> of a member not requiring "
+                f"shear reinforcement (EN 1992-1-1 sec. {clause}), method "
+                f"<b>{sh['method']}</b>. {axis}, with the "
+                f"tension reinforcement on the {face} face.")
+        self._small(
+            f"Entered {action} = {_fmt(signed_action, 3)} kN; resistance and "
+            f"utilisation use |{action}| = {_fmt(abs(signed_action), 3)} kN."
+        )
+        if sh.get("face_mode") == "auto":
+            self._small(
+                "Automatic face selection uses the associated moment at the "
+                "concrete centroid: "
+                f"{_fmt(sh.get('associated_moment'), 3)} kNm."
+            )
+        return component, action, face
+
     def _shear_direction(self, sh, *, include_case_heading=True, component=None):
         res = sh["res"]
         combined_blocker = presentation.combined_bending_assessment_blocker(
@@ -7396,28 +7522,9 @@ class ReportBuilder:
                   "utilisation or PASS/FAIL verdict is published."
             )
             return
-        component = component or sh.get("component") or (
-            "vy" if sh["axis"] == "x" else "vx"
+        component, action, face = self._shear_direction_introduction(
+            sh, component, signed_action,
         )
-        axis = ("Vy along y, paired with Mx" if component == "vy"
-                else "Vx along x, paired with My")
-        action = "V<sub>y,Ed</sub>" if component == "vy" else "V<sub>x,Ed</sub>"
-        face = viz.tension_face_label(sh["tension_low"], sh["axis"])
-        clause = "8.2.2" if sh.get("model_2023") else "6.2.2(1)"
-        self._p(f"Design shear resistance V<sub>Rd,c</sub> of a member not requiring "
-                f"shear reinforcement (EN 1992-1-1 sec. {clause}), method "
-                f"<b>{sh['method']}</b>. {axis}, with the "
-                f"tension reinforcement on the {face} face.")
-        self._small(
-            f"Entered {action} = {_fmt(signed_action, 3)} kN; resistance and "
-            f"utilisation use |{action}| = {_fmt(abs(signed_action), 3)} kN."
-        )
-        if sh.get("face_mode") == "auto":
-            self._small(
-                "Automatic face selection uses the associated moment at the "
-                "concrete centroid: "
-                f"{_fmt(sh.get('associated_moment'), 3)} kNm."
-            )
         if res.get("calculation_state") == "NOT ASSESSED":
             reason = _result_reason(
                 res.get("reason"),
@@ -7477,88 +7584,7 @@ class ReportBuilder:
             )
         )
         if sh.get("both_faces_evaluated") and face_evidence_current:
-            face_rows = [["Candidate face", "V<sub>Rd,c</sub>",
-                          "|V<sub>Ed</sub>|/V<sub>Rd,c</sub>",
-                          "|V<sub>Ed</sub>|/V<sub>Rd</sub>",
-                          "Shear", "V+T", "Combined"]]
-            for candidate in sh.get("face_candidates", []):
-                candidate_shear = candidate.get("shear") or {}
-                candidate_links = candidate_shear.get("links") or {}
-                face_rows.append([
-                    viz.tension_face_label(
-                        candidate.get("tension_low", True), sh["axis"]
-                    ),
-                    f"{_fmt((candidate_shear.get('res') or {}).get('vrd_c'), 3)} kN",
-                    _pct(candidate_shear.get("util")),
-                    ("-" if candidate_links.get("util") is None
-                     else _pct(candidate_links.get("util"))),
-                    candidate.get("shear_status", "NOT ASSESSED"),
-                    candidate.get("torsion_status", "NOT RUN"),
-                    (
-                        "NOT ASSESSED"
-                        if combined_blocked
-                        else candidate.get("combined_status", "NOT RUN")
-                    ),
-                ])
-            domain_subject = (
-                "Shear and V+T"
-                if combined_blocked
-                else "Shear, V+T and combined"
-            )
-            self._small(
-                "The associated bending moment is effectively zero; both faces are "
-                f"mandatory. {domain_subject} checks may govern on different faces."
-            )
-            self._table(
-                face_rows,
-                [30 * mm, 23 * mm, 26 * mm, 23 * mm, 21 * mm, 21 * mm, 26 * mm],
-                font=5.8,
-            )
-            governing_domains = sh.get("governing_domains") or {}
-            labels = {
-                "shear": "Shear",
-                "vt": "V+T (6.29)",
-                "minimum_reinforcement": "Minimum reinf. (6.31)",
-                "combined": "Combined",
-            }
-            governing_rows = [["Check", "Governing face", "cot theta",
-                               "Value / util.", "Status / outcome",
-                               "Separate detailing"]]
-            for key in ("shear", "vt", "minimum_reinforcement", "combined"):
-                domain = governing_domains.get(key)
-                if not domain:
-                    continue
-                if key == "combined" and combined_blocked:
-                    governing_rows.append([
-                        labels[key], "-", "-", "-", "NOT ASSESSED", "-",
-                    ])
-                    continue
-                status = domain.get("status")
-                if key == "minimum_reinforcement":
-                    status = presentation.minimum_reinforcement_screen_outcome(
-                        domain
-                    )
-                governing_rows.append([
-                    labels[key],
-                    viz.directional_face_label(component, domain.get("face")),
-                    _fmt(domain.get("cot"), 3),
-                    _pct(domain.get("util")),
-                    status,
-                    (
-                        presentation.minimum_reinforcement_detailing_status(
-                            domain
-                        )
-                        if key == "minimum_reinforcement" else "-"
-                    ),
-                ])
-            self._h2("Independent governing selections")
-            self._table(
-                governing_rows,
-                [29 * mm, 30 * mm, 20 * mm, 25 * mm, 43 * mm, 33 * mm],
-                font=6.5,
-            )
-            if combined_blocked:
-                self._small(combined_blocker)
+            self._shear_face_tables(sh, component, combined_blocked, combined_blocker)
         elif sh.get("both_faces_evaluated"):
             self._h2("Face-specific shear comparison")
             self._small(
@@ -7619,6 +7645,9 @@ class ReportBuilder:
         if sh.get("model_2023"):
             self._shear_2023(sh, res)
             return
+        self._shear_2005(sh, res)
+
+    def _shear_2005(self, sh, res):
         bw_src = "user input" if sh["bw_user"] else "derived (minimum solid width)"
         calculation_bw = float(res.get("bw", sh["bw"]))
         if not math.isclose(
@@ -7679,14 +7708,25 @@ class ReportBuilder:
             subst=f"max({_fmt(res['v_basic'], 3)}, {_fmt(res['v_floor'], 3)}) &#183; "
                   f"{_fmt(calculation_bw, 1)} &#183; {_fmt(sh['d'], 1)} / 1000",
             result=f"V<sub>Rd,c</sub> = {_fmt(res['vrd_c'], 3)} kN")
-        util = sh["util"]
-        util_txt = _pct(util)
         nominal = presentation.nominal_shear_resistance(
             sh,
             links_selected=self.inp.get("shear_links") is True,
             input_payload=self.inp,
             torsion_result=self.out.get("torsion"),
         )
+        self._shear_2005_utilisation(sh, res, nominal)
+        self._small("A<sub>sl</sub> is the tension reinforcement on the chosen face, "
+                    "assumed fully anchored (&#8805; l<sub>bd</sub> + d) beyond the "
+                    "section. sigma<sub>cp</sub> uses the plastic axial force "
+                    "plus any tendon precompression from the prestress. A section with "
+                    "V<sub>Ed</sub> &gt; V<sub>Rd,c</sub> requires designed shear "
+                    "reinforcement.")
+        if sh.get("links") is not None:
+            self._shear_links(sh)
+
+    def _shear_2005_utilisation(self, sh, res, nominal):
+        util = sh["util"]
+        util_txt = _pct(util)
         concrete_route_selected = bool(
             nominal.get("valid") is True and nominal.get("route") == "concrete"
         )
@@ -7700,14 +7740,19 @@ class ReportBuilder:
                           else f"{util_txt}  "
                                f"({'OK' if viz.util_ok(util) else 'EXCEEDED'})"
                       ))
-        self._small("A<sub>sl</sub> is the tension reinforcement on the chosen face, "
-                    "assumed fully anchored (&#8805; l<sub>bd</sub> + d) beyond the "
-                    "section. sigma<sub>cp</sub> uses the plastic axial force "
-                    "plus any tendon precompression from the prestress. A section with "
-                    "V<sub>Ed</sub> &gt; V<sub>Rd,c</sub> requires designed shear "
-                    "reinforcement.")
-        if sh.get("links") is not None:
-            self._shear_links(sh)
+
+    def _shear_link_terms_available(self, lk):
+        retained_angle_fields = {
+            "cot", "tan", "theta_deg", "cot_min", "cot_max",
+            "cot_unconstrained", "angle_selection",
+        }
+        if not retained_angle_fields.issubset(lk):
+            self._small(
+                "Worked shear calculation unavailable: the selected strut-angle "
+                "terms are missing. Recalculate before issuing the report."
+            )
+            return False
+        return True
 
     def _shear_links(self, sh):
         links = sh["links"]
@@ -7810,15 +7855,7 @@ class ReportBuilder:
                 "|V<sub>Ed</sub>| &#8804; V<sub>Rd,c</sub>. Minimum reinforcement "
                 "and link detailing are assessed separately."
             )
-        retained_angle_fields = {
-            "cot", "tan", "theta_deg", "cot_min", "cot_max",
-            "cot_unconstrained", "angle_selection",
-        }
-        if not retained_angle_fields.issubset(lk):
-            self._small(
-                "Worked shear calculation unavailable: the selected strut-angle "
-                "terms are missing. Recalculate before issuing the report."
-            )
+        if not self._shear_link_terms_available(lk):
             return
         shear_geometry = links.get("shear_geometry") or {}
         effective_asw_over_s = links.get(
@@ -8228,19 +8265,23 @@ class ReportBuilder:
                 assessment_complete=assessment_complete,
             )
         elif model_2023 and isinstance(chord_assessment, Mapping):
-            chord_status = str(
-                chord_assessment.get("status") or "NOT ASSESSED"
-            ).upper()
-            self._h2("Required 2023 longitudinal chord faces")
-            self._small(
-                "Longitudinal chord assessment: "
-                f"{chord_status}. "
-                + presentation.result_reason(
-                    chord_assessment.get("reason"),
-                    "shear",
-                    context="report longitudinal chord assessment",
-                )
+            self._shear_2023_missing_chords(chord_assessment)
+
+    def _shear_2023_missing_chords(self, chord_assessment):
+        chord_status = str(
+            chord_assessment.get("status") or "NOT ASSESSED"
+        ).upper()
+        self._h2("Required 2023 longitudinal chord faces")
+        self._small(
+            "Longitudinal chord assessment: "
+            f"{chord_status}. "
+            + presentation.result_reason(
+                chord_assessment.get("reason"),
+                "shear",
+                context="report longitudinal chord assessment",
             )
+        )
+
 
     def _combined_base_en_direction(self, c):
         """Publish Base-EN physical interactions without a DK aggregate."""
@@ -8414,6 +8455,9 @@ class ReportBuilder:
         if blocker is not None:
             self._small("Combined Base-EN components: NOT ASSESSED. " + blocker)
             return
+        self._combined_base_en_components(aggregate)
+
+    def _combined_base_en_components(self, aggregate):
         if aggregate.get("biaxial") is True:
             retained = presentation.base_en_combined_direction_items(aggregate)
             if retained is None:
@@ -8480,6 +8524,57 @@ class ReportBuilder:
             self._combined_base_en_direction(directions[selected_component])
             return
         self._combined_base_en_direction(aggregate)
+
+    def _combined_directional_summary(self, directions):
+        self._case_heading(
+            "Combined bending + directional shear + torsion", "plastic"
+        )
+        self._small(
+            "V<sub>x,Ed</sub> + T<sub>Ed</sub> and V<sub>y,Ed</sub> + "
+            "T<sub>Ed</sub> are assessed separately. A simultaneous "
+            "V<sub>x</sub> + V<sub>y</sub> + T check is not included and requires "
+            "a separate member check."
+        )
+        rows = [["Screen", "r<sub>N</sub>", "r<sub>M</sub>", "r<sub>V</sub>",
+                 "r<sub>T</sub>", "DK NA sum", "Governing face",
+                 "cot theta", "DK NA sum status"]]
+        for component in ("vx", "vy"):
+            item = directions.get(component)
+            if not item:
+                continue
+            rows.append([
+                "Vx+T" if component == "vx" else "Vy+T",
+                _pct(item.get("r_n")), _pct(item.get("r_m")),
+                _pct(item.get("r_v")),
+                _pct(item.get("r_t")), _pct(item.get("dkna_sum")),
+                viz.directional_face_label(
+                    component, item.get("governing_face")
+                ),
+                _fmt(item.get("governing_cot"), 3),
+                presentation.combined_dkna_status(item),
+            ])
+        self._table(
+            rows,
+            [18 * mm, 14 * mm, 14 * mm, 14 * mm, 14 * mm, 21 * mm,
+             31 * mm, 17 * mm, 22 * mm],
+            font=5.8,
+        )
+        governing_notes = {
+            presentation.combined_governing_assessment_note(item)
+            for item in directions.values()
+            if presentation.combined_governing_assessment_note(item)
+        }
+        for note in sorted(governing_notes):
+            self._small(_html_escape(note))
+        if any(
+            item.get("outside_default_range")
+            for item in directions.values()
+        ):
+            self._small(
+                "One or more entered shared compression-strut ranges are outside "
+                "the permitted method range. Dependent combined checks are NOT "
+                "ASSESSED."
+            )
 
     def _combined(self):
         aggregate = self.out["combined"]
@@ -8568,55 +8663,7 @@ class ReportBuilder:
             self._combined_direction(aggregate, include_case_heading=False)
             return
 
-        self._case_heading(
-            "Combined bending + directional shear + torsion", "plastic"
-        )
-        self._small(
-            "V<sub>x,Ed</sub> + T<sub>Ed</sub> and V<sub>y,Ed</sub> + "
-            "T<sub>Ed</sub> are assessed separately. A simultaneous "
-            "V<sub>x</sub> + V<sub>y</sub> + T check is not included and requires "
-            "a separate member check."
-        )
-        rows = [["Screen", "r<sub>N</sub>", "r<sub>M</sub>", "r<sub>V</sub>",
-                 "r<sub>T</sub>", "DK NA sum", "Governing face",
-                 "cot theta", "DK NA sum status"]]
-        for component in ("vx", "vy"):
-            item = directions.get(component)
-            if not item:
-                continue
-            rows.append([
-                "Vx+T" if component == "vx" else "Vy+T",
-                _pct(item.get("r_n")), _pct(item.get("r_m")),
-                _pct(item.get("r_v")),
-                _pct(item.get("r_t")), _pct(item.get("dkna_sum")),
-                viz.directional_face_label(
-                    component, item.get("governing_face")
-                ),
-                _fmt(item.get("governing_cot"), 3),
-                presentation.combined_dkna_status(item),
-            ])
-        self._table(
-            rows,
-            [18 * mm, 14 * mm, 14 * mm, 14 * mm, 14 * mm, 21 * mm,
-             31 * mm, 17 * mm, 22 * mm],
-            font=5.8,
-        )
-        governing_notes = {
-            presentation.combined_governing_assessment_note(item)
-            for item in directions.values()
-            if presentation.combined_governing_assessment_note(item)
-        }
-        for note in sorted(governing_notes):
-            self._small(_html_escape(note))
-        if any(
-            item.get("outside_default_range")
-            for item in directions.values()
-        ):
-            self._small(
-                "One or more entered shared compression-strut ranges are outside "
-                "the permitted method range. Dependent combined checks are NOT "
-                "ASSESSED."
-            )
+        self._combined_directional_summary(directions)
         if not critical:
             self._small(
                 "The complete combined M-V-T worked example is published only for "
@@ -8652,6 +8699,10 @@ class ReportBuilder:
             self._case_heading(
                 "Combined bending + shear + torsion (M-V-T)", "plastic"
             )
+        scope_note = presentation.combined_publication_scope_note(c)
+        if scope_note is not None:
+            self._small(_html_escape(scope_note))
+            return
         if not c.get("valid"):
             missing = []
             if not c.get("have_m", True):
@@ -8797,6 +8848,7 @@ class ReportBuilder:
                 ),
             )
         self._h2("Physical resistance components")
+        components_start = len(self.flow) - 1
         physical_components = presentation.combined_physical_components(c)
         physical_by_key = {
             component["key"]: component for component in physical_components
@@ -8817,6 +8869,7 @@ class ReportBuilder:
             [48 * mm, 28 * mm, 29 * mm, 65 * mm],
             font=7.5,
         )
+        self._keep_from(components_start)
         self._small(
             "Concrete strut, closed stirrup and longitudinal reinforcement are "
             "independent physical checks. The worst value may govern the case, but "
@@ -8898,88 +8951,80 @@ class ReportBuilder:
                 self._keep_measured_calculation_from(stirrup_start)
         longitudinal = physical_by_key["longitudinal"]
         lg = longitudinal.get("governing")
+        diagnostic_only = False
+        if lg is None and presentation.required_chord_fallback(c) is not None:
+            case_combined = self.out.get("combined")
+            directions = case_combined.get("directions") if isinstance(case_combined, Mapping) else None
+            owned_component = c.get("component")
+            component_matches = component is None or (
+                type(component) is str and component == owned_component
+            )
+            owned = component_matches and (
+                c is case_combined or (
+                    isinstance(directions, Mapping) and type(owned_component) is str
+                    and directions.get(owned_component) is c
+                )
+            )
+            diagnostic_current = owned and presentation.combined_publication_evidence_is_current(
+                self.inp, self.out,
+            )[0]
+            if diagnostic_current:
+                lg = capacity._combined_longitudinal_candidate(c.get("governing_longitudinal"))
+                diagnostic_only = lg is not None
         if isinstance(lg, Mapping) and lg.get("valid"):
             self._h2("Longitudinal reinforcement: combined M + V + T tension chord")
             chord_status = longitudinal["chord_status"]
             chord_util = longitudinal["chord_util"]
             coverage = lg.get("off_not_evaluated")
-            model_2023_chord = lg.get("chord_formula") in {"8.51", "8.52"}
             ax = lg["axis"]
             face = viz.tension_face_label(
                 lg.get("tension_low", True), lg.get("axis")
             )
-            if model_2023_chord:
-                face_desc = (
-                    f"the flexural tension chord ({face}), Formula (8.51)"
-                    if lg.get("chord_role") == "flexural_tension"
-                    else f"the flexural compression chord ({face}), Formula "
-                         "(8.52), after bending-compression relief"
-                )
+            face_desc = (
+                f"the off-axis face ({face})"
+                if lg.get("role") == "off_axis"
+                else
+                f"the shear tension face ({face})"
+                if lg.get("gets_shift") is True
+                else f"the shear compression face ({face}), with torsion "
+                     "tension and bending relief"
+            )
+            if diagnostic_only:
                 self._p(
-                    f"The governing chord is {face_desc} about the {ax}-axis. "
-                    "N<sub>Vd</sub> = |V<sub>Ed</sub>| cot theta is applied to "
-                    "both flexural chords. Each face is checked against its "
-                    "bending resistance conditional on the acting axial force and "
-                    "coexisting orthogonal moment; axial force is therefore not "
-                    "added again to the equivalent-moment comparison. The "
-                    "support/load-specific Formula (8.53) relief is not credited."
+                    "Required face coverage is incomplete. The largest available "
+                    "conditional face is shown for inspection; these operands do "
+                    "not establish a complete governing chord check."
                 )
-                self._formula(
-                    "M<sub>Ed,total</sub> = max(M<sub>face</sub> + "
-                    "N<sub>Vd</sub>&#183;z, 0) + F<sub>td,T</sub>&#183;z/2",
-                    equation_key="combined.chord.demand",
-                    equation_variant="2023",
-                    ref=(
-                        "DS/EN 1992-1-1:2023, 8.2.3(8), Formulae "
-                        "(8.50)-(8.52)"
-                    ),
-                    subst=(
-                        f"max({_fmt(lg.get('face_m_ed_signed'), 1)} + "
-                        f"{_fmt(lg['mv'], 1)}, 0) + {_fmt(lg['mt'], 1)} kNm "
-                        f" (z = {_fmt(lg['z'], 3)} m, "
-                        f"N<sub>Vd</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
-                        f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)"
-                    ),
-                    result=(
-                        f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm"
-                    ),
+            self._p(
+                ("The retained conditional chord is " if diagnostic_only
+                 else "The governing tension chord is ") + f"{face_desc} about the "
+                f"{ax}-axis; M<sub>Ed</sub> and M<sub>Rd</sub> are taken on that face. "
+                "The chord carries the bending tension plus the shear shift "
+                "&#916;F<sub>td</sub> = "
+                "0.5&#183;V<sub>Ed</sub>&#183;cot theta (6.18, only on the flexural "
+                "tension face; zero on an off-axis face) and the torsion longitudinal force "
+                "F<sub>td,T</sub> = T<sub>Ed</sub>&#183;u<sub>k</sub>&#183;cot "
+                "theta/(2A<sub>k</sub>) (6.28, distributed round the perimeter, "
+                "so half acts on this chord). Each is turned into an equivalent "
+                "moment on the lever arm z and checked against M<sub>Rd</sub> "
+                + viz.chord_mrd_label(
+                    ax, lg.get("m_off", 0.0), lg.get("conditional", True)
                 )
-            else:
-                face_desc = (
-                    f"the shear tension face ({face})"
-                    if lg.get("gets_shift", True)
-                    else f"the shear compression face ({face}), with torsion "
-                         "tension and bending relief"
-                )
-                self._p(
-                    f"The governing tension chord is {face_desc} about the "
-                    f"{ax}-axis; M<sub>Ed</sub> and M<sub>Rd</sub> are taken on that face. "
-                    "The chord carries the bending tension plus the shear shift "
-                    "&#916;F<sub>td</sub> = "
-                    "0.5&#183;V<sub>Ed</sub>&#183;cot theta (6.18, only on the flexural "
-                    "tension face) and the torsion longitudinal force "
-                    "F<sub>td,T</sub> = T<sub>Ed</sub>&#183;u<sub>k</sub>&#183;cot "
-                    "theta/(2A<sub>k</sub>) (6.28, distributed round the perimeter, "
-                    "so half acts on this chord). Each is turned into an equivalent "
-                    "moment on the lever arm z and checked against M<sub>Rd</sub> "
-                    + viz.chord_mrd_label(
-                        ax, lg.get("m_off", 0.0), lg.get("conditional", True)
-                    )
-                    + "."
-                )
-                self._formula(
-                    "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
-                    "&#916;F<sub>td</sub>&#183;z + F<sub>td,T</sub>&#183;z/2",
-                    equation_key="combined.chord.demand",
-                    ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
-                    subst=f"{_fmt(lg['m_ed'], 1)} + {_fmt(lg['mv'], 1)} + "
-                          f"{_fmt(lg['mt'], 1)} kNm  (z = {_fmt(lg['z'], 3)} m, "
-                          f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
-                          f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
-                    result=(
-                        f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm"
-                    ),
-                )
+                + "."
+            )
+            self._formula(
+                "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
+                "&#916;F<sub>td</sub>&#183;z + F<sub>td,T</sub>&#183;z/2",
+                equation_key="combined.chord.demand",
+                ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
+                subst=f"{_fmt(lg['m_ed'], 1)} + {_fmt(lg['mv'], 1)} + "
+                      f"{_fmt(lg['mt'], 1)} kNm  (z = {_fmt(lg['z'], 3)} m, "
+                      f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
+                      f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
+                result=(
+                    f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm"
+                ),
+            )
             biaxial = lg.get("biaxial", False)
             fallback = presentation.required_chord_fallback(c)
             fell_back = fallback is not None
@@ -9023,11 +9068,6 @@ class ReportBuilder:
                 lg.get("theta_mode"),
                 angle_valid=concrete.get("angle_valid") is True,
             )
-            if model_2023_chord:
-                note += (
-                    " The required flexural tension and compression chord faces "
-                    "use Formulae (8.51) and (8.52), respectively."
-                )
             if coverage == "subdivided":
                 note += (" Compound (subdivided) section: the torsion longitudinal "
                          "steel is per sub-tube, so the off-axis chord's torsion "
@@ -9060,31 +9100,18 @@ class ReportBuilder:
                 c.get("chord_off"),
                 assessment_complete=assessment_complete,
             )
-        elif (
-            c.get("longitudinal_model_2023") is True
-            and isinstance(c.get("longitudinal_assessment"), Mapping)
-        ):
-            chord_assessment = c["longitudinal_assessment"]
-            chord_status = str(
-                chord_assessment.get("status") or "NOT ASSESSED"
-            ).upper()
-            self._h2("Required 2023 longitudinal chord faces")
-            self._small(
-                "Longitudinal chord assessment: "
-                f"{chord_status}. "
-                + presentation.result_reason(
-                    chord_assessment.get("reason"),
-                    "shear",
-                    context="report longitudinal chord assessment",
-                )
-            )
         else:
+            chord_guidance = (
+                "Complete current longitudinal chord evidence is required for the full utilisation check."
+                if c.get("links") else
+                "Enable shear links for the full utilisation check."
+            )
             self._small(f"Additional longitudinal steel: torsion "
                         "&#8721;A<sub>sl</sub> = "
                         f"{_fmt(c['asl_torsion'], 0)} mm<sup>2</sup> round the perimeter "
                         f"(6.28); shear &#916;F<sub>td</sub> = {_fmt(c['delta_ftd'], 1)} "
                         "kN on the tension chord (6.18) -- both beyond the bending "
-                        "steel. Enable shear links for the full utilisation check.")
+                        "steel. " + chord_guidance)
 
     def _chord_off_block(self, och, *, assessment_complete=True):
         """Off-axis chord check (bending + torsion share), shared by the shear and
@@ -9537,35 +9564,8 @@ class ReportBuilder:
                                             show_verdict=True),
                   120, 100)
 
-    def _torsion(self):
-        t = self.out["torsion"]
-        critical = self._selected_family("torsion", self.inp) is not None
-        self._case_heading("Torsion (thin-walled tube)", "plastic")
-        if self.inp.get("_report_case_current") is False:
-            self._h2("Torsion result")
-            self._status_block(
-                "NOT ASSESSED - Recalculate this action set before relying on "
-                "the torsion result.",
-                "NOT ASSESSED",
-            )
-            return
-        current, current_reason = presentation.torsion_publication_component_is_current(
-            self.inp,
-            self._shear_publication_authority(),
-            t,
-        )
-        if current is not True:
-            guidance = _result_reason(
-                current_reason,
-                "torsion",
-                "report torsion current-evidence reason",
-            )
-            self._h2("Torsion result")
-            self._status_block(
-                "NOT ASSESSED - " + guidance + ". Recalculate the torsion check.",
-                "NOT ASSESSED",
-            )
-            return
+    def _torsion_applicability_block(self, t):
+        """Render applicability; the caller must first establish current evidence."""
         applicability = t.get("applicability")
         if not isinstance(applicability, Mapping):
             applicability = {}
@@ -9627,7 +9627,120 @@ class ReportBuilder:
                 ],
                 [45 * mm, 45 * mm, 45 * mm, 45 * mm],
             )
+            return False
+        return True
+
+    def _torsion_longitudinal_block(self, t):
+        retained_longitudinal_assessment = t.get("longitudinal_assessment")
+        longitudinal_assessment = (
+            presentation.torsion_longitudinal_assessment(t, input_payload=self.inp)
+        )
+        if isinstance(retained_longitudinal_assessment, Mapping):
+            self._h2("Longitudinal torsion reinforcement (Formula 6.28)")
+            self._table(
+                [
+                    ["Quantity", "Value", "Assessment"],
+                    [
+                        "Required longitudinal area",
+                        f"{_fmt(longitudinal_assessment.get('required_asl_mm2'), 0)} mm<sup>2</sup>",
+                        "Formula (6.28)",
+                    ],
+                    [
+                        "All modelled passive bars - gross area",
+                        f"{_fmt(longitudinal_assessment.get('provided_gross_area_mm2'), 0)} mm<sup>2</sup>",
+                        "Upper bound before bending demand",
+                    ],
+                    [
+                        "All modelled passive bars - equivalent area at selected f<sub>yd</sub>",
+                        f"{_fmt(longitudinal_assessment.get('provided_equivalent_area_mm2'), 0)} mm<sup>2</sup>",
+                        str(longitudinal_assessment.get("status") or "NOT ASSESSED"),
+                    ],
+                ],
+                [75 * mm, 45 * mm, 60 * mm],
+                font=7.0,
+            )
+            self._small(
+                _html_escape(presentation.torsion_assessment_note(t, input_payload=self.inp))
+                + ". The modelled passive-bar total is not credited as usable "
+                "torsion reinforcement until reserve beyond bending, distribution "
+                "around every torsion-tube side and anchorage along the member are "
+                "established."
+            )
+
+    def _torsion(self):
+        t = self.out["torsion"]
+        critical = self._selected_family("torsion", self.inp) is not None
+        self._case_heading("Torsion (thin-walled tube)", "plastic")
+        if self.inp.get("_report_case_current") is False:
+            self._h2("Torsion result")
+            self._status_block(
+                "NOT ASSESSED - Recalculate this action set before relying on "
+                "the torsion result.",
+                "NOT ASSESSED",
+            )
             return
+        current, current_reason = presentation.torsion_publication_component_is_current(
+            self.inp,
+            self._shear_publication_authority(),
+            t,
+        )
+        if current is not True:
+            guidance = _result_reason(
+                current_reason,
+                "torsion",
+                "report torsion current-evidence reason",
+            )
+            self._h2("Torsion result")
+            self._status_block(
+                "NOT ASSESSED - " + guidance + ". Recalculate the torsion check.",
+                "NOT ASSESSED",
+            )
+            return
+        if self._torsion_applicability_block(t) is not True:
+            return
+        self._torsion_components(t, critical)
+
+    def _torsion_angle_diagnostic(self, t, angle_applicability):
+        reason = _result_reason(
+            t.get("assessment_reason") or t.get("reason"),
+            "torsion",
+            "report torsion strut-angle applicability reason",
+        )
+        self._small(
+            "Torsion NOT ASSESSED: " + _html_escape(reason) + ". "
+            "No torsion resistance, utilisation, longitudinal demand or "
+            "dependent interaction verdict is published."
+        )
+        self._table(
+            [
+                ["Quantity", "Value", "Publication state"],
+                [
+                    "T<sub>Ed</sub>",
+                    f"{_fmt(t.get('t_ed'), 3)} kN&#183;m",
+                    "Applied action",
+                ],
+                [
+                    "T<sub>Rd,c</sub>",
+                    f"{_fmt(t.get('trd_c'), 3)} kN&#183;m",
+                    "Angle-independent cracking context",
+                ],
+            ],
+            [55 * mm, 45 * mm, 80 * mm],
+        )
+        self._small(
+            "Requested cot theta: "
+            f"{_fmt(angle_applicability.get('requested_min'), 3)} to "
+            f"{_fmt(angle_applicability.get('requested_max'), 3)}; "
+            "permitted for "
+            + _html_escape(str(angle_applicability.get("method") or "-"))
+            + ": "
+            f"{_fmt(angle_applicability.get('permitted_min'), 3)} to "
+            f"{_fmt(angle_applicability.get('permitted_max'), 3)} ("
+            + _html_escape(str(angle_applicability.get("clause") or "-"))
+            + ")."
+        )
+
+    def _torsion_components(self, t, critical):
         tube = t["tube"]
         tube_valid = (
             t.get("tube_valid") is True
@@ -9849,44 +9962,7 @@ class ReportBuilder:
                 isinstance(angle_applicability, dict)
                 and angle_applicability.get("applicable") is False
             ):
-                reason = _result_reason(
-                    t.get("assessment_reason") or t.get("reason"),
-                    "torsion",
-                    "report torsion strut-angle applicability reason",
-                )
-                self._small(
-                    "Torsion NOT ASSESSED: " + _html_escape(reason) + ". "
-                    "No torsion resistance, utilisation, longitudinal demand or "
-                    "dependent interaction verdict is published."
-                )
-                self._table(
-                    [
-                        ["Quantity", "Value", "Publication state"],
-                        [
-                            "T<sub>Ed</sub>",
-                            f"{_fmt(t.get('t_ed'), 3)} kN&#183;m",
-                            "Applied action",
-                        ],
-                        [
-                            "T<sub>Rd,c</sub>",
-                            f"{_fmt(t.get('trd_c'), 3)} kN&#183;m",
-                            "Angle-independent cracking context",
-                        ],
-                    ],
-                    [55 * mm, 45 * mm, 80 * mm],
-                )
-                self._small(
-                    "Requested cot theta: "
-                    f"{_fmt(angle_applicability.get('requested_min'), 3)} to "
-                    f"{_fmt(angle_applicability.get('requested_max'), 3)}; "
-                    "permitted for "
-                    + _html_escape(str(angle_applicability.get("method") or "-"))
-                    + ": "
-                    f"{_fmt(angle_applicability.get('permitted_min'), 3)} to "
-                    f"{_fmt(angle_applicability.get('permitted_max'), 3)} ("
-                    + _html_escape(str(angle_applicability.get("clause") or "-"))
-                    + ")."
-                )
+                self._torsion_angle_diagnostic(t, angle_applicability)
                 return
             reason = _result_reason(
                 t.get("assessment_reason")
@@ -10004,41 +10080,7 @@ class ReportBuilder:
                 self._small("Warning: the tube could not be formed (a degenerate or "
                             "too-thin section).")
             return
-        retained_longitudinal_assessment = t.get("longitudinal_assessment")
-        longitudinal_assessment = (
-            presentation.torsion_longitudinal_assessment(t, input_payload=self.inp)
-        )
-        if isinstance(retained_longitudinal_assessment, Mapping):
-            self._h2("Longitudinal torsion reinforcement (Formula 6.28)")
-            self._table(
-                [
-                    ["Quantity", "Value", "Assessment"],
-                    [
-                        "Required longitudinal area",
-                        f"{_fmt(longitudinal_assessment.get('required_asl_mm2'), 0)} mm<sup>2</sup>",
-                        "Formula (6.28)",
-                    ],
-                    [
-                        "All modelled passive bars - gross area",
-                        f"{_fmt(longitudinal_assessment.get('provided_gross_area_mm2'), 0)} mm<sup>2</sup>",
-                        "Upper bound before bending demand",
-                    ],
-                    [
-                        "All modelled passive bars - equivalent area at selected f<sub>yd</sub>",
-                        f"{_fmt(longitudinal_assessment.get('provided_equivalent_area_mm2'), 0)} mm<sup>2</sup>",
-                        str(longitudinal_assessment.get("status") or "NOT ASSESSED"),
-                    ],
-                ],
-                [75 * mm, 45 * mm, 60 * mm],
-                font=7.0,
-            )
-            self._small(
-                _html_escape(presentation.torsion_assessment_note(t, input_payload=self.inp))
-                + ". The modelled passive-bar total is not credited as usable "
-                "torsion reinforcement until reserve beyond bending, distribution "
-                "around every torsion-tube side and anchorage along the member are "
-                "established."
-            )
+        self._torsion_longitudinal_block(t)
         if not critical:
             self._small(
                 "The complete torsion worked example is published only for the "
@@ -10062,8 +10104,9 @@ class ReportBuilder:
             self._h2("Sub-tubes (compound section, 6.3.1(3))")
             self._subtube_section(t)
             return
+        primary = t.get("primary")
         retained = {
-            name: t.get(name)
+            name: primary.get(name) if isinstance(primary, Mapping) else None
             for name in (
                 "angle_selection",
                 "steel_resistance",
@@ -10086,8 +10129,7 @@ class ReportBuilder:
         resistance = retained["resistance_selection"]
         cracking = retained["cracking_resistance"]
         longitudinal = retained["longitudinal_reinforcement"]
-        self._page_break()
-        self._h2("Equivalent-tube wall selection", reserve=0)
+        self._h2("Equivalent-tube wall selection")
         tef_src = str(tube.get("tef_selection") or "wall limits")
         rows = [["Quantity", "Symbol", "Value"],
                 ["Gross area (incl. hollow)", "A", f"{_fmt(tube['A'] * 1e6, 0)} mm<sup>2</sup>"],
@@ -11375,10 +11417,10 @@ class ReportBuilder:
             )
 
     def _crack_mean_strain_worked(self, mean, *, edition):
-        lower_label = "0.6" if edition == "2005" else "1 - k<sub>t</sub>"
+        lower_label = "0.6" if edition == "2005" else "(1 - k<sub>t</sub>)"
         symbolic = (
             "eps<sub>sm</sub> - eps<sub>cm</sub> = max{[sigma<sub>s</sub> - "
-            "k<sub>t</sub>f<sub>ct,eff</sub>/rho<sub>p,eff</sub> "
+            "(k<sub>t</sub>f<sub>ct,eff</sub>/rho<sub>p,eff</sub>) &#183; "
             "(1 + alpha<sub>e</sub>rho<sub>p,eff</sub>)]/E<sub>s</sub>, "
             f"{lower_label} sigma<sub>s</sub>/E<sub>s</sub>}}"
         )
@@ -12848,8 +12890,8 @@ class ReportBuilder:
             equation_key="fatigue.reinforcement.design-resistance-range",
             ref=source,
             subst=(
-                f"{_fmt(selected_bin['delta_sigma_rsk_mpa'], 6)} / "
-                f"{_fmt(material_factor, 6)} MPa"
+                f"({_fmt(selected_bin['delta_sigma_rsk_mpa'], 6)} / "
+                f"{_fmt(material_factor, 6)}) MPa"
             ),
             result=(
                 "Delta sigma<sub>Rd</sub> = "
@@ -12923,7 +12965,7 @@ class ReportBuilder:
             equation_key="fatigue.reinforcement.yield-limit",
             ref=source,
             subst=(
-                f"{_fmt(characteristic, 6)} / {_fmt(material_factor, 6)} MPa"
+                f"({_fmt(characteristic, 6)} / {_fmt(material_factor, 6)}) MPa"
             ),
             result=f"sigma<sub>Rd</sub> = {_fmt(design_limit, 6)} MPa",
             note=_html_escape(
@@ -13009,8 +13051,8 @@ class ReportBuilder:
             }
             if all(value is not None for value in values.values()):
                 self._formula(
-                    "f<sub>cd,fat</sub> = k<sub>1</sub> beta<sub>cc</sub> "
-                    "alpha<sub>cc</sub> f<sub>ck</sub> / gamma<sub>c</sub> "
+                    "f<sub>cd,fat</sub> = (k<sub>1</sub> beta<sub>cc</sub> "
+                    "alpha<sub>cc</sub> f<sub>ck</sub> / gamma<sub>c</sub>) &#183; "
                     "(1 - f<sub>ck</sub>/250)",
                     equation_key="fatigue.concrete.strength",
                     equation_variant="2005",
@@ -13449,7 +13491,13 @@ class ReportBuilder:
                     "The selected torsion method and its clause references are "
                     "stated with the torsion-resistance calculation."
                 )
-        if any(result.get("valid") for result in combined_results):
+        # Native biaxial aggregates deliberately have no aggregate verdict.
+        # Use the same eligible directional evidence as worked-case selection,
+        # after the current-case, scope and prerequisite checks above.
+        if any(
+            presentation._transverse_metric("combined", result) is not None
+            for result in combined_results
+        ):
             lines.append(
                 "The combined M-V-T chapter states the selected edition, the common "
                 "strut-angle basis and the applicable interaction expressions."

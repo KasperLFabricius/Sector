@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import math
 import pathlib
 import sys
@@ -1506,7 +1507,8 @@ def test_app_combined_mv_independent_uses_max():
     assert row["Status"] == "NOT ASSESSED"
 
 
-def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass():
+@pytest.mark.parametrize("shear_force", (60.0, 100.0))
+def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass(shear_force):
     at = _fresh()
     at.run()
     _set(
@@ -1520,7 +1522,7 @@ def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass():
         at,
         "calculate",
         ("checkbox", "shear_links", True),
-        ("number_input", "shear_V", 100.0),
+        ("number_input", "shear_V", shear_force),
         ("number_input", "torsion_T", 40.0),
     )
     simultaneous = copy.deepcopy(at.session_state["results"]["combined"])
@@ -1536,10 +1538,28 @@ def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass():
     assert simultaneous["dkna_sum"] > 1.0
     assert simultaneous["dkna_status"] == "FAIL"
     assert simultaneous["dkna_ok"] is False
-    assert separate["dkna_sum"] < 1.0
-    assert separate["dkna_limit_satisfied"] is True
-    assert separate["dkna_status"] == "CONDITIONAL"
-    assert separate["dkna_ok"] is None
+    expected_sum = (separate["r_n"] + separate["r_t"]
+                    + max(separate["r_m"], separate["r_v"]))
+    assert separate["dkna_sum"] == pytest.approx(expected_sum)
+    if shear_force == 60.0:
+        # Both possible shear faces use concrete at V=60; the lower action-alone
+        # resistance is 94.306565842 kN. With M=275 and T=40, max(M,V)+T is
+        # below one, while M+V+T exceeds it. The favourable assumption is still
+        # CONDITIONAL and can never certify a PASS.
+        assert separate["action_alone"]["v"]["resistance"] == pytest.approx(
+            94.30656584213839
+        )
+        assert separate["dkna_sum"] < 1.0
+        assert separate["dkna_limit_satisfied"] is True
+        assert separate["dkna_status"] == "CONDITIONAL"
+        assert separate["dkna_ok"] is None
+    else:
+        # Preserve the original 275/100/40 case: it exceeds one even under the
+        # favourable assumption with the current action-alone denominators.
+        assert separate["dkna_sum"] > 1.0
+        assert separate["dkna_limit_satisfied"] is False
+        assert separate["dkna_status"] == "FAIL"
+        assert separate["dkna_ok"] is False
 
     _set_and_click(
         at,
@@ -2842,7 +2862,10 @@ def test_app_2023_shear_retains_both_signed_longitudinal_chords(
     assert links["longitudinal_assessment"]["status"] in {"PASS", "FAIL"}
 
 
-def test_app_2023_chords_are_invariant_to_section_reference_translation():
+@pytest.mark.parametrize("requested_max", (2.4, 2.5))
+def test_app_2023_chords_are_invariant_to_section_reference_translation(
+    requested_max,
+):
     at = _fresh().run()
     _set(
         at,
@@ -2856,6 +2879,7 @@ def test_app_2023_chords_are_invariant_to_section_reference_translation():
         ("number_input", "pl_P", 100.0),
         ("number_input", "pl_Mx", 20.0),
         ("number_input", "shear_V", 150.0),
+        ("number_input", "strut_cot_max", requested_max),
     )
     assert not at.exception
     centred_links = at.session_state["results"]["shear"]["links"]
@@ -2881,6 +2905,21 @@ def test_app_2023_chords_are_invariant_to_section_reference_translation():
     }
     assert shifted_links["m_ed_2023"] == pytest.approx(20.0)
     assert shifted_links["moment_reference_shift"] == pytest.approx(30.0)
+    permitted_max = 2.5 - 0.1 * 100.0 / 150.0
+    for links in (centred_links, shifted_links):
+        assert links["angle_applicability"]["permitted_max"] == (
+            pytest.approx(permitted_max)
+        )
+        assert links["angle_applicability"]["requested_max"] == requested_max
+    if requested_max > permitted_max:
+        for links in (centred_links, shifted_links):
+            assert links["res"]["valid"] is False
+            assert links["angle_applicability"]["status"] == "NOT ASSESSED"
+        assert centred == shifted == {}
+        return
+    assert centred_links["res"]["valid"] is True
+    assert shifted_links["res"]["valid"] is True
+    assert set(centred) == {True, False}
     assert set(shifted) == {True, False}
     assert shifted[True]["chord_role"] == "flexural_tension"
     assert shifted[False]["chord_role"] == "flexural_compression"
@@ -3303,7 +3342,7 @@ def test_mvt_view_zero_2023_chord_candidates_uses_retained_assessment():
     assert "Enable links for the full utilisation check" not in visible
     assert "(6.18)" not in visible
     assert r"\Delta Ftd" not in visible
-    assert "ΔFtd" not in visible
+    assert "\u0394Ftd" not in visible
 
 
 def test_failed_2023_chord_propagates_to_retained_mvt_component_and_overview():
@@ -5483,8 +5522,8 @@ def test_app_combined_transverse_shear_credit():
     assert tr["governing"] == pytest.approx(max(tr["u_stirrup"], tr["u_crush"]))
     assert tr["governs"] == ("crushing" if tr["u_crush"] > tr["u_stirrup"]
                              else "stirrups")
-    # The link comparison is not a live nominal route, so its resistance-optimum
-    # angle does not constrain the torsion-led combined check.
+    # Concrete remains the nominal shear route, while provided links participate
+    # in the common member angle because torsion is live.
     r = at.session_state["results"]
     assert r["shear"]["nominal_resistance"]["route"] == "concrete"
     assert r["shear"]["links"]["longitudinal_shear_force"] == pytest.approx(0.0)
@@ -5495,8 +5534,90 @@ def test_app_combined_transverse_shear_credit():
         r["combined"]["action_alone"]["v"]["demand"]
         / r["combined"]["action_alone"]["v"]["resistance"]
     )
-    assert r["shear"]["links"]["theta_mode"] == "resistance"
+    assert r["shear"]["links"]["theta_mode"] == "utilisation"
     assert tr["cot"] == pytest.approx(r["torsion"]["cot"])
+
+
+@pytest.mark.parametrize("shear_force", (60.0, 300.0))
+def test_member_angle_chord_objectives_match_retained_forces(monkeypatch, shear_force):
+    # Capture the genuine minimax objectives at the chosen and adjacent angles.
+    # This catches a force mismatch even when a transverse objective governs.
+    original = combined.governing_strut_result
+    scans = []
+
+    def capture(evaluators, low, high, **kwargs):
+        result = original(evaluators, low, high, **kwargs)
+        caller = inspect.currentframe().f_back.f_code.co_name
+        probes = sorted({max(low, result.cot - 0.001), result.cot,
+                         min(high, result.cot + 0.001)})
+        scans.append((caller, result.cot, [
+            (cot, tuple(evaluator(cot) for evaluator in evaluators))
+            for cot in probes
+        ]))
+        return result
+
+    monkeypatch.setattr(combined, "governing_strut_result", capture)
+    at = _fresh().run()
+    _run_member(at, mx=275.0, v=shear_force, t=40.0)
+    assert not at.exception
+    inp = at.session_state["result_input_snapshot"]
+    out = at.session_state["results"]
+    sh, tor = out["shear"], out["torsion"]
+    links = sh["links"]
+    selection = links["member_angle_selection"]
+    labels = selection["objective_labels"]
+    candidates = links["chord_candidates"]
+    assert len(candidates) == 4
+    assert {(item["axis"], item["tension_low"]) for item in candidates} == {
+        ("x", True), ("x", False), ("y", True), ("y", False),
+    }
+    assert all(item["role"] == (
+        "shear_axis" if item["axis"] == "x" else "off_axis"
+    ) for item in candidates)
+    assert inp["plastic_case"]["id"] == links["z_source_case"] == "PL-01"
+    assert out["plastic_cases"][0]["results"]["shear"] is sh
+    assert len(labels) == len(set(labels))
+    assert all(item["valid"] and item["conditional"] for item in candidates)
+    credited = shear_force <= sh["res"]["vrd_c"]
+    assert credited is (shear_force == 60.0)
+    cot_star = links["res"]["cot"]
+
+    expected_selection = result_presentation._current_member_angle_selection(
+        inp, sh, tor,
+    )
+    assert expected_selection == selection
+    assert result_presentation.provided_link_publication_assessment(
+        inp, sh, torsion_result=tor,
+    ).valid
+
+    for caller in ("_run_uniaxial_capacity_checks", "_current_member_angle_selection"):
+        matching = [probes for source, cot, probes in scans
+                    if source == caller and abs(cot - cot_star) < 1e-12
+                    and len(probes[0][1]) == len(labels)]
+        assert matching, caller
+        for probes in matching:
+            for cot, values in probes:
+                for candidate in candidates:
+                    face = "negative" if candidate["tension_low"] else "positive"
+                    role = ("longitudinal" if candidate["role"] == "shear_axis"
+                            else "off-axis")
+                    label = f"{candidate['axis']}-axis {face} {role} chord"
+                    gets_shift = (candidate["role"] == "shear_axis"
+                                  and candidate.get("gets_shift") is True)
+                    shear_force_at = (0.0 if credited or not gets_shift
+                                      else 0.5 * shear_force * cot)
+                    torsion_force_at = candidate["ftd_t"] * cot / cot_star
+                    mv = min(shear_force_at * candidate["z"],
+                             max(candidate["m_rd"] - candidate["m_ed"], 0.0))
+                    mt = torsion_force_at * candidate["z"] / 2.0
+                    expected = (candidate["m_ed"] + mv + mt) / candidate["m_rd"]
+                    assert values[labels.index(label)] == pytest.approx(expected)
+                    if cot == cot_star:
+                        assert candidate["ftd_v"] == pytest.approx(shear_force_at)
+                        assert candidate["util"] == pytest.approx(expected)
+    transverse = out["combined"]["transverse"]
+    assert transverse["shear_credited"] is credited
+    assert transverse["u_crush"] > tor["t_ed"] / tor["trd_max"]
 
 
 def test_app_combined_transverse_no_credit_when_shear_high():

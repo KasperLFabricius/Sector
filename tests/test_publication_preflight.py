@@ -31,7 +31,7 @@ from tools.publication_preflight import (  # noqa: E402
 
 def _publication_pdf(
     *, pagesize=A4, publication_link=True, same_page_target=True,
-    own_target=True
+    own_target=True, reference_prefix=""
 ):
     buffer = io.BytesIO()
     styles = sector_report._styles()
@@ -50,6 +50,7 @@ def _publication_pdf(
         )
     else:
         reference = "See Table 1.10."
+    reference = reference_prefix + reference
     caption_anchor = '<a name="published"/>' if same_page_target else ""
     flow = [
         Paragraph(reference, styles["publication_ref"]),
@@ -138,6 +139,38 @@ def test_each_publication_reference_is_bound_to_its_own_link_rectangle():
         preflight_pdf(
             _publication_pdf(publication_link=False), min_pages=1
         )
+
+
+def test_aggregate_join_preserves_strict_positioned_reference_identity():
+    reader = pypdf.PdfReader(io.BytesIO(_publication_pdf()))
+    texts = [page.extract_text() or "" for page in reader.pages]
+    # pypdf 6.18 can join a preceding heading and a separate reference object.
+    joined = [text.replace("See Table", "GlossarySee Table", 1) for text in texts]
+    assert joined != texts
+    assert validate_caption_colocation(joined) == ("Table 1.10",)
+    assert [ref.label for ref in validate_publication_links(reader, joined)] == [
+        "Table 1.10",
+    ]
+
+    with pytest.raises(AssertionError, match="2 references"):
+        validate_caption_colocation([joined[0] + "HeadingSee Table 1.10."])
+    with pytest.raises(AssertionError, match="strands.*Table 1.1"):
+        validate_caption_colocation(["HeadingSee Table 1.1. Table 1.10. Caption"])
+
+
+def test_aggregate_join_cannot_hide_a_missing_link_or_embedded_reference():
+    reader = pypdf.PdfReader(io.BytesIO(_publication_pdf(publication_link=False)))
+    joined = [
+        (page.extract_text() or "").replace("See Table", "GlossarySee Table", 1)
+        for page in reader.pages
+    ]
+    with pytest.raises(AssertionError, match="Table 1.10.*0 matching link"):
+        validate_publication_links(reader, joined)
+
+    # Here NeverSee is in the same real text object, not two objects joined by
+    # aggregate extraction. It must not acquire a positioned reference identity.
+    with pytest.raises(AssertionError, match="cannot be positioned exactly"):
+        preflight_pdf(_publication_pdf(reference_prefix="Never"))
 
 
 def test_publication_link_must_target_its_same_page_caption():

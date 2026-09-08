@@ -5718,8 +5718,9 @@ def test_plastic_effective_depths_publish_all_axes_faces_and_bar_populations():
     )
 
 
+@pytest.mark.parametrize("in_permitted_range", (True, False))
 def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd(
-    monkeypatch,
+    monkeypatch, in_permitted_range,
 ):
     monkeypatch.setattr(
         capacity,
@@ -5730,27 +5731,36 @@ def test_2023_shear_context_propagates_axial_tension_angle_limit_and_final_fcd(
         shear_method=codes.EC2_2023.label,
         shear_links=True,
         transverse_ductility_class="B",
-        P_pl=-400.0,
+        P_pl=400.0,
         plastic_case={"id": "PL-01"},
     )
+    permitted_max = max(2.5 - 0.1 * 400.0 / inp["shear_V"], 1.0)
+    if in_permitted_range:
+        inp["strut_cot_max"] = permitted_max
     _payload, links = capacity.build_shear_context(
         inp,
         n_prestress=0.0,
-        n_ed_comp=-400.0,
+        n_ed_comp=-inp["P_pl"],
     )
 
     assert links is not None and links["model_2023"]
     assert links["z_component"] == "z_y"
     assert links["z_source_angle_deg"] == pytest.approx(90.0)
     assert links["z_source_case"] == "PL-01"
-    assert links["z_source_axial_kn"] == pytest.approx(-400.0)
+    assert links["z_source_axial_kn"] == pytest.approx(400.0)
     assert links["angle_limits"]["axial_tension_applied"]
     assert links["angle_limits"]["maximum"] == pytest.approx(
-        max(2.5 - 0.1 * 400.0 / inp["shear_V"], 1.0)
+        permitted_max
     )
     result = links["build"](1.0, links["angle_limits"]["maximum"])
-    assert result["valid"]
-    assert result["fcd"] == pytest.approx(inp["concrete"].fcd)
+    assert result["valid"] is in_permitted_range
+    if in_permitted_range:
+        assert result["fcd"] == pytest.approx(inp["concrete"].fcd)
+    else:
+        # A post-hoc builder interval cannot repair invalid configured inputs.
+        assert links["angle_applicability"]["outside_upper"] is True
+        assert result["calculation_state"] == "NOT ASSESSED"
+        assert result["vrd"] is None
 
 
 @pytest.mark.parametrize(

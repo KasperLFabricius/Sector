@@ -217,8 +217,10 @@ def _builder():
     )
 
 
-def test_catalogue_exactly_covers_every_live_call_and_variant():
+def test_catalogue_accounts_for_every_supported_and_deferred_identity():
     _source, calls = _formula_calls()
+    # Preserve every historical definition while requiring an authored path for
+    # every supported equation. The sole deferred identity cannot be emitted.
     assert len(calls) == 145
     assert all(
         not any(keyword.arg == "equation_spec" for keyword in call.keywords)
@@ -232,7 +234,17 @@ def test_catalogue_exactly_covers_every_live_call_and_variant():
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
     assert len(catalogue_pairs) == 145
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
-    assert authored_pairs == EXPECTED_CONTRACT_KEYS
+    supported = dict(contracts.supported_equation_contract_items())
+    deferred = dict(contracts.deferred_equation_contract_items())
+    assert set(deferred) == {("combined.chord.demand", "2023")}
+    assert len(supported) == 144
+    assert not set(supported) & set(deferred)
+    assert set(supported) | set(deferred) == EXPECTED_CONTRACT_KEYS
+    assert all(item.publication_scope == "supported" and item.scope_reason is None
+               for item in supported.values())
+    assert all(item.publication_scope == "deferred" and item.scope_reason
+               for item in deferred.values())
+    assert authored_pairs == set(supported)
 
 
 def test_every_contract_is_complete_immutable_and_role_pinned():
@@ -524,3 +536,78 @@ def test_explicit_test_contract_cannot_mask_a_variant_or_wrong_type():
         builder._formula(
             "x = 1", equation_key="test.synthetic", equation_spec=object()
         )
+
+@pytest.mark.parametrize("explicit_spec", (False, True))
+def test_deferred_equation_emission_is_atomic_for_lookup_and_explicit_spec(explicit_spec):
+    builder = _builder()
+    builder._h1("Deferred equation probe")
+    identity = ("combined.chord.demand", "2023")
+    contract = contracts.equation_contract(*identity)
+    assert contract.publication_scope == "deferred"
+    before = (tuple(builder.flow), dict(builder._equations), builder._equation_number)
+    options = (
+        {"equation_key": "test.deferred", "equation_spec": contract}
+        if explicit_spec else
+        {"equation_key": identity[0], "equation_variant": identity[1]}
+    )
+    with pytest.raises(ValueError, match="not supported for publication"):
+        builder._formula("M = N z", subst="1 x 2", result="M = 2 kNm", **options)
+    assert (tuple(builder.flow), builder._equations, builder._equation_number) == before
+    with pytest.raises(ValueError, match="unknown prior key"):
+        builder._formula(
+            "M / R", equation_key="combined.chord.utilisation",
+            subst="1 / 2", result="utilisation = 50 %",
+            references=("combined.chord.demand",),
+        )
+    assert (tuple(builder.flow), builder._equations, builder._equation_number) == before
+
+
+@pytest.mark.parametrize("route", ("flag", "governing", "candidate", "direction"))
+@pytest.mark.parametrize("entrypoint", ("direction", "normal"))
+def test_unsupported_combined_route_withholds_demand_comparison_and_verdict(route, entrypoint):
+    candidate = {"chord_formula": "8.51", "m_total": 123.456, "util": 0.1, "status": "PASS"}
+    combined = {"valid": True, "method": "unsupported probe"}
+    if route == "flag":
+        combined["longitudinal_model_2023"] = True
+    elif route == "governing":
+        combined["longitudinal"] = candidate
+    elif route == "candidate":
+        combined["longitudinal_candidates"] = [candidate]
+    else:
+        combined["directions"] = {"vy": {"longitudinal": candidate}}
+    builder = _builder()
+    builder._h1("Supported scope")
+    if entrypoint == "direction":
+        builder._combined_direction(combined)
+    else:
+        builder.out["combined"] = combined
+        builder._combined()
+    text = " ".join(item.getPlainText() for item in builder.flow
+                    if hasattr(item, "getPlainText"))
+    assert "NOT ASSESSED" in text and "outside the supported release scope" in text
+    assert "123.456" not in text and "PASS" not in text and "FAIL" not in text
+    assert not builder._equations and builder._equation_number == 0
+    current, reason = sector_report.presentation.combined_publication_evidence_is_current(
+        {"combined_method": combined["method"]},
+        {"combined": combined, "shear": {}, "plastic": {}},
+    )
+    assert current is False and "outside the supported release scope" in reason
+
+
+@pytest.mark.parametrize("formula", ([], {}, 8.51, True))
+def test_malformed_combined_formula_is_unavailable_at_normal_report_entry(formula):
+    combined = {"valid": True, "longitudinal": {
+        "chord_formula": formula, "m_total": 123.456, "util": 0.1, "status": "PASS",
+    }}
+    builder = _builder()
+    builder.out["combined"] = combined
+    builder._combined()
+    text = " ".join(item.getPlainText() for item in builder.flow
+                    if hasattr(item, "getPlainText"))
+    assert "NOT ASSESSED" in text and "formula is invalid" in text
+    assert "123.456" not in text and "PASS" not in text and "FAIL" not in text
+    assert not builder._equations and builder._equation_number == 0
+    current, reason = sector_report.presentation.combined_publication_evidence_is_current(
+        {}, {"combined": combined, "shear": {}, "plastic": {}},
+    )
+    assert current is False and "formula is invalid" in reason

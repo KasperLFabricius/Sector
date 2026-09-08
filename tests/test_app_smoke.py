@@ -2889,21 +2889,21 @@ def test_slab_t20_at_200_renders_five_equivalents_and_matches_five_entered_bars(
         item.value for item in spaced.caption if "bar-equivalents/m" in item.value
     ]
     assert density_captions == [
-        "Primary T20 @ 200 mm: 5.000 bar-equivalents/m and Aₛ = "
-        "1,570.796 mm²/m per layer. Bottom total: Aₛ = 1,570.796 mm²/m "
-        "per layer and 1,570.796 mm²/m over 1 layer.",
-        "Primary T20 @ 200 mm: 5.000 bar-equivalents/m and Aₛ = "
-        "1,570.796 mm²/m per layer. Top total: Aₛ = 1,570.796 mm²/m "
-        "per layer and 1,570.796 mm²/m over 1 layer.",
+        "Primary T20 @ 200 mm: 5.000 bar-equivalents/m and A\u209b = "
+        "1,570.796 mm\u00b2/m per layer. Bottom total: A\u209b = 1,570.796 mm\u00b2/m "
+        "per layer and 1,570.796 mm\u00b2/m over 1 layer.",
+        "Primary T20 @ 200 mm: 5.000 bar-equivalents/m and A\u209b = "
+        "1,570.796 mm\u00b2/m per layer. Top total: A\u209b = 1,570.796 mm\u00b2/m "
+        "per layer and 1,570.796 mm\u00b2/m over 1 layer.",
     ]
     preview_captions = [item.value for item in spaced.caption]
     assert (
-        "Bottom: 1 layer; primary T20 @ 200 mm; Aₛ = 1,570.796 mm²/m "
-        "per layer and 1,570.796 mm²/m in total."
+        "Bottom: 1 layer; primary T20 @ 200 mm; A\u209b = 1,570.796 mm\u00b2/m "
+        "per layer and 1,570.796 mm\u00b2/m in total."
     ) in preview_captions
     assert (
-        "Top: 1 layer; primary T20 @ 200 mm; Aₛ = 1,570.796 mm²/m "
-        "per layer and 1,570.796 mm²/m in total."
+        "Top: 1 layer; primary T20 @ 200 mm; A\u209b = 1,570.796 mm\u00b2/m "
+        "per layer and 1,570.796 mm\u00b2/m in total."
     ) in preview_captions
     assert (
         "4 concrete corners, 0 void(s), 64 slab-density analysis points, 0 tendons."
@@ -2975,7 +2975,7 @@ def test_slab_spacing_interleave_uses_periodic_midpoints_and_exact_density():
     captions = [item.value for item in at.caption]
     assert any(
         "Interleave T16 @ 200 mm: 5.000 bar-equivalents/m" in value
-        and "Bottom total: Aₛ = 2,576.106 mm²/m per layer" in value
+        and "Bottom total: A\u209b = 2,576.106 mm\u00b2/m per layer" in value
         for value in captions
     )
     _apply_qs(at)
@@ -3074,14 +3074,14 @@ def test_slab_mixed_series_captions_and_preview_total_multiple_layers():
     captions = [item.value for item in at.caption]
     for face in ("Bottom", "Top"):
         assert any(
-            f"{face} total: Aₛ = 2,576.106 mm²/m per layer and "
-            "5,152.212 mm²/m over 2 layers." in value
+            f"{face} total: A\u209b = 2,576.106 mm\u00b2/m per layer and "
+            "5,152.212 mm\u00b2/m over 2 layers." in value
             for value in captions
         )
         assert (
             f"{face}: 2 layers; primary T20 @ 200 mm + interleave T16 @ "
-            "200 mm; Aₛ = 2,576.106 mm²/m per layer and 5,152.212 "
-            "mm²/m in total."
+            "200 mm; A\u209b = 2,576.106 mm\u00b2/m per layer and 5,152.212 "
+            "mm\u00b2/m in total."
         ) in captions
     assert any(
         "Primary T20 @ 200 mm: 5.000 bar-equivalents/m" in value
@@ -4531,9 +4531,9 @@ def test_cleared_section_does_not_fall_back_to_quick_section():
     assert "results" not in at.session_state
 
 
-def test_blank_and_partial_point_rows_are_skipped():
-    # A blank row and a half-typed point (x with no y) and a non-numeric paste are
-    # ignored, never crash, and only the complete numeric rows become points.
+def test_incomplete_point_rows_block_calculation_until_corrected():
+    # Entered reinforcement cannot silently disappear from the section. Retain
+    # incomplete rows and block calculation until the user corrects the table.
     import pandas as pd
     at = _fresh()
     at.run()
@@ -4542,6 +4542,17 @@ def test_blank_and_partial_point_rows_are_skipped():
         {"x (mm)": [50.0, None, 150.0, "oops"],   # row 2 blank, row 4 non-numeric
          "y (mm)": [50.0, 50.0, None, 50.0],       # row 3 half-typed (no y)
          "area (mm2)": [491.0, 491.0, 491.0, 491.0]}))
+    _calculate(at)
+    assert not at.exception
+    assert "results" not in at.session_state
+    assert len(at.session_state["bars_base"]) == 4
+    assert any(
+        "Enter finite coordinates and a positive area and diameter" in item.value
+        for item in at.error
+    )
+    _replace_base_table(at, "bars_base", pd.DataFrame({
+        "x (mm)": [50.0], "y (mm)": [50.0], "area (mm2)": [491.0],
+    }))
     _calculate(at)
     assert not at.exception
     assert len(at.session_state["results"]["elastic"]["total"]) == 1   # one valid bar
@@ -8181,16 +8192,27 @@ def test_es_field_present_and_editable():
     assert "plastic" in at.session_state["results"]
 
 
-def test_eut_below_yield_strain_warns_and_calculates():
-    # Meaningful constraint: a rupture strain below the yield strain is clamped
-    # with a warning rather than accepted.
+def test_eut_below_yield_strain_is_retained_and_blocks_calculation():
+    # An invalid entered law is retained for correction and never silently clamped.
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Mild steel")
     at.number_input(key="mild_eut").set_value(0.5).run()  # 0.5 permille, below ey ~ 2.5
-    assert any("yield strain" in w.value for w in at.warning)
+    assert at.number_input(key="mild_eut").value == pytest.approx(0.5)
+    assert at.session_state["mild_material_catalog"]["items"][0]["eut"] == (
+        pytest.approx(0.5)
+    )
+    assert any("rupture strain above every active yield point" in w.value
+               for w in at.warning)
     _calculate(at)
     assert not at.exception
+    assert "results" not in at.session_state
+    assert at.session_state["_latest_inputs"]["steel"] is None
+    _goto_material_tab(at, "Mild steel")
+    at.number_input(key="mild_eut").set_value(50.0).run()
+    _calculate(at)
+    assert not at.exception
+    assert "plastic" in at.session_state["results"]
 
 
 def test_two_yield_fields_live_under_default_preset():
@@ -9362,7 +9384,7 @@ def test_core_m02_real_app_calculation_retains_refinement_evidence():
     _select_view(at, "Detailing")
     captions = [str(item.value) for item in at.caption]
     assert any(
-        f"achieved governing interval {achieved:g}° for the {target:g}° target"
+        f"achieved governing interval {achieved:g}\u00b0 for the {target:g}\u00b0 target"
         in value
         for value in captions
     )
@@ -9428,13 +9450,13 @@ def test_core_m02_review_case_renders_refined_engineering_verdict():
         for value in visible_errors
     )
     assert any(
-        "Nominal envelope: achieved governing interval 0.083° for the 0.1° target"
+        "Nominal envelope: achieved governing interval 0.083\u00b0 for the 0.1\u00b0 target"
         in value
         and "assessment resolved" in value
         for value in visible_captions
     )
     assert any(
-        "utilisation interval 100.0560–100.0620 %" in value
+        "utilisation interval 100.0560\u2013100.0620 %" in value
         and "all retained angles converged" in value
         for value in visible_captions
     )
@@ -9503,12 +9525,12 @@ def test_core_m02_unresolved_case_renders_not_assessed_guidance():
         for value in visible_warnings
     )
     assert any(
-        "achieved governing interval 0.0095° for the 0.01° target" in value
+        "achieved governing interval 0.0095\u00b0 for the 0.01\u00b0 target" in value
         and "separate assessment required" in value
         for value in visible_captions
     )
     assert any(
-        "utilisation interval 99.9999–100.0002 %" in value
+        "utilisation interval 99.9999\u2013100.0002 %" in value
         and "all retained angles converged" in value
         for value in visible_captions
     )
@@ -9565,7 +9587,7 @@ def test_core_m02_moved_direction_failure_renders_fail_closed_guidance():
         for item in at.warning
     )
     assert any(
-        "achieved governing interval 15° for the 0.01° target" in str(item.value)
+        "achieved governing interval 15\u00b0 for the 0.01\u00b0 target" in str(item.value)
         and "separate assessment required" in str(item.value)
         for item in at.caption
     )

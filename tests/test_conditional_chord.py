@@ -21,7 +21,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import manual  # noqa: E402  (real app preset materials + example sections)
-from sector import combined  # noqa: E402
+from sector import capacity, combined, shear  # noqa: E402
 from sector.plastic import (  # noqa: E402
     conditional_capacity,
     plastic_capacity_at_angle,
@@ -366,7 +366,18 @@ def test_conditional_capacity_with_axial_and_prestress():
 
 def _fresh():
     from streamlit.testing.v1 import AppTest
-    return AppTest.from_file(APP, default_timeout=120)
+    at = AppTest.from_file(APP, default_timeout=120)
+    at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+        "PL-01": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_EQUILIBRIUM
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        }
+    }
+    at.session_state["torsion_design_basis"] = capacity.TORSION_DESIGN_EQUILIBRIUM
+    at.session_state["torsion_member_scope"] = capacity.TORSION_MEMBER_CLOSED
+    return at
 
 
 def _goto_page(at, page):
@@ -440,7 +451,7 @@ def _mvt(at, my=0.0, torsion=True):
     return at
 
 
-def _valid_t_subdivision(at):
+def _valid_t_subdivision(at, *, complete_cage=True):
     """Apply a 1000 x 200 flange + 300 x 600 web and its positioned partition."""
     at.session_state["_qs_open"] = True
     at.run()
@@ -466,6 +477,28 @@ def _valid_t_subdivision(at):
         ("number_input", "torsion_sub_b1", 1000.0),
         ("number_input", "torsion_sub_h1", 200.0),
     )
+    if not complete_cage:
+        return
+    # Each physical sub-tube needs its own four corner reinforcement positions.
+    # The default flexural cage alone does not establish every torsion wall.
+    import pandas as pd
+
+    area = math.pi * 20.0**2 / 4.0
+    positions = [
+        (-100.0, -350.0), (100.0, -350.0),
+        (100.0, 150.0), (-100.0, 150.0),
+        (-450.0, 250.0), (450.0, 250.0),
+        (450.0, 350.0), (-450.0, 350.0),
+    ]
+    _goto_page(at, "Inputs")
+    at.session_state["bars_base"] = pd.DataFrame(
+        [(x, y, area) for x, y in positions],
+        columns=["x (mm)", "y (mm)", "area (mm2)"],
+    )
+    at.session_state["ed_bars_ver"] += 1
+    if "ed_bars" in at.session_state:
+        del at.session_state["ed_bars"]
+    at.run()
     return at
 
 
@@ -564,16 +597,22 @@ def test_app_off_axis_chord_absent_without_torsion():
     assert ch["biaxial"] and not ch["has_torsion"] and ch["conditional"]
 
 
-def test_app_zero_capacity_chord_does_not_poison_the_scan():
+@pytest.mark.parametrize("both_axes_zero", (False, True))
+def test_app_zero_capacity_chord_does_not_poison_the_scan(both_axes_zero):
     # An off-axis moment beyond the envelope leaves zero conditional capacity: the
     # chord reports utilisation = inf (honest), but is kept OUT of the strut-angle
     # objective. If it leaked in, governing_strut_cot would see inf at every angle
-    # and tie to the band LOW edge (cot = 1.0); the healthy finite optimum here is
-    # well above it, so cot >> 1.0 pins that the guard actually excludes the chord.
+    # and tie to the band LOW edge (cot = 1.0). A positive off-axis chord can
+    # legitimately govern at that edge; with both axes unavailable the finite
+    # transverse optimum must remain above it.
     at = _fresh(); at.run()
     _mvt(at)
     my_max = at.session_state["results"]["plastic"]["max_my"]
-    _set(at, ("number_input", "pl_My", float(my_max) * 1.5))
+    changes = [("number_input", "pl_My", float(my_max) * 1.5)]
+    if both_axes_zero:
+        mx_max = at.session_state["results"]["plastic"]["max_mx"]
+        changes.append(("number_input", "pl_Mx", float(mx_max) * 1.5))
+    _set(at, *changes)
     _calculate(at)
     assert not at.exception
     res = at.session_state["results"]
@@ -582,7 +621,29 @@ def test_app_zero_capacity_chord_does_not_poison_the_scan():
     assert math.isinf(lg["util"])                     # zero capacity, real demand
     lk = res["shear"]["links"]["res"]
     assert lk["valid"] and math.isfinite(lk["cot"])
-    assert lk["cot"] > 1.5                            # NOT pinned to the band low edge
+    selection = res["shear"]["links"]["member_angle_selection"]
+    assert math.isfinite(selection["utilisation"])
+    assert not any("x-axis" in name for name in selection["objective_labels"])
+    if both_axes_zero:
+        candidates = res["shear"]["links"]["chord_candidates"]
+        assert len(candidates) == 4
+        assert {(item["axis"], item["tension_low"]) for item in candidates} == {
+            ("x", True), ("x", False), ("y", True), ("y", False),
+        }
+        for candidate in candidates:
+            assert candidate["valid"] and candidate["conditional"]
+            assert candidate["m_rd"] == 0.0 and candidate["z"] > 0.0
+            assert math.isfinite(candidate["m_total"]) and candidate["m_total"] > 0.0
+            assert candidate["status"] == "FAIL"
+            assert math.isinf(candidate["util"])
+        assert not any("chord" in name for name in selection["objective_labels"])
+        assert selection["objective_count"] == 5
+        assert lk["cot"] > 1.5
+    else:
+        assert selection["governing_objectives"] == (
+            "y-axis negative off-axis chord",
+        )
+        assert lk["cot"] == pytest.approx(1.0)
 
 
 def test_app_off_axis_chord_skipped_on_subdivided_section_disclosed_uniaxially():
@@ -592,6 +653,11 @@ def test_app_off_axis_chord_skipped_on_subdivided_section_disclosed_uniaxially()
     # bending, so the marker must not be gated on biaxial (Codex round-2 P2).
     at = _fresh(); at.run()
     _valid_t_subdivision(at)
+    _set(
+        at,
+        ("selectbox", "shear_section_form", shear.SHEAR_SECTION_CONSTANT),
+        ("number_input", "shear_bw", 300.0),
+    )
     _mvt(at)                                            # My = 0 -> uniaxial
     t = at.session_state["results"]["torsion"]
     assert t["subdivided"]
@@ -602,10 +668,48 @@ def test_app_off_axis_chord_skipped_on_subdivided_section_disclosed_uniaxially()
     _select_view(at, "M-V-T Combined")
     metric = next(
         item for item in at.metric
-        if item.label == r"$M_{Ed,\mathrm{total}}/M_{Rd}$"
+        if item.label == "Chord utilisation"
     )
+    assert metric.value == "-"
     assert not metric.delta
     assert "NOT ASSESSED" in metric.help
+
+
+def test_app_incomplete_subtube_wall_mapping_withholds_combined_chord():
+    at = _fresh().run()
+    _valid_t_subdivision(at, complete_cage=False)
+    _set(
+        at,
+        ("selectbox", "shear_section_form", shear.SHEAR_SECTION_CONSTANT),
+        ("number_input", "shear_bw", 300.0),
+    )
+    _mvt(at)
+    assert not at.exception
+    results = at.session_state["results"]
+    assert results["torsion"]["valid"] is False
+    assert "wall" in results["torsion"]["reason"]
+    assert "incomplete" in results["torsion"]["reason"]
+    assert "longitudinal" not in results["combined"]
+
+
+@pytest.mark.parametrize("subdivided", (False, True))
+def test_app_missing_torsion_authority_withholds_combined_chord(subdivided):
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(APP, default_timeout=120).run()
+    if subdivided:
+        _valid_t_subdivision(at)
+        _set(
+            at,
+            ("selectbox", "shear_section_form", shear.SHEAR_SECTION_CONSTANT),
+            ("number_input", "shear_bw", 300.0),
+        )
+    _mvt(at)
+    assert not at.exception
+    results = at.session_state["results"]
+    assert results["torsion"]["valid"] is False
+    assert results["torsion"]["reason"] == "torsion design basis not established"
+    assert "longitudinal" not in results["combined"]
 
 
 def test_shear_face_mrd_falls_back_to_pure_axis_on_solve_failure(monkeypatch):
