@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.96.2 - 2026-09-08
+
+Sector 0.96.2 strengthens project replacement, calculation boundaries and the
+current evidence used by issued results. Project schema remains 27.
+
+- Project loading replaces input state transactionally; material and section
+  calculations enforce their valid domains and bounded plastic sweeps.
+- Corrected slab reinforcement spacing, the nominal resistance envelope,
+  Danish shear-torsion interaction and longitudinal torsion assessment.
+- Shear, torsion and combined publications require current actions, effective
+  section properties, applicable member scope and their retained calculation
+  evidence. Valid applied demands remain visible when resistance is unavailable.
+- The overview selects governing calculated elastic outputs consistently with
+  detailed results. Report equations use explicit mathematical grouping and
+  material, torsion and contents layout retains readable calculation groups.
+- Corrected manual references and generated ID guidance, reduced unnecessary
+  startup imports, and updated locked dependencies for identified security fixes.
+
+See [v0.96.2 release notes](docs/v0962_release_notes.md) for the scope and portable
+package instructions. Existing schema 25 and 26 migrations remain unchanged.
+
 ## 0.96.1 - 2026-08-25
 
 Sector 0.96.1 strengthens calculation prerequisites, result interpretation,
