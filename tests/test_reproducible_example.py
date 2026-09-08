@@ -470,7 +470,7 @@ def test_pub_m01_provided_links_publish_their_own_pass_in_native_views(
         caption.value
         == "Separate link detailing assessment: "
         + results["transverse_reinforcement"]["status"]
-        + "."
+        + ". This detailing result is not a shear-capacity verdict."
         for caption in pub_m01_example.caption
     )
 
@@ -747,7 +747,10 @@ def test_pub_m01_native_required_authority_and_incomplete_child_fail_closed(
             for metric in pub_m01_example.metric
         )
         assert any(
-            caption.value == "Separate link detailing assessment: FAIL."
+            caption.value == (
+                "Separate link detailing assessment: FAIL. "
+                "This detailing result is not a shear-capacity verdict."
+            )
             for caption in pub_m01_example.caption
         )
 
@@ -794,7 +797,10 @@ def test_pub_m01_native_hostile_chord_status_fails_closed_without_raw_copy(
         assert "provided-link resistance is NOT ASSESSED" in visible
         assert "[]" not in visible
         assert any(
-            caption.value == "Separate link detailing assessment: FAIL."
+            caption.value == (
+                "Separate link detailing assessment: FAIL. "
+                "This detailing result is not a shear-capacity verdict."
+            )
             for caption in pub_m01_example.caption
         )
 

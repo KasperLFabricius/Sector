@@ -65,9 +65,9 @@ _MANUAL_CROPS = (
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # MVT-M05 adds one governed applicability page; the cover/footer crop
-        # changes only because its final page count is now 75.
-        "2da8c1dc98c1977617f8a4dc5440f83af2a3ec59ea0e2e4521e20d1815d13619",
+        # The reviewed 0.96.2 footer changes its version label; the page count
+        # remains 75 and the crop geometry is unchanged.
+        "c9f9a0313e976adc6c744b26be1522d3d235df0135c1e79e0f2c979f7128eb85",
     ),
 )
 

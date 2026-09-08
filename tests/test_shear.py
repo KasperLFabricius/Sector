@@ -1428,7 +1428,7 @@ def _replace_base_table(at, base_key, value):
     return at
 
 
-def _set_and_click(at, button_key, *changes):
+def _set_and_click(at, button_key, *changes, run_timeout=None):
     """Submit a group of existing inputs with one button-triggered rerun."""
     if button_key in {"qs_apply", "qs_back"} and changes:
         _set(at, *changes)
@@ -1441,7 +1441,7 @@ def _set_and_click(at, button_key, *changes):
     if button_key == "calculate":
         _goto_page(at, "Analysis")
     at.button(key=button_key).click()
-    at.run()
+    at.run(timeout=run_timeout)
     if button_key in {"qs_apply", "qs_back"}:
         discard_retired_qs_fragment(at)
     return at
@@ -1770,10 +1770,13 @@ def test_app_circular_vx_torsion_rejects_invalid_off_axis_arm_then_recovers():
     assert links_row["Result"].endswith(" % (non-governing)")
     assert chord_row["Status"] != "PASS"
 
+    # Allow this native recovery solve the bounded calculation-fixture budget
+    # under coverage; ordinary navigation retains the default timeout.
     _set_and_click(
         at,
         "calculate",
         ("number_input", "shear_vy_fitted_z", 500.0),
+        run_timeout=300,
     )
 
     assert not at.exception
