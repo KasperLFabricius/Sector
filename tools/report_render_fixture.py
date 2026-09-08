@@ -9,7 +9,6 @@ an engineer expects in the issued report cannot be produced.
 from __future__ import annotations
 
 import argparse
-import copy
 import datetime
 import functools
 import io
@@ -17,7 +16,6 @@ import math
 import pathlib
 import re
 import sys
-from dataclasses import asdict
 
 import pypdf
 
@@ -29,9 +27,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import case_analysis
-import fatigue_analysis
+import fatigue_analysis as fatigue_analysis
 import fatigue_inputs
-import load_cases
 import material_catalog
 import result_presentation
 import sector_report
@@ -46,7 +43,6 @@ from sector import (
     torsion,
 )
 from sector.design_standards import DesignBasisKey
-from sector.heightened_crack_control import calculate_dual_heightened_crack_control
 from sector.materials import Concrete
 from sector.section import Section
 from tools.publication_preflight import (
@@ -179,12 +175,12 @@ def _inputs() -> dict:
         },
         {
             "name": "EL-QA-2",
-            "description": "Frequent response | Source: QA register",
+            "description": "Governing elastic response | Source: QA register",
             "n_long_ed_kn": 0.0,
-            "mx_long_ed_knm": 45.0,
+            "mx_long_ed_knm": 90.0,
             "my_long_ed_knm": 0.0,
             "n_short_ed_kn": 0.0,
-            "mx_short_ed_knm": 10.0,
+            "mx_short_ed_knm": 25.0,
             "my_short_ed_knm": 0.0,
             "calculate_crack_width": False,
         },
@@ -391,6 +387,7 @@ def _inputs() -> dict:
         ],
         "capacity_steel_material_id": second_id,
         "prestress": None,
+        "prestress_material_catalog": material_catalog.default_catalog("prestress"),
         "P_pl": 0.0,
         "Mx_pl": 80.0,
         "My_pl": 0.0,
@@ -407,6 +404,7 @@ def _inputs() -> dict:
         "conc_Ec": 33.0,
         "sls_fctm": 2.9,
         "sls_cw": True,
+        "sls_phi": 0.0,
         "sls_code": DesignBasisKey.FIRST_GEN_DK_NA_2024.value,
         "sls_member": "Beam",
         "sls_bond": "Ribbed / high bond (k1 = 0.8)",
@@ -427,418 +425,11 @@ def _inputs() -> dict:
     }
 
 
-def _elastic_state(mx: float) -> dict:
-    """Return one retained accepted elastic state without rerunning the solver."""
-    return {
-        "raw_stress_plane": {
-            "sigma0_kpa": 0.0,
-            "gradient_x_kpa_per_m": mx,
-            "gradient_y_kpa_per_m": 0.0,
-        },
-        "iterations": 4,
-        "converged": True,
-        "equilibrium": {
-            "matrix": [
-                [1.0, 0.0, 0.0],
-                [0.0, 1.0, 0.0],
-                [0.0, 0.0, 1.0],
-            ],
-            "target": {"n": 0.0, "mx": mx, "my": 0.0},
-            "internal": {"n": 0.0, "mx": mx, "my": 0.0},
-            "residual": {"n": 0.0, "mx": 0.0, "my": 0.0},
-            "residual_scale": abs(mx),
-            "normalised_residual": 0.0,
-            "relative_tolerance": 1.0e-8,
-        },
-    }
-
-
-def _crack() -> dict:
-    """Return a complete retained 2005 crack-width worked example."""
-    rho = 2.72 / 99.0
-    ac_eff = 0.0005 / rho
-    concrete_reduction = 0.4 * 2.9 / rho * (1.0 + 6.06 * rho)
-    mean_strain = 0.213 / 235.0
-    sigma_s = mean_strain * 200_000.0 + concrete_reduction
-    mean = {
-        "record_kind": "CrackMeanStrainOperands",
-        "sigma_s": sigma_s,
-        "kt": 0.4,
-        "fctm": 2.9,
-        "rho_p_eff": rho,
-        "alpha_e": 6.06,
-        "es": 200_000.0,
-        "concrete_tension_reduction": concrete_reduction,
-        "formula_candidate": mean_strain,
-        "lower_bound_factor": 0.6,
-        "lower_bound_candidate": 0.6 * sigma_s / 200_000.0,
-        "selected_candidate": "formula-7.9",
-        "selected_esm_ecm": mean_strain,
-    }
-    spacing = {
-        "record_kind": "CrackSpacing2005Operands",
-        "cover": 40.0,
-        "diameter": 16.0,
-        "rho_p_eff": rho,
-        "k1": 0.8,
-        "k2": 0.5,
-        "k3_base": 3.4,
-        "k3_used": 3.4,
-        "k4": 0.425,
-        "nearest_neighbour_spacing": 100.0,
-        "close_spacing_limit": 240.0,
-        "tension_zone_depth": 0.15,
-        "formula_7_11": 235.0,
-        "geometric_7_14": 195.0,
-        "selected_candidate": "formula-7.11",
-        "selected_spacing": 235.0,
-    }
-    candidate = {
-        "element_type": "Bar",
-        "element_no": 1,
-        "element_id": "bar 1",
-        "x_mm": 0.0,
-        "y_mm": -120.0,
-        "area_mm2": 500.0,
-        "wk": 0.213,
-        "sr_max": 235.0,
-        "esm_ecm": mean_strain,
-        "sigma_s": sigma_s,
-        "rho_p_eff": rho,
-        "ac_eff": ac_eff,
-        "hc_ef": 0.125,
-        "phi": 16.0,
-        "cover": 40.0,
-        "coarse": False,
-        "edition": "2004",
-        "kw": 1.0,
-        "k1_r": 1.0,
-        "kfl": 1.0,
-        "sr_max_geometric": False,
-        "as_eff": 0.0005,
-        "ap_eff": 0.0,
-        "ap_eff_weighted": 0.0,
-        "xi1": None,
-        "reinforcement_type": "mild",
-        "bc_ef": 0.0,
-        "direct_tension": False,
-        "scope": "dominant direction",
-        "direction_deg": 90.0,
-        "equivalent_diameter": 25.231,
-        "diameter_source": "provided",
-        "cover_source": "geometry",
-        "bond_coefficient": 0.8,
-        "modular_ratio": 6.06,
-        "mean_strain_operands": mean,
-        "spacing_operands": spacing,
-    }
-    effective_area = {
-        "record_kind": "CrackEffectiveArea2005Fine",
-        "section_depth": 0.3,
-        "effective_depth": 0.25,
-        "tension_zone_depth": 0.4,
-        "h_minus_d": 0.05,
-        "candidate_2_5_h_minus_d": 0.125,
-        "candidate_h_minus_x_over_3": 0.13333333333333333,
-        "candidate_h_over_2": 0.15,
-        "selected_candidate": "2.5(h-d)",
-        "selected_hc_eff": 0.125,
-        "band_limit": -0.025,
-        "ac_eff": ac_eff,
-    }
-    return dict(
-        candidate,
-        gov_bar=1,
-        effective_area_operands=effective_area,
-        effective_reinforcement_2023=None,
-        governing_rule="maximum-wk-then-lowest-bar-index",
-        governing_candidate=dict(candidate),
-        candidates=[candidate],
-    )
-
-
 def _results(inp: dict | None = None) -> dict:
-    inp = inp or _inputs()
-    # Plastic and every dependent member family come from the actual solver on
-    # this fixture's own geometry, four bars, two materials and named cases.
+    """Use the application's native producer for every enabled fixture family."""
     import sector_app
 
-    member_results = case_analysis.run_case_tables(
-        dict(inp, mode="Plastic"), sector_app._run_single_analysis,
-    )
-    elastic = {
-        "total": [150.0],
-        "long": [120.0],
-        "dif": [30.0],
-        "rst1": [0.0],
-        "max_conc": 12.0,
-        "max_conc_xy": (0.0, 0.15),
-        "max_conc_point": 4,
-        "na_x": 0.0,
-        "na_y": 0.04,
-        "max_steel": 150.0,
-        "max_steel_bar": 1,
-        "max_steel_element": "bar 1",
-        "converged": True,
-        "cracked": True,
-        "lambda_cr": 0.4,
-        "sigma_ct": 7.2,
-        "fctm": 2.9,
-        "show_cw": True,
-        "stress_plane": (-12000.0, 0.0, 80000.0),
-        "elements": [{
-            "element_type": "Bar",
-            "element_no": 1,
-            "element_id": "bar 1",
-            "x_mm": 0.0,
-            "y_mm": -120.0,
-            "area_mm2": 500.0,
-            "strain_permille": 0.75,
-            "total_mpa": 150.0,
-            "long_mpa": 120.0,
-            "dif_mpa": 30.0,
-            "rst1_mpa": 0.0,
-            "long_passive_mpa": 100.0,
-            "reduced_long_mpa": 59.595959596,
-            "locked_in_mpa": 0.0,
-        }],
-        "concrete_corners": [
-            {"point_no": 1, "ring": "Outer", "ring_point_no": 1,
-             "x_mm": -100.0, "y_mm": -150.0,
-             "strain_permille": -0.72727, "stress_mpa": -24.0},
-            {"point_no": 2, "ring": "Outer", "ring_point_no": 2,
-             "x_mm": 100.0, "y_mm": -150.0,
-             "strain_permille": -0.72727, "stress_mpa": -24.0},
-            {"point_no": 3, "ring": "Outer", "ring_point_no": 3,
-             "x_mm": 100.0, "y_mm": 150.0,
-             "strain_permille": 0.0, "stress_mpa": 0.0},
-            {"point_no": 4, "ring": "Outer", "ring_point_no": 4,
-             "x_mm": -100.0, "y_mm": 150.0,
-             "strain_permille": 0.0, "stress_mpa": 0.0},
-        ],
-        "stress_outputs": {
-            "concrete": {
-                "value": 12.0,
-                "quantity": "maximum concrete compression",
-                "unit": "MPa",
-                "calculation_state": "CALCULATED",
-            },
-            "reinforcement": {
-                "value": 150.0,
-                "quantity": "maximum reinforcement tension",
-                "unit": "MPa",
-                "governing": "bar 1",
-                "element_no": 1,
-                "calculation_state": "CALCULATED",
-            },
-            "prestress": {
-                "value": None,
-                "quantity": "maximum tendon tension",
-                "unit": "MPa",
-                "calculation_state": "NOT APPLICABLE",
-            },
-        },
-        "props_un": {
-            "area": 0.06,
-            "cx": 0.0,
-            "cy": 0.0,
-            "Ix": 4.5e-4,
-            "Iy": 2.0e-4,
-            "Ixy": 0.0,
-        },
-        "props_cr": {
-            "area": 0.03,
-            "cx": 0.0,
-            "cy": 0.02,
-            "Ix": 2.1e-4,
-            "Iy": 1.0e-4,
-            "Ixy": 0.0,
-        },
-        "crack": _crack(),
-        "crack_short": _crack(),
-        "crack_output": {
-            "long_term": {
-                "duration": "long_term",
-                "value": 0.213,
-                "case": "Long-term",
-                "governing": "bar 1",
-                "unit": "mm",
-                "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
-                "criterion_mm": 0.20,
-                "ratio": 1.065,
-                "criterion_source": (
-                    "User input - Analysis settings - long-term"
-                ),
-                "reason": (
-                    "The calculated crack width exceeds the user-specified limit."
-                ),
-                "comparison_equation": "w_k / w_k,criterion",
-            },
-            "short_term": {
-                "duration": "short_term",
-                "value": 0.213,
-                "case": "Short-term",
-                "governing": "bar 1",
-                "unit": "mm",
-                "calculation_state": "EXCEEDS USER-SPECIFIED LIMIT",
-                "criterion_mm": 0.20,
-                "ratio": 1.065,
-                "criterion_source": (
-                    "User input - Analysis settings - short-term"
-                ),
-                "reason": (
-                    "The calculated crack width exceeds the user-specified limit."
-                ),
-                "comparison_equation": "w_k / w_k,criterion",
-            },
-        },
-        "crack_code": "EN 1992-1-1:2005",
-        "crack_member": None,
-        "accepted_states": {
-            "long_term": _elastic_state(80.0),
-            "instantaneous_combined": _elastic_state(95.0),
-        },
-        "superposition": {
-            "long_term_modular_ratio": 15.0,
-            "short_term_modular_ratio": 200.0 / 33.0,
-            "long_term_reduction_factor": 1.0 - (200.0 / 33.0) / 15.0,
-            "prestress_resultant": {"n": 0.0, "mx": 0.0, "my": 0.0},
-            "combined_target_before_neutralisation": {
-                "n": 29.797979798,
-                "mx": 91.424242424,
-                "my": 0.0,
-            },
-            "neutralising_resultant": {
-                "n": 29.797979798,
-                "mx": -3.575757576,
-                "my": 0.0,
-            },
-        },
-    }
-    elastic_2 = copy.deepcopy(elastic)
-    elastic_2["show_cw"] = False
-    elastic_2["crack"] = None
-    elastic_2["crack_short"] = None
-    elastic_2["crack_output"] = {
-        duration: {
-            "duration": duration,
-            "value": None,
-            "case": None,
-            "governing": None,
-            "unit": "mm",
-            "calculation_state": "NOT REQUESTED",
-            "criterion_mm": 0.20,
-            "ratio": None,
-            "criterion_source": (
-                f"User input - Analysis settings - {duration.replace('_', '-')}"
-            ),
-            "reason": (
-                "Crack-width calculation was not requested for this Elastic case."
-            ),
-            "comparison_equation": None,
-        }
-        for duration in ("long_term", "short_term")
-    }
-    elastic_2["max_steel"] = 245.0
-    elastic_2["elements"][0]["total_mpa"] = 245.0
-    elastic_2["stress_outputs"]["reinforcement"]["value"] = 245.0
-    inputs = inp
-    elastic_rows = case_analysis.case_records(inputs, "elastic")
-    fatigue = fatigue_analysis.run_analysis(inputs)
-    material_properties = {
-        "concrete": {
-            "variant": "2005",
-            "characteristic_strength_mpa": inp["concrete"].fck,
-            "strength_factor": inp["concrete"].alpha_cc,
-            "partial_factor": inp["concrete"].gamma_c,
-            "eta_cc": inp.get("concrete_eta_cc"),
-            "k_tc": inp.get("concrete_k_tc"),
-            "design_strength_mpa": inp["concrete"].fcd,
-        },
-        "mild": [
-            {
-                "material_id": material_id,
-                "characteristic_yield_mpa": material.fytk,
-                "yield_factor": material.gamma_y,
-                "design_yield_mpa": capacity.design_yield(material),
-            }
-            for material_id, material in inp["mild_materials"].items()
-        ],
-        "prestress": [],
-    }
-    dual_heightened = calculate_dual_heightened_crack_control(
-        basis=inp["sls_code"],
-        reinforcement_surface=inp["sls_heightened_reinforcement_surface"],
-        bar_diameter_mm=25.23,
-        effective_tensile_strength_mpa=inp[
-            "sls_heightened_effective_tensile_strength_mpa"
-        ],
-        reinforcement_modulus_mpa=200_000.0,
-        permitted_crack_width_mm=inp[
-            "sls_heightened_permitted_crack_width_mm"
-        ],
-        fine_effective_tension_area_mm2=inp[
-            "sls_heightened_fine_effective_tension_area_mm2"
-        ],
-        coarse_effective_tension_area_mm2=inp[
-            "sls_heightened_coarse_effective_tension_area_mm2"
-        ],
-        provided_reinforcement_area_mm2=500.0,
-    )
-    heightened_branches = {}
-    for branch_name in ("fine", "coarse"):
-        branch = getattr(dual_heightened, branch_name)
-        heightened_branches[branch_name] = asdict(branch)
-    governing = heightened_branches[
-        dual_heightened.governing_crack_system.value
-    ]
-    heightened_payload = {
-        **governing,
-        **heightened_branches,
-        "governing_crack_system": (
-            dual_heightened.governing_crack_system.value
-        ),
-        "governing_required_reinforcement_area_mm2": (
-            dual_heightened.governing_required_reinforcement_area_mm2
-        ),
-        "governing_comparison_ratio": (
-            dual_heightened.governing_comparison_ratio
-        ),
-        "governing_status": dual_heightened.governing_status.value,
-        "reference_case_id": "EL-QA-1",
-        "ordinary_crack_branch": "Long-term (fine)",
-        "diameter_source": "largest contributing mild bar",
-        "diameter_governing_element_ids": ["R1"],
-        "modulus_governing_material_ids": ["M1"],
-        "contributions": [{
-            "element_id": "R1",
-            "material_id": "M1",
-            "material_name": "Fixture mild steel",
-            "area_mm2": 500.0,
-            "diameter_mm": 25.23,
-            "diameter_source": "equivalent-area",
-            "reinforcement_modulus_mpa": 200_000.0,
-        }],
-    }
-    out = {
-        "material_properties": material_properties,
-        **member_results,
-        "elastic": elastic,
-        "fatigue": fatigue,
-        "clear_spacing": sector_app._clear_spacing_result(inp),
-        "heightened_crack_control": heightened_payload,
-        "elastic_cases": [
-            {"name": "EL-QA-1", "actions": elastic_rows[0], "evaluated": True,
-             "signature": case_analysis.case_signature(
-                 elastic_rows[0], load_cases.ELASTIC_TABLE_KEY, inp),
-             "results": {"elastic": elastic}},
-            {"name": "EL-QA-2", "actions": elastic_rows[1], "evaluated": True,
-             "signature": case_analysis.case_signature(
-                 elastic_rows[1], load_cases.ELASTIC_TABLE_KEY, inp),
-             "results": {"elastic": elastic_2}},
-        ],
-    }
-    return out
+    return sector_app.run_analysis(inp if inp is not None else _inputs())
 
 
 def validate_fixture_engineering(inp: dict, out: dict) -> None:
@@ -935,76 +526,144 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
     )
     close("plastic curvature selection", selected_curvature, point["kappa"])
 
-    elastic_worked = out["elastic_cases"][1]["results"]["elastic"]
-    superposition = elastic_worked["superposition"]
-    close(
-        "elastic modular-ratio reduction",
-        superposition["long_term_reduction_factor"],
-        1.0
-        - superposition["short_term_modular_ratio"]
-        / superposition["long_term_modular_ratio"],
-    )
-    element = elastic_worked["elements"][0]
-    close(
-        "elastic reduced long-term stress",
-        element["reduced_long_mpa"],
-        element["long_passive_mpa"]
-        * superposition["long_term_reduction_factor"],
-    )
-    neutralising = superposition["neutralising_resultant"]
-    close(
-        "elastic neutralising axial force",
-        neutralising["n"],
-        element["reduced_long_mpa"] * element["area_mm2"] / 1000.0,
-    )
-    close(
-        "elastic neutralising Mx",
-        neutralising["mx"],
-        element["reduced_long_mpa"]
-        * element["area_mm2"]
-        * element["y_mm"]
-        / 1_000_000.0,
-    )
-    for name, state in elastic_worked["accepted_states"].items():
-        equilibrium = state["equilibrium"]
-        for resultant in ("n", "mx", "my"):
-            close(
-                f"elastic {name} {resultant} residual",
-                equilibrium["residual"][resultant],
-                equilibrium["internal"][resultant]
-                - equilibrium["target"][resultant],
-            )
+    for entry, actions in zip(out["elastic_cases"], inp["elastic_cases"]):
+        if entry["name"] != actions["name"] or entry["actions"] != actions:
+            raise AssertionError("the native Elastic case lost its input identity")
+        elastic_worked = entry["results"]["elastic"]
+        superposition = elastic_worked["superposition"]
+        reduction = superposition["long_term_reduction_factor"]
+        close("elastic modular-ratio reduction", reduction, 1.0 - inp["ns"] / inp["nl"])
+        elements = elastic_worked["elements"]
+        if len(elements) != len(inp["bar_elements"]) or inp["tendons"]:
+            raise AssertionError("the fixture requires its complete native mild-bar cage")
+        for index, (element, bar) in enumerate(zip(elements, inp["bar_elements"])):
+            if element["element_id"] != bar["id"]:
+                raise AssertionError("the native Elastic element lost its input identity")
+            if element["material_id"] != bar["material_id"]:
+                raise AssertionError("inconsistent fixture Elastic material identity")
+            close("elastic element modulus", element["modulus_mpa"],
+                  inp["mild_materials"][bar["material_id"]].Es)
+            for key in ("area_mm2", "x_mm", "y_mm"):
+                close(f"elastic element {key}", element[key], bar[key])
+            close("elastic reduced long-term stress", element["reduced_long_mpa"],
+                  element["long_passive_mpa"] * reduction)
+            close("elastic total stress", element["total_mpa"],
+                  element["reduced_long_mpa"] + element["rst1_mpa"] + element["locked_in_mpa"])
+            close("elastic difference stress", element["dif_mpa"],
+                  element["total_mpa"] - element["long_mpa"])
+            for array, field in (("total", "total_mpa"), ("long", "long_mpa"),
+                                 ("dif", "dif_mpa"), ("rst1", "rst1_mpa")):
+                close(f"elastic {array} array", elastic_worked[array][index], element[field])
+        neutralising = superposition["neutralising_resultant"]
+        combined_target = superposition["combined_target_before_neutralisation"]
+        for resultant, coordinate, scale in (("n", None, 1000.0),
+                                             ("mx", "y_mm", 1_000_000.0),
+                                             ("my", "x_mm", 1_000_000.0)):
+            close(f"elastic neutralising {resultant}", neutralising[resultant],
+                  sum(element["reduced_long_mpa"] * element["area_mm2"]
+                      * (element[coordinate] if coordinate else 1.0) / scale
+                      for element in elements))
+            # The native stiffness equations use tension-positive resultants.
+            # This fixture has zero axial load and prestress; bending targets
+            # are the negatives of the engineer-facing input moments.
+            long_action = actions[f"{resultant}_long_ed_{'kn' if resultant == 'n' else 'knm'}"]
+            short_action = actions[f"{resultant}_short_ed_{'kn' if resultant == 'n' else 'knm'}"]
+            if resultant == "n":
+                close("elastic fixture axial long action", long_action, 0.0)
+                close("elastic fixture axial short action", short_action, 0.0)
+            close(f"elastic combined {resultant} input target",
+                  combined_target[resultant], -(long_action + short_action))
+            close(f"elastic long {resultant} input target",
+                  elastic_worked["accepted_states"]["long_term"]["equilibrium"]["target"][resultant],
+                  -long_action)
+            close(f"elastic instantaneous {resultant} input target",
+                  elastic_worked["accepted_states"]["instantaneous_combined"]["equilibrium"]["target"][resultant],
+                  combined_target[resultant] - neutralising[resultant])
+        for name, state in elastic_worked["accepted_states"].items():
+            equilibrium = state["equilibrium"]
+            plane = state["raw_stress_plane"]
+            operands = [plane[key] for key in (
+                "sigma0_kpa", "gradient_x_kpa_per_m", "gradient_y_kpa_per_m",
+            )]
+            for index, resultant in enumerate(("n", "mx", "my")):
+                close(f"elastic {name} matrix {resultant}",
+                      equilibrium["internal"][resultant],
+                      sum(a * b for a, b in zip(equilibrium["matrix"][index], operands)))
+                close(f"elastic {name} {resultant} residual",
+                      equilibrium["residual"][resultant],
+                      equilibrium["internal"][resultant] - equilibrium["target"][resultant])
+            if not state["converged"] or equilibrium["normalised_residual"] > equilibrium["relative_tolerance"]:
+                raise AssertionError("the native Elastic equilibrium did not converge")
+        maximum_steel = max(element["total_mpa"] for element in elements)
+        close("elastic maximum reinforcement stress", elastic_worked["max_steel"], maximum_steel)
+        close("elastic reinforcement stress output",
+              elastic_worked["stress_outputs"]["reinforcement"]["value"], maximum_steel)
+        corners = elastic_worked["concrete_corners"]
+        maximum_concrete = max(0.0, -min(corner["stress_mpa"] for corner in corners))
+        close("elastic maximum concrete compression", elastic_worked["max_conc"], maximum_concrete)
+        close("elastic concrete stress output",
+              elastic_worked["stress_outputs"]["concrete"]["value"], maximum_concrete)
+        governing_corner = next(c for c in corners if c["point_no"] == elastic_worked["max_conc_point"])
+        close("elastic governing concrete point", -governing_corner["stress_mpa"], maximum_concrete)
 
-    crack = out["elastic_cases"][0]["results"]["elastic"]["crack"]
-    candidate = crack["governing_candidate"]
-    spacing = candidate["spacing_operands"]
-    mean = candidate["mean_strain_operands"]
-    close(
-        "crack effective reinforcement ratio",
-        candidate["rho_p_eff"],
-        candidate["as_eff"] / candidate["ac_eff"],
-    )
-    close(
-        "crack spacing Formula (7.11)",
-        spacing["selected_spacing"],
-        spacing["k3_used"] * spacing["cover"]
-        + spacing["k1"]
-        * spacing["k2"]
-        * spacing["k4"]
-        * spacing["diameter"]
-        / spacing["rho_p_eff"],
-    )
-    close(
-        "crack mean-strain formula candidate",
-        mean["formula_candidate"],
-        (mean["sigma_s"] - mean["concrete_tension_reduction"]) / mean["es"],
-    )
-    close(
-        "crack width",
-        crack["wk"],
-        spacing["selected_spacing"] * mean["selected_esm_ecm"],
-    )
+
+    elastic_reference = out["elastic_cases"][0]["results"]["elastic"]
+    for branch_name in ("crack", "crack_short", "crack_coarse", "crack_short_coarse"):
+        crack = elastic_reference[branch_name]
+        candidates = crack["candidates"]
+        if [row["element_id"] for row in candidates] != ["R1", "R3"]:
+            raise AssertionError("inconsistent fixture crack candidate inventory")
+        if crack["governing_candidate"] != candidates[0] or crack["element_id"] != candidates[0]["element_id"]:
+            raise AssertionError("inconsistent fixture crack governing candidate identity")
+        for candidate in candidates:
+            spacing = candidate["spacing_operands"]
+            mean = candidate["mean_strain_operands"]
+            coarse = branch_name.endswith("coarse")
+            short = "short" in branch_name
+            if candidate["coarse"] is not coarse or crack["coarse"] is not coarse:
+                raise AssertionError("inconsistent fixture crack system identity")
+            element = next(e for e in elastic_reference["elements"] if e["element_id"] == candidate["element_id"])
+            for key in ("x_mm", "y_mm", "area_mm2"):
+                close(f"{branch_name} candidate {key}", candidate[key], element[key])
+            for key, operand in (("sigma_s", "sigma_s"), ("esm_ecm", "selected_esm_ecm"), ("rho_p_eff", "rho_p_eff")):
+                close(f"{branch_name} candidate {key}", candidate[key], mean[operand])
+            for key, operand in (("sr_max", "selected_spacing"), ("cover", "cover"), ("phi", "diameter"), ("rho_p_eff", "rho_p_eff")):
+                close(f"{branch_name} candidate {key}", candidate[key], spacing[operand])
+            close(f"{branch_name} source steel stress", mean["sigma_s"],
+                  element["total_mpa"] if short else element["long_mpa"])
+            close(f"{branch_name} duration coefficient", mean["kt"], 0.6 if short else 0.4)
+            close(f"{branch_name} effective reinforcement ratio", candidate["rho_p_eff"],
+                  candidate["as_eff"] / candidate["ac_eff"])
+            close(f"{branch_name} spacing Formula (7.11)", spacing["selected_spacing"],
+                  spacing["k3_used"] * spacing["cover"] + spacing["k1"] * spacing["k2"]
+                  * spacing["k4"] * spacing["diameter"] / spacing["rho_p_eff"])
+            close(f"{branch_name} concrete tension reduction", mean["concrete_tension_reduction"],
+                  mean["kt"] * mean["fctm"] / mean["rho_p_eff"] * (1.0 + mean["alpha_e"] * mean["rho_p_eff"]))
+            close(f"{branch_name} mean-strain formula candidate", mean["formula_candidate"],
+                  (mean["sigma_s"] - mean["concrete_tension_reduction"]) / mean["es"])
+            close(f"{branch_name} mean-strain lower candidate", mean["lower_bound_candidate"],
+                  0.6 * mean["sigma_s"] / mean["es"])
+            close(f"{branch_name} selected mean strain", mean["selected_esm_ecm"],
+                  max(mean["formula_candidate"], mean["lower_bound_candidate"]))
+            width = (0.5 if coarse else 1.0) * spacing["selected_spacing"] * mean["selected_esm_ecm"]
+            close(f"{branch_name} candidate width", candidate["wk"], width)
+        close(f"{branch_name} published width", crack["wk"], candidates[0]["wk"])
+        close(f"{branch_name} governing width", crack["wk"], max(row["wk"] for row in candidates))
+
     heightened = out["heightened_crack_control"]
+    input_bars = {bar["id"]: bar for bar in inp["bar_elements"]}
+    contributions = heightened["contributions"]
+    if {item["element_id"] for item in contributions} != {"R1", "R3"}:
+        raise AssertionError("the heightened fixture lost its native contributing bars")
+    for item in contributions:
+        bar = input_bars[item["element_id"]]
+        close("heightened contribution area", item["area_mm2"], bar["area_mm2"])
+        close("heightened contribution diameter", item["diameter_mm"],
+              math.sqrt(4.0 * bar["area_mm2"] / math.pi))
+    close("heightened provided area", heightened["provided_reinforcement_area_mm2"],
+          sum(item["area_mm2"] for item in contributions))
+    close("heightened governing diameter", heightened["bar_diameter_mm"],
+          max(item["diameter_mm"] for item in contributions))
     for branch_name in ("fine", "coarse"):
         branch = heightened[branch_name]
         close(
@@ -1296,7 +955,7 @@ def validate_worked_example_text(text: str) -> None:
         "Step 3 - converged instantaneous combined state",
         "Crack width worked - governing case",
         "Formula (7.11) selected",
-        "User-specified crack-width comparison - critical long-term case",
+        "User-specified crack-width comparison - critical short-term case",
         "DK heightened crack-control minimum",
         "Formula 7.100 NA",
     ):
@@ -1309,7 +968,7 @@ def validate_worked_example_text(text: str) -> None:
 def validate_equation_source_colocation(
     page_texts: list[str],
     *,
-    expected_equation_count: int = 93,
+    expected_equation_count: int = 107,
 ) -> None:
     """Require every governed equation identity and source on the same page."""
     equation_count = 0
@@ -1493,7 +1152,8 @@ def validate_pdf_content(
         "Step 1 - converged long-term state",
         "Step 2 - neutralise the long-term concrete stress",
         "Step 3 - converged instantaneous combined state",
-        "Cracking threshold and governing crack width - EL-QA-1",
+        "Governing crack width - EL-QA-1",
+        "Cracking threshold - EL-QA-2",
         "Crack width worked - governing case",
         "Formula (7.11) selected",
         "Grouped fatigue",
@@ -1520,7 +1180,9 @@ def validate_pdf_content(
         # formatting vector remains in test_multi_case_report_includes_later_
         # governing_case_and_all_details; it is not this native calculation.
         "220.8 %",
-        "245.000 MPa",
+        # The native governing Elastic result; retained 245.000/456.000 MPa
+        # formatting vectors have independent multi-case unit coverage.
+        "955.462 MPa",
         "Candidate summary for governing crack example",
         f"Generated 2026-07-19 12:00 by Sector {__version__}",
     ):

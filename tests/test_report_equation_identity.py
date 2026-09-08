@@ -311,10 +311,12 @@ def test_renderer_compilation_failures_leave_publication_state_atomic(
     assert builder._equation_number == number_before
 
 
-def test_literal_result_compiler_is_whitelisted_to_exact_stress_plane_identities():
+def test_literal_result_compiler_is_whitelisted_to_exact_text_result_identities():
     expected = frozenset({
         ("elastic.long.stress-plane", None),
         ("elastic.instantaneous.stress-plane", None),
+        ("torsion.utilisation", None),
+        ("torsion.subtube.governing-utilisation", None),
     })
     assert sector_report._LITERAL_REPORT_RESULT_IDENTITIES == expected
 

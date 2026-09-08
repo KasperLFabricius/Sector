@@ -3092,7 +3092,8 @@ def test_report_front_matter_identifies_action_sets_and_result_statuses():
     assert "Concrete stress" in txt and "Crack width" in txt
 
 
-def test_multi_case_report_includes_later_governing_case_and_all_details():
+@pytest.mark.parametrize("later_stress", [245.0, 456.0])
+def test_multi_case_report_includes_later_governing_case_and_all_details(later_stress):
     inp = _inp()
     plastic_rows = [
         {
@@ -3135,9 +3136,9 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
     second_plastic["applied"] = (125.0, 0.0)
     second_elastic = copy.deepcopy(first["elastic"])
     second_elastic["show_cw"] = False
-    second_elastic["max_steel"] = 456.0
+    second_elastic["max_steel"] = later_stress
     second_elastic["max_steel_element"] = "bar 1"
-    second_elastic["elements"][0]["total_mpa"] = 456.0
+    second_elastic["elements"][0]["total_mpa"] = later_stress
 
     out = {
         # Deliberately retain only the first case in the compatibility projection.
@@ -3187,7 +3188,7 @@ def test_multi_case_report_includes_later_governing_case_and_all_details():
     assert "EQ-" not in flat
     assert "Each comparison has its own status" in flat
     assert "125.0 %" in flat
-    assert "456.000 MPa" in flat
+    assert f"{later_stress:.3f} MPa" in flat
     assert flat.count("Selected sweep point") == 1
     assert flat.count("The elastic analysis uses an") == 1
     assert flat.count("reference-stress plane") >= 1

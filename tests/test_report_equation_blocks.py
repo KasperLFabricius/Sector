@@ -1,3 +1,5 @@
+import ast
+import dataclasses
 import io
 import pathlib
 import re
@@ -79,6 +81,139 @@ def _visible(markup, *, math=True):
         rendered,
         sector_report._styles()["formula"],
     ).getPlainText()
+
+
+def _walk_math(node):
+    yield node
+    for field in dataclasses.fields(node):
+        value = getattr(node, field.name)
+        children = value if isinstance(value, tuple) else (value,)
+        for child in children:
+            if isinstance(child, publication_equations.MathNode):
+                yield from _walk_math(child)
+
+
+def _numeric_math(node):
+    """Evaluate the rendered tree's small numeric subset, including grouping."""
+    if isinstance(node, publication_equations.Number):
+        return float(node.text)
+    if isinstance(node, publication_equations.Fraction):
+        return _numeric_math(node.numerator) / _numeric_math(node.denominator)
+    if isinstance(node, publication_equations.Delimited):
+        return _numeric_math(node.content)
+    assert isinstance(node, publication_equations.MathSequence)
+    terms = []
+    operator = "+"
+    for item in node.items:
+        if isinstance(item, publication_equations.MathSpace):
+            continue
+        if isinstance(item, publication_equations.Operator):
+            operator = item.text
+            continue
+        value = _numeric_math(item)
+        if operator == "+":
+            terms.append(value)
+        elif operator in ("-", chr(0x2212)):
+            terms.append(-value)
+        else:
+            assert operator in ("*", chr(0x00B7), chr(0x00D7))
+            terms[-1] *= value
+        operator = "*"  # Adjacent operands are an implicit product.
+    return sum(terms)
+
+
+def _assert_denominator(node, expected):
+    denominators = [
+        publication_equations.linear_math_text(item.denominator)
+        for item in _walk_math(node)
+        if isinstance(item, publication_equations.Fraction)
+    ]
+    assert expected in denominators
+
+
+@pytest.mark.parametrize("edition", ["2005", "2023"])
+def test_authored_crack_reduction_keeps_the_multiplier_outside_rho(edition, monkeypatch):
+    builder = _builder()
+    builder._h1("Mean strain")
+    captured = []
+    original = builder._formula
+
+    def observe(expression, **kwargs):
+        captured.append(expression)
+        return original(expression, **kwargs)
+
+    monkeypatch.setattr(builder, "_formula", observe)
+    builder._crack_mean_strain_worked({
+        "sigma_s": 150.0, "concrete_tension_reduction": 52.2,
+        "es": 200000.0, "formula_candidate": 0.000489,
+        "lower_bound_factor": 0.6, "lower_bound_candidate": 0.00045,
+        "selected_esm_ecm": 0.000489, "selected_candidate": "formula",
+    }, edition=edition)
+    expression, = captured
+    expected_lower = "0.6" if edition == "2005" else "(1 - k<sub>t</sub>)"
+    assert f"{expected_lower} sigma<sub>s</sub>/E<sub>s</sub>" in expression
+    reduction = expression.split("sigma<sub>s</sub> - ", 1)[1].split("]/E<sub>s</sub>", 1)[0]
+    old = "k<sub>t</sub>f<sub>ct,eff</sub>/rho<sub>p,eff</sub> (1 + alpha<sub>e</sub>rho<sub>p,eff</sub>)"
+    denominator = chr(0x03C1) + "_(p, eff)"
+    _assert_denominator(publication_equations.compile_report_math(reduction), denominator)
+    with pytest.raises(AssertionError):
+        _assert_denominator(publication_equations.compile_report_math(old), denominator)
+    for source, expected in ((reduction, 52.2), (old, 23.2)):
+        for symbol, value in (("k<sub>t</sub>", "0.4 "),
+                              ("f<sub>ct,eff</sub>", "2.9 "),
+                              ("rho<sub>p,eff</sub>", "(1 / 30) "),
+                              ("alpha<sub>e</sub>", "15 ")):
+            source = source.replace(symbol, value)
+        assert _numeric_math(publication_equations.compile_report_math(source)) == pytest.approx(expected)
+    lower = expression.rsplit(", ", 1)[1].rstrip("}")
+    assert isinstance(publication_equations.compile_report_math(lower), publication_equations.Fraction)
+    for kt in (0.4, 0.25):
+        source = lower.replace("k<sub>t</sub>", str(kt)).replace("sigma<sub>s</sub>", "150 ").replace("E<sub>s</sub>", "200000")
+        factor = 0.6 if edition == "2005" else 1.0 - kt
+        assert _numeric_math(publication_equations.compile_report_math(source)) == pytest.approx(factor * 150.0 / 200000.0)
+    if edition == "2023":
+        old_lower = "1 - k<sub>t</sub> sigma<sub>s</sub>/E<sub>s</sub>"
+        assert not isinstance(publication_equations.compile_report_math(old_lower), publication_equations.Fraction)
+        poisoned = old_lower.replace("k<sub>t</sub>", "0.4").replace("sigma<sub>s</sub>", "150 ").replace("E<sub>s</sub>", "200000")
+        assert _numeric_math(publication_equations.compile_report_math(poisoned)) == pytest.approx(0.9997)
+
+
+def test_authored_fatigue_strength_keeps_reduction_outside_gamma():
+    tree = ast.parse((ROOT / "app" / "sector_report.py").read_text(encoding="utf-8"))
+    expressions = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        values = {kw.arg: kw.value.value for kw in node.keywords if isinstance(kw.value, ast.Constant)}
+        if values.get("equation_key") == "fatigue.concrete.strength" and values.get("equation_variant") == "2005":
+            expressions.append(ast.literal_eval(node.args[0]))
+    expression, = expressions
+    old = "k<sub>1</sub> beta<sub>cc</sub> alpha<sub>cc</sub> f<sub>ck</sub> / gamma<sub>c</sub> (1 - f<sub>ck</sub>/250)"
+    actual = expression.split("=", 1)[1]
+    denominator = chr(0x03B3) + "_(c)"
+    _assert_denominator(publication_equations.compile_report_math(actual), denominator)
+    with pytest.raises(AssertionError):
+        _assert_denominator(publication_equations.compile_report_math(old), denominator)
+    for source, expected in ((actual, 14.96), (old, 19.318181818181817)):
+        for symbol, value in (("k<sub>1</sub>", "0.85 "), ("beta<sub>cc</sub>", "1 "),
+                              ("alpha<sub>cc</sub>", "1 "), ("f<sub>ck</sub>", "30 "),
+                              ("gamma<sub>c</sub>", "1.5 ")):
+            source = source.replace(symbol, value)
+        assert _numeric_math(publication_equations.compile_report_math(source)) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("key", ["torsion.utilisation", "torsion.subtube.governing-utilisation"])
+def test_torsion_qualifier_is_literal_but_unrelated_results_remain_math(key):
+    builder = _builder()
+    builder._h1("Torsion component")
+    builder._formula("T<sub>Ed</sub> / T<sub>Rd</sub>", equation_key=key,
+                     subst="17.05 / 10", result="170.5% (transverse/strut component FAIL)")
+    result = _math_line(builder.flow[-1], "result").expression
+    assert isinstance(result, publication_equations.LiteralText)
+    assert result.text == "170.5% (transverse/strut component FAIL)"
+    builder._formula("V<sub>Ed</sub> / V<sub>Rd,c</sub>",
+                     equation_key="shear.2005.utilisation", subst="8 / 4", result="8 / 4")
+    assert isinstance(_math_line(builder.flow[-1], "result").expression, publication_equations.Fraction)
 
 
 @pytest.mark.parametrize(

@@ -105,6 +105,8 @@ _DERIVED_EQUATION_SOURCE = (
 _LITERAL_REPORT_RESULT_IDENTITIES = frozenset({
     ("elastic.long.stress-plane", None),
     ("elastic.instantaneous.stress-plane", None),
+    ("torsion.utilisation", None),
+    ("torsion.subtube.governing-utilisation", None),
 })
 _EQUATION_DECIMAL_PLACES = 3
 _EQUATION_DECIMAL_QUANTUM = decimal.Decimal(1).scaleb(
@@ -880,8 +882,8 @@ def _styles():
         leftIndent=0, firstLineIndent=0, spaceBefore=2, spaceAfter=2,
     )
     out["toc_h2"] = ParagraphStyle(
-        "toc-h2", parent=out["small"], fontSize=8.2, leading=10,
-        leftIndent=14, firstLineIndent=0, spaceBefore=1, spaceAfter=1,
+        "toc-h2", parent=out["small"], fontSize=8.2, leading=11,
+        leftIndent=14, firstLineIndent=0, spaceBefore=0, spaceAfter=0,
     )
     out["formula_symbol"] = ParagraphStyle(
         "fs", parent=ss["Normal"], fontSize=8.1, leading=11,
@@ -4070,10 +4072,8 @@ class ReportBuilder:
         self._h2("Concrete", reserve=320)
         self._concrete_block()
         if inp.get("bars") or inp.get("shear_on") or inp.get("torsion_on"):
-            start = len(self.flow)
             self._h2("Reinforcement")
             self._steel_block()
-            self._keep_from(start)
         if inp.get("tendons") and inp.get("prestress") is not None:
             start = len(self.flow)
             self._h2("Prestressing steel")
@@ -4454,7 +4454,7 @@ class ReportBuilder:
                 self._fig(viz.steel_curve_figure(
                     st, title=f"{material_id} - {item.get('name', '')}"
                 ), 130, 80)
-            self._keep_from(block_start)
+            self._keep_measured_calculation_from(block_start)
 
     def _prestress_block(self):
         catalogue = (self.inp.get("prestress_material_catalog") or {}).get(
@@ -10129,8 +10129,7 @@ class ReportBuilder:
         resistance = retained["resistance_selection"]
         cracking = retained["cracking_resistance"]
         longitudinal = retained["longitudinal_reinforcement"]
-        self._page_break()
-        self._h2("Equivalent-tube wall selection", reserve=0)
+        self._h2("Equivalent-tube wall selection")
         tef_src = str(tube.get("tef_selection") or "wall limits")
         rows = [["Quantity", "Symbol", "Value"],
                 ["Gross area (incl. hollow)", "A", f"{_fmt(tube['A'] * 1e6, 0)} mm<sup>2</sup>"],
@@ -11418,10 +11417,10 @@ class ReportBuilder:
             )
 
     def _crack_mean_strain_worked(self, mean, *, edition):
-        lower_label = "0.6" if edition == "2005" else "1 - k<sub>t</sub>"
+        lower_label = "0.6" if edition == "2005" else "(1 - k<sub>t</sub>)"
         symbolic = (
             "eps<sub>sm</sub> - eps<sub>cm</sub> = max{[sigma<sub>s</sub> - "
-            "k<sub>t</sub>f<sub>ct,eff</sub>/rho<sub>p,eff</sub> "
+            "(k<sub>t</sub>f<sub>ct,eff</sub>/rho<sub>p,eff</sub>) &#183; "
             "(1 + alpha<sub>e</sub>rho<sub>p,eff</sub>)]/E<sub>s</sub>, "
             f"{lower_label} sigma<sub>s</sub>/E<sub>s</sub>}}"
         )
@@ -13052,8 +13051,8 @@ class ReportBuilder:
             }
             if all(value is not None for value in values.values()):
                 self._formula(
-                    "f<sub>cd,fat</sub> = k<sub>1</sub> beta<sub>cc</sub> "
-                    "alpha<sub>cc</sub> f<sub>ck</sub> / gamma<sub>c</sub> "
+                    "f<sub>cd,fat</sub> = (k<sub>1</sub> beta<sub>cc</sub> "
+                    "alpha<sub>cc</sub> f<sub>ck</sub> / gamma<sub>c</sub>) &#183; "
                     "(1 - f<sub>ck</sub>/250)",
                     equation_key="fatigue.concrete.strength",
                     equation_variant="2005",
