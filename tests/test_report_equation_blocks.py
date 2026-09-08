@@ -178,6 +178,50 @@ def test_authored_crack_reduction_keeps_the_multiplier_outside_rho(edition, monk
         assert _numeric_math(publication_equations.compile_report_math(poisoned)) == pytest.approx(0.9997)
 
 
+@pytest.mark.parametrize("key,numerator", [
+    ("fatigue.reinforcement.design-resistance-range", 162.5),
+    ("fatigue.reinforcement.yield-limit", 550.0),
+])
+def test_authored_fatigue_substitution_keeps_mpa_outside_the_fraction(key, numerator):
+    tree = ast.parse((ROOT / "app" / "sector_report.py").read_text(encoding="utf-8"))
+    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and any(kw.arg == "equation_key" and isinstance(kw.value, ast.Constant)
+                     and kw.value.value == key for kw in node.keywords)]
+    call, = calls
+    keywords = {kw.arg: kw.value for kw in call.keywords}
+    material_factor = 1.15
+    values = {
+        "_fmt": sector_report._fmt,
+        "_html_escape": sector_report._html_escape,
+        "fatigue_presentation": sector_report.fatigue_presentation,
+        "yield_check": {"branch": "Retained yield/proof branch"},
+        "selected_bin": {"delta_sigma_rsk_mpa": numerator,
+                         "delta_sigma_rd_mpa": numerator / material_factor},
+        "material_factor": material_factor, "characteristic": numerator,
+        "design_limit": numerator / material_factor,
+    }
+    def authored(argument):
+        expression = ast.Expression(keywords[argument])
+        return eval(compile(expression, "authored-fatigue-substitution", "eval"),
+                    {"__builtins__": {}}, values)
+    substitution = authored("subst")
+    builder = _builder()
+    builder._h1("Fatigue units")
+    builder._formula(ast.literal_eval(call.args[0]), equation_key=key,
+                     subst=substitution, result=authored("result"),
+                     note=authored("note") if "note" in keywords else None,
+                     ref="Retained fatigue equation source")
+    actual = _math_line(builder.flow[-1], "numerical-substitution").expression
+    _assert_denominator(actual, "1.15")
+    fraction, = [node for node in _walk_math(actual)
+                 if isinstance(node, publication_equations.Fraction)]
+    assert _numeric_math(fraction) == pytest.approx(numerator / material_factor)
+    assert publication_equations.linear_math_text(actual).endswith("MPa")
+    old = f"{numerator} / {material_factor} MPa"
+    with pytest.raises(AssertionError):
+        _assert_denominator(publication_equations.compile_report_math(old), "1.15")
+
+
 def test_authored_fatigue_strength_keeps_reduction_outside_gamma():
     tree = ast.parse((ROOT / "app" / "sector_report.py").read_text(encoding="utf-8"))
     expressions = []

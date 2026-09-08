@@ -12890,8 +12890,8 @@ class ReportBuilder:
             equation_key="fatigue.reinforcement.design-resistance-range",
             ref=source,
             subst=(
-                f"{_fmt(selected_bin['delta_sigma_rsk_mpa'], 6)} / "
-                f"{_fmt(material_factor, 6)} MPa"
+                f"({_fmt(selected_bin['delta_sigma_rsk_mpa'], 6)} / "
+                f"{_fmt(material_factor, 6)}) MPa"
             ),
             result=(
                 "Delta sigma<sub>Rd</sub> = "
@@ -12965,7 +12965,7 @@ class ReportBuilder:
             equation_key="fatigue.reinforcement.yield-limit",
             ref=source,
             subst=(
-                f"{_fmt(characteristic, 6)} / {_fmt(material_factor, 6)} MPa"
+                f"({_fmt(characteristic, 6)} / {_fmt(material_factor, 6)}) MPa"
             ),
             result=f"sigma<sub>Rd</sub> = {_fmt(design_limit, 6)} MPa",
             note=_html_escape(
