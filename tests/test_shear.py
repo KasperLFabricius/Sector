@@ -1524,7 +1524,10 @@ def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately()
     comparison_metric = next(
         metric for metric in at.metric if "Provided-link comparison" in metric.label
     )
-    assert comparison_metric.delta == ""
+    assert comparison_metric.delta == "FAIL"
+    assert comparison_metric.value == f"{sh['links']['util'] * 100:.1f} %"
+    assert "Independent provided-link resistance check" in comparison_metric.help
+    assert "It does not replace the nominal concrete route" in visible
 
     _select_view(at, "Results Overview")
     overview = next(table.value for table in at.table if "Check" in table.value)
@@ -1537,10 +1540,10 @@ def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately()
     assert concrete_row["Status"] == "PASS"
     assert concrete_row["Result"] == "96.7 % (VEd / VRd,c)"
     assert detail_row["Status"] == "FAIL"
-    assert not any(
-        row["Status"] == "FAIL"
-        for _index, row in overview.iterrows()
-        if row["Check"] in {"Shear without links", "Shear with links"}
+    links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
+    assert links_row["Status"] == "FAIL"
+    assert links_row["Result"] == (
+        f"{sh['links']['util'] * 100:.1f} % (non-governing)"
     )
 
 
@@ -1822,6 +1825,22 @@ def test_app_unknown_2023_duct_geometry_blocks_no_links_kernel_and_recovers(
     assert "Enter the duct type and outer diameters" in visible
     assert "No resistance, utilisation or PASS/FAIL verdict" in visible
     assert shear.SHEAR_DUCT_INPUT_REASON not in visible
+    pristine = copy.deepcopy(blocked)
+    blocked["res"].update(valid=True, vrd_c=999.0, reason="FORGED-GUIDANCE")
+    blocked.update(util=0.01, assessment_status="PASS")
+    _select_view(at, "Shear")
+    poisoned_visible = " ".join(
+        str(item.value)
+        for collection in (at.warning, at.caption, at.markdown, at.metric)
+        for item in collection
+    )
+    assert "Enter the duct type and outer diameters" in poisoned_visible
+    assert "FORGED-GUIDANCE" not in poisoned_visible
+    assert "999" not in poisoned_visible
+    assert all(metric.delta not in {"OK", "PASS", "FAIL"} for metric in at.metric)
+    assert calls == []
+    blocked.clear()
+    blocked.update(pristine)
 
     _select_view(at, "Results Overview")
     overview = next(table.value for table in at.table if "Check" in table.value)
@@ -3168,7 +3187,8 @@ def test_app_shear_2023_links_with_axial_compression_fail_closed(monkeypatch):
     screening_metric = next(
         metric
         for metric in at.metric
-        if "Utilisation" in metric.label and "V_{Rd,c}" in metric.label
+        if "Non-governing concrete utilisation" in metric.label
+        and "V_{Rd,c}" in metric.label
     )
     assert screening_metric.value == "20.7 %"
     assert screening_metric.delta == ""

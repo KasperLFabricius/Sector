@@ -8217,48 +8217,8 @@ class ReportBuilder:
                          "combined &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>).")
             self._small(note)
             if model_2023:
-                rows = [[
-                    "Face", "Chord", "Formula", "M<sub>face</sub>",
-                    "N<sub>Vd</sub>z", "M<sub>Ed,total</sub>",
-                    "M<sub>Rd</sub>", "Utilisation", "Status",
-                ]]
-                for candidate in chord_publication.get("candidates") or ():
-                    if candidate.get("role") != "shear_axis":
-                        continue
-                    rows.append([
-                        viz.tension_face_label(
-                            candidate.get("tension_low", True),
-                            candidate.get("axis"),
-                        ),
-                        (
-                            "Flexural tension"
-                            if candidate.get("chord_role") == "flexural_tension"
-                            else "Flexural compression"
-                        ),
-                        f"({candidate.get('chord_formula', '-')})",
-                        f"{_fmt(candidate.get('face_m_ed_signed'), 1)} kNm",
-                        f"{_fmt(candidate.get('mv'), 1)} kNm",
-                        f"{_fmt(candidate.get('m_total'), 1)} kNm",
-                        f"{_fmt(candidate.get('m_rd'), 1)} kNm",
-                        _pct(candidate.get("util")),
-                        str(candidate.get("status") or "NOT ASSESSED"),
-                    ])
-                if len(rows) > 1:
-                    self._h2("Required 2023 longitudinal chord faces")
-                    self._table(
-                        rows,
-                        [16 * mm, 23 * mm, 17 * mm, 18 * mm, 18 * mm,
-                         20 * mm, 18 * mm, 20 * mm, 16 * mm],
-                        font=6.7,
-                    )
-                self._small(
-                    "Longitudinal chord assessment: "
-                    f"{chord_status}. "
-                    + presentation.result_reason(
-                        chord_assessment.get("reason"),
-                        "shear",
-                        context="report longitudinal chord assessment",
-                    )
+                self._shear_2023_chord_faces(
+                    chord_publication, chord_assessment, chord_status,
                 )
             self._chord_off_block(
                 chord_publication.get("chord_off"),
@@ -8266,6 +8226,52 @@ class ReportBuilder:
             )
         elif model_2023 and isinstance(chord_assessment, Mapping):
             self._shear_2023_missing_chords(chord_assessment)
+
+    def _shear_2023_chord_faces(self, chord_publication, chord_assessment, chord_status):
+        """Render the separate-shear face table after caller validation."""
+        rows = [[
+            "Face", "Chord", "Formula", "M<sub>face</sub>",
+            "N<sub>Vd</sub>z", "M<sub>Ed,total</sub>",
+            "M<sub>Rd</sub>", "Utilisation", "Status",
+        ]]
+        for candidate in chord_publication.get("candidates") or ():
+            if candidate.get("role") != "shear_axis":
+                continue
+            rows.append([
+                viz.tension_face_label(
+                    candidate.get("tension_low", True),
+                    candidate.get("axis"),
+                ),
+                (
+                    "Flexural tension"
+                    if candidate.get("chord_role") == "flexural_tension"
+                    else "Flexural compression"
+                ),
+                f"({candidate.get('chord_formula', '-')})",
+                f"{_fmt(candidate.get('face_m_ed_signed'), 1)} kNm",
+                f"{_fmt(candidate.get('mv'), 1)} kNm",
+                f"{_fmt(candidate.get('m_total'), 1)} kNm",
+                f"{_fmt(candidate.get('m_rd'), 1)} kNm",
+                _pct(candidate.get("util")),
+                str(candidate.get("status") or "NOT ASSESSED"),
+            ])
+        if len(rows) > 1:
+            self._h2("Required 2023 longitudinal chord faces")
+            self._table(
+                rows,
+                [16 * mm, 23 * mm, 17 * mm, 18 * mm, 18 * mm,
+                 20 * mm, 18 * mm, 20 * mm, 16 * mm],
+                font=6.7,
+            )
+        self._small(
+            "Longitudinal chord assessment: "
+            f"{chord_status}. "
+            + presentation.result_reason(
+                chord_assessment.get("reason"),
+                "shear",
+                context="report longitudinal chord assessment",
+            )
+        )
 
     def _shear_2023_missing_chords(self, chord_assessment):
         chord_status = str(

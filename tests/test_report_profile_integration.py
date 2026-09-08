@@ -1019,13 +1019,13 @@ def test_every_profile_retains_governing_statuses_and_engineering_values(tmp_pat
     expected = (
         "Plastic bending PL-QA-2 FAIL 220.8 %",
         "Crack width - Long-term EL-QA-1 "
-        "EXCEEDS USER-SPECIFIED LIMIT 0.213 mm",
+        "EXCEEDS USER-SPECIFIED LIMIT 0.529 mm",
         "Crack width - Short-term EL-QA-1 "
-        "EXCEEDS USER-SPECIFIED LIMIT 0.213 mm",
+        "EXCEEDS USER-SPECIFIED LIMIT 0.658 mm",
         "Torsion PL-QA-1 FAIL FAIL",
         "Torsion transverse/strut resistance PL-QA-1 FAIL 170.5 %",
         "Combined M-V-T - DK NA sum PL-QA-1 FAIL 391.1 %",
-        "Fatigue Road traffic PASS 46.1 %",
+        "Fatigue Road traffic PASS 46.2 %",
     )
     for profile in ("Brief", "Standard", "Audit"):
         # A narrow table column can make PDF extraction separate the hyphen from
@@ -1087,7 +1087,7 @@ def test_brief_omits_non_governing_fatigue_spectra_but_deeper_profiles_retain_th
             for page in reader.pages
         )
         texts[profile] = text
-        assert "Fatigue Road traffic PASS 46.1 %" in text
+        assert "Fatigue Road traffic PASS 46.2 %" in text
     assert "Fatigue Rail traffic PASS 23.0 %" not in texts["Brief"]
     assert "Fatigue Rail traffic PASS 23.0 %" in texts["Standard"]
     assert "Fatigue Rail traffic PASS 23.0 %" in texts["Audit"]
@@ -1145,6 +1145,16 @@ def test_long_case_inventory_uses_a_complete_compact_running_header():
 
 
 def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
+    # This conditional subheading appears when the same real case governs
+    # threshold and crack width. Enable the second case in the native producer.
+    inp = report_render_fixture._inputs()
+    inp["elastic_cases"][1]["calculate_crack_width"] = True
+    out = report_render_fixture._results(inp)
+    selection = report_render_fixture.result_presentation.worked_example_selection(inp, out)
+    assert selection["cracking_threshold"]["case_id"] == "EL-QA-2"
+    assert selection["crack_examples"]
+    assert {item["case_id"] for item in selection["crack_examples"]} == {"EL-QA-2"}
+    out["worked_example_selection"] = selection
     headings = (
         "Concrete",
         "Resistance",
@@ -1160,7 +1170,10 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
         "Textbook calculation - governing concrete fatigue",
     )
     for profile in ("Standard", "Audit"):
-        reader = PdfReader(io.BytesIO(_profile_pdf(profile)))
+        pdf = report_render_fixture.sector_report.build_report(
+            {}, inp, out, figures=False, profile=profile,
+        )
+        reader = PdfReader(io.BytesIO(pdf))
         seen = set()
         for page in reader.pages:
             fragments = []
@@ -1195,3 +1208,31 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
                         for value, _size, y in fragments
                     ), (profile, heading)
         assert set(headings) <= seen
+
+
+@pytest.mark.parametrize("profile", ("Standard", "Audit"))
+def test_distinct_cracking_threshold_section_retains_its_first_equation(profile, tmp_path):
+    """The ordinary fixture has separate threshold and crack-width cases."""
+    pdf = _profile_pdf(profile)
+    (tmp_path / f"distinct-threshold-{profile}.pdf").write_bytes(pdf)
+    reader = PdfReader(io.BytesIO(pdf))
+    seen = []
+    for page_number, page in enumerate(reader.pages):
+        fragments = []
+
+        def collect(text, cm, tm, _font, size):
+            value = " ".join(text.split())
+            if value:
+                fragments.append((value, float(cm[5]) + float(tm[5]), float(size)))
+
+        page.extract_text(visitor_text=collect)
+        # Contents entries reuse the chapter title at9.5pt; only the14pt
+        # chapter heading is required to keep its first equation here.
+        headings = [y for value, y, size in fragments if size == 14.0 and re.fullmatch(
+            r"\d+\. Cracking threshold - EL-QA-2", value,
+        )]
+        for heading_y in headings:
+            seen.append(page_number)
+            assert any(y < heading_y - 4 and value.startswith("Mathematical expression:")
+                       for value, y, _size in fragments), (profile, page_number)
+    assert len(seen) == 1

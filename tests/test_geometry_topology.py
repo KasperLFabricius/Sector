@@ -655,6 +655,9 @@ def test_capacity_orchestrator_entries_do_not_swallow_topology_errors(entry):
         "shear_links": True,
         "shear_method": capacity.codes.EC2_2005_DKNA.label,
         "torsion_on": True,
+        "torsion_T": 1.0,
+        "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+        "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
         "torsion_nu_v": False,
         "torsion_method": capacity.codes.EC2_2005_DKNA.label,
     }

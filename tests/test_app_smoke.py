@@ -5059,6 +5059,7 @@ def test_real_project_upload_hides_invalid_records_and_shows_precise_copy():
 def test_schema_25_shared_crack_width_migrates_with_visible_warning():
     import load_cases
     import project_io
+    from sector import capacity
 
     elastic = load_cases.normalise_table(
         [{"name": "EL-A", "calculate_crack_width": True}],
@@ -5076,6 +5077,7 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
     ))
     payload["version"] = project_io.LEGACY_MIGRATABLE_VERSION
     payload["scalars"].pop("shear_gamma_v", None)
+    payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY)
     for key in (
         "sls_long_term_permitted_crack_width_mm",
         "sls_short_term_permitted_crack_width_mm",
@@ -5180,7 +5182,7 @@ def test_current_schema_load_clears_prior_migration_evidence():
 
 def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
     import project_io
-    from sector import codes
+    from sector import capacity, codes
 
     payload = json.loads(project_io.dump_project(
         {},
@@ -5193,6 +5195,7 @@ def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
     ))
     payload["version"] = project_io.MIGRATABLE_VERSION
     payload["scalars"].pop("shear_gamma_v")
+    payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY)
     payload["provenance"]["input_sha256"] = project_io._input_digest({
         "tables": payload["tables"],
         "scalars": payload["scalars"],
