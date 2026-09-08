@@ -109,6 +109,14 @@ def test_reference_fixture_engineering_is_internally_consistent():
     rows = result_presentation.multi_case_summary_rows(inp, out)
     selected = result_presentation.governing_summary_rows(rows)
     assert not result_presentation.governing_information_rows(selected)
+    output_checks = {"Concrete stress", "Reinforcement stress", "Cracking threshold/state"}
+    governing_outputs = [row for row in selected if row["check"] in output_checks]
+    assert len(governing_outputs) == 3
+    assert {row["case"] for row in governing_outputs} == {"EL-QA-2"}
+    assert all(row["status"] == "CALCULATED" and row["util"] is None
+               and row["criterion"] == "Output only" for row in governing_outputs)
+    complement = result_presentation.non_governing_summary_rows(rows)
+    assert {row["case"] for row in complement if row["check"] in output_checks} == {"EL-QA-1"}
     # Both Elastic cases inherit the global detailing toggles. They must not
     # create extra Plastic NOT RUN rows or repeat the section-wide spacing check.
     assert len(out["elastic_cases"]) == 2
@@ -180,6 +188,9 @@ def test_native_fixture_rejects_elastic_case_stress_and_contributor_mismatches()
         (("elastic_cases", 0, "results", "elastic", "crack_short", "governing_candidate", "mean_strain_operands", "sigma_s"), 150.0),
         (("elastic_cases", 0, "results", "elastic", "crack_short_coarse", "governing_candidate", "spacing_operands", "selected_spacing"), 235.0),
         (("elastic_cases", 0, "results", "elastic", "crack_short", "candidates", 1, "sigma_s"), 150.0),
+        (("elastic_shared", "creep_coefficient"), 0.0),
+        (("elastic_shared", "materials", 0, "short_term"), 6.0),
+        (("elastic_cases", 1, "results", "elastic", "superposition", "long_term_modular_ratio"), 15.0),
     )
     for path, value in paths_and_values:
         changed = copy.deepcopy(out)
@@ -189,6 +200,11 @@ def test_native_fixture_rejects_elastic_case_stress_and_contributor_mismatches()
         target[path[-1]] = value
         with pytest.raises(AssertionError, match="inconsistent fixture"):
             validate_fixture_engineering(inp, changed)
+    for key, value in (("ns", 6.0), ("nl", 15.0), ("el_phi", 0.0)):
+        changed_input = copy.deepcopy(inp)
+        changed_input[key] = value
+        with pytest.raises(AssertionError, match="inconsistent fixture input"):
+            validate_fixture_engineering(changed_input, out)
     changed = copy.deepcopy(out)
     changed["elastic_cases"][0]["results"]["elastic"]["crack_short"]["candidates"].pop()
     with pytest.raises(AssertionError, match="crack candidate inventory"):

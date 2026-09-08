@@ -6061,6 +6061,7 @@ def _summary_row(
     overview_key=None,
     overview_parent=None,
     overview_placeholder=False,
+    overview_value=None,
 ):
     case = action_set(inp, family)
     row = {
@@ -6082,6 +6083,8 @@ def _summary_row(
         row["overview_parent"] = str(overview_parent)
     if overview_placeholder:
         row["overview_placeholder"] = True
+    if overview_value is not None:
+        row["overview_value"] = overview_value
     return row
 
 
@@ -7383,6 +7386,7 @@ def result_summary_rows(inp, results, *, stale=False):
                     output.get("governing") or output.get("quantity") or "", inp,
                     overview_key=f"elastic_stress:{key}",
                     overview_parent="elastic_stresses",
+                    overview_value=value,
                 ))
         try:
             lambda_cr = float(elastic.get("lambda_cr"))
@@ -7410,6 +7414,7 @@ def result_summary_rows(inp, results, *, stale=False):
             cracking_result, "Output only", None, "Elastic Results",
             cracking_note, inp,
             overview_key="cracking_threshold",
+            overview_value=elastic.get("lambda_cr"),
         ))
         output = elastic.get("crack_output")
         if isinstance(output, Mapping):
@@ -8708,6 +8713,27 @@ def _governing_overview_utilisation(row):
     return metric
 
 
+def _governing_overview_metric(row):
+    """Rank retained numeric outputs without treating them as utilisations."""
+    utilisation = _governing_overview_utilisation(row)
+    if utilisation is not None:
+        return utilisation
+    if row.get("status") != "CALCULATED" or row.get("family") != "elastic":
+        return None
+    value = _publication_metric(row.get("overview_value"))
+    if value is None or value < 0.0:
+        return None
+    key = row.get("overview_key")
+    if key == "cracking_threshold":
+        return -value
+    if key in {
+        "elastic_stress:concrete", "elastic_stress:reinforcement",
+        "elastic_stress:prestress",
+    }:
+        return value
+    return None
+
+
 def _governing_summary_selection(rows):
     """Return retained rows and the selected source index for each check type."""
 
@@ -8732,23 +8758,23 @@ def _governing_summary_selection(rows):
         key = (str(row.get("family") or ""), semantic_key)
         status = str(row.get("status") or "")
         rank = _GOVERNING_OVERVIEW_STATUS_RANK.get(status, -1)
-        utilisation = _governing_overview_utilisation(row)
+        metric = _governing_overview_metric(row)
         if key not in selected:
             order.append(key)
-            selected[key] = (index, row, rank, utilisation)
+            selected[key] = (index, row, rank, metric)
             continue
-        _current_index, _current, current_rank, current_utilisation = selected[key]
+        _current_index, _current, current_rank, current_metric = selected[key]
         replace_current = rank < current_rank
         if rank == current_rank:
             replace_current = bool(
-                utilisation is not None
+                metric is not None
                 and (
-                    current_utilisation is None
-                    or utilisation > current_utilisation
+                    current_metric is None
+                    or metric > current_metric
                 )
             )
         if replace_current:
-            selected[key] = (index, row, rank, utilisation)
+            selected[key] = (index, row, rank, metric)
     return retained, order, selected
 
 

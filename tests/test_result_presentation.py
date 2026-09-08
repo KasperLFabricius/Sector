@@ -4495,6 +4495,84 @@ def _overview_row(
     return row
 
 
+def _calculated_overview_row(key, value, case):
+    row = _overview_row(
+        "CALCULATED", family="elastic", case=case,
+        check=key, overview_key=key,
+    )
+    row.update(overview_value=value, criterion="Output only")
+    return row
+
+
+@pytest.mark.parametrize("key,first,later", [
+    ("elastic_stress:concrete", 12.0, 39.0),
+    ("elastic_stress:reinforcement", 831.0, 955.0),
+    ("elastic_stress:prestress", 900.0, 1100.0),
+    ("cracking_threshold", 0.121, 0.105),
+])
+def test_governing_overview_calculated_outputs_select_numeric_extremum(key, first, later):
+    rows = [_calculated_overview_row(key, first, "A"),
+            _calculated_overview_row(key, later, "B")]
+    for ordered in (rows, list(reversed(rows))):
+        before = copy.deepcopy(ordered)
+        selected = presentation.governing_summary_rows(ordered)
+        assert selected[0]["case"] == "B"
+        assert selected[0]["util"] is None
+        assert selected[0]["status"] == "CALCULATED"
+        assert selected[0]["criterion"] == "Output only"
+        assert [row["case"] for row in presentation.non_governing_summary_rows(ordered)] == ["A"]
+        assert ordered == before
+
+
+@pytest.mark.parametrize("key", ["elastic_stress:concrete", "cracking_threshold"])
+@pytest.mark.parametrize("invalid", [None, "999", True, -1.0, math.nan, math.inf, -math.inf])
+def test_governing_overview_output_metric_rejects_malformed_values(key, invalid):
+    valid = _calculated_overview_row(key, 0.0, "valid zero")
+    malformed = _calculated_overview_row(key, invalid, "malformed")
+    for rows in ([malformed, valid], [valid, malformed]):
+        assert presentation.governing_summary_rows(rows)[0]["case"] == "valid zero"
+
+
+@pytest.mark.parametrize("key", [
+    "elastic_stress:concrete", "elastic_stress:reinforcement",
+    "elastic_stress:prestress", "cracking_threshold",
+])
+def test_governing_overview_output_metric_equal_values_keep_first(key):
+    rows = [_calculated_overview_row(key, 0.25, "first"),
+            _calculated_overview_row(key, 0.25, "second")]
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "first"
+
+
+def test_governing_overview_output_metric_preserves_status_and_utilisation_priority():
+    rows = [_calculated_overview_row("elastic_stress:concrete", 999.0, "larger output"),
+            _calculated_overview_row("elastic_stress:concrete", 1.0, "assessed")]
+    rows[1].update(status="FAIL", util=1.2)
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "assessed"
+    rows[1]["status"] = "CALCULATED"
+    rows[0]["util"] = 0.5
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "assessed"
+
+
+@pytest.mark.parametrize("status", ["STALE", "INVALID", "NOT CALCULATED"])
+def test_governing_overview_does_not_rank_unusable_output_metadata(status):
+    rows = [_calculated_overview_row("elastic_stress:concrete", 1.0, "first"),
+            _calculated_overview_row("elastic_stress:concrete", 999.0, "second")]
+    for row in rows:
+        row["status"] = status
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "first"
+
+
+@pytest.mark.parametrize("family,key", [
+    ("plastic", "elastic_stress:concrete"), ("elastic", "other_output"),
+])
+def test_governing_overview_output_metadata_is_limited_to_known_elastic_quantities(family, key):
+    rows = [_calculated_overview_row(key, 1.0, "first"),
+            _calculated_overview_row(key, 999.0, "second")]
+    for row in rows:
+        row["family"] = family
+    assert presentation.governing_summary_rows(rows)[0]["case"] == "first"
+
+
 def test_governing_overview_freezes_complete_status_precedence():
     statuses = presentation.GOVERNING_OVERVIEW_STATUS_PRECEDENCE
     assert statuses == (

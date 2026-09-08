@@ -43,7 +43,7 @@ from sector import (
     torsion,
 )
 from sector.design_standards import DesignBasisKey
-from sector.materials import Concrete
+from sector.materials import ES, Concrete
 from sector.section import Section
 from tools.publication_preflight import (
     REPORT_FURNITURE,
@@ -248,6 +248,10 @@ def _inputs() -> dict:
             "single loaded lane in the QA fixture; issued-report regression spectrum"
         ),
     })
+    concrete_modulus_gpa = 33.0
+    creep_coefficient = 1.5
+    short_term_ratio = ES / (concrete_modulus_gpa * 1000.0)
+    long_term_ratio = short_term_ratio * (1.0 + creep_coefficient)
     return {
         "mode": "Both",
         "plastic_cases": plastic_cases,
@@ -399,9 +403,10 @@ def _inputs() -> dict:
         "P_el_s": 0.0,
         "Mx_el_s": 20.0,
         "My_el_s": 0.0,
-        "nl": 15.0,
-        "ns": 6.0,
-        "conc_Ec": 33.0,
+        "nl": long_term_ratio,
+        "ns": short_term_ratio,
+        "conc_Ec": concrete_modulus_gpa,
+        "el_phi": creep_coefficient,
         "sls_fctm": 2.9,
         "sls_cw": True,
         "sls_phi": 0.0,
@@ -440,6 +445,28 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
             raise AssertionError(
                 f"inconsistent fixture {label}: {actual!r} != {expected!r}"
             )
+
+    ec_mpa = inp["conc_Ec"] * 1000.0
+    creep = inp["el_phi"]
+    close("input short-term modular ratio", inp["ns"], ES / ec_mpa)
+    close("input long-term modular ratio", inp["nl"], ES * (1.0 + creep) / ec_mpa)
+    shared = out["elastic_shared"]
+    close("shared concrete modulus", shared["concrete_modulus_mpa"], ec_mpa)
+    close("shared creep coefficient", shared["creep_coefficient"], creep)
+    close("shared effective concrete modulus", shared["effective_concrete_modulus_mpa"],
+          ec_mpa / (1.0 + creep))
+    if sorted((row["material_family"], row["material_id"]) for row in shared["materials"]) != [
+        ("mild", "M1"), ("mild", "M2"),
+    ]:
+        raise AssertionError("inconsistent fixture shared material inventory")
+    for row in shared["materials"]:
+        modulus = inp["mild_materials"][row["material_id"]].Es
+        close("shared assigned material modulus", row["modulus_mpa"], modulus)
+        close("shared short-term modular ratio", row["short_term"], modulus / ec_mpa)
+        close("shared long-term modular ratio", row["long_term"], modulus * (1.0 + creep) / ec_mpa)
+    prepared_fatigue = fatigue_analysis.prepare(inp)
+    close("fatigue short-term modular ratio", prepared_fatigue.ns, inp["ns"])
+    close("fatigue long-term modular ratio", prepared_fatigue.nl, inp["nl"])
 
     retained_materials = out["material_properties"]
     close(
@@ -533,6 +560,10 @@ def validate_fixture_engineering(inp: dict, out: dict) -> None:
         superposition = elastic_worked["superposition"]
         reduction = superposition["long_term_reduction_factor"]
         close("elastic modular-ratio reduction", reduction, 1.0 - inp["ns"] / inp["nl"])
+        close("elastic native short-term modular ratio",
+              elastic_worked["superposition"]["short_term_modular_ratio"], inp["ns"])
+        close("elastic native long-term modular ratio",
+              elastic_worked["superposition"]["long_term_modular_ratio"], inp["nl"])
         elements = elastic_worked["elements"]
         if len(elements) != len(inp["bar_elements"]) or inp["tendons"]:
             raise AssertionError("the fixture requires its complete native mild-bar cage")
@@ -1182,7 +1213,7 @@ def validate_pdf_content(
         "220.8 %",
         # The native governing Elastic result; retained 245.000/456.000 MPa
         # formatting vectors have independent multi-case unit coverage.
-        "955.462 MPa",
+        "955.729 MPa",
         "Candidate summary for governing crack example",
         f"Generated 2026-07-19 12:00 by Sector {__version__}",
     ):
