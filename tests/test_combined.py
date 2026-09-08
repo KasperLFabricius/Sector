@@ -17,7 +17,11 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 APP = str(ROOT / "app" / "sector_app.py")
 
-from app_case_inputs import apply_widget_changes  # noqa: E402
+from app_case_inputs import (  # noqa: E402
+    CALCULATION_RUN_TIMEOUT,
+    REPORT_RUN_TIMEOUT,
+    apply_widget_changes,
+)
 import result_presentation  # noqa: E402
 from native_member_report_fixtures import native_member_report_cases  # noqa: E402,F401
 
@@ -826,7 +830,7 @@ def _goto_page(at, page):
 
 def _calculate(at):
     _goto_page(at, "Analysis")
-    at.button(key="calculate").click().run()
+    at.button(key="calculate").click().run(timeout=CALCULATION_RUN_TIMEOUT)
     return at
 
 
@@ -840,7 +844,7 @@ def _set(at, *changes):
     return apply_widget_changes(at, changes)
 
 
-def _set_and_click(at, button_key, *changes):
+def _set_and_click(at, button_key, *changes, run_timeout=None):
     """Submit inputs, navigate if needed, then click the page-local action."""
     if button_key == "calculate" and changes:
         _set(at, *changes)
@@ -850,7 +854,9 @@ def _set_and_click(at, button_key, *changes):
     if button_key == "calculate":
         _goto_page(at, "Analysis")
     at.button(key=button_key).click()
-    return at.run()
+    if run_timeout is None and button_key == "calculate":
+        run_timeout = CALCULATION_RUN_TIMEOUT
+    return at.run(timeout=run_timeout)
 
 
 def _translate_section_y(at, offset_mm):
@@ -2183,7 +2189,7 @@ def test_app_combined_basis_switch_invalidates_results_and_reports():
 
     _goto_page(at, "Report")
     at.session_state["_report_no_figures"] = True
-    at.button(key="gen_report").click().run()
+    at.button(key="gen_report").click().run(timeout=REPORT_RUN_TIMEOUT)
     assert at.session_state["report_generation_record"]["result_source"] == (
         "reused-current-analysis-results"
     )
@@ -2210,7 +2216,7 @@ def test_app_combined_basis_switch_invalidates_results_and_reports():
     assert "dkna_sum" in dk_result
 
     _goto_page(at, "Report")
-    at.button(key="gen_report").click().run()
+    at.button(key="gen_report").click().run(timeout=REPORT_RUN_TIMEOUT)
     assert at.session_state["report_generation_record"]["result_source"] == (
         "reused-current-analysis-results"
     )

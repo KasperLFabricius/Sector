@@ -42,6 +42,7 @@ QA_UPLOAD_SETTINGS = {
     "path": "qa-artifacts/",
     "if-no-files-found": "error",
     "retention-days": 7,
+    "include-hidden-files": True,
 }
 BASELINE_ENV = "SECTOR_COVERAGE_BASELINE_REF"
 BASELINE_EXPRESSION = (
@@ -428,6 +429,41 @@ def expected_validator_command() -> str:
     )
 
 
+
+CORE_SHARDS = ("report", "combined", "native", "other")
+CORE_DOWNLOAD_STEP_NAME = "Download exact core shard evidence"
+CORE_DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+CORE_DOWNLOAD_SETTINGS = {
+    "pattern": "sector-core-${{ github.run_id }}-${{ github.run_attempt }}-*",
+    "path": "qa-core-inputs",
+    "merge-multiple": False,
+}
+
+
+def expected_core_job() -> dict[str, Any]:
+    return {
+        "name": "Primary pytest (${{ matrix.shard }})",
+        "runs-on": "windows-latest",
+        "timeout-minutes": 240,
+        "strategy": {"fail-fast": False, "matrix": {"shard": list(CORE_SHARDS)}},
+        "steps": [
+            {"name": CHECKOUT_STEP_NAME, "uses": CHECKOUT_ACTION, "with": {"fetch-depth": 0}},
+            {"name": "Set up pinned Python",
+             "uses": "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+             "with": {"python-version-file": ".python-version", "cache": "pip", "cache-dependency-path": "requirements-dev.txt"}},
+            {"name": "Preflight locked dependency inputs",
+             "run": "python tools/verify_dependency_audit.py quality-dependency-audit.toml --preflight-locks"},
+            {"name": "Install locked QA environment",
+             "run": "python -m pip install --require-hashes -r requirements-dev.txt"},
+            {"name": "Run complete primary shard",
+             "run": 'python tools/qa_core_shards.py run --shard "${{ matrix.shard }}" --output qa-shard'},
+            {"name": "Upload raw primary shard evidence", "if": "always()", "uses": QA_UPLOAD_ACTION,
+             "with": {"name": "sector-core-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}",
+                      "path": "qa-shard/", "include-hidden-files": True, "if-no-files-found": "error", "retention-days": 7}},
+        ],
+    }
+
+
 def expected_coverage_command(data: Mapping[str, Any]) -> str:
     coverage = data["coverage"]
     targets = "\n".join(
@@ -441,22 +477,18 @@ if (Test-Path -LiteralPath $baseTemp) {{
   throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
 }}
 New-Item -ItemType Directory -Path $baseTemp | Out-Null
-$coreTemp = Join-Path $baseTemp "core"
 $vizTemp = Join-Path $baseTemp "real-viz"
 $reportTemp = Join-Path $baseTemp "real-report"
 $manualTemp = Join-Path $baseTemp "real-manual"
 $phaseFailures = @()
+if ("${{{{ steps.core_download.outcome }}}}" -ne "success") {{
+  $phaseFailures += "core artifact download"
+}}
 
-python -m pytest tests -n 4 `
-  --dist loadgroup `
-  -m "not real_image_export" `
-  --basetemp $coreTemp `
-{targets}
-  --cov-report= `
-  --junitxml=qa-artifacts/test-results.xml
+python tools/qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts
 $phaseExit = $LASTEXITCODE
 if ($phaseExit -ne 0) {{
-  $phaseFailures += "parallel core ($phaseExit)"
+  $phaseFailures += "parallel core shards ($phaseExit)"
 }}
 
 python -m pytest tests/test_viz.py -n 0 `
@@ -624,10 +656,19 @@ def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
         "runs-on",
         "timeout-minutes",
         "steps",
-    }:
+        "needs",
+        "if",
+    } or test_job.get("needs") != "core" or test_job.get("if") != "always()":
         raise CoverageGateContractError(
             "test job must retain an unconditional failure-propagating context"
         )
+    if jobs.get("core") != expected_core_job():
+        raise CoverageGateContractError("core shard execution or evidence contract differs")
+    portable = jobs.get("portable")
+    if not isinstance(portable, Mapping) or portable.get("needs") != ["core", "test"]:
+        raise CoverageGateContractError("portable must require every core shard and the complete aggregate gate")
+    if "if" in portable or "continue-on-error" in portable:
+        raise CoverageGateContractError("portable prerequisite failure cannot be masked")
     steps = test_job["steps"]
 
     checkout = _named_step(steps, CHECKOUT_STEP_NAME)
@@ -650,6 +691,10 @@ def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
     if validator.get("run") != expected_validator_command():
         raise CoverageGateContractError("coverage validator command differs")
 
+    download = _named_step(steps, CORE_DOWNLOAD_STEP_NAME)
+    if download != {"name": CORE_DOWNLOAD_STEP_NAME, "id": "core_download", "continue-on-error": True,
+                    "uses": CORE_DOWNLOAD_ACTION, "with": CORE_DOWNLOAD_SETTINGS}:
+        raise CoverageGateContractError("core artifact download must retain exact current-run shard directories")
     coverage_step = _named_step(steps, COVERAGE_STEP_NAME)
     if set(coverage_step) != {"name", "shell", "run"}:
         raise CoverageGateContractError(
@@ -692,6 +737,7 @@ def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
         )
 
     ordered = [
+        download,
         coverage_step,
         branch_step,
         report_render,

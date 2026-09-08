@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
+
+from tools import qa_core_shards
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -141,8 +144,33 @@ def test_every_real_browser_export_test_has_the_registered_marker():
     assert "real_image_export:" in (ROOT / "pytest.ini").read_text(encoding="utf-8")
 
 
-def test_real_image_workflow_runs_every_marked_family_in_a_fresh_serial_process():
+def test_real_image_workflow_runs_every_marked_family_in_a_fresh_serial_process(tmp_path, monkeypatch):
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    core_job = workflow["jobs"]["core"]
+    assert core_job["strategy"]["matrix"]["shard"] == ["report", "combined", "native", "other"]
+    core_step = next(step for step in core_job["steps"] if step["name"] == "Run complete primary shard")
+    assert core_step["run"] == 'python tools/qa_core_shards.py run --shard "${{ matrix.shard }}" --output qa-shard'
+    assert workflow["jobs"]["test"]["needs"] == "core"
+    commands = []
+    monkeypatch.setattr(qa_core_shards, "identity", lambda: {"run_id": "1", "run_attempt": "1"})
+    monkeypatch.setattr(qa_core_shards, "source_digest", lambda: "unchanged-fixture-source")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "temporary"))
+    def capture(command, **kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(qa_core_shards.subprocess, "run", capture)
+    for shard in core_job["strategy"]["matrix"]["shard"]:
+        assert qa_core_shards.run_shard(shard, tmp_path / shard) == 0
+    assert len(commands) == 4
+    core_temps = []
+    for command in commands:
+        assert command[1:3] == ["-m", "pytest"]
+        assert command[command.index("-n") + 1] == "4"
+        assert command[command.index("--dist") + 1] == "loadgroup"
+        assert command[command.index("-m", 3) + 1] == "not real_image_export"
+        assert "--cov=app" in command and "--cov=sector" in command
+        core_temps.append(command[command.index("--basetemp") + 1])
+    assert len(set(core_temps)) == 4
     coverage_step = next(
         step
         for step in workflow["jobs"]["test"]["steps"]
@@ -151,7 +179,7 @@ def test_real_image_workflow_runs_every_marked_family_in_a_fresh_serial_process(
     command = coverage_step["run"]
 
     phases = (
-        'python -m pytest tests -n 4 `\n  --dist loadgroup `\n  -m "not real_image_export"',
+        'python tools/qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts',
         'python -m pytest tests/test_viz.py -n 0 `\n  -m "real_image_export"',
         "python -m pytest `\n  tests/test_report_rendered.py::"
         "test_issued_report_renders_every_page_and_retains_expected_content `",
@@ -161,7 +189,7 @@ def test_real_image_workflow_runs_every_marked_family_in_a_fresh_serial_process(
     positions = [command.index(phase) for phase in phases]
 
     assert positions == sorted(positions)
-    assert command.count("python -m pytest") == 4
+    assert command.count("python -m pytest") == 3
     assert command.count("-n 0") == 3
     assert command.count("--cov-append") == 3
     for folder, variable in (

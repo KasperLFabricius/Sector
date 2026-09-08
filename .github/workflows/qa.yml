@@ -15,7 +15,48 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  core:
+    name: Primary pytest (${{ matrix.shard }})
+    runs-on: windows-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+        - report
+        - combined
+        - native
+        - other
+    steps:
+    - name: Check out source
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      with:
+        fetch-depth: 0
+    - name: Set up pinned Python
+      uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+      with:
+        python-version-file: .python-version
+        cache: pip
+        cache-dependency-path: requirements-dev.txt
+    - name: Preflight locked dependency inputs
+      run: python tools/verify_dependency_audit.py quality-dependency-audit.toml --preflight-locks
+    - name: Install locked QA environment
+      run: python -m pip install --require-hashes -r requirements-dev.txt
+    - name: Run complete primary shard
+      run: python tools/qa_core_shards.py run --shard "${{ matrix.shard }}" --output qa-shard
+    - name: Upload raw primary shard evidence
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: sector-core-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}
+        path: qa-shard/
+        include-hidden-files: true
+        if-no-files-found: error
+        retention-days: 7
+
   test:
+    needs: core
+    if: always()
     name: Full test and report gate
     runs-on: windows-latest
     timeout-minutes: 360
@@ -72,6 +113,15 @@ jobs:
       - name: Execute strict mypy policy
         run: python tools/verify_mypy_policy.py quality-mypy-policy.toml --execute
 
+      - name: Download exact core shard evidence
+        id: core_download
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: sector-core-${{ github.run_id }}-${{ github.run_attempt }}-*
+          path: qa-core-inputs
+          merge-multiple: false
+
       - name: Run complete test suite with coverage
         shell: pwsh
         run: |
@@ -83,23 +133,18 @@ jobs:
             throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
           }
           New-Item -ItemType Directory -Path $baseTemp | Out-Null
-          $coreTemp = Join-Path $baseTemp "core"
           $vizTemp = Join-Path $baseTemp "real-viz"
           $reportTemp = Join-Path $baseTemp "real-report"
           $manualTemp = Join-Path $baseTemp "real-manual"
           $phaseFailures = @()
+          if ("${{ steps.core_download.outcome }}" -ne "success") {
+            $phaseFailures += "core artifact download"
+          }
 
-          python -m pytest tests -n 4 `
-            --dist loadgroup `
-            -m "not real_image_export" `
-            --basetemp $coreTemp `
-            --cov=app `
-            --cov=sector `
-            --cov-report= `
-            --junitxml=qa-artifacts/test-results.xml
+          python tools/qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts
           $phaseExit = $LASTEXITCODE
           if ($phaseExit -ne 0) {
-            $phaseFailures += "parallel core ($phaseExit)"
+            $phaseFailures += "parallel core shards ($phaseExit)"
           }
 
           python -m pytest tests/test_viz.py -n 0 `
@@ -214,13 +259,14 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sector-qa-${{ github.run_id }}
+          include-hidden-files: true
           path: qa-artifacts/
           if-no-files-found: error
           retention-days: 7
 
   portable:
     name: Build and run portable Sector
-    needs: test
+    needs: [core, test]
     runs-on: windows-latest
     timeout-minutes: 60
 

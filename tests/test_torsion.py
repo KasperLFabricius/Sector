@@ -1118,6 +1118,8 @@ sys.path.insert(0, str(ROOT / "app"))
 APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import (  # noqa: E402
+    CALCULATION_RUN_TIMEOUT,
+    REPORT_RUN_TIMEOUT,
     apply_widget_changes,
     discard_retired_qs_fragment,
     first_case_value,
@@ -1160,7 +1162,7 @@ def _goto_page(at, page):
 
 def _calculate(at):
     _goto_page(at, "Analysis")
-    at.button(key="calculate").click().run()
+    at.button(key="calculate").click().run(timeout=CALCULATION_RUN_TIMEOUT)
     return at
 
 
@@ -1174,7 +1176,7 @@ def _set(at, *changes):
     return apply_widget_changes(at, changes)
 
 
-def _set_and_click(at, button_key, *changes):
+def _set_and_click(at, button_key, *changes, run_timeout=None):
     """Submit a group of existing inputs with one button-triggered rerun."""
     if button_key in {"qs_apply", "qs_back"} and changes:
         _set(at, *changes)
@@ -1187,7 +1189,9 @@ def _set_and_click(at, button_key, *changes):
     if button_key == "calculate":
         _goto_page(at, "Analysis")
     at.button(key=button_key).click()
-    at.run()
+    if run_timeout is None and button_key == "calculate":
+        run_timeout = CALCULATION_RUN_TIMEOUT
+    at.run(timeout=run_timeout)
     if button_key in {"qs_apply", "qs_back"}:
         discard_retired_qs_fragment(at)
     return at
@@ -2807,7 +2811,7 @@ def test_pre_m05_capacity_and_buffered_report_are_hidden_until_recalculated():
     )
     at.session_state["_report_no_figures"] = True
     at.segmented_control(key="rep_report_content").set_value("Brief").run()
-    at.button(key="gen_report").click().run()
+    at.button(key="gen_report").click().run(timeout=REPORT_RUN_TIMEOUT)
     assert not at.exception
     assert at.session_state["report_generation_record"][
         "capacity_result_contract"

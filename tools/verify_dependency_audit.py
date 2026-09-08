@@ -508,7 +508,9 @@ def validate_workflow(text: str) -> None:
         "runs-on",
         "timeout-minutes",
         "steps",
-    }:
+        "needs",
+        "if",
+    } or job.get("needs") != "core" or job.get("if") != "always()":
         raise DependencyAuditError("test job execution context differs")
     if job.get("name") != "Full test and report gate":
         raise DependencyAuditError("test job name differs")

@@ -482,7 +482,9 @@ def validate_workflow(text: str) -> None:
         "runs-on",
         "timeout-minutes",
         "steps",
-    }:
+        "needs",
+        "if",
+    } or test_job.get("needs") != "core" or test_job.get("if") != "always()":
         raise MypyPolicyError("test job execution context differs")
     steps = test_job["steps"]
 
