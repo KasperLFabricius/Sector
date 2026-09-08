@@ -14168,6 +14168,64 @@ def _publication_calculation(function):
     return evaluate
 
 
+def _render_shear_longitudinal_assessment(chord_assessment):
+    """Render the assessment after the caller validates publication evidence."""
+    if isinstance(chord_assessment, Mapping):
+        chord_status = str(
+            chord_assessment.get("status") or "NOT ASSESSED"
+        ).upper()
+        chord_note = presentation.result_reason(
+            chord_assessment.get("reason"),
+            "shear",
+            context="shear longitudinal chord assessment",
+        )
+        if chord_status == "FAIL":
+            _manual_warning(
+                st,
+                "calculation-warning",
+                "Overall reinforced shear assessment: FAIL. " + chord_note + ".",
+            )
+        elif chord_status == "NOT ASSESSED":
+            _manual_warning(
+                st,
+                "calculation-warning",
+                "Overall reinforced shear assessment: NOT ASSESSED. "
+                + chord_note
+                + ".",
+            )
+
+
+def _render_shear_2023_chord_faces(chord_publication):
+    """Render the already validated separate-shear face table."""
+    chord_rows = []
+    for candidate in chord_publication.get("candidates") or ():
+        if candidate.get("role") != "shear_axis":
+            continue
+        candidate_face = viz.tension_face_label(
+            candidate.get("tension_low", True), candidate.get("axis")
+        )
+        chord_rows.append({
+            "Face": candidate_face,
+            "Chord": (
+                "Flexural tension"
+                if candidate.get("chord_role") == "flexural_tension"
+                else "Flexural compression"
+            ),
+            "Formula": f"({candidate.get('chord_formula', '-')})",
+            "Signed Mface": (
+                f"{candidate.get('face_m_ed_signed', 0.0):.1f} kNm"
+            ),
+            "NVd z": f"{candidate.get('mv', 0.0):.1f} kNm",
+            "MEd,total": f"{candidate.get('m_total', 0.0):.1f} kNm",
+            "MRd": f"{candidate.get('m_rd', 0.0):.1f} kNm",
+            "Utilisation": _pct(candidate.get("util")),
+            "Status": candidate.get("status", "NOT ASSESSED"),
+        })
+    if chord_rows:
+        st.markdown("**Required 2023 longitudinal chord faces**")
+        st.dataframe(chord_rows, hide_index=True, width="stretch")
+
+
 @_publication_calculation
 def shear_view(inp, results, *, global_results=None):
     """Shear resistance without shear reinforcement (VRd,c) and the utilisation.
@@ -14204,8 +14262,9 @@ def shear_view(inp, results, *, global_results=None):
         )
     )
     if aggregate_current is not True:
+        input_reasons = presentation.shear_input_geometry_reasons(inp)
         guidance = presentation.result_reason(
-            aggregate_reason,
+            input_reasons[0] if input_reasons else aggregate_reason,
             "shear",
             context="detailed shear family authority",
         )
@@ -14218,6 +14277,9 @@ def shear_view(inp, results, *, global_results=None):
         c1.metric("Applied shear", "-")
         c2.metric(r"Resistance $V_{Rd}$", "-")
         c3.metric("Assessment", "NOT ASSESSED")
+        if input_reasons:
+            st.caption("No resistance, utilisation or PASS/FAIL verdict is available "
+                       "until the section geometry is complete.")
         return
     combined_blocker = presentation.combined_bending_assessment_blocker(
         results,
@@ -14690,7 +14752,8 @@ def shear_view(inp, results, *, global_results=None):
         else:
             detailing_status = "NOT ASSESSED"
         st.caption(
-            "Separate link detailing assessment: " + detailing_status + "."
+            "Separate link detailing assessment: " + detailing_status
+            + ". This detailing result is not a shear-capacity verdict."
         )
         if not isinstance(lk, dict) or lk.get("valid") is not True:
             angle_applicability = (lk or {}).get(
@@ -14799,29 +14862,7 @@ def shear_view(inp, results, *, global_results=None):
                 "coverage_complete": False,
                 "governing": None,
             }
-        if isinstance(chord_assessment, Mapping):
-            chord_status = str(
-                chord_assessment.get("status") or "NOT ASSESSED"
-            ).upper()
-            chord_note = presentation.result_reason(
-                chord_assessment.get("reason"),
-                "shear",
-                context="shear longitudinal chord assessment",
-            )
-            if chord_status == "FAIL":
-                _manual_warning(
-                    st,
-                    "calculation-warning",
-                    "Overall reinforced shear assessment: FAIL. " + chord_note + ".",
-                )
-            elif chord_status == "NOT ASSESSED":
-                _manual_warning(
-                    st,
-                    "calculation-warning",
-                    "Overall reinforced shear assessment: NOT ASSESSED. "
-                    + chord_note
-                    + ".",
-                )
+        _render_shear_longitudinal_assessment(chord_assessment)
         if links.get("model_2023"):
             effective_asw_over_s = links.get(
                 "effective_asw_over_s", links.get("asw_over_s", 0.0)
@@ -15047,33 +15088,7 @@ def shear_view(inp, results, *, global_results=None):
                       "bending resistance."
                     + obj_note
                 )
-                chord_rows = []
-                for candidate in chord_publication.get("candidates") or ():
-                    if candidate.get("role") != "shear_axis":
-                        continue
-                    candidate_face = viz.tension_face_label(
-                        candidate.get("tension_low", True), candidate.get("axis")
-                    )
-                    chord_rows.append({
-                        "Face": candidate_face,
-                        "Chord": (
-                            "Flexural tension"
-                            if candidate.get("chord_role") == "flexural_tension"
-                            else "Flexural compression"
-                        ),
-                        "Formula": f"({candidate.get('chord_formula', '-')})",
-                        "Signed Mface": (
-                            f"{candidate.get('face_m_ed_signed', 0.0):.1f} kNm"
-                        ),
-                        "NVd z": f"{candidate.get('mv', 0.0):.1f} kNm",
-                        "MEd,total": f"{candidate.get('m_total', 0.0):.1f} kNm",
-                        "MRd": f"{candidate.get('m_rd', 0.0):.1f} kNm",
-                        "Utilisation": _pct(candidate.get("util")),
-                        "Status": candidate.get("status", "NOT ASSESSED"),
-                    })
-                if chord_rows:
-                    st.markdown("**Required 2023 longitudinal chord faces**")
-                    st.dataframe(chord_rows, hide_index=True, width="stretch")
+                _render_shear_2023_chord_faces(chord_publication)
             else:
                 st.caption(
                     f"Governing chord: {face_desc}. "
@@ -15203,6 +15218,34 @@ def torsion_view(inp, results, *, global_results=None):
             st.info("Press Calculate to run the torsion check.")
         return
     t = results["torsion"]
+    raw_t_ed = inp.get("torsion_T")
+    input_t_ed = None
+    if type(raw_t_ed) in {int, float} and math.isfinite(float(raw_t_ed)):
+        input_t_ed = abs(float(raw_t_ed))
+    if input_t_ed is not None:
+        input_applicability = capacity.torsion_applicability(inp, input_t_ed)
+        if input_applicability["status"] != "APPLICABLE":
+            # This is a diagnosis of current member selections. A retained
+            # payload, including a forged applicable/PASS record, is not read.
+            diagnostic = {"t_ed": input_t_ed, "applicability": input_applicability}
+            note = presentation.torsion_applicability_note(diagnostic)
+            status = input_applicability["status"]
+            st.markdown("**Torsion applicability and member scope**")
+            st.caption(
+                f"Design basis: {input_applicability['design_basis']}. "
+                f"Member scope: {input_applicability['member_scope']}. " + note + "."
+            )
+            _manual_warning(
+                st, "method-applicability",
+                f"The torsion assessment is {status}. " + note
+                + ". Resistance, utilisation, governing angle, longitudinal "
+                "demand and dependent interaction verdicts are withheld.",
+            )
+            c1, c2, c3 = st.columns(3)
+            c1.metric(r"Applied $T_{Ed}$", f"{input_t_ed:.3f} kNm")
+            c2.metric(r"Section resistance $T_{Rd}$", "-")
+            c3.metric("Utilisation", "-")
+            return
     shear_authority = results.get("shear")
     current, current_reason = presentation.torsion_publication_component_is_current(
         inp,
@@ -15210,6 +15253,10 @@ def torsion_view(inp, results, *, global_results=None):
         t,
     )
     if current is not True:
+        holes = inp.get("holes")
+        if (isinstance(holes, (list, tuple)) and len(holes) > 1
+                and inp.get("torsion_subdivide") is not True):
+            current_reason = "multi-cell (2+ voids)"
         guidance = presentation.result_reason(
             current_reason,
             "torsion",

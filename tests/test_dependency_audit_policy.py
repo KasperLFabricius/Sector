@@ -575,7 +575,7 @@ def test_workflow_checkout_setup_triggers_commands_and_install_are_exact():
     }
 
 
-@pytest.mark.parametrize("timeout", [90, 179, 181, None, "180"])
+@pytest.mark.parametrize("timeout", [90, 179, 180, 181, 359, 361, None, "180", "360"])
 def test_test_job_rejects_unapproved_execution_timeouts(timeout):
     workflow = _workflow()
     workflow["jobs"]["test"]["timeout-minutes"] = timeout

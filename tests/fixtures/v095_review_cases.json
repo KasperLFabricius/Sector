@@ -767,6 +767,13 @@
       "source_locations": ["app/sector_app.py:3241"],
       "reproduction": {
         "valid_project_byte_recipe": {
+          "schema_version": 27,
+          "post_dump_omitted_scalar_defaults": {
+            "torsion_design_basis": "Not established",
+            "torsion_member_scope": "Not established",
+            "torsion_case_authorities": {}
+          },
+          "historical_scope": "Reconstruct the frozen pre-torsion-default schema-27 serialization; current project saves retain all current fields.",
           "generator": "project_io.dump_project({}, {}, app_version='0.94', revision=REVISION)",
           "clock_injection": "unittest.mock.patch.object(project_io, 'datetime', FrozenDateTime)",
           "frozen_datetime_now": "2026-08-14T00:00:00+00:00",

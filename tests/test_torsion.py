@@ -1536,11 +1536,45 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
     ] == "NOT ASSESSED"
 
     _select_view(at, "Results Overview")
-    overview = "\n".join(
-        frame.value.to_string(index=False) for frame in at.table
+    import result_presentation as presentation
+
+    # Overview selects one governing case per check, while the case picker
+    # must preserve each case's own torsion authority and signed action.
+    all_rows = presentation.multi_case_summary_rows(
+        at.session_state["result_input_snapshot"], at.session_state["results"],
     )
-    assert "EQ-01" in overview
-    assert "COMP-01" in overview
+    assert {"EQ-01", "COMP-01"}.issubset({row["case"] for row in all_rows})
+    selected = presentation.governing_summary_rows(all_rows)
+    expected = presentation.governing_result_rows(selected)
+    table = next(item.value for item in at.table if "Governing action" in item.value)
+    assert list(table[["Check", "Governing action", "Status", "Result"]].itertuples(
+        index=False, name=None,
+    )) == [(row["check"], row["case"], row["status"], row["result"]) for row in expected]
+    assert "EQ-01" in set(table["Governing action"])
+
+    _select_view(at, "Torsion")
+    for index, name, torque in ((0, "EQ-01", 40.0), (1, "COMP-01", -40.0)):
+        at.selectbox(key="_plastic_result_case_index").set_value(index).run()
+        assert not at.exception
+        picker = at.selectbox(key="_plastic_result_case_index")
+        assert picker.options[index].startswith(name)
+        actions = next(item.value for item in at.dataframe if "T_Ed [kNm]" in item.value)
+        assert actions.iloc[0]["T_Ed [kNm]"] == torque
+        metric_values = {str(item.value) for item in at.metric}
+        if index == 0:
+            assert f"{eq_torsion['trd']:.3f} kNm" in metric_values
+            # The resistance is assessed; the separately unverified
+            # longitudinal reinforcement still makes the overall state unavailable.
+            assert any("Overall torsion assessment: NOT ASSESSED" in item.value
+                       and "distributed around every torsion-tube side" in item.value
+                       for item in at.warning)
+            assert not any("The torsion check is NOT ASSESSED:" in item.value
+                           for item in at.warning)
+        else:
+            assert any("requires a separate member or system assessment" in item.value
+                       for item in (*at.warning, *at.info, *at.caption))
+            assert f"{eq_torsion['trd']:.3f} kNm" not in metric_values
+            assert not any(item.delta in {"PASS", "FAIL"} for item in at.metric)
 
     _set_and_click(
         at,
@@ -3227,6 +3261,8 @@ def test_app_torsion_subdivided_uses_the_shared_member_angle():
     at.checkbox(key="shear_links").set_value(True).run()
     _set(at, ("number_input", "shear_V", 150.0))
     _subdivided(at, T=40.0)
+    _set(at, ("selectbox", "shear_section_form", "Constant-width web"),
+         ("number_input", "shear_bw", 300.0))
     _set_and_click(
         at,
         "calculate",
@@ -3236,11 +3272,15 @@ def test_app_torsion_subdivided_uses_the_shared_member_angle():
     assert not at.exception
     t = at.session_state["results"]["torsion"]
     assert t["theta_mode"] == "utilisation"
+    links = at.session_state["results"]["shear"]["links"]["res"]
+    assert links["valid"] is True
+    assert links["cot"] == pytest.approx(t["cot"])
     cots = [s["cot"] for s in t["subtubes"]]
     assert all(cot == pytest.approx(t["cot"]) for cot in cots)
     _select_view(at, "Torsion")
     caps = " ".join(c.value for c in at.caption)
-    assert "ONE member strut angle" in caps
+    assert f"every sub-tube uses cot {chr(0x03B8)} = {t['cot']:.3f}" in caps
+    assert "member strut angle is shared by shear and torsion" in caps
     assert "each sub-tube is at its OWN" not in caps
 
 
@@ -3427,7 +3467,18 @@ def test_app_torsion_multi_void_rejected():
     assert not at.exception
     assert not at.session_state["results"]["torsion"]["valid"]
     _select_view(at, "Torsion")
-    assert any("multi-cell" in w.value for w in at.warning)
+    assert len(at.session_state["result_input_snapshot"]["holes"]) == 2
+    rejected = at.session_state["results"]["torsion"]
+    assert rejected["reason"] == "multi-cell (2+ voids)"
+    assert rejected["tube_valid"] is False
+    assert rejected["full_resistance_assessed"] is False
+    assert any("The section contains multiple cells" in w.value for w in at.warning)
+    assert any("separate calculation for multi-cell torsion" in w.value for w in at.warning)
+    assert not any("subdivide it into single-cell torsion tubes" in w.value for w in at.warning)
+    metrics = {metric.label: metric.value for metric in at.metric}
+    assert metrics[r"Resistance $T_{Rd}$"] == "-"
+    assert metrics["Assessment"] == "NOT ASSESSED"
+    assert all(metric.delta not in {"OK", "PASS", "FAIL"} for metric in at.metric)
 
 
 def test_app_torsion_uses_the_shared_stirrup():

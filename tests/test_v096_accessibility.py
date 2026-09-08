@@ -172,4 +172,4 @@ def test_audit_equation_identities_semantics_and_sources_remain_colocated():
         assert len(identities) == len(sources), page_number
         assert len(semantics) >= len(identities), page_number
         total += len(identities)
-    assert total == 88
+    assert total == 107

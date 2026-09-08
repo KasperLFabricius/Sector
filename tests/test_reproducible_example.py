@@ -38,9 +38,9 @@ def _pub_m01_pdf_text(pdf):
         " ".join((page.extract_text() or "").split())
         for page in PdfReader(io.BytesIO(pdf)).pages
     )
-    # The Standard table can wrap the last character of this long case ID in
-    # extraction even though the rendered glyphs remain contiguous.
-    return re.sub(r"PL-COMPLET\s+E", "PL-COMPLETE", text)
+    # The narrow case cell can wrap after the existing hyphen or before E.
+    # Join only this exact fixture ID; retain every status, value and other ID.
+    return re.sub(r"\bPL-\s*COMPLET\s*E\b", "PL-COMPLETE", text)
 
 
 @pytest.fixture(scope="module")

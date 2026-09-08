@@ -34,6 +34,7 @@ def _fixture_input() -> dict:
     inp = report_render_fixture._inputs()
     inp.update(
         mode="Plastic",
+        sls_heightened_on=False,
         combined_on=True,
         combined_method=codes.EC2_2005.label,
         shear_on=True,

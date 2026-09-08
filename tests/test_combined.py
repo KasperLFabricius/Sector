@@ -19,6 +19,7 @@ APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import apply_widget_changes  # noqa: E402
 import result_presentation  # noqa: E402
+from native_member_report_fixtures import native_member_report_cases  # noqa: E402,F401
 
 
 # -- engine -----------------------------------------------------------------
@@ -951,11 +952,20 @@ def test_biaxial_combined_reuses_one_lazy_normal_bending_action_solve(
     monkeypatch,
 ):
     original = capacity.dkna_normal_bending_action_alone
-    calls = 0
+    production_calls = 0
+    publication_calls = 0
 
     def counted(inp):
-        nonlocal calls
-        calls += 1
+        nonlocal production_calls, publication_calls
+        # Publication independently reconstructs authority after production.
+        # The directional producer must still reuse one N/M solve.
+        callers = {frame.function for frame in inspect.stack(context=0)}
+        if "_single_combined_publication_evidence_is_current" in callers:
+            publication_calls += 1
+        elif "_run_uniaxial_capacity_checks" in callers:
+            production_calls += 1
+        else:
+            pytest.fail("Unexpected normal-bending solve caller")
         return original(inp)
 
     monkeypatch.setattr(
@@ -981,7 +991,8 @@ def test_biaxial_combined_reuses_one_lazy_normal_bending_action_solve(
     )
 
     assert not at.exception
-    assert calls == 1
+    assert production_calls == 1
+    assert publication_calls > 0
     aggregate = at.session_state["results"]["combined"]
     assert set(aggregate["directions"]) == {"vx", "vy"}
     assert all(
@@ -1086,10 +1097,22 @@ def test_biaxial_directional_vt_outside_permitted_range_withholds_verdicts():
     )
     assert "NOT ASSESSED" in visible
     assert "outside the permitted range" in visible
-    assert not any(
-        "Directional screen" in frame.value.columns
-        for frame in at.dataframe
+    screens = [frame.value for frame in at.dataframe
+               if "Directional screen" in frame.value.columns]
+    assert len(screens) == 1
+    screen = screens[0]
+    assert tuple(screen["Directional screen"]) == ("Vx,Ed + TEd", "Vy,Ed + TEd")
+    assert set(screen["Status"]) == {"NOT ASSESSED"}
+    assert set(screen["Governing face"]) == {"-"}
+    assert screen[["TEd/TRd", "6.29 V+T", f"cot {chr(0x03B8)}"]].isna().all().all()
+    minimum_screens = [frame.value for frame in at.dataframe
+                       if "Directional 6.31 screen" in frame.value.columns]
+    assert len(minimum_screens) == 1
+    assert tuple(minimum_screens[0]["Directional 6.31 screen"]) == (
+        "Vx,Ed + TEd", "Vy,Ed + TEd",
     )
+    assert set(minimum_screens[0]["Status"]) == {"NOT ASSESSED"}
+    assert minimum_screens[0]["6.31 sum"].isna().all()
 
     _select_view(at, "Results Overview")
     overview = at.table[0].value
@@ -1754,6 +1777,98 @@ def test_app_base_en_biaxial_view_keeps_only_directional_physical_checks():
     assert not any("DK NA" in value or "action-alone" in value.casefold() for value in checks)
 
 
+def _assert_current_native_mvt_views(at, *, longitudinal=False):
+    """Prove a real producer positive before an adversarial saved-result edit."""
+    inp = at.session_state["result_input_snapshot"]
+    results = at.session_state["results"]
+    assert results["plastic"]["util_valid"] is True
+    assert result_presentation.combined_publication_evidence_is_current(inp, results)[0] is True
+    assert result_presentation.combined_bending_assessment_blocker(results, inp) is None
+    pristine = copy.deepcopy(results)
+    component = next(item for item in
+                     result_presentation.combined_physical_components(results["combined"])
+                     if item["key"] == "longitudinal") if longitudinal else None
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    assert not any("Combined M-V-T is NOT ASSESSED" in item.value for item in at.warning)
+    assert at.metric or at.dataframe
+    if longitudinal:
+        physical = next(metric for metric in at.metric
+                        if metric.label == "Longitudinal reinforcement")
+        physical_value = str(physical.value)
+        expected_value = "-" if component["util"] is None else f"{component['util'] * 100:.1f} %"
+        assert physical_value == expected_value
+        if component["status"] in {"PASS", "FAIL"}:
+            assert physical.delta == component["status"]
+        else:
+            assert component["status"] == "NOT ASSESSED"
+            assert physical.delta in {None, ""}
+        # Chord and overall Formula6.28/longitudinal assessment remain distinct.
+        assert component["chord_status"] in {"PASS", "FAIL"}
+        chord = next(metric for metric in at.metric if metric.label == "Chord utilisation")
+        assert chord.delta == component["chord_status"]
+        assert str(chord.value) == f"{component['chord_util'] * 100:.1f} %"
+    _select_view(at, "Results Overview")
+    overview = next(table.value for table in at.table if "Check" in table.value)
+    rows = overview[overview["Check"].str.startswith("Combined ")]
+    assert not rows.empty
+    assessed = rows[rows["Status"].isin(["PASS", "FAIL"])]
+    assert not assessed.empty
+    assert all(value != "-" for value in assessed["Result"])
+    if longitudinal:
+        target = rows[rows["Check"] == "Combined longitudinal reinforcement"]
+        assert len(target) == 1
+        assert (target.iloc[0]["Status"], target.iloc[0]["Result"]) == (
+            component["status"], physical_value,
+        )
+    return pristine
+
+
+def _assert_rejected_native_mvt_views(at):
+    """An actual guard rejection must produce explicit unavailable Overview rows."""
+    inp = at.session_state["result_input_snapshot"]
+    results = at.session_state["results"]
+    assert result_presentation.combined_publication_evidence_is_current(inp, results)[0] is False
+    blocker = result_presentation.combined_bending_assessment_blocker(results, inp)
+    assert isinstance(blocker, str) and blocker
+    _select_view(at, "M-V-T Combined")
+    assert not at.exception
+    assert any("Combined M-V-T is NOT ASSESSED" in item.value and blocker in item.value
+               for item in at.warning)
+    values = {str(metric.value) for metric in at.metric}
+    assert not values.difference({"-", "NOT ASSESSED"})
+    assert not any("Directional screen" in frame.value.columns for frame in at.dataframe)
+    captions = " ".join(str(item.value) for item in at.caption)
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = next(table.value for table in at.table if "Check" in table.value)
+    rows = overview[overview["Check"].str.startswith("Combined ")]
+    assert not rows.empty
+    assert set(rows["Status"]) == {"NOT ASSESSED"}
+    assert set(rows["Result"]) == {"-"}
+    return {"rows": rows, "values": values, "captions": captions}
+
+
+def _restore_current_native_mvt_views(at, pristine, *, longitudinal=False):
+    at.session_state["results"] = copy.deepcopy(pristine)
+    _assert_current_native_mvt_views(at, longitudinal=longitudinal)
+
+
+def _base_en_component_view(combined_result):
+    """Render the declared component unit, outside ordinary native publication."""
+    from streamlit.testing.v1 import AppTest
+
+    leaf = AppTest.from_string(
+        "import streamlit as st\nimport sector_app\n"
+        "sector_app._render_base_en_combined(st.session_state['component'])\n",
+        default_timeout=60,
+    )
+    leaf.session_state["component"] = copy.deepcopy(combined_result)
+    leaf.run()
+    assert not leaf.exception
+    return leaf
+
+
 @pytest.mark.parametrize("malformed_vy", ("missing", "empty"))
 def test_app_base_en_missing_biaxial_direction_fails_closed(malformed_vy):
     at = _fresh()
@@ -1775,31 +1890,23 @@ def test_app_base_en_missing_biaxial_direction_fails_closed(malformed_vy):
         ("number_input", "shear_Vy", 12.0),
         ("number_input", "torsion_T", 5.0),
     )
+    pristine = _assert_current_native_mvt_views(at)
     aggregate = at.session_state["results"]["combined"]
+    assert set(aggregate["directions"]) == {"vx", "vy"}
+    assert all(aggregate["directions"].values())
+    assert result_presentation.base_en_combined_direction_items(aggregate) is not None
     if malformed_vy == "missing":
         aggregate["directions"].pop("vy")
     else:
         aggregate["directions"]["vy"] = {}
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
-    assert any(
-        "both Vx+T and Vy+T" in warning.value
-        for warning in at.warning
-    )
-    assert not any(
-        "Directional screen" in frame.value.columns
-        for frame in at.dataframe
-    )
-
-    _select_view(at, "Results Overview")
-    assert not at.exception
-    overview = at.table[0].value
-    combined_rows = overview[
-        overview["Check"] == "Combined M-V-T supported components"
-    ]
+    assert result_presentation.base_en_combined_direction_items(aggregate) is None
+    proof = _assert_rejected_native_mvt_views(at)
+    combined_rows = proof["rows"]
+    assert tuple(combined_rows["Check"]) == ("Combined M-V-T supported components",)
     assert tuple(combined_rows["Status"]) == ("NOT ASSESSED",)
     assert tuple(combined_rows["Result"]) == ("-",)
+    _restore_current_native_mvt_views(at, pristine)
 
 
 @pytest.mark.parametrize(
@@ -1832,6 +1939,7 @@ def test_app_base_en_invalid_utilisations_are_not_published(
         ("number_input", "shear_V", 150.0),
         ("number_input", "torsion_T", 40.0),
     )
+    pristine = _assert_current_native_mvt_views(at)
     combined = at.session_state["results"]["combined"]
     combined["transverse"].update(
         u_crush=transverse_retained,
@@ -1849,11 +1957,11 @@ def test_app_base_en_invalid_utilisations_are_not_published(
         "reason": "longitudinal_torsion_reinforcement_not_verified",
     }
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
+    leaf = _base_en_component_view(combined)
+    assert not leaf.exception
     component_metrics = {
         metric.label: str(metric.value)
-        for metric in at.metric
+        for metric in leaf.metric
         if metric.label in {
             "Concrete compression strut",
             "Closed stirrup",
@@ -1863,23 +1971,25 @@ def test_app_base_en_invalid_utilisations_are_not_published(
     assert component_metrics["Concrete compression strut"] == "-"
     assert component_metrics["Closed stirrup"] == "-"
     assert component_metrics["Longitudinal reinforcement"] != "100.0 %"
-    assert "100.0 %" not in {str(metric.value) for metric in at.metric}
-    assert "50.0 %" not in {str(metric.value) for metric in at.metric}
-    assert "-25.0 %" not in {str(metric.value) for metric in at.metric}
-    assert "inf" not in {str(metric.value).casefold() for metric in at.metric}
-    assert sum(caption.value == "NOT ASSESSED" for caption in at.caption) >= 3
+    assert "100.0 %" not in {str(metric.value) for metric in leaf.metric}
+    assert "50.0 %" not in {str(metric.value) for metric in leaf.metric}
+    assert "-25.0 %" not in {str(metric.value) for metric in leaf.metric}
+    assert "inf" not in {str(metric.value).casefold() for metric in leaf.metric}
+    assert sum(caption.value == "NOT ASSESSED" for caption in leaf.caption) >= 3
 
-    _select_view(at, "Results Overview")
+    _assert_rejected_native_mvt_views(at)
     assert not at.exception
     overview = at.table[0].value
     combined_rows = overview[
         overview["Check"].str.startswith("Combined ")
     ]
+    assert not combined_rows.empty
     assert set(combined_rows["Status"]) == {"NOT ASSESSED"}
     assert "100.0 %" not in set(combined_rows["Result"])
     assert "50.0 %" not in set(combined_rows["Result"])
     assert "-25.0 %" not in set(combined_rows["Result"])
     assert "inf" not in {str(value).casefold() for value in combined_rows["Result"]}
+    _restore_current_native_mvt_views(at, pristine)
 
 
 @pytest.mark.parametrize(
@@ -1898,6 +2008,7 @@ def test_app_dkna_worked_details_share_invalid_utilisation_boundary(
     at = _fresh()
     at.run()
     _enable_all(at)
+    pristine = _assert_current_native_mvt_views(at)
     combined = at.session_state["results"]["combined"]
     combined["transverse"].update(
         u_crush=transverse_retained,
@@ -1917,36 +2028,31 @@ def test_app_dkna_worked_details_share_invalid_utilisation_boundary(
         "reason": "longitudinal_torsion_reinforcement_not_verified",
     }
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
-    sum_metrics = [metric for metric in at.metric if metric.label == "Sum"]
-    stirrup_metrics = [
-        metric
-        for metric in at.metric
-        if metric.label == "Closed-stirrup utilisation"
-    ]
-    chord_metrics = [
-        metric
-        for metric in at.metric
-        if "M_{Ed" in str(metric.label) and "/M_{Rd}" in str(metric.label)
-    ]
-    assert {str(metric.value) for metric in sum_metrics} == {"-"}
-    assert {str(metric.value) for metric in stirrup_metrics} == {"-"}
-    # The governing retained chord is unavailable; an independently valid
-    # orthogonal chord may remain visible as separate engineering evidence.
-    assert "-" in {str(metric.value) for metric in chord_metrics}
-    assert sum(caption.value == "NOT ASSESSED" for caption in at.caption) >= 3
-    visible_metrics = {str(metric.value) for metric in at.metric}
+    # The old Sum/stirrup widgets represented these canonical components.
+    # Ordinary native publication now rejects the complete poisoned family first.
+    physical = {item["key"]: item for item in
+                result_presentation.combined_physical_components(combined)}
+    for key in ("concrete", "stirrup"):
+        assert physical[key]["status"] == "NOT ASSESSED"
+        assert physical[key]["util"] is None
+    longitudinal = capacity.combined_longitudinal_assessment(combined)
+    assert longitudinal["chord_status"] == "NOT ASSESSED"
+    assert longitudinal["chord_util"] is None
+    # Independently valid orthogonal children are not rewritten or invalidated.
+    proof = _assert_rejected_native_mvt_views(at)
+    visible_metrics = proof["values"]
     assert "100.0 %" not in visible_metrics
     assert "50.0 %" not in visible_metrics
     assert "-25.0 %" not in visible_metrics
     assert "inf" not in {value.casefold() for value in visible_metrics}
+    _restore_current_native_mvt_views(at, pristine)
 
 
 def test_app_direct_shear_and_formula_629_invalid_utilisations_are_not_assessed():
     at = _fresh()
     at.run()
     _enable_all(at)
+    pristine = _assert_current_native_mvt_views(at)
 
     _select_view(at, "Shear")
     valid_shear_metric = next(
@@ -1964,32 +2070,32 @@ def test_app_direct_shear_and_formula_629_invalid_utilisations_are_not_assessed(
     )
     assert valid_formula_metric.delta in {"PASS", "FAIL"}
 
-    results = at.session_state["results"]
     for rejected_utilisation in (True, math.inf):
+        at.session_state["results"] = copy.deepcopy(pristine)
+        results = at.session_state["results"]
         results["shear"]["links"]["util"] = rejected_utilisation
         results["torsion"]["interaction"]["value"] = rejected_utilisation
-
-        _select_view(at, "Shear")
-        assert not at.exception
-        shear_metric = next(
-            metric
-            for metric in at.metric
-            if metric.label == r"Utilisation $V_{Ed}/V_{Rd}$"
+        inp = at.session_state["result_input_snapshot"]
+        provided = result_presentation.provided_link_publication_assessment(
+            inp, results["shear"], torsion_result=results["torsion"],
         )
-        assert str(shear_metric.value) == "-"
-        assert shear_metric.delta in {None, ""}
-        assert any(caption.value == "NOT ASSESSED" for caption in at.caption)
-
-        _select_view(at, "Torsion")
-        assert not at.exception
-        formula_metric = next(
-            metric
-            for metric in at.metric
-            if metric.label == r"Sum ($\leq100\%$)"
-        )
-        assert str(formula_metric.value) == "-"
-        assert formula_metric.delta in {None, ""}
-        assert any(caption.value == "NOT ASSESSED" for caption in at.caption)
+        assert provided.valid is False
+        assert provided.utilisation is None
+        assert result_presentation.torsion_publication_component_is_current(
+            inp, results["shear"], results["torsion"],
+        )[0] is False
+        for view, affected_label in (
+            ("Shear", r"Utilisation $V_{Ed}/V_{Rd}$"),
+            ("Torsion", r"Sum ($\leq100\%$)"),
+        ):
+            _select_view(at, view)
+            assert not at.exception
+            assert any("NOT ASSESSED" in item.value for item in at.warning)
+            affected = [metric for metric in at.metric if metric.label == affected_label]
+            assert all(str(metric.value) == "-" and metric.delta in {None, ""}
+                       for metric in affected)
+        _assert_rejected_native_mvt_views(at)
+    _restore_current_native_mvt_views(at, pristine)
 
 
 @pytest.mark.parametrize(
@@ -2021,6 +2127,7 @@ def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(
         )
     else:
         _enable_all(at)
+    pristine = _assert_current_native_mvt_views(at)
     combined = at.session_state["results"]["combined"]
     if conflict == "utilisation":
         combined["transverse"]["u_crush"] = True
@@ -2033,37 +2140,26 @@ def test_app_conflicting_formula_629_evidence_fails_closed_everywhere(
         combined["transverse"]["u_crush"] = combined["crushing"]["value"]
         combined["crushing"]["theta_deg"] = 60.0
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
-    concrete_metrics = [
-        metric for metric in at.metric
-        if metric.label in {"Concrete compression strut", "Sum"}
-    ]
-    assert {str(metric.value) for metric in concrete_metrics} == {"-"}
-    assert all(metric.delta in {None, ""} for metric in concrete_metrics)
-    assert "50.0 %" not in {str(metric.value) for metric in at.metric}
-    visible_captions = " ".join(str(caption.value) for caption in at.caption)
-    assert "1.40" not in visible_captions
-    assert r"\theta=60.0" not in visible_captions
-    assert any(
-        "Formula (6.29) is NOT ASSESSED" in warning.value
-        for warning in at.warning
-    )
-
-    _select_view(at, "Results Overview")
-    assert not at.exception
-    overview = at.table[0].value
-    row = overview[
-        overview["Check"] == "Combined concrete compression strut"
-    ].iloc[0]
-    assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == "-"
+    physical = {item["key"]: item for item in
+                result_presentation.combined_physical_components(combined)}
+    assert physical["concrete"]["status"] == "NOT ASSESSED"
+    assert physical["concrete"]["util"] is None
     if conflict in {"angle", "theta"}:
-        stirrup = overview[
-            overview["Check"] == "Combined closed stirrup"
-        ].iloc[0]
-        assert stirrup["Status"] == "NOT ASSESSED"
-        assert stirrup["Result"] == "-"
+        assert physical["stirrup"]["status"] == "NOT ASSESSED"
+        assert physical["stirrup"]["util"] is None
+    # Keep the Base-EN Formula6.29 formatting obligation at its real leaf.
+    if method == codes.EC2_2005.label:
+        leaf = _base_en_component_view(combined)
+        assert any("Formula (6.29) is NOT ASSESSED" in item.value for item in leaf.warning)
+        concrete_metrics = [metric for metric in leaf.metric
+                            if metric.label == "Concrete compression strut"]
+        assert {str(metric.value) for metric in concrete_metrics} == {"-"}
+        assert all(metric.delta in {None, ""} for metric in concrete_metrics)
+    proof = _assert_rejected_native_mvt_views(at)
+    assert "50.0 %" not in proof["values"]
+    assert "1.40" not in proof["captions"]
+    assert r"\theta=60.0" not in proof["captions"]
+    _restore_current_native_mvt_views(at, pristine)
 
 
 def test_app_combined_basis_switch_invalidates_results_and_reports():
@@ -2327,7 +2423,8 @@ def test_mvt_m04_contract_recomputes_when_stored_input_and_result_are_both_old()
 
     _goto_page(at, "Report")
     _goto_page(at, "Analysis")
-    assert any("recalculate" in item.value.lower() for item in at.caption)
+    assert any("Capacity results require recalculation" in item.value
+               for item in at.caption)
     _calculate(at)
 
     refreshed = at.session_state["results"]
@@ -2984,6 +3081,291 @@ def test_app_2023_shear_with_torsion_retains_complete_shifted_chords():
     assert links["longitudinal_assessment"]["status"] in {"PASS", "FAIL"}
 
 
+@pytest.fixture(scope="module")
+def native_2023_shear_contract_cases(tmp_path_factory):
+    """Whole native bundles at the real C5 actions and a measured T=0 failure."""
+    cases = {}
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path_factory.mktemp("native-c3-c5")))
+        for name, moment, torque in (("failed", -200.0, 0.0), ("complete", 90.0, 40.0)):
+            at = _fresh().run()
+            _set(at, ("checkbox", "shear_on", True),
+                 ("checkbox", "torsion_on", torque != 0.0),
+                 ("selectbox", "shear_method", codes.EC2_2023.label))
+            changes = [("checkbox", "shear_links", True),
+                       ("number_input", "shear_V", 150.0),
+                       ("number_input", "pl_Mx", moment)]
+            if torque:
+                changes.append(("number_input", "torsion_T", torque))
+            _set_and_click(at, "calculate", *changes)
+            cases[name] = _current_2023_shear_views(at)
+    return cases
+
+
+def _current_2023_shear_views(at):
+    """Bind actual selected Shear and Overview views to a complete producer pair."""
+    assert not at.exception
+    inp = copy.deepcopy(at.session_state["result_input_snapshot"])
+    out = copy.deepcopy(at.session_state["results"])
+    assert out["plastic"]["util_valid"] is True
+    assert out["plastic_cases"][0]["name"] == "PL-01"
+    provided = result_presentation.provided_link_publication_assessment(
+        inp, out["shear"], torsion_result=out.get("torsion"),
+    )
+    chord = result_presentation.provided_link_longitudinal_publication_assessment(
+        inp, out["shear"], torsion_result=out.get("torsion"),
+    )
+    assert provided.valid is True and chord["valid"] is True
+    assert chord["assessment"]["coverage_complete"] is True
+    faces = [item for item in chord["candidates"] if item["role"] == "shear_axis"]
+    assert len(faces) == 2
+    assert {item["chord_formula"] for item in faces} == {"8.51", "8.52"}
+    for face in faces:
+        assert face["mv"] == pytest.approx(face["ftd_v"] * face["z"])
+        assert face["m_total"] == pytest.approx(
+            max(face["face_m_ed_signed"] + face["mv"], 0.0) + face["ftd_t"] * face["z"] / 2,
+        )
+        assert face["util"] == pytest.approx(face["m_total"] / face["m_rd"])
+    _select_view(at, "Shear")
+    assert not at.exception
+    table = next(item.value.copy(deep=True) for item in at.dataframe
+                 if "Formula" in item.value and "Signed Mface" in item.value)
+    assert set(table["Formula"]) == {"(8.51)", "(8.52)"}
+    visible = " ".join(str(item.value) for item in
+                       (*at.warning, *at.info, *at.caption, *at.markdown))
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = next(item.value.copy(deep=True) for item in at.table if "Check" in item.value)
+    chord_row = overview[overview["Check"] == "Shear longitudinal chords"].iloc[0]
+    assert (chord_row["Status"], chord_row["Result"]) == (
+        chord["assessment"]["status"], f"{chord['assessment']['util'] * 100:.1f} %",
+    )
+    link_row = overview[overview["Check"] == "Shear with links"].iloc[0]
+    assert link_row["Status"] == provided.status
+    assert link_row["Result"].startswith(f"{provided.utilisation * 100:.1f} %")
+    return {"input": inp, "results": out, "provided": provided, "chord": chord,
+            "table": table, "visible": visible, "overview": overview}
+
+
+def _assert_rejected_native_2023_shear(at):
+    """The real family/link guard rejects a complete but noncurrent saved pair."""
+    inp = at.session_state["result_input_snapshot"]
+    out = at.session_state["results"]
+    provided = result_presentation.provided_link_publication_assessment(
+        inp, out["shear"], torsion_result=out.get("torsion"),
+    )
+    current, reason = result_presentation.shear_publication_input_is_current(
+        inp, out["shear"], plastic_result=out.get("plastic"),
+        validate_directions=False, torsion_result=out.get("torsion"),
+    )
+    assert current is False or provided.valid is False
+    if provided.valid:
+        # A family rejection can coexist with a valid resistance subcheck.
+        assert current is False
+        assert provided.status == "PASS" and provided.ok is True
+        assert provided.utilisation == pytest.approx(
+            abs(out["shear"]["v_ed"]) / provided.resistance,
+        )
+    _select_view(at, "Shear")
+    assert not at.exception
+    prefix = ("The shear check is NOT ASSESSED:" if not current
+              else "The provided-link resistance is NOT ASSESSED:")
+    assert any(prefix in item.value for item in at.warning)
+    assert not any("Overall reinforced shear assessment: FAIL" in item.value for item in at.warning)
+    assert not any("Formula" in item.value for item in at.dataframe)
+    assert not any(item.label in {r"$V_{Rd,s}$", r"$V_{Rd,max}$", r"$V_{Rd}=\min$"}
+                   for item in at.metric)
+    _select_view(at, "Results Overview")
+    assert not at.exception
+    overview = next(item.value for item in at.table if "Check" in item.value)
+    links = overview[overview["Check"].str.startswith("Shear")
+                     & overview["Check"].str.endswith("with links")]
+    assert not links.empty
+    assert set(links["Status"]) == {"NOT ASSESSED"}
+    assert set(links["Result"]) == {"-"}
+    return current, reason
+
+
+def _recalculate_after_2023_solver_fault(at, monkeypatch):
+    """Discard only the AppTest cache made by the deliberately replaced solver."""
+    import pickle
+
+    failed = at.session_state["results"]
+    frozen = pickle.dumps(failed)
+    signature = at.session_state["result_input_snapshot"]["signature"]
+    monkeypatch.undo()
+    # An input signature cannot detect a test-only replacement of its solver.
+    # Clear the cached result, not its saved evidence or publication predicates.
+    at.session_state["results"] = {}
+    _set_and_click(at, "calculate")
+    assert not at.exception
+    assert at.session_state["result_input_snapshot"]["signature"] == signature
+    assert at.session_state["results"]["plastic_cases"][0]["reused"] is False
+    assert pickle.dumps(failed) == frozen
+
+
+def _exact_2023_shear_chord_component():
+    """Coherent declared 215/100 and 35/100 arithmetic, without native authority."""
+    faces = []
+    for low in (True, False):
+        face = combined.longitudinal_chord_check_2023(
+            90.0, 100.0, 250.0, 0.0, 0.5,
+            tension_low=low, flexural_tension_low=True,
+        )
+        face.update(valid=True, conditional=True, axis="x", role="shear_axis",
+                    biaxial=False, off_not_evaluated=None, has_torsion=False,
+                    gets_shift=True)
+        faces.append(face)
+    links = {"model_2023": True, "chord_candidates": faces,
+             "longitudinal_shear_force": 250.0, "chord": faces[0],
+             "governing_longitudinal": faces[0], "longitudinal_all_conditional": True,
+             "chord_off": None, "longitudinal_fallback": None}
+    links["longitudinal_assessment"] = capacity.longitudinal_chord_assessment(
+        links, shear_axis="x", shear_tension_low=True, shear_live=True,
+        torsion_live=False, torsion_subdivided=False,
+    )
+    publication = capacity.provided_link_longitudinal_publication_assessment(
+        {"axis": "x", "tension_low": True, "links": links},
+    )
+    assert publication["valid"] is True
+    assert publication["assessment"]["coverage_complete"] is True
+    assert publication["assessment"]["status"] == "FAIL"
+    assert [(face["m_total"], face["util"], face["status"]) for face in faces] == [
+        (215.0, 2.15, "FAIL"), (35.0, 0.35, "PASS"),
+    ]
+    return publication
+
+
+def _retained_2023_chord_row(inp, assessment):
+    row = result_presentation._summary_row(
+        "Shear longitudinal chords", "plastic", assessment["status"],
+        "-" if assessment["util"] is None else f"{assessment['util'] * 100:.1f} %",
+        "<= 100 %", assessment["util"], "Shear",
+        result_presentation.result_reason(assessment["reason"], "shear"),
+        inp, overview_key="shear:longitudinal_chords", overview_parent="shear",
+    )
+    # This row belongs to the declared formatting unit, not a native case source.
+    row["source"] = "Retained shear chord calculation"
+    return row
+
+
+def _retained_2023_chord_view(inp, out, assessment, publication=None):
+    """Actual formatting leaves and declared Overview rows; no native claim."""
+    from streamlit.testing.v1 import AppTest
+
+    leaf = AppTest.from_string(
+        "import copy\nimport streamlit as st\nimport sector_app\nimport result_presentation\n"
+        "from unittest.mock import patch\n"
+        "inp, out, assessment, publication, row = st.session_state['declared_unit']\n"
+        "surface = st.radio('Unit surface', ['Chord', 'Overview'], key='unit_surface')\n"
+        "if surface == 'Chord':\n"
+        "    sector_app._render_shear_longitudinal_assessment(assessment)\n"
+        "    if publication is not None:\n"
+        "        sector_app._render_shear_2023_chord_faces(publication)\n"
+        "else:\n"
+        "    original = result_presentation.multi_case_summary_rows\n"
+        "    with patch.object(result_presentation, 'multi_case_summary_rows', "
+        "side_effect=lambda *args, **kwargs: [copy.deepcopy(row)]):\n"
+        "        sector_app.results_overview_view(inp, out)\n"
+        "    assert result_presentation.multi_case_summary_rows is original\n",
+        default_timeout=120,
+    )
+    leaf.session_state["declared_unit"] = copy.deepcopy((
+        inp, out, assessment, publication, _retained_2023_chord_row(inp, assessment),
+    ))
+    leaf.run()
+    assert not leaf.exception
+    return leaf
+
+
+def _retained_2023_chord_pdf(inp, out, assessment, publication, profile, path):
+    import pickle
+    from test_report import _declared_member_overview_unit, _finish_retained_unit_pdf
+
+    before = pickle.dumps((inp, out, assessment, publication))
+    row = _retained_2023_chord_row(inp, assessment)
+    buffer, builder = _declared_member_overview_unit(
+        inp, out, [row], profile, "Retained separate shear chord formatting",
+    )
+    if publication is None:
+        builder._shear_2023_missing_chords(assessment)
+    elif profile in {"Standard", "Audit"}:
+        builder._shear_2023_chord_faces(publication, assessment, assessment["status"])
+    pdf = _finish_retained_unit_pdf(buffer, builder)
+    assert pickle.dumps((inp, out, assessment, publication)) == before
+    path.write_bytes(pdf)
+    return _native_2023_pdf_text(pdf)
+
+
+def _native_2023_pdf_text(pdf):
+    import io
+    import pypdf
+
+    return " ".join(" ".join((page.extract_text() or "").split())
+                    for page in pypdf.PdfReader(io.BytesIO(pdf)).pages)
+
+
+def _native_2023_shear_pdf(inp, out, profile, path, *, current):
+    import pickle
+    import re
+    import sector_report
+
+    inp, out = copy.deepcopy((inp, out))
+    out["worked_example_selection"] = result_presentation.worked_example_selection(inp, out)
+    before = pickle.dumps((inp, out))
+    provided = result_presentation.provided_link_publication_assessment(
+        inp, out["shear"], torsion_result=out.get("torsion"),
+    )
+    family_current, _family_reason = result_presentation.shear_publication_input_is_current(
+        inp, out["shear"], plastic_result=out.get("plastic"),
+        validate_directions=False, torsion_result=out.get("torsion"),
+    )
+    if current:
+        assert family_current is True and provided.valid is True
+    else:
+        assert family_current is False or provided.valid is False
+        if provided.valid:
+            assert provided.status == "PASS" and provided.ok is True
+            assert provided.utilisation == pytest.approx(
+                abs(out["shear"]["v_ed"]) / provided.resistance,
+            )
+    rows = [row for row in result_presentation.multi_case_summary_rows(inp, out)
+            if row["check"].startswith("Shear")]
+    assert rows
+    pdf = sector_report.build_report({}, inp, out, figures=False, profile=profile)
+    path.write_bytes(pdf)
+    text = _native_2023_pdf_text(pdf)
+    assert pickle.dumps((inp, out)) == before
+    selected = result_presentation.governing_summary_rows(rows)
+    compared = result_presentation.governing_result_rows(selected)
+    information = result_presentation.governing_information_rows(selected)
+    for row in (*compared, *information):
+        def token(value):
+            return re.escape(str(value)).replace(r"\ ", r"\s+").replace(r"\-", r"-\s*")
+        separator = r"\s+\|\s+" if row in information else r"\s+"
+        pattern = separator.join(token(row[key]) for key in ("check", "case", "status", "result"))
+        matched = re.search(pattern, text)
+        assert matched is not None, (row["check"], row["case"], row["status"])
+    link_rows = [row for row in rows if row["check"].endswith("with links")]
+    assert link_rows
+    if not current:
+        assert all(row["status"] == "NOT ASSESSED" and row["result"] == "-"
+                   and row["util"] is None for row in link_rows)
+        assert "215.0 %" not in text
+    else:
+        chords = [row for row in rows if row["check"] == "Shear longitudinal chords"]
+        assert len(chords) == 1
+        chord = result_presentation.provided_link_longitudinal_publication_assessment(
+            inp, out["shear"], torsion_result=out.get("torsion"),
+        )
+        assert chord["valid"] is True
+        assert chords[0]["status"] == chord["assessment"]["status"]
+        if profile in {"Standard", "Audit"}:
+            assert "Required 2023 longitudinal chord faces" in text
+            assert "(8.51)" in text and "(8.52)" in text
+    return text
+
+
 def _install_exact_2023_chord_review_fixture(monkeypatch):
     original = combined.longitudinal_chord_check_2023
 
@@ -3035,10 +3417,9 @@ def _app_with_failed_2023_chord(monkeypatch):
 
 
 def test_app_2023_failed_required_chord_propagates_to_shear_and_overview(
-    monkeypatch,
+    monkeypatch, native_2023_shear_contract_cases,
 ):
     at = _app_with_failed_2023_chord(monkeypatch)
-
     assert not at.exception
     links = at.session_state["results"]["shear"]["links"]
     assessment = links["longitudinal_assessment"]
@@ -3049,64 +3430,65 @@ def test_app_2023_failed_required_chord_propagates_to_shear_and_overview(
     assert assessment["coverage_complete"] is True
     assert assessment["util"] == pytest.approx(2.15)
     assert assessment["governing"]["m_total"] == pytest.approx(215.0)
+    inp = copy.deepcopy(at.session_state["result_input_snapshot"])
+    out = copy.deepcopy(at.session_state["results"])
+    _assert_rejected_native_2023_shear(at)
 
-    _select_view(at, "Shear")
-    visible = " ".join(
-        str(item.value) for item in (*at.warning, *at.caption, *at.markdown)
-    )
+    # The exact overridden numbers remain a separate coherent formatting unit.
+    publication = _exact_2023_shear_chord_component()
+    leaf = _retained_2023_chord_view(inp, out, publication["assessment"], publication)
+    visible = " ".join(str(item.value) for item in
+                       (*leaf.warning, *leaf.caption, *leaf.markdown))
     assert "Overall reinforced shear assessment: FAIL" in visible
     assert "required longitudinal chords exceed" in visible
-    face_table = next(
-        frame.value
-        for frame in at.dataframe
-        if "Formula" in frame.value.columns
-        and "Signed Mface" in frame.value.columns
-    )
+    face_table = next(frame.value for frame in leaf.dataframe
+                      if "Formula" in frame.value and "Signed Mface" in frame.value)
     assert set(face_table["Formula"]) == {"(8.51)", "(8.52)"}
     assert set(face_table["Status"]) == {"FAIL", "PASS"}
-
-    _select_view(at, "Results Overview")
-    overview = at.table[0].value
-    row = overview.loc[
-        overview["Check"] == "Shear longitudinal chords"
-    ].iloc[0]
+    leaf.radio(key="unit_surface").set_value("Overview").run()
+    assert not leaf.exception
+    overview = leaf.table[0].value
+    row = overview.loc[overview["Check"] == "Shear longitudinal chords"].iloc[0]
     assert row["Status"] == "FAIL"
     assert row["Result"] == "215.0 %"
-    overall_row = overview.loc[
-        overview["Check"] == "Shear with links"
+
+    native = native_2023_shear_contract_cases["failed"]
+    assert native["chord"]["assessment"]["util"] == pytest.approx(1.695976504439608)
+    assert native["chord"]["assessment"]["status"] == "FAIL"
+    assert "Overall reinforced shear assessment: FAIL" in native["visible"]
+    assert "required longitudinal chords exceed" in native["visible"]
+    assert set(native["table"]["Status"]) == {"FAIL", "PASS"}
+    native_row = native["overview"].loc[
+        native["overview"]["Check"] == "Shear longitudinal chords"
     ].iloc[0]
-    assert overall_row["Status"] == "FAIL"
-    assert overall_row["Result"] == "215.0 %"
+    assert (native_row["Status"], native_row["Result"]) == ("FAIL", "169.6 %")
+    # The old aggregate 215% shear-resistance claim is replaced by its own
+    # independent current |V|/VRd comparison, while the chord remains failed.
+    overall_row = native["overview"].loc[
+        native["overview"]["Check"] == "Shear with links"
+    ].iloc[0]
+    assert native["provided"].utilisation == pytest.approx(0.8160181797595336)
+    assert (overall_row["Status"], overall_row["Result"]) == ("PASS", "81.6 %")
+    _recalculate_after_2023_solver_fault(at, monkeypatch)
+    _current_2023_shear_views(at)
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_failed_2023_chord_reaches_every_report_profile(monkeypatch, profile):
-    import io
-
-    import pypdf
-
-    import sector_report
-
+def test_failed_2023_chord_reaches_every_report_profile(
+    monkeypatch, profile, native_2023_shear_contract_cases, tmp_path,
+):
     at = _app_with_failed_2023_chord(monkeypatch)
     assert not at.exception
-    inputs = at.session_state["_latest_inputs"]
-    results = at.session_state["results"]
-    results["worked_example_selection"] = (
-        result_presentation.worked_example_selection(inputs, results)
+    inputs = copy.deepcopy(at.session_state["result_input_snapshot"])
+    results = copy.deepcopy(at.session_state["results"])
+    _native_2023_shear_pdf(
+        inputs, results, profile, tmp_path / "rejected-overridden-shear.pdf", current=False,
     )
-    pdf = sector_report.build_report(
-        {},
-        inputs,
-        results,
-        figures=False,
-        profile=profile,
+    publication = _exact_2023_shear_chord_component()
+    text = _retained_2023_chord_pdf(
+        inputs, results, publication["assessment"], publication, profile,
+        tmp_path / "retained-exact-shear-chords.pdf",
     )
-    reader = pypdf.PdfReader(io.BytesIO(pdf))
-    text = " ".join(
-        " ".join((page.extract_text() or "").split())
-        for page in reader.pages
-    )
-
     assert "Shear longitudinal chords" in text
     assert "215.0 %" in text
     assert "FAIL" in text
@@ -3116,6 +3498,20 @@ def test_failed_2023_chord_reaches_every_report_profile(monkeypatch, profile):
         assert "Required 2023 longitudinal chord faces" in text
         assert "(8.51)" in text and "(8.52)" in text
         assert "215.0 kNm" in text
+
+    # Native reconstruction must use the real kernel, not the retained override.
+    monkeypatch.undo()
+    native = native_2023_shear_contract_cases["failed"]
+    native_text = _native_2023_shear_pdf(
+        native["input"], native["results"], profile,
+        tmp_path / "native-failed-shear.pdf", current=True,
+    )
+    assert "169.6 %" in native_text and "required longitudinal chords exceed" in native_text
+    assert "SHEAR-LONGITUDINAL" not in native_text
+    if profile in {"Standard", "Audit"}:
+        assert "263.2 kNm" in native_text
+    _recalculate_after_2023_solver_fault(at, monkeypatch)
+    _current_2023_shear_views(at)
 
 
 def _app_with_incomplete_2023_chord(monkeypatch):
@@ -3170,9 +3566,24 @@ def test_app_2023_incomplete_chord_coverage_is_not_assessed(monkeypatch):
 
     _select_view(at, "Results Overview")
     overview = at.table[0].value
-    for check in ("Shear with links", "Shear longitudinal chords"):
-        row = overview.loc[overview["Check"] == check].iloc[0]
-        assert row["Status"] == "NOT ASSESSED"
+    # Transverse link resistance and required longitudinal coverage are
+    # separate checks; an unavailable chord must not erase a valid link result.
+    inp = at.session_state["result_input_snapshot"]
+    provided = result_presentation.provided_link_publication_assessment(inp, shear)
+    assert provided.valid is True and provided.status == "PASS"
+    assert provided.utilisation == pytest.approx(shear["v_ed"] / shear["links"]["res"]["vrd"])
+    link_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
+    assert link_row["Status"] == "PASS"
+    assert link_row["Result"].startswith(f"{provided.utilisation * 100:.1f} %")
+    chord_row = overview.loc[overview["Check"] == "Shear longitudinal chords"].iloc[0]
+    assert chord_row["Status"] == "NOT ASSESSED"
+    # The one known face remains a diagnostic value; it is not a coverage PASS.
+    assert assessment["coverage_complete"] is False and assessment["ok"] is None
+    assert assessment["util"] == pytest.approx(
+        shear["links"]["chord_candidates"][0]["m_total"]
+        / shear["links"]["chord_candidates"][0]["m_rd"],
+    )
+    assert chord_row["Result"] == f"{assessment['util'] * 100:.1f} %"
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
@@ -3240,10 +3651,14 @@ def _app_with_no_2023_chord_candidate(monkeypatch):
 
 
 def test_app_2023_zero_chord_candidates_remain_visibly_not_assessed(
-    monkeypatch,
+    monkeypatch, native_2023_shear_contract_cases,
 ):
-    at = _app_with_no_2023_chord_candidate(monkeypatch)
+    positive = native_2023_shear_contract_cases["complete"]
+    assert positive["chord"]["assessment"]["coverage_complete"] is True
+    assert len(positive["chord"]["candidates"]) == 4
+    assert all(item["ftd_t"] > 0 for item in positive["chord"]["candidates"])
 
+    at = _app_with_no_2023_chord_candidate(monkeypatch)
     assert not at.exception
     results = at.session_state["results"]
     links = results["shear"]["links"]
@@ -3251,52 +3666,63 @@ def test_app_2023_zero_chord_candidates_remain_visibly_not_assessed(
     assert links["chord"] is None
     assert links["chord_candidates"] == []
     assert links["longitudinal_assessment"]["status"] == "NOT ASSESSED"
-
-    _select_view(at, "Shear")
-    visible = " ".join(
-        str(item.value)
-        for item in (*at.warning, *at.info, *at.caption, *at.markdown)
+    canonical = capacity.longitudinal_chord_assessment(
+        links, shear_axis=results["shear"]["axis"],
+        shear_tension_low=results["shear"]["tension_low"], shear_live=True,
+        torsion_live=True, torsion_subdivided=False,
     )
-    assert "Complete both required longitudinal chord checks" in visible
+    assert canonical == links["longitudinal_assessment"]
+    assert canonical["util"] is None and canonical["coverage_complete"] is False
+    inputs = copy.deepcopy(at.session_state["result_input_snapshot"])
+    failed = copy.deepcopy(results)
+    current, _reason = _assert_rejected_native_2023_shear(at)
+    assert current is False
 
-    _select_view(at, "Results Overview")
-    overview = at.table[0].value
-    row = overview.loc[
-        overview["Check"] == "Shear longitudinal chords"
-    ].iloc[0]
+    leaf = _retained_2023_chord_view(inputs, failed, canonical)
+    visible = " ".join(str(item.value) for item in
+                       (*leaf.warning, *leaf.info, *leaf.caption, *leaf.markdown))
+    assert "Complete both required longitudinal chord checks" in visible
+    leaf.radio(key="unit_surface").set_value("Overview").run()
+    assert not leaf.exception
+    overview = leaf.table[0].value
+    row = overview.loc[overview["Check"] == "Shear longitudinal chords"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
+    assert row["Result"] == "-"
+
+    _recalculate_after_2023_solver_fault(at, monkeypatch)
+    recovered = _current_2023_shear_views(at)
+    assert recovered["chord"]["assessment"]["coverage_complete"] is True
+    assert len(recovered["chord"]["candidates"]) == 4
+    assert failed["shear"]["links"]["chord_candidates"] == []
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
 def test_zero_2023_chord_candidates_publish_assessment_without_legacy_copy(
-    monkeypatch,
-    profile,
+    monkeypatch, profile, native_2023_shear_contract_cases, tmp_path,
 ):
-    import io
-
-    import pypdf
-
-    import sector_report
-
+    positive = native_2023_shear_contract_cases["complete"]
+    assert positive["chord"]["assessment"]["coverage_complete"] is True
+    assert len(positive["chord"]["candidates"]) == 4
     at = _app_with_no_2023_chord_candidate(monkeypatch)
     assert not at.exception
-    inputs = at.session_state["_latest_inputs"]
-    results = at.session_state["results"]
-    results["worked_example_selection"] = (
-        result_presentation.worked_example_selection(inputs, results)
+    inputs = copy.deepcopy(at.session_state["result_input_snapshot"])
+    results = copy.deepcopy(at.session_state["results"])
+    links = results["shear"]["links"]
+    assert links["model_2023"] is True and links["chord"] is None
+    assert links["chord_candidates"] == []
+    canonical = capacity.longitudinal_chord_assessment(
+        links, shear_axis=results["shear"]["axis"],
+        shear_tension_low=results["shear"]["tension_low"], shear_live=True,
+        torsion_live=True, torsion_subdivided=False,
     )
-    pdf = sector_report.build_report(
-        {},
-        inputs,
-        results,
-        figures=False,
-        profile=profile,
+    assert canonical == links["longitudinal_assessment"]
+    assert canonical["status"] == "NOT ASSESSED" and canonical["util"] is None
+    native_text = _native_2023_shear_pdf(
+        inputs, results, profile, tmp_path / "rejected-zero-face-shear.pdf", current=False,
     )
-    text = " ".join(
-        " ".join((page.extract_text() or "").split())
-        for page in pypdf.PdfReader(io.BytesIO(pdf)).pages
+    text = _retained_2023_chord_pdf(
+        inputs, results, canonical, None, profile, tmp_path / "retained-missing-shear-chords.pdf",
     )
-
     assert "Shear longitudinal chords" in text
     assert "NOT ASSESSED" in text
     assert "Complete both required longitudinal chord checks" in text
@@ -3305,12 +3731,24 @@ def test_zero_2023_chord_candidates_publish_assessment_without_legacy_copy(
         assert "Required 2023 longitudinal chord faces" in text
         assert "Enable shear links for the full utilisation check" not in text
         assert "both beyond the bending steel" not in text
+    for forbidden in ("SHEAR-LONGITUDINAL", "Enable shear links for the full utilisation check",
+                      "both beyond the bending steel"):
+        assert forbidden not in native_text
+
+    _recalculate_after_2023_solver_fault(at, monkeypatch)
+    recovered = _current_2023_shear_views(at)
+    _native_2023_shear_pdf(
+        recovered["input"], recovered["results"], profile,
+        tmp_path / "recovered-native-shear.pdf", current=True,
+    )
+    assert results["shear"]["links"]["chord_candidates"] == []
 
 
 def test_mvt_view_zero_2023_chord_candidates_uses_retained_assessment():
     at = _fresh().run()
     _enable_all(at)
     assert not at.exception
+    pristine = _assert_current_native_mvt_views(at, longitudinal=True)
 
     retained = copy.deepcopy(at.session_state["results"])
     combined_result = retained["combined"]
@@ -3336,13 +3774,26 @@ def test_mvt_view_zero_2023_chord_candidates_uses_retained_assessment():
         for family in (at.markdown, at.warning, at.info, at.caption)
         for item in family
     )
-    assert "Required 2023 longitudinal chord faces" in visible
-    assert "Longitudinal chord assessment: NOT ASSESSED" in visible
-    assert "Complete both required longitudinal chord checks" in visible
+    scope_note = result_presentation.combined_publication_scope_note(combined_result)
+    assert "2023 Combined bending, shear and torsion is outside" in scope_note
+    assert scope_note in visible
+    assert "NOT ASSESSED" in visible
+    # Preserve the retained missing-face diagnostic separately from the
+    # unsupported Combined publication route.
+    assert "Complete both required longitudinal chord checks" in (
+        result_presentation.combined_longitudinal_chord_assessment_note(combined_result)
+    )
+    assessment = capacity.combined_longitudinal_assessment(combined_result)
+    assert assessment["chord_status"] == "NOT ASSESSED"
+    assert assessment["chord_util"] is None
+    assert combined_result["longitudinal_assessment"]["coverage_complete"] is False
+    assert not combined_result.get("longitudinal_candidates")
     assert "Enable links for the full utilisation check" not in visible
     assert "(6.18)" not in visible
     assert r"\Delta Ftd" not in visible
     assert "\u0394Ftd" not in visible
+    _assert_rejected_native_mvt_views(at)
+    _restore_current_native_mvt_views(at, pristine, longitudinal=True)
 
 
 def test_failed_2023_chord_propagates_to_retained_mvt_component_and_overview():
@@ -3391,12 +3842,22 @@ def test_failed_2023_chord_propagates_to_retained_mvt_component_and_overview():
             combined_result
         )
     }
-    assert components["longitudinal"]["status"] == "FAIL"
-    assert components["longitudinal"]["util"] == pytest.approx(2.15)
+    # A bare retained FAIL/2.15 claim has no candidate operands or owners.
+    # Preserve its legacy arithmetic/diagnostic contract without admitting it
+    # as canonical physical-component or native Overview authority.
+    assert assessment["util"] == pytest.approx(215.0 / 100.0)
     assert "required longitudinal chords exceed" in (
-        components["longitudinal"]["note"]
+        result_presentation.combined_longitudinal_chord_assessment_note(combined_result)
     )
-    assert "distributed around every torsion-tube side" in (
+    assert "distributed around every torsion-tube side" in result_presentation.result_reason(
+        combined_result["torsion_longitudinal_assessment"]["reason"], "torsion",
+    )
+    canonical = capacity.combined_longitudinal_assessment(combined_result)
+    assert canonical["status"] == canonical["chord_status"] == "NOT ASSESSED"
+    assert canonical["util"] is None and canonical["chord_util"] is None
+    assert components["longitudinal"]["status"] == "NOT ASSESSED"
+    assert components["longitudinal"]["util"] is None
+    assert "Recalculate the combined longitudinal reinforcement assessment" in (
         components["longitudinal"]["note"]
     )
 
@@ -3404,11 +3865,31 @@ def test_failed_2023_chord_propagates_to_retained_mvt_component_and_overview():
         {"combined_on": True},
         {"combined": combined_result},
     )
-    by_check = {row["check"]: row for row in rows}
-    assert by_check["Combined M-V-T - DK NA sum"]["status"] == "FAIL"
-    longitudinal = by_check["Combined longitudinal reinforcement"]
-    assert longitudinal["status"] == "FAIL"
-    assert longitudinal["result"] == "215.0 %"
+    combined_rows = [row for row in rows if row["check"].startswith("Combined ")]
+    assert combined_rows
+    assert {row["status"] for row in combined_rows} == {"NOT ASSESSED"}
+    assert {row["result"] for row in combined_rows} == {"-"}
+    assert all(row["util"] is None for row in combined_rows)
+
+
+def _retained_longitudinal_component_row(leaf, combined_result):
+    """Bind retained row assertions to the canonical assessment and real formatter.
+
+    A manufactured component never qualifies a native Overview row. The same
+    test separately requires explicit unavailable rows from the ordinary view.
+    """
+    component = next(item for item in result_presentation.combined_physical_components(
+        combined_result,
+    ) if item["key"] == "longitudinal")
+    metric = next(item for item in leaf.metric if item.label == "Longitudinal reinforcement")
+    status = component["status"]
+    if status in {"PASS", "FAIL"}:
+        assert metric.delta == status
+    else:
+        assert status == "NOT ASSESSED"
+        assert metric.delta in {None, ""}
+        assert any(item.value == "NOT ASSESSED" for item in leaf.caption)
+    return {"Status": status, "Result": str(metric.value)}
 
 
 def _pub_h01_formula_628_assessment(ratio):
@@ -3460,6 +3941,7 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview(
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
     assert not at.exception
 
     retained = copy.deepcopy(at.session_state["results"])
@@ -3549,14 +4031,14 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview(
     combined_result["overall_longitudinal_assessment"] = stale_overall
     at.session_state["results"] = retained
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
+    leaf = _base_en_component_view(combined_result)
+    assert not leaf.exception
     physical = next(
-        metric for metric in at.metric
+        metric for metric in leaf.metric
         if metric.label == "Longitudinal reinforcement"
     )
     detailed = next(
-        metric for metric in at.metric
+        metric for metric in leaf.metric
         if metric.label == "Chord utilisation"
     )
     assert str(physical.value) == "123.9 %"
@@ -3564,21 +4046,19 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview(
     assert str(detailed.value) == "123.9 %"
     assert str(detailed.delta) == "FAIL"
 
-    _select_view(at, "Results Overview")
-    assert not at.exception
-    overview = at.table[0].value
-    row = overview.loc[
-        overview["Check"] == "Combined longitudinal reinforcement"
-    ].iloc[0]
+    row = _retained_longitudinal_component_row(leaf, combined_result)
+    _assert_rejected_native_mvt_views(at)
     assert row["Status"] == "FAIL"
     assert row["Result"] == "123.9 %"
     assert str(row["Result"]).casefold() not in {"inf", "infinite", "-"}
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 def test_pub_h01_chord_and_formula_628_overall_are_published_separately():
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
     assert not at.exception
 
     retained = copy.deepcopy(at.session_state["results"])
@@ -3626,31 +4106,34 @@ def test_pub_h01_chord_and_formula_628_overall_are_published_separately():
     )
     at.session_state["results"] = retained
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
+    leaf = _base_en_component_view(combined_result)
+    assert not leaf.exception
     chord_metric = next(
-        metric for metric in at.metric if metric.label == "Chord utilisation"
+        metric for metric in leaf.metric if metric.label == "Chord utilisation"
     )
     overall_metric = next(
         metric
-        for metric in at.metric
+        for metric in leaf.metric
         if metric.label == "Longitudinal reinforcement"
     )
     assert str(chord_metric.value) == "50.0 %"
     assert str(chord_metric.delta) == "PASS"
     assert str(overall_metric.value) == "200.0 %"
     assert str(overall_metric.delta) == "FAIL"
-    visible = " ".join(str(item.value) for item in at.caption)
+    visible = " ".join(str(item.value) for item in leaf.caption)
     assert (
         "Overall longitudinal reinforcement assessment: 200.0 % (FAIL)" in visible
     )
     assert "governing check: Formula (6.28) longitudinal torsion reinforcement" in visible
+    _assert_rejected_native_mvt_views(at)
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 def test_pub_h01_stale_2023_single_face_pass_fails_closed_in_native_views():
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
     assert not at.exception
 
     retained = copy.deepcopy(at.session_state["results"])
@@ -3723,37 +4206,36 @@ def test_pub_h01_stale_2023_single_face_pass_fails_closed_in_native_views():
     del combined_result["longitudinal_candidates"][1]
     at.session_state["results"] = retained
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
+    leaf = _base_en_component_view(combined_result)
+    assert not leaf.exception
     overall_metric = next(
         metric
-        for metric in at.metric
+        for metric in leaf.metric
         if metric.label == "Longitudinal reinforcement"
     )
     assert str(overall_metric.value) == "-"
     assert str(overall_metric.delta) == ""
-    assert any(str(caption.value) == "NOT ASSESSED" for caption in at.caption)
+    assert any(str(caption.value) == "NOT ASSESSED" for caption in leaf.caption)
     assert all(
         not (
             metric.label == "Chord utilisation"
             and str(metric.delta) == "PASS"
         )
-        for metric in at.metric
+        for metric in leaf.metric
     )
 
-    _select_view(at, "Results Overview")
-    overview = at.table[0].value
-    row = overview.loc[
-        overview["Check"] == "Combined longitudinal reinforcement"
-    ].iloc[0]
+    row = _retained_longitudinal_component_row(leaf, combined_result)
+    _assert_rejected_native_mvt_views(at)
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == "-"
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
     assert not at.exception
     base_results = copy.deepcopy(at.session_state["results"])
 
@@ -3958,11 +4440,11 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
         )
         at.session_state["results"] = retained
 
-        _select_view(at, "M-V-T Combined")
-        assert not at.exception
+        leaf = _base_en_component_view(combined_result)
+        assert not leaf.exception
         overall_metric = next(
             metric
-            for metric in at.metric
+            for metric in leaf.metric
             if metric.label == "Longitudinal reinforcement"
         )
         assert str(overall_metric.value) == "-"
@@ -3978,23 +4460,21 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
                     metric.label == "Chord utilisation"
                     and str(metric.delta) == "PASS"
                 )
-                for metric in at.metric
+                for metric in leaf.metric
             )
 
-        _select_view(at, "Results Overview")
-        assert not at.exception
-        overview = at.table[0].value
-        row = overview.loc[
-            overview["Check"] == "Combined longitudinal reinforcement"
-        ].iloc[0]
+        row = _retained_longitudinal_component_row(leaf, combined_result)
+        _assert_rejected_native_mvt_views(at)
         assert row["Status"] == "NOT ASSESSED"
         assert row["Result"] == "-"
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 def test_pub_h01_missing_off_axis_torsion_fails_closed_in_native_views():
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
     assert not at.exception
 
     retained = copy.deepcopy(at.session_state["results"])
@@ -4040,11 +4520,11 @@ def test_pub_h01_missing_off_axis_torsion_fails_closed_in_native_views():
     )
     at.session_state["results"] = retained
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
+    leaf = _base_en_component_view(combined_result)
+    assert not leaf.exception
     physical = next(
         metric
-        for metric in at.metric
+        for metric in leaf.metric
         if metric.label == "Longitudinal reinforcement"
     )
     assert str(physical.value) == "-"
@@ -4054,23 +4534,21 @@ def test_pub_h01_missing_off_axis_torsion_fails_closed_in_native_views():
             metric.label == "Chord utilisation"
             and str(metric.delta) == "PASS"
         )
-        for metric in at.metric
+        for metric in leaf.metric
     )
 
-    _select_view(at, "Results Overview")
-    assert not at.exception
-    overview = at.table[0].value
-    row = overview.loc[
-        overview["Check"] == "Combined longitudinal reinforcement"
-    ].iloc[0]
+    row = _retained_longitudinal_component_row(leaf, combined_result)
+    _assert_rejected_native_mvt_views(at)
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == "-"
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 def test_pub_h01_subtube_total_forgery_fails_closed_in_torsion_and_overview():
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
     assert not at.exception
 
     retained = copy.deepcopy(at.session_state["results"])
@@ -4154,7 +4632,14 @@ def test_pub_h01_subtube_total_forgery_fails_closed_in_torsion_and_overview():
     torsion_rows = overview.loc[
         overview["Check"].astype(str).str.startswith("Torsion")
     ]
-    assert torsion_rows.empty
+    assert not torsion_rows.empty
+    assert set(torsion_rows["Status"]) == {"NOT ASSESSED"}
+    assert set(torsion_rows["Result"]) == {"-"}
+    assert result_presentation.torsion_publication_component_is_current(
+        at.session_state["result_input_snapshot"], retained["shear"], torsion,
+    )[0] is False
+    _assert_rejected_native_mvt_views(at)
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 @pytest.mark.parametrize(
@@ -4172,6 +4657,7 @@ def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views(
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
     assert not at.exception
 
     retained = copy.deepcopy(at.session_state["results"])
@@ -4241,24 +4727,21 @@ def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views(
     )
     at.session_state["results"] = retained
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
+    leaf = _base_en_component_view(combined_result)
+    assert not leaf.exception
     overall_metric = next(
         metric
-        for metric in at.metric
+        for metric in leaf.metric
         if metric.label == "Longitudinal reinforcement"
     )
     assert str(overall_metric.value) == "123.9 %"
     assert str(overall_metric.delta) == "FAIL"
 
-    _select_view(at, "Results Overview")
-    assert not at.exception
-    overview = at.table[0].value
-    row = overview.loc[
-        overview["Check"] == "Combined longitudinal reinforcement"
-    ].iloc[0]
+    row = _retained_longitudinal_component_row(leaf, combined_result)
+    _assert_rejected_native_mvt_views(at)
     assert row["Status"] == "FAIL"
     assert row["Result"] == "123.9 %"
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 @pytest.mark.parametrize("model_2023", (False, True), ids=("2005", "2023"))
@@ -4268,6 +4751,7 @@ def test_pub_h01_malformed_candidate_containers_keep_failure_in_native_views(
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
     assert not at.exception
     baseline = copy.deepcopy(at.session_state["results"])
 
@@ -4375,24 +4859,21 @@ def test_pub_h01_malformed_candidate_containers_keep_failure_in_native_views(
         )
         at.session_state["results"] = retained
 
-        _select_view(at, "M-V-T Combined")
-        assert not at.exception
+        leaf = _base_en_component_view(combined_result)
+        assert not leaf.exception
         overall_metric = next(
             metric
-            for metric in at.metric
+            for metric in leaf.metric
             if metric.label == "Longitudinal reinforcement"
         )
         assert str(overall_metric.value) == "123.9 %"
         assert str(overall_metric.delta) == "FAIL"
 
-        _select_view(at, "Results Overview")
-        assert not at.exception
-        overview = at.table[0].value
-        row = overview.loc[
-            overview["Check"] == "Combined longitudinal reinforcement"
-        ].iloc[0]
+        row = _retained_longitudinal_component_row(leaf, combined_result)
+        _assert_rejected_native_mvt_views(at)
         assert row["Status"] == "FAIL"
         assert row["Result"] == "123.9 %"
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 @pytest.mark.parametrize("model_2023", (False, True), ids=("2005", "2023"))
@@ -4402,7 +4883,34 @@ def test_pub_h01_malformed_candidate_container_never_promotes_native_pass(
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
+    assert capacity.combined_longitudinal_assessment(
+        native_pristine["combined"],
+    )["chord_status"] == "PASS"
     assert not at.exception
+    if not model_2023:
+        # Isolate the missing inventory on a genuinely current chord-PASS bundle.
+        # The unchanged compound manufactured vectors below remain separate.
+        import pickle
+
+        damaged = copy.deepcopy(native_pristine)
+        damaged["combined"]["longitudinal_candidates"] = None
+        for family in ("shear", "torsion"):
+            assert pickle.dumps(damaged[family]) == pickle.dumps(native_pristine[family])
+        for key in native_pristine["combined"]:
+            if key != "longitudinal_candidates":
+                assert pickle.dumps(damaged["combined"][key]) == pickle.dumps(
+                    native_pristine["combined"][key],
+                )
+        assessment = capacity.combined_longitudinal_assessment(damaged["combined"])
+        assert assessment["chord_status"] == "NOT ASSESSED"
+        assert assessment["chord_util"] is None
+        at.session_state["results"] = damaged
+        _assert_rejected_native_mvt_views(at)
+        _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
+        assert capacity.combined_longitudinal_assessment(
+            at.session_state["results"]["combined"],
+        )["chord_status"] == "PASS"
 
     retained = copy.deepcopy(at.session_state["results"])
     combined_result = retained["combined"]
@@ -4507,11 +5015,11 @@ def test_pub_h01_malformed_candidate_container_never_promotes_native_pass(
     )
     at.session_state["results"] = retained
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
+    leaf = _base_en_component_view(combined_result)
+    assert not leaf.exception
     overall_metric = next(
         metric
-        for metric in at.metric
+        for metric in leaf.metric
         if metric.label == "Longitudinal reinforcement"
     )
     assert str(overall_metric.value) == "-"
@@ -4521,23 +5029,21 @@ def test_pub_h01_malformed_candidate_container_never_promotes_native_pass(
             metric.label == "Chord utilisation"
             and str(metric.delta) == "PASS"
         )
-        for metric in at.metric
+        for metric in leaf.metric
     )
 
-    _select_view(at, "Results Overview")
-    assert not at.exception
-    overview = at.table[0].value
-    row = overview.loc[
-        overview["Check"] == "Combined longitudinal reinforcement"
-    ].iloc[0]
+    row = _retained_longitudinal_component_row(leaf, combined_result)
+    _assert_rejected_native_mvt_views(at)
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == "-"
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 def test_pub_h01_roleless_torsion_failure_with_zero_owner_is_not_published():
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
     assert not at.exception
 
     retained = copy.deepcopy(at.session_state["results"])
@@ -4609,11 +5115,11 @@ def test_pub_h01_roleless_torsion_failure_with_zero_owner_is_not_published():
     )
     at.session_state["results"] = retained
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
+    leaf = _base_en_component_view(combined_result)
+    assert not leaf.exception
     overall_metric = next(
         metric
-        for metric in at.metric
+        for metric in leaf.metric
         if metric.label == "Longitudinal reinforcement"
     )
     assert str(overall_metric.value) == "-"
@@ -4621,24 +5127,21 @@ def test_pub_h01_roleless_torsion_failure_with_zero_owner_is_not_published():
     visible = " ".join(
         str(item.value)
         for collection in (
-            at.metric,
-            at.warning,
-            at.info,
-            at.caption,
-            at.markdown,
+            leaf.metric,
+            leaf.warning,
+            leaf.info,
+            leaf.caption,
+            leaf.markdown,
         )
         for item in collection
     )
     assert "123.9 %" not in visible
 
-    _select_view(at, "Results Overview")
-    assert not at.exception
-    overview = at.table[0].value
-    row = overview.loc[
-        overview["Check"] == "Combined longitudinal reinforcement"
-    ].iloc[0]
+    row = _retained_longitudinal_component_row(leaf, combined_result)
+    _assert_rejected_native_mvt_views(at)
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == "-"
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 @pytest.mark.parametrize(
@@ -4650,6 +5153,7 @@ def test_pub_h01_inconsistent_longitudinal_evidence_fails_closed_in_native_views
     at = _fresh()
     at.run()
     _enable_all(at)
+    native_pristine = _assert_current_native_mvt_views(at, longitudinal=True)
     assert not at.exception
 
     retained = copy.deepcopy(at.session_state["results"])
@@ -4725,21 +5229,21 @@ def test_pub_h01_inconsistent_longitudinal_evidence_fails_closed_in_native_views
     )
     at.session_state["results"] = retained
 
-    _select_view(at, "M-V-T Combined")
-    assert not at.exception
+    leaf = _base_en_component_view(combined_result)
+    assert not leaf.exception
     physical = next(
-        metric for metric in at.metric
+        metric for metric in leaf.metric
         if metric.label == "Longitudinal reinforcement"
     )
     assert str(physical.value) == "-"
     visible = " ".join(
         str(item.value)
         for collection in (
-            at.metric,
-            at.warning,
-            at.info,
-            at.caption,
-            at.markdown,
+            leaf.metric,
+            leaf.warning,
+            leaf.info,
+            leaf.caption,
+            leaf.markdown,
         )
         for item in collection
     )
@@ -4749,17 +5253,14 @@ def test_pub_h01_inconsistent_longitudinal_evidence_fails_closed_in_native_views
     assert "123.9 %" not in visible
     assert not any(
         str(metric.value).casefold() in {"nan", "inf", "-inf"}
-        for metric in at.metric
+        for metric in leaf.metric
     )
 
-    _select_view(at, "Results Overview")
-    assert not at.exception
-    overview = at.table[0].value
-    row = overview.loc[
-        overview["Check"] == "Combined longitudinal reinforcement"
-    ].iloc[0]
+    row = _retained_longitudinal_component_row(leaf, combined_result)
+    _assert_rejected_native_mvt_views(at)
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == "-"
+    _restore_current_native_mvt_views(at, native_pristine, longitudinal=True)
 
 
 def test_pub_h01_contract_recomputes_capacity_and_clears_buffered_report():
@@ -4863,12 +5364,22 @@ def test_incomplete_2023_chord_keeps_retained_mvt_not_assessed():
     }
     assert components["longitudinal"]["status"] == "NOT ASSESSED"
     assert components["longitudinal"]["coverage"] == "incomplete"
+    assert components["longitudinal"]["util"] is None
+    assert components["longitudinal"]["chord_status"] == "NOT ASSESSED"
+    assert components["longitudinal"]["chord_util"] is None
+    assert "Recalculate the combined longitudinal reinforcement assessment" in (
+        components["longitudinal"]["note"]
+    )
+    # Original retained missing-face and distribution guidance remain distinct
+    # from the current canonical reconstruction's recalculation instruction.
     assert "Complete both required longitudinal chord checks" in (
-        components["longitudinal"]["note"]
+        result_presentation.combined_longitudinal_chord_assessment_note(combined_result)
     )
-    assert "distributed around every torsion-tube side" in (
-        components["longitudinal"]["note"]
+    assert "distributed around every torsion-tube side" in result_presentation.result_reason(
+        combined_result["torsion_longitudinal_assessment"]["reason"], "torsion",
     )
+    assert combined_result["longitudinal_assessment"]["util"] == 0.50
+    assert combined_result["longitudinal_assessment"]["coverage_complete"] is False
 
 
 def test_incomplete_torsion_wall_evidence_blocks_stale_mvt_verdicts():
@@ -4893,6 +5404,18 @@ def test_incomplete_torsion_wall_evidence_blocks_stale_mvt_verdicts():
     }
     results = {"torsion": torsion_result, "combined": stale_combined}
 
+    # Missing applicability is an earlier, independent blocker.
+    assert "design basis and member scope have not been established" in (
+        result_presentation.combined_bending_assessment_blocker(results)
+    )
+    torsion_result["t_ed"] = 1.0
+    torsion_result["applicability"] = capacity.torsion_applicability({
+        "torsion_design_basis": capacity.TORSION_DESIGN_EQUILIBRIUM,
+        "torsion_member_scope": capacity.TORSION_MEMBER_CLOSED,
+    }, 1.0)
+    assert result_presentation.torsion_applicability_publication_status(
+        torsion_result,
+    ) == "APPLICABLE"
     blocker = result_presentation.combined_bending_assessment_blocker(results)
     assert blocker == (
         "Torsion prerequisite is not assessed: Torsion is not assessed because "
@@ -5678,3 +6201,113 @@ def test_app_combined_is_saved_and_restored():
     assert "combined_mv_independent" not in {
         widget.key for widget in at2.checkbox
     }
+
+
+def test_pub_h01_current_native_failure_rejects_isolated_candidate_inventory(
+    native_member_report_cases, tmp_path,
+):
+    """Complete native bundles exercise both real views; this is not app navigation."""
+    import hashlib
+    import json
+    import pickle
+    from streamlit.testing.v1 import AppTest
+
+    inp, out = copy.deepcopy(native_member_report_cases["two-face"])
+    original = pickle.dumps((inp, out))
+    assert result_presentation.combined_publication_evidence_is_current(inp, out) == (True, None)
+    candidates = out["combined"]["longitudinal_candidates"]
+    assert {(item["axis"], item["tension_low"]) for item in candidates} == {
+        ("x", True), ("x", False), ("y", True), ("y", False),
+    }
+    failed = next(item for item in candidates if item["status"] == "FAIL")
+    assert abs(failed["m_total"] / failed["m_rd"] - 2.059941571055692) < 1e-10
+    runner = AppTest.from_string(
+        "import streamlit as st\nimport sector_app\n"
+        "inp, out = st.session_state['native_bundle']\n"
+        "surface = st.radio('Result surface', ['M-V-T Combined', 'Results Overview'], key='surface')\n"
+        "if surface == 'M-V-T Combined':\n    sector_app.combined_view(inp, out)\n"
+        "else:\n    sector_app.results_overview_view(inp, out)\n",
+        default_timeout=120,
+    )
+    records = []
+
+    def inspect(label, bundle, current):
+        root_input, root_output = bundle
+        actual, reason = result_presentation.combined_publication_evidence_is_current(
+            root_input, root_output,
+        )
+        assert actual is current, (label, reason)
+        runner.session_state["native_bundle"] = copy.deepcopy(bundle)
+        runner.session_state["surface"] = "M-V-T Combined"
+        runner.run()
+        assert not runner.exception
+        view_metrics = [{"label": metric.label, "value": str(metric.value),
+                         "delta": metric.delta} for metric in runner.metric]
+        warnings = [item.value for item in runner.warning]
+        if current:
+            assert not any("Combined M-V-T is NOT ASSESSED" in text for text in warnings)
+            for metric_label in ("Longitudinal reinforcement", "Chord utilisation"):
+                metric = next(item for item in view_metrics if item["label"] == metric_label)
+                assert (metric["value"], metric["delta"]) == ("206.0 %", "FAIL")
+        else:
+            assert any("Combined M-V-T is NOT ASSESSED" in text for text in warnings)
+            assert not view_metrics
+        runner.radio(key="surface").set_value("Results Overview").run()
+        assert not runner.exception
+        table = next(item.value for item in runner.table if "Check" in item.value)
+        combined_rows = table[table["Check"].str.startswith("Combined ")]
+        assert not combined_rows.empty
+        if current:
+            row = combined_rows[combined_rows["Check"] == "Combined longitudinal reinforcement"].iloc[0]
+            assert (row["Status"], row["Result"]) == ("FAIL", "206.0 %")
+        else:
+            assert set(combined_rows["Status"]) == {"NOT ASSESSED"}
+            assert set(combined_rows["Result"]) == {"-"}
+        assessment = capacity.combined_longitudinal_assessment(root_output["combined"])
+        assert assessment["status"] == assessment["chord_status"] == "FAIL"
+        expected_util = failed["m_total"] / failed["m_rd"]
+        assert assessment["util"] == pytest.approx(expected_util)
+        assert assessment["chord_util"] == pytest.approx(expected_util)
+        assert pickle.dumps(root_output["shear"]) == pickle.dumps(out["shear"])
+        assert pickle.dumps(root_output["torsion"]) == pickle.dumps(out["torsion"])
+        records.append({"label": label, "current": actual, "reason": reason,
+                        "metrics": view_metrics,
+                        "rows": combined_rows.to_dict(orient="records"),
+                        "canonical": {key: assessment.get(key) for key in (
+                            "status", "util", "chord_status", "chord_util", "chord_reason")},
+                        "same_shear_companion": pickle.dumps(root_output["shear"]) == pickle.dumps(out["shear"]),
+                        "same_torsion_companion": pickle.dumps(root_output["torsion"]) == pickle.dumps(out["torsion"])})
+
+    inspect("current-native-206-percent", (inp, out), True)
+    for label, container in (
+        ("none", None), ("text", "bad"), ("integer", 7), ("boolean", True),
+        ("mapping", {}), ("empty-list", []), ("empty-tuple", ()),
+    ):
+        altered = copy.deepcopy(out)
+        altered["combined"]["longitudinal_candidates"] = container
+        inspect("container-" + label, (inp, altered), False)
+    for label in ("missing-list", "documented-incomplete", "none-sibling", "malformed-status"):
+        altered = copy.deepcopy(out)
+        combined = altered["combined"]
+        if label == "missing-list":
+            combined.pop("longitudinal_candidates")
+        else:
+            candidates = list(combined["longitudinal_candidates"])
+            if label == "documented-incomplete":
+                candidates = [item for item in candidates if item["status"] == "FAIL"]
+                combined["longitudinal_assessment"] = dict(
+                    combined["longitudinal_assessment"], coverage_complete=False,
+                )
+            elif label == "none-sibling":
+                candidates.append(None)
+            else:
+                index = next(i for i, item in enumerate(candidates) if item["status"] == "PASS")
+                candidates[index] = dict(candidates[index], status=["PASS"])
+            combined["longitudinal_candidates"] = candidates
+        inspect(label, (inp, altered), False)
+    inspect("restored-native-206-percent", (inp, out), True)
+    assert pickle.dumps((inp, out)) == original
+    destination = tmp_path / "native-mvt-inventory.json"
+    assert not destination.exists()
+    destination.write_text(json.dumps({"producer_bundle_sha256": hashlib.sha256(original).hexdigest(),
+                                      "records": records}, indent=2) + "\n", encoding="utf-8")

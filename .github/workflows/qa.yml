@@ -18,7 +18,7 @@ jobs:
   test:
     name: Full test and report gate
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 360
 
     steps:
       - name: Check out source

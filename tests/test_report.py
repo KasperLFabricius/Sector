@@ -3416,7 +3416,31 @@ def test_report_builder_consumes_selection_and_does_not_choose_candidates():
     assert "def _select_critical" not in source
     assert "def _critical_transverse_direction" not in source
     assert "id(case_out)" not in source
-    assert "_transverse_metric" not in source
+    # The appendix may test eligibility for its method prose; it must not
+    # rank or select worked cases. Every use is bound to this boolean guard.
+    tree = ast.parse(source)
+    parents = {child: parent for parent in ast.walk(tree)
+               for child in ast.iter_child_nodes(parent)}
+    references = [node for node in ast.walk(tree)
+                  if isinstance(node, ast.Attribute)
+                  and node.attr == "_transverse_metric"]
+    assert len(references) == 1
+    reference = references[0]
+    guard = reference
+    while not (isinstance(guard, ast.Call)
+               and isinstance(guard.func, ast.Name)
+               and guard.func.id == "any"):
+        assert guard in parents
+        guard = parents[guard]
+    expected = ast.parse(
+        "any(presentation._transverse_metric(\"combined\", result) "
+        "is not None for result in combined_results)", mode="eval",
+    ).body
+    assert ast.dump(guard) == ast.dump(expected)
+    owner = guard
+    while not isinstance(owner, ast.FunctionDef):
+        owner = parents[owner]
+    assert owner.name == "_appendix"
     assert 'get("worked_example_selection")' in source
 
 

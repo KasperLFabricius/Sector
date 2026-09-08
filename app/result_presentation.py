@@ -520,7 +520,8 @@ _TORSION_REASON_MESSAGES = {
     ),
     "multi-cell (2+ voids)": EngineerMessage(
         "TORSION-MULTI-CELL",
-        "The section contains multiple cells; subdivide it into single-cell torsion tubes",
+        "The section contains multiple cells; this torsion model does not assess "
+        "their shared internal webs. Use a separate calculation for multi-cell torsion",
     ),
     "compound outline requires subdivision": EngineerMessage(
         "TORSION-SUBDIVISION",
@@ -1497,6 +1498,77 @@ def shear_publication_signed_demand(inp, shear_result):
         inp, shear_result, "retained shear action evidence is unavailable",
     )
     return None if action is None else action["expected_signed_v"]
+
+
+def shear_input_geometry_reasons(inp):
+    """Diagnose current input geometry without trusting a retained result.
+
+    These messages do not establish resistance or publication authority. The
+    detailed view uses them only after its ordinary authority gate has rejected
+    the result, while all resistance, utilisation and verdict values stay hidden.
+    """
+    if not isinstance(inp, Mapping) or inp.get("shear_on") is not True:
+        return ()
+    method = inp.get("shear_method")
+    if type(method) is not str or method not in capacity.SHEAR_METHODS:
+        return ()
+    if type(inp.get("shear_links")) is not bool:
+        return ()
+    code = capacity.SHEAR_METHODS[method]
+    directional = any(
+        key in inp for key in ("shear_Vx", "shear_Vy", "shear_components")
+    )
+    if directional:
+        specs, _reason = _strict_current_directional_shear_specs(inp, "")
+        if specs is None:
+            return ()
+    else:
+        axis = inp.get("shear_axis")
+        demand = _publication_metric(inp.get("shear_V"))
+        width = _publication_metric(inp.get("shear_bw"))
+        if axis not in {"x", "y"} or demand is None or width is None or width < 0.0:
+            return ()
+        specs = {"vy" if axis == "x" else "vx": {
+            "axis": axis, "v_ed": abs(demand), "bw": width,
+        }}
+    reasons = []
+    try:
+        outer = inp["outer"]
+        holes = inp.get("holes") or ()
+        rectangle = section_geometry.section_is_approximately_solid_rectangle(outer, holes)
+        for component, spec in specs.items():
+            if spec["v_ed"] <= 0.0:
+                continue
+            override = spec["bw"]
+            width = override if override > 0.0 else shear_core.min_web_width(
+                outer, holes, spec["axis"],
+            )
+            geometry = shear_core.resolve_shear_geometry(
+                model_2023=getattr(code, "shear_model", "2005") == "2023",
+                solid_rectangle=rectangle,
+                section_form=inp.get("shear_section_form", shear_core.SHEAR_SECTION_AUTO),
+                bw_mm=width,
+                bw_user=override > 0.0,
+                links_present=inp["shear_links"],
+                web_inclination_deg=inp.get(
+                    f"shear_{component}_web_inclination_deg",
+                    inp.get("shear_web_inclination_deg", 0.0),
+                ),
+                hoop_diameter_mm=inp.get("shear_hoop_diameter", 0.0),
+                fitted_z_mm=inp.get(f"shear_{component}_fitted_z", inp.get("shear_fitted_z", 0.0)),
+                duct_case=inp.get("shear_duct_case", shear_core.SHEAR_DUCT_NONE),
+                duct_sum_mm=inp.get(f"shear_{component}_duct_sum", inp.get("shear_duct_sum", 0.0)),
+                duct_largest_mm=inp.get(
+                    f"shear_{component}_duct_largest", inp.get("shear_duct_largest", 0.0),
+                ),
+            )
+            for route in ("concrete", "links") if inp["shear_links"] else ("concrete",):
+                reason = geometry.get(f"{route}_reason")
+                if geometry.get(f"{route}_valid") is False and reason and reason not in reasons:
+                    reasons.append(reason)
+    except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+        return ()
+    return tuple(reasons)
 
 
 def concrete_shear_publication_input_is_current(inp, shear_result):
