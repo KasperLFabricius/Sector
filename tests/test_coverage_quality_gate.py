@@ -25,6 +25,7 @@ from tools.verify_coverage_gate import (
     VALIDATOR_STEP_NAME,
     CoverageGateContractError,
     CORE_DOWNLOAD_STEP_NAME,
+    _branch_tests,
     expected_core_job,
     expected_branch_coverage_command,
     expected_coverage_command,
@@ -84,14 +85,108 @@ def test_exact_contract_and_workflow_are_aligned():
     assert "--cov=app" in command
     assert "--cov=sector" in command
     assert "coverage report --show-missing --skip-covered --fail-under=90" in command
-    assert "--dist load" in branch_command
+    assert "--dist loadgroup" in branch_command
     assert branch_command.count("--cov-branch") == 1
     assert "--results qa-artifacts/branch-coverage.json" in branch_command
     assert len(data["branch_coverage"]["targets"]) == 6
-    assert len(data["branch_coverage"]["tests"]) == 6
+    assert {
+        "tests/test_design_standards.py",
+        "tests/test_heightened_crack_control.py",
+        "tests/test_load_cases.py",
+        "tests/test_modelled_direction.py",
+        "tests/test_result_presentation.py",
+        "tests/test_session_state_migrations.py",
+    } <= set(data["branch_coverage"]["tests"])
     assert data["coverage"]["minimum_percent"] == 90
     assert data["branch_coverage"]["minimum_percent"] == 81
     assert data["waivers"] == []
+
+
+def test_branch_selection_accepts_complete_parameterized_function(tmp_path):
+    module = tmp_path / "tests" / "test_boundary.py"
+    module.parent.mkdir()
+    module.write_text(
+        'import pytest\n@pytest.mark.parametrize("value", [0, 1])\n'
+        'def test_boundary(value):\n    assert value >= 0\n', encoding="utf-8",
+    )
+    selection = "tests/test_boundary.py::test_boundary"
+    assert _branch_tests([selection], tmp_path) == [selection]
+    assert _branch_tests(["tests/test_boundary.py"], tmp_path) == [
+        "tests/test_boundary.py"
+    ]
+
+
+@pytest.mark.parametrize("selection", [
+    "tests/test_boundary.py::test_boundary[0]",
+    "tests/test_boundary.py::TestBoundary::test_boundary",
+    "tests/test_boundary.py::test_boundary::",
+    "tests/test_boundary.py::",
+    "tests/test_boundary.py::helper",
+    "tests/test_boundary.py::test_missing",
+    "tests/test_boundary.py::test_nested",
+    "tests/test_missing.py::test_boundary",
+    "../tests/test_boundary.py::test_boundary",
+    "tests/../test_boundary.py::test_boundary",
+    "tests/test_boundary.py::test_boundary;Write-Output",
+    "tests/test_boundary.py::test_boundary$(Get-Location)",
+    "tests/test_boundary.py::test_boundary`n",
+    "tests/test_boundary.py::test_boundary --collect-only",
+    "tests/test_boundary.py::test_boundary\n",
+    " tests/test_boundary.py::test_boundary",
+])
+def test_branch_selection_rejects_invalid_or_partial_functions(tmp_path, selection):
+    module = tmp_path / "tests" / "test_boundary.py"
+    module.parent.mkdir()
+    module.write_text(
+        'def helper():\n    def test_nested():\n        pass\n'
+        'def test_boundary():\n    pass\n', encoding="utf-8",
+    )
+    with pytest.raises(CoverageGateContractError):
+        _branch_tests([selection], tmp_path)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_branch_selection_rejects_file_and_function_overlap(tmp_path, reverse):
+    module = tmp_path / "tests" / "test_boundary.py"
+    module.parent.mkdir()
+    module.write_text('def test_boundary():\n    pass\n', encoding="utf-8")
+    selections = ["tests/test_boundary.py", "tests/test_boundary.py::test_boundary"]
+    if reverse:
+        selections.reverse()
+    with pytest.raises(CoverageGateContractError, match="overlapping"):
+        _branch_tests(selections, tmp_path)
+
+
+def test_branch_selection_rejects_ambiguous_function_definitions(tmp_path):
+    module = tmp_path / "tests" / "test_boundary.py"
+    module.parent.mkdir()
+    module.write_text('def test_boundary():\n    pass\n' * 2, encoding="utf-8")
+    with pytest.raises(CoverageGateContractError, match="one existing"):
+        _branch_tests(["tests/test_boundary.py::test_boundary"], tmp_path)
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("kind", ["files", "functions", "overlap"])
+def test_branch_selection_rejects_windows_case_aliases(tmp_path, reverse, kind):
+    module = tmp_path / "tests" / "test_boundary.py"
+    module.parent.mkdir()
+    module.write_text('def test_boundary():\n    pass\n', encoding="utf-8")
+    alias = module.with_name("test_BOUNDARY.py")
+    if not alias.exists():
+        pytest.skip("Requires a case-insensitive filesystem")
+    assert module.samefile(alias)
+    lower = "tests/test_boundary.py"
+    upper = "tests/test_BOUNDARY.py"
+    if kind == "functions":
+        lower += "::test_boundary"
+        upper += "::test_boundary"
+    elif kind == "overlap":
+        upper += "::test_boundary"
+    selections = [lower, upper]
+    if reverse:
+        selections.reverse()
+    with pytest.raises(CoverageGateContractError, match="duplicate|overlapping"):
+        _branch_tests(selections, tmp_path)
 
 
 @pytest.mark.parametrize("mutation", [

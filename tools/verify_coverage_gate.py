@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -80,6 +82,55 @@ def _paths(value: object, label: str, repository_root: Path) -> list[str]:
         if not candidate.exists():
             raise CoverageGateContractError(f"{label} does not exist: {relative}")
     return paths
+
+
+def _branch_tests(value: object, repository_root: Path) -> list[str]:
+    """Keep complete files or all parameters of an existing test function."""
+    label = "branch_coverage.tests"
+    selections = _strings(value, label)
+    if selections != value:
+        raise CoverageGateContractError(f"{label} must use exact test selections")
+    parsed: list[tuple[Path, str | None]] = []
+    for selection in selections:
+        parts = selection.split("::")
+        module = parts[0]
+        if len(parts) > 2 or re.fullmatch(
+            r"tests/(?:[A-Za-z0-9_]+/)*test_[A-Za-z0-9_]+\.py", module
+        ) is None:
+            raise CoverageGateContractError(f"{label} has an invalid test selection")
+        _paths([module], label, repository_root)
+        module_path = (repository_root / module).resolve()
+        if not module_path.is_file():
+            raise CoverageGateContractError(f"{label} must select a test module")
+        function = parts[1] if len(parts) == 2 else None
+        if function is not None and re.fullmatch(r"test_[A-Za-z0-9_]+", function) is None:
+            raise CoverageGateContractError(
+                f"{label} must select a whole top-level test function"
+            )
+        parsed.append((module_path, function))
+    # Path equality follows the platform, including Windows case aliases.
+    identities = set(parsed)
+    if len(identities) != len(parsed):
+        raise CoverageGateContractError(f"{label} has duplicate physical test selections")
+    for module_path, function in parsed:
+        if function is None:
+            continue
+        if (module_path, None) in identities:
+            raise CoverageGateContractError(f"{label} has overlapping test selections")
+        try:
+            tree = ast.parse(module_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, SyntaxError) as exc:
+            raise CoverageGateContractError(f"{label} cannot read test module") from exc
+        definitions = [
+            node for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == function
+        ]
+        if len(definitions) != 1:
+            raise CoverageGateContractError(
+                f"{label} must name one existing top-level test function"
+            )
+    return selections
 
 
 def _coverage_modules(
@@ -171,9 +222,8 @@ def _snapshot(
             )
         )
         branch_tests = set(
-            _paths(
+            _branch_tests(
                 branch.get("tests"),
-                "branch_coverage.tests",
                 repository_root,
             )
         )
@@ -565,7 +615,7 @@ New-Item -ItemType Directory -Path $branchTemp | Out-Null
 python -m pytest `
 {tests}
   -n 4 `
-  --dist load `
+  --dist loadgroup `
   --basetemp $branchTemp `
 {targets}
   --cov-branch `
