@@ -714,8 +714,10 @@ def manual_blocks() -> list:
            ["Torsion", "Selected Plastic case: torsion resistance and utilisation"],
            ["M-V-T Combined", "Selected Plastic case: combined interactions"]])
     h2("Report workspace")
-    md("Enter project number, project name, section, revision, author and comments "
+    md("Enter project number, project name, section, revision, author, optional "
+       "Checker and Approver names, and comments "
        "in this workspace, then select **Brief**, **Standard** or **Audit**. "
+       "Checker and Approver appear only when supplied and describe document roles. "
        "Generating reuses Analysis results when they match the current inputs; "
        "otherwise Sector recalculates them for the report. A project-detail or input edit marks an existing "
        "PDF out of date and blocks its download until it is regenerated.")

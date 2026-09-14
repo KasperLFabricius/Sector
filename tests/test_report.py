@@ -5150,7 +5150,7 @@ def test_report_ignores_removed_design_basis_aggregate():
     assert "does not implement the torsion check" not in txt
 
 
-def test_report_ignores_removed_authority_approval_and_cover_calculator_metadata():
+def test_report_keeps_document_roles_and_ignores_removed_authority_metadata():
     inp = _inp()
     inp.update({
         "infrastructure_manager": "OBSOLETE-MANAGER-MARKER",
@@ -5159,8 +5159,8 @@ def test_report_ignores_removed_authority_approval_and_cover_calculator_metadata
         "cover_calculator": {"cover_mm": 999.0},
     })
     meta = {
-        "checker": "OBSOLETE-CHECKER-MARKER",
-        "approver": "OBSOLETE-APPROVER-MARKER",
+        "checker": "DOCUMENT-CHECKER-MARKER",
+        "approver": "DOCUMENT-APPROVER-MARKER",
     }
 
     text = _pdf_text(_build_report_with_selection(
@@ -5171,11 +5171,12 @@ def test_report_ignores_removed_authority_approval_and_cover_calculator_metadata
         "OBSOLETE-MANAGER-MARKER",
         "OBSOLETE-ASSET-MARKER",
         "OBSOLETE-BASIS-MARKER",
-        "OBSOLETE-CHECKER-MARKER",
-        "OBSOLETE-APPROVER-MARKER",
         "999.0",
     ):
         assert marker not in text
+
+    assert "DOCUMENT-CHECKER-MARKER" in text
+    assert "DOCUMENT-APPROVER-MARKER" in text
 
 
 def test_report_ignores_stale_bridge_and_trace_payloads():
@@ -13949,3 +13950,27 @@ def test_elastic_characteristic_comparisons_preserve_outputs_across_profiles(pro
         assert "-24.000 MPa" in text  # actual stress remains signed
         assert "Stress as percentage of characteristic strength" in text
         assert "These percentages do not assess compliance" in text
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+@pytest.mark.parametrize("roles", [
+    {"checker": "  ", "approver": ""},
+    {"checker": "A & B <check>"},
+    {"approver": 'C "Approve"'},
+    {"checker": "Checker", "approver": "Approver"},
+])
+def test_document_role_cover_rows_are_optional_independent_and_literal(profile, roles):
+    from reportlab.platypus import Paragraph
+    builder = sector_report.ReportBuilder(io.BytesIO(), roles, _inp(), {},
+                                          figures=False, profile=profile)
+    tables = []
+    builder._table = lambda rows, *_args, **_kwargs: tables.append(rows)
+    builder._cover()
+    fields = dict(tables[0][1:])
+    for key, label in (("checker", "Checker"), ("approver", "Approver")):
+        value = roles.get(key, "")
+        if value.strip():
+            assert Paragraph(fields[label], builder.s["body"]).getPlainText() == value
+        else:
+            assert label not in fields
+    assert fields["Prepared by"] == ""

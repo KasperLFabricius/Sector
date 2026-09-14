@@ -2484,3 +2484,30 @@ def test_current_schema_requires_torsion_tensile_factor_when_active():
 
     with pytest.raises(ValueError, match="torsion_gamma_ct is required"):
         project_io.dump_project(tables, scalars)
+
+
+@pytest.mark.parametrize("roles", [
+    {}, {"rep_checker": "A & B <check>"}, {"rep_approver": 'C "Approve"'},
+    {"rep_checker": "  Checker  ", "rep_approver": "Approver"},
+])
+def test_optional_document_roles_roundtrip_in_schema27(roles):
+    tables, scalars = _current_project()
+    scalars.update(roles)
+    text = project_io.dump_project(tables, scalars)
+    assert json.loads(text)["version"] == 27
+    _, loaded = project_io.parse_project(text)
+    for key in ("rep_checker", "rep_approver"):
+        assert loaded.get(key, "") == roles.get(key, "")
+
+
+@pytest.mark.parametrize("key", ["rep_checker", "rep_approver"])
+@pytest.mark.parametrize("invalid", [None, True, 17, 2.5, [], {}])
+def test_document_roles_reject_nontext_project_values(key, invalid):
+    tables, scalars = _current_project()
+    payload = json.loads(project_io.dump_project(tables, scalars))
+    payload["scalars"][key] = invalid
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"], "scalars": payload["scalars"],
+    })
+    with pytest.raises(project_io.ProjectInputError, match=f"{key} must be text"):
+        project_io.parse_project(json.dumps(payload))

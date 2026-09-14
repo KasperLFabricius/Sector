@@ -7372,6 +7372,23 @@ def test_metadata_only_report_edit_reuses_frozen_engineering_results(
         "project_state_sha256"
     ]
 
+    for key, value in (("rep_checker", "A & B <check>"),
+                       ("rep_approver", 'C "Approve"')):
+        at.text_input(key=key).set_value(value).run()
+        assert any("Report out of date" in warning.value for warning in at.warning)
+        assert at.session_state["calculation_record"] == calculation
+        _goto_page(at, "Inputs")
+        _goto_page(at, "Report")
+        assert at.text_input(key=key).value == value
+        at.button(key="gen_report").click().run()
+        assert captured["meta"][key.removeprefix("rep_")] == value
+        assert at.session_state["report_generation_record"]["result_source"] == (
+            "reused-current-analysis-results"
+        )
+        assert at.session_state["calculation_record"] == calculation
+    assert at.text_input(key="rep_author").value == ""
+    assert not at.exception
+
 
 def test_report_download_becomes_stale_after_metadata_change():
     at = _fresh()
