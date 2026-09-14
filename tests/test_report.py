@@ -2008,7 +2008,7 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
     for heading in (
         "Worked plastic calculation (utilisation direction)",
         "Converged strain plane",
-        "Governing ultimate curvature",
+        "Ultimate-curvature candidates",
         "Compression-depth solution",
         "Section resultants at convergence",
         "Step 1 - converged long-term state",
@@ -2027,7 +2027,7 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
     assert "internal bisection sequence and integration bands are not published" in (
         text.casefold()
     )
-    assert "converged reference-stress plane" in text
+    assert "Long-term reference-stress plane" in text
     assert "not a physical-unit norm" in text
 
 
@@ -3269,11 +3269,18 @@ def test_report_publishes_only_governing_fine_and_coarse_crack_examples():
     assert "EQ-CRACKING.THRESHOLD" not in flat
     assert "governing case (long-term (fine))" in flat
     assert "governing case (long-term (coarse))" in flat
-    assert "Candidate summary for governing crack example" not in flat
-    assert "Case (LT/ST)" not in flat
+    assert "Candidate summary for governing crack example" in flat
     assert "EL-03" in flat
     assert "Governing crack width - EL-03" not in flat
     assert "Cracking threshold and governing crack width - EL-03" not in flat
+    standard = " ".join(_pdf_body_text(_build_report_with_selection(
+        {}, inp, out, figures=False, profile="Standard",
+    )).split())
+    assert "Candidate summary for governing crack example" not in standard
+    assert "Case (LT/ST)" not in standard
+    assert "EL-03" in standard
+    assert "Governing crack width - EL-03" not in standard
+    assert "Cracking threshold and governing crack width - EL-03" not in standard
 
 
 def test_worked_selectors_ignore_invalid_nonfinite_case_results():
