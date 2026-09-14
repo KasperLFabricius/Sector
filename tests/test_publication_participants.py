@@ -88,7 +88,7 @@ def current_participants(request, tmp_path_factory):
         _select_view(at, "Results Overview")
         assert not at.exception
         overview = next(
-            item.value.copy(deep=True) for item in at.table
+            item.value.copy(deep=True) for item in at.dataframe
             if "Check" in item.value.columns
         )
         yield {
@@ -359,7 +359,7 @@ def test_pub_m01_poisoned_participant_is_withheld_in_native_views(
         assert "876.543" not in all_visible and "947.321" not in all_visible
         _select_view(at, "Results Overview")
         assert not at.exception
-        overview = next(item.value for item in at.table if "Check" in item.value.columns)
+        overview = next(item.value for item in at.dataframe if "Check" in item.value.columns)
         if t.get("directional_interactions"):
             row = overview.loc[
                 overview["Check"] == "Vy+T Formula (6.31) minimum-reinforcement screen"

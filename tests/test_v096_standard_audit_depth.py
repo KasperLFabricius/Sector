@@ -389,8 +389,9 @@ def test_existing_audit_only_solver_and_crack_candidate_ledgers_remain_separate(
     ):
         assert heading not in texts["Standard"]
         assert heading in texts["Audit"]
+    assert "Worked plastic calculation (utilisation direction)" not in texts["Standard"]
+    assert "Worked plastic calculation (utilisation direction)" in texts["Audit"]
     for heading in (
-        "Worked plastic calculation (utilisation direction)",
         "Governing reinforcement element - R1",
         "Governing concrete fibre - 2",
     ):

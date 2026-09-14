@@ -179,7 +179,8 @@ def test_every_real_scalar_rejects_boolean_string_nonfinite_and_container_values
 
 @pytest.mark.parametrize("key", sorted(project_io._NESTED_SCALAR_KEYS))
 def test_every_nested_scalar_rejects_the_wrong_container(key: str) -> None:
-    for invalid in (True, "items", [], 1.0):
+    wrong_container = {} if key == "rep_source_register" else []
+    for invalid in (True, "items", wrong_container, 1.0):
         with pytest.raises(project_io.ProjectInputError):
             project_io._canonical_scalars({key: invalid}, {})
 

@@ -88,7 +88,7 @@ def test_assessment_banner_owns_spacing_and_retains_plain_table_palette():
                for command in table._linecmds)
 
 
-def test_loads_and_analysis_settings_start_on_distinct_pages(monkeypatch):
+def test_loads_start_on_a_fresh_page_and_settings_follow_with_heading_keep(monkeypatch):
     builder = _builder()
     monkeypatch.setattr(
         sector_report.viz, "section_figure", lambda *args, **kwargs: object()
@@ -108,7 +108,10 @@ def test_loads_and_analysis_settings_start_on_distinct_pages(monkeypatch):
         if isinstance(item, Paragraph) and item.getPlainText() == "Analysis settings"
     )
     assert isinstance(builder.flow[loads_index - 2], NotAtTopPageBreak)
-    assert isinstance(builder.flow[settings_index - 2], NotAtTopPageBreak)
+    assert not any(isinstance(item, NotAtTopPageBreak)
+                   for item in builder.flow[loads_index + 1:settings_index])
+    assert builder.flow[settings_index].keepWithNext
+    assert loads_index < settings_index
     assert isinstance(builder.flow[loads_index - 1], CondPageBreak)
     assert isinstance(builder.flow[settings_index - 1], CondPageBreak)
     assert not any(
@@ -126,7 +129,8 @@ def test_loads_and_analysis_settings_start_on_distinct_pages(monkeypatch):
                       if "LOADS BODY" in text)
     settings_page = next(index for index, text in enumerate(page_texts)
                          if "SETTINGS BODY" in text)
-    assert loads_page != settings_page
+    assert loads_page == settings_page
+    assert page_texts[loads_page].index("LOADS BODY") < page_texts[loads_page].index("SETTINGS BODY")
     assert "Loads" in page_texts[loads_page]
     assert "Analysis settings" in page_texts[settings_page]
 

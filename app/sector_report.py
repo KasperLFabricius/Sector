@@ -2210,7 +2210,9 @@ class ReportBuilder:
                 required = max(
                     required,
                     min(paragraph.minWidth(), authored_width),
-                    numeric_width,
+                    # Table layout may round an exact string-width boundary
+                    # down; retain a negligible guard against splitting a digit.
+                    numeric_width + 1e-6 if numeric_width else 0.0,
                 )
             floors.append(required + 2 * _REPORT_TABLE_HORIZONTAL_PADDING)
         return floors
@@ -13575,8 +13577,7 @@ class ReportBuilder:
             )
 
     def _appendix(self):
-        self.flow.append(NotAtTopPageBreak())
-        self._h1("QA appendix - references and notes")
+        self._h1("QA appendix - references and notes", reserve=110)
         lines = []
         plastic_results = self._result_values("plastic")
         elastic_results = self._result_values("elastic")
