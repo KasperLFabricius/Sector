@@ -86,14 +86,14 @@ def test_legacy_build_names_are_simple_aliases():
 def test_build_wrapper_resolves_python_and_delegates_once():
     script = (ROOT / "packaging" / "build_portable.ps1").read_text("utf-8")
     folded = script.casefold()
-    for token in ('-cne "cpython"', '-cne "3"', '-cne "13"', '-cne "64"'):
+    for token in ('-cne "cpython"', '-cne $pythonversion', '-cne "64"'):
         assert token in folded
     assert "sectorbuilds\\build-" in folded
     assert '$driver = Join-Path $sourceRoot "tools/build_portable_windows.py"' in script
     assert '"--python"' in script
     assert '"--source-revision"' in script
     assert "first-page execution" in folded
-    assert 'Write-Host "Sector v0.96.3 portable Windows build"' in script
+    assert 'Write-Host "Sector v0.96.4 portable Windows build"' in script
     assert 'Write-Host "Sector v0.96 portable Windows build"' not in script
     for removed in (
         "portable-distribution.json",
@@ -118,9 +118,9 @@ def test_user_documentation_describes_the_actual_small_output():
         assert "receipt" not in text.casefold()
         assert "authenticated" not in text.casefold()
         assert "certificate" not in text.casefold()
-    assert """Sector-v0.96.3-windows-portable/
-Sector-v0.96.3-windows-portable.zip
-Sector-v0.96.3-windows-portable.zip.sha256""" in readme
+    assert """Sector-v0.96.4-windows-portable/
+Sector-v0.96.4-windows-portable.zip
+Sector-v0.96.4-windows-portable.zip.sha256""" in readme
     assert "Sector-v0.96-windows-portable" not in readme
     assert portable.count("@SECTOR_VERSION@") == 1
 
