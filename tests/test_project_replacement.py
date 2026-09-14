@@ -195,6 +195,8 @@ def _replacement_snapshot(at: AppTest) -> tuple[str, str]:
                 "rep_section",
                 "rep_rev",
                 "rep_author",
+                "rep_checker",
+                "rep_approver",
                 "rep_comments",
                 project_io.REPORT_PROFILE_KEY,
             }
@@ -431,3 +433,16 @@ def test_successful_sparse_replacement_discards_old_results_events_and_reports()
     assert "_pending_input_events" not in at.session_state
     assert "_pending_report_events" not in at.session_state
     assert at.session_state["_latest_inputs"]["concrete"].fck == pytest.approx(35.0)
+
+
+def test_old_project_clears_optional_document_roles():
+    at = AppTest.from_file(APP, default_timeout=90).run()
+    _goto_page(at, "Report")
+    at.text_input(key="rep_checker").set_value("Previous checker").run()
+    at.text_input(key="rep_approver").set_value("Previous approver").run()
+    _upload_sparse_project(at)
+    _goto_page(at, "Report")
+    for key in ("rep_checker", "rep_approver"):
+        assert at.text_input(key=key).value == ""
+        assert at.session_state["_durable_report_scalars"][key] == ""
+    assert not at.exception

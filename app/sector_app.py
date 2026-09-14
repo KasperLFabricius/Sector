@@ -2986,6 +2986,8 @@ _REPORT_STATE_SCALARS = (
     "rep_section",
     "rep_rev",
     "rep_author",
+    "rep_checker",
+    "rep_approver",
     "rep_comments",
     project_io.REPORT_PROFILE_KEY,
 )
@@ -4158,6 +4160,8 @@ _REPORT_FIELDS = [
     ("section", "Section"),
     ("rev", "Revision"),
     ("author", "Prepared by"),
+    ("checker", "Checker"),
+    ("approver", "Approver"),
 ]
 _REPORT_DEFAULT = report_profiles.DEFAULT_PROFILE.label
 _REPORT_CONTENT_OPTIONS = report_profiles.REPORT_PROFILE_KEYS
@@ -4541,6 +4545,11 @@ def _report_workspace(inp):
     c1, c2 = metadata_box.columns(2)
     _seeded_text(c1, "Revision", "", "rep_rev")
     _seeded_text(c2, "Prepared by", "", "rep_author")
+    checker, approver = metadata_box.columns(2)
+    _seeded_text(checker, "Checker (optional)", "", "rep_checker",
+                 help="Document-control name printed only when supplied.")
+    _seeded_text(approver, "Approver (optional)", "", "rep_approver",
+                 help="Document-control name printed only when supplied.")
     _seeded_text_area(
         metadata_box, "Comments", "", "rep_comments", height=100
     )

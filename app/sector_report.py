@@ -3983,6 +3983,9 @@ class ReportBuilder:
                 ["Section", _html_escape(m.get("section", ""))],
                 ["Revision", _html_escape(m.get("rev", ""))],
                 ["Prepared by", _html_escape(m.get("author", ""))],
+                *[[label, _html_escape(m[key])]
+                  for key, label in (("checker", "Checker"), ("approver", "Approver"))
+                  if str(m.get(key) or "").strip()],
                 ["Date", _html_escape(date)],
                 ["Tool version", self.version or "-"],
                 [

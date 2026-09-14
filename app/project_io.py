@@ -273,9 +273,9 @@ SCALAR_KEYS = [
     "combined_method", "combined_mv_independent",
     capacity.TORSION_CASE_AUTHORITIES_KEY,
     "capacity_steel_material_id", "label_scale", "label_min_gap",
-    # Project/report metadata. No checker/approver sign-off fields.
+    # Project/report document metadata. Roles do not imply approval status.
     "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev",
-    "rep_author", "rep_comments",
+    "rep_author", "rep_checker", "rep_approver", "rep_comments",
     # Local application preferences that are meaningful on restore.
     "autosave_on", "autosave_min",
 ]
@@ -388,6 +388,8 @@ _TEXT_SCALAR_KEYS = frozenset({
     "rep_section",
     "rep_rev",
     "rep_author",
+    "rep_checker",
+    "rep_approver",
     "rep_comments",
 })
 
