@@ -7402,7 +7402,8 @@ def build_inputs(host=st):
         help="Zero applies A/u together with the wall-specific lower bound from "
              "the longitudinal reinforcement centres and the real-wall limit for "
              "a single-cell hollow section. A positive single-tube override must "
-             "satisfy every wall interval; subdivided tubes require zero and "
+             "satisfy every wall interval. For supported subdivision, set this "
+             "global effective-wall-thickness override to 0 mm and provide "
              "complete reinforcement locations for each sub-tube.")
     torsion_gamma_ct = _seeded_number(
         sts,
