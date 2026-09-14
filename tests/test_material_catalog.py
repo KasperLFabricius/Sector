@@ -718,13 +718,13 @@ def test_mild_preset_identity_is_concrete_and_not_numerically_promoted():
         )
 
     assert mc.mild_preset_classification(generic_name) == (
-        "User-defined / project-defined Curve 2 preset; uncited"
+        "Project-defined elastic-perfectly-plastic diagram; uncited"
     )
     assert mc.mild_preset_classification(edition_name) == (
-        "Curve 3 Eurocode design preset"
+        "Eurocode design stress-strain diagram"
     )
-    assert "Curve 2 preset; uncited" in mc.mild_preset_display_label(generic_name)
-    assert "Curve 3 Eurocode design preset" in mc.mild_preset_display_label(
+    assert "elastic-perfectly-plastic diagram; uncited" in mc.mild_preset_display_label(generic_name)
+    assert "Eurocode design stress-strain diagram" in mc.mild_preset_display_label(
         edition_name
     )
     assert mp.MILD_PRESETS[generic_name]["gamma_E"] == pytest.approx(1.0)

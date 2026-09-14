@@ -1021,8 +1021,10 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "Annex E.5" in text and "Formulae (E.7)-(E.8)" in text
     assert "published reference; project adoption required" in text
     assert "no Danish National Annex is applied" in text
-    assert "reinforcement_fatigue" in text
-    assert "concrete_fatigue_damage_sum" in text
+    assert "Reinforcement fatigue" in text
+    assert "reinforcement_fatigue" not in text
+    assert "Concrete fatigue - Miner damage" in text
+    assert "concrete_fatigue_damage_sum" not in text
     assert "different spectrum names are not combined" in text
     assert "Max Miner D" in text
     assert "Max yield / proof" in text
@@ -1147,9 +1149,9 @@ def test_fatigue_report_limits_worked_detail_to_independent_global_extrema():
     assert all(name in text for name in ("Traffic A", "Traffic B", "Traffic C"))
     # Reinforcement and concrete intentionally govern in different spectra.
     assert text.count(
-        "Textbook calculation - governing reinforcement fatigue"
+        "Worked calculation - governing reinforcement fatigue"
     ) == 1
-    assert text.count("Textbook calculation - governing concrete fatigue") == 1
+    assert text.count("Worked calculation - governing concrete fatigue") == 1
     assert "Spectrum - Traffic A" in text
     assert "Spectrum - Traffic B" in text
     assert "Spectrum - Traffic C" not in text
@@ -1279,7 +1281,7 @@ def test_reinforcement_fatigue_lead_and_first_equation_share_bounded_group():
         if isinstance(item, sector_report.Paragraph)
     ]
     assert re.fullmatch(
-        r"\d+\.\d+ Textbook calculation - governing reinforcement fatigue",
+        r"\d+\.\d+ Worked calculation - governing reinforcement fatigue",
         paragraphs[0],
     )
     assert any(
@@ -3059,8 +3061,8 @@ def test_report_does_not_assign_eurocode_source_to_custom_or_generic_steel(prese
     assert "3.2.7" not in flat
     assert "uncited" in flat
     if preset == "Curve 2 (elastic-perfectly-plastic)":
-        assert "User-defined / project-defined Curve 2 preset" in flat
-        assert "General Curve 3 law" in flat
+        assert "Project-defined elastic-perfectly-plastic diagram" in flat
+        assert "Project-defined stress-strain diagram" in flat
 
 
 def test_report_footer_identifies_the_organisational_licensee():
@@ -4534,7 +4536,8 @@ def test_report_input_table_symbols_are_registered_markup(
     assert not any(token in markup for token in ("\\", "{", "}"))
 
 
-def test_tables_only_load_tables_publish_input_policy_without_raw_tex():
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_tables_only_load_tables_omit_entry_guidance_without_raw_tex(profile):
     inp = _inp()
     plastic = {
         "name": "PL-INPUT",
@@ -4588,7 +4591,7 @@ def test_tables_only_load_tables_publish_input_policy_without_raw_tex():
     }
 
     text = _pdf_text(_build_report_with_selection(
-        {}, inp, out, figures=False, qa_appendix=False,
+        {}, inp, out, figures=False, profile=profile,
     ))
     flat = " ".join(text.split())
     policy = (
@@ -4596,7 +4599,7 @@ def test_tables_only_load_tables_publish_input_policy_without_raw_tex():
         "blank action cells are treated as zero; calculations use the "
         "parsed numeric precision."
     )
-    assert flat.count(policy) == 1
+    assert policy not in flat
     assert chr(0x394) in text
     assert not any(token in text for token in (r"\Delta", "_{", "}"))
 
@@ -5006,7 +5009,7 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
     assert f"{0.85 * eta:.6f}" in txt
     assert f"{inp['concrete'].fcd:.3f}" in txt
     assert chr(0x3B7) in txt  # eta_cc uses the Greek symbol
-    assert "Curve 3 Eurocode design preset" in " ".join(txt.split())
+    assert "Eurocode design stress-strain diagram" in " ".join(txt.split())
     assert "3.15" not in txt
     assert "published project-adoption basis" in flat
     assert "no Danish National Annex is applied" in flat
@@ -10200,7 +10203,7 @@ def _dkna_2005_component_unit_pdf(inp, combined, profile, *, include_input_conte
                   for cell in row)
             for row in table._cellvalues
         ]
-        if rows[header] == ("Component", "Utilisation", "Status", "QA note"):
+        if rows[header] == ("Component", "Utilisation", "Status", "Assessment note"):
             matches.append((table, rows))
     assert len(matches) == 1
     table, rows = matches[0]

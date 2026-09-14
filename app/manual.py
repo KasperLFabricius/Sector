@@ -529,8 +529,7 @@ def manual_blocks() -> list:
        "and the material laws. It returns plastic capacity, cracked-section elastic "
        "response, grouped fatigue checks, independent resistance checks and a "
        "report.")
-    call("concept", "Sector is a **transparent structural calculation tool**. "
-         "It publishes calculation inputs, methods, intermediate values and "
+    call("concept", "Sector publishes calculation inputs, methods, intermediate values and "
          "result-specific statuses. The engineer selects the project methods, "
          "action sets and coefficients; standards provide the calculation "
          "equations, references, defaults and warnings.")
@@ -640,10 +639,10 @@ def manual_blocks() -> list:
     )
 
     h1("The worked examples")
-    md("Two sections are threaded through this manual. Every worked derivation in "
-       "Part C is carried out on one of them, and the figures are generated from "
-       "them live, so the numbers you read here match what the app produces.")
-    h2("Rectangular beam (mild steel)")
+    md("The material, bending and elastic examples use the two sections below. "
+       "Shear and torsion examples use the variants described with their "
+       "calculations; changed inputs and supplied scalar assumptions are stated there.")
+    h2("Rectangular beam (reinforcing steel)")
     md("A 300 x 600 mm rectangular section in C40/50 concrete with B550 "
        "reinforcement: three 25 mm bars near the bottom face and two 16 mm bars "
        "near the top. It is the simplest section that still exercises the plastic "
@@ -740,9 +739,8 @@ def manual_blocks() -> list:
        "an issued deliverable.")
     h1("Defining the section")
     md("A section is a set of explicit points in millimetres -- the concrete "
-       "corners, any voids, the bars and the tendons. The point tables are the "
-       "**source of truth**; the Quick Section builder is a convenience that writes "
-       "into them.")
+       "corners, any voids, the bars and the tendons. Sector calculates from "
+       "these point tables; applying Quick Section updates them.")
     h2("The point tables")
     md("Four editable tables hold the concrete corners, the voids, the bars "
        "and the tendons. Coordinates and diameters are in millimetres; areas are "
@@ -762,9 +760,8 @@ def manual_blocks() -> list:
        "detail is required on every bar and tendon when reinforcement fatigue is "
        "enabled; otherwise it is optional. Half-typed rows are ignored until "
        "complete.")
-    call("concept", "Everything downstream reads these points. The builder, the "
-         "presets and the save file all end up as rows in these four tables, so you "
-         "can always edit the geometry by hand.")
+    call("concept", "The builder, presets and loaded projects populate these four point "
+         "tables. You can edit the geometry directly in the tables.")
     h2("The Quick Section builder")
     md("A full-width builder (opened from the *Section* panel) generates a "
        "parametric shape with a live preview, then *Apply* writes its points into "
@@ -829,6 +826,7 @@ def manual_blocks() -> list:
        "causal defect is reported with its ring, point or edge location.")
     call("concept", "The length tolerance is the greatest of **1e-12 m**, "
          "**1e-9 times the section span** and **8 ULP of the coordinate magnitude**. "
+         "ULP is the spacing between adjacent representable coordinate values. "
          "Validation preserves the entered coordinates exactly. A geometry "
          "validation failure is distinct from a valid section whose calculation "
          "later fails to converge.")
@@ -837,7 +835,7 @@ def manual_blocks() -> list:
          "the plane-section assumption no longer holds across a break.")
 
     h1("Materials")
-    md("Concrete has one definition. Mild steel and prestress use catalogues: each "
+    md("Concrete has one definition. Reinforcing steel and prestress use catalogues: each "
        "definition has a unique ID, name and optional description. Add, duplicate "
        "or delete definitions in the material panel, then assign the ID to each bar "
        "or tendon in the Section table. An assigned definition cannot be deleted. "
@@ -866,12 +864,12 @@ def manual_blocks() -> list:
         "example (C40/50).",
         "A compression stress-strain curve that rises parabolically from zero to the "
         "design strength and then remains horizontal to the ultimate strain.")
-    h2("Mild steel")
-    md("Each mild-steel definition uses the general **Curve 3** law, with every "
+    h2("Reinforcing steel")
+    md("Each reinforcing-steel definition uses the general **Curve 3** law, with every "
        "parameter visible and live. The generic **Curve 1**, **Curve 2** and "
        "**Curve 3** selections are user-defined/project-defined starting-value "
        "presets and are explicitly uncited. An edition-named selection is labelled "
-       "a **Curve 3 Eurocode design preset** and keeps that edition's source. "
+       "a **Eurocode design stress-strain diagram** and keeps that edition's source. "
        "The preset supplies traceable starting values; edited numerical values are "
        "the actual calculation inputs. The selected definition's plot is shown beside its "
        "inputs. These include yield and ultimate strengths, ultimate strain, the "
@@ -1019,7 +1017,7 @@ def manual_blocks() -> list:
            ["$k_1$, $C$", "2005 concrete-strength coefficient; C applies only to the explicit concrete-life method"]])
     md("The **Fatigue details** material tab holds named resistance definitions. "
        "Assign one detail ID to every checked bar or tendon. Standard presets "
-       "lock $N^*$, the two S-N slopes, the characteristic reference range and its "
+       "lock $N^{*}$, the two S-N slopes, the characteristic reference range and its "
        "source; Custom / imported makes them editable. Diameter-dependent and "
        "bent-bar reductions are applied where the selected preset requires them. "
        "For a section combining mild reinforcement and bonded tendons, each tendon "
@@ -1098,7 +1096,7 @@ def manual_blocks() -> list:
        "2023 section-form rules to a first-generation shear method. That combination "
        "is reported as NOT ASSESSED and requires a separately applicable member "
        "calculation.")
-    md("The retained web-duct allowances are: 2023 grouted steel, "
+    md("The duct allowances used in the calculation are: 2023 grouted steel, "
        "$k_{duct}=0.5$; 2023 grouted plastic with confirmed thin wall, "
        "$k_{duct}=0.8$; and 2023 thick-wall plastic, ungrouted or soft-filled "
        "ducts, $k_{duct}=1.2$. These 2023 allowances apply when "
@@ -1119,7 +1117,7 @@ def manual_blocks() -> list:
           "$\\tau_{Rd,c} = (0.66/\\gamma_V)(100\\rho_l f_{ck} d_{dg}/d)^{1/3} \\geq "
           "\\tau_{Rd,c,min}$ (8.27), with $d_{dg} = 16 + D_{lower}$ ($\\leq 40$ mm, "
           "8.2.1(4)) and the flexural design yield $f_{yd}$. When axial force is "
-          "present, Sector applies $d \\rightarrow k_{vp}d$ in (8.27), with "
+          "present, Sector replaces $d$ with $k_{vp}d$ in Formula (8.27), with "
           "$k_{vp}=\\max[1+N_{Ed}/|V_{Ed}|\\,d/(3a_{cs}),0.1]$ and "
           "$a_{cs}=\\max(|M_{Ed}/V_{Ed}|,d)$ (8.30-8.31), including locked-in "
           "prestress effects. Tendons are assumed parallel to the member axis "
@@ -1198,8 +1196,9 @@ def manual_blocks() -> list:
        "longitudinal reinforcement. For each tube wall, $t_{ef}$ must be at least "
        "twice the distance from the concrete edge to the assigned bar centre and, "
        "for a hollow section, no greater than the real wall. A positive single-tube "
-       "override must satisfy every wall interval. Subdivided tubes require zero "
-       "and complete bar-to-wall evidence for every sub-tube.")
+       "override must satisfy every wall interval. For supported subdivision, set "
+       "the global effective-wall-thickness override to 0 mm for automatic "
+       "wall thickness; complete bar-to-wall evidence is required for every sub-tube.")
     md("**Material and strut inputs.** Enter one compression-strut range under "
        "**Links / stirrups** for both shear and torsion. The direct positive "
        "$\\gamma_{ct}$ gives $f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}$; starting values "
@@ -1233,7 +1232,8 @@ def manual_blocks() -> list:
          "sub-tubes** under 6.3.1(3). Enter each positioned rectangle by centre "
          "x/y and b/h; together they must cover the concrete net area without "
          "overlap, boundary crossing or entry into a void. Multi-cell sections "
-         "require a separate applicable tube model.")
+         "require a separate applicable tube model; defining rectangles does not "
+         "establish that model in Sector.")
     call(
         "concept",
         "Entered strut bounds remain visible calculation inputs. If the complete "
@@ -1263,9 +1263,8 @@ def manual_blocks() -> list:
          "area, distribution and anchorage are not verified by the section "
          "calculation. A governing value above the limit is **FAIL** even under "
          "that favourable assumption.")
-    call("limit", "This is an internal cross-section resistance check. It does "
-         "not replace a separate member and detailing assessment under Annex F "
-         "where that assessment applies.")
+    call("limit", "Scope: cross-section resistance. Complete the applicable Annex F "
+         "member and detailing assessment separately.")
     h2("Modular ratios and creep")
     md("The cracked-elastic analysis uses a short-term modular ratio $n_s = E/E_c$ "
        "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
@@ -1523,7 +1522,7 @@ def manual_blocks() -> list:
         "example.",
         "Concrete compression stress increases on a curved branch to its design "
         "plateau, which continues until the marked crushing strain.")
-    h2("Mild steel")
+    h2("Reinforcing steel")
     md(("The mild-steel editor uses one general Curve 3 law. It is linear to a "
        "first yield, can pass through a second yield defined by the plastic offsets, "
        "and then reaches the entered ultimate point. Setting $k=1$ and both offsets "
@@ -1600,8 +1599,8 @@ def manual_blocks() -> list:
     call("concept", "$s_{p,j}$ is tendon $j$'s projection on the local strain "
          "gradient. If all tendons share the same limit and initial strain, "
          "$s_{p,min}=\\min_j s_{p,j}$ is a useful shorthand for the most tensile "
-         "location. The calculation still evaluates every tendon; no undefined global "
-         "cable coordinate replaces the element-specific candidates.")
+         "location. Each tendon is checked using its own position, initial strain "
+         "and material limit.")
     call("tip", "The reported mild-steel strain is split into its two governing "
          "extremes: the most **tensile** bar strain $\\varepsilon_{s,t}$ and, when "
          "the bars are active in compression, the most **compressed** bar strain "
@@ -1729,8 +1728,8 @@ def manual_blocks() -> list:
        "transformed area $n\\,A$. (The method can also subtract the concrete a "
        "compression-zone bar displaces, using $(n-1)\\,A$ there; Sector leaves that "
        "refinement off, so the reported stresses and section properties use "
-       "$n\\,A$ throughout.) The calculation uses an $E_c=1$ reference-stress "
-       "plane $(\\sigma_0,g_x,g_y)$, not a physical strain/curvature plane. The "
+       "$n\\,A$ throughout.) The solver normalises $E_c$ to 1 and solves a "
+       "reference-stress plane $(\\sigma_0,g_x,g_y)$. The "
        "physical concrete strain is $\\varepsilon_c=\\sigma_{ref}/E_c$. Report "
        "labels identify the physical quantity represented by each result field. "
        "Newton iteration determines the "
@@ -1810,8 +1809,8 @@ def manual_blocks() -> list:
          "coarse system side by side, each for the long-term and the short-term "
          "load -- four crack widths in one calculation.")
     h2("DK NA heightened crack-control minimum")
-    md("This is a separate, user-selected DS/EN 1992-1-1 DK NA:2024 "
-       "Formula 7.100 NA calculation, not another ordinary crack-width result. "
+    md("Enable **DK heightened crack-control minimum** to calculate the "
+       "reinforcement ratio required by DS/EN 1992-1-1 DK NA:2024 Formula 7.100 NA. "
        "The required reinforcement ratio is\n\n"
        "$$\\rho_{s,min}=m_s\\sqrt{\\frac{\\phi f_{ct,eff}}"
        "{4E_{sk}kw_k}}$$\n\n"
@@ -1893,12 +1892,14 @@ def manual_blocks() -> list:
              "70 MPa characteristic range"],
             ["2005 family - welded reinforcing bar or fabric",
              "35 MPa characteristic range"],
-            ["2023 - unwelded straight or bent bar, phi <= 12 mm",
+            ["2023 - unwelded straight or bent bar, $\\phi \\leq 12$ mm",
              "90 MPa design range"],
-            ["2023 - unwelded straight or bent bar, phi > 12 mm",
+            ["2023 - unwelded straight or bent bar, $\\phi > 12$ mm",
              "73 MPa design range"],
-            ["2023 - welded bar or fabric, phi <= 12 / > 12 mm",
-             "40 / 30 MPa design range"],
+            ["2023 - welded bar or fabric, $\\phi \\leq 12$ mm",
+             "40 MPa design range"],
+            ["2023 - welded bar or fabric, $\\phi > 12$ mm",
+             "30 MPa design range"],
             ["2023 - reinforcing-steel coupler", "19 MPa design range"],
             ["2023 - pretensioning steel or single strand in plastic duct",
              "95 MPa design range"],
@@ -1920,11 +1921,11 @@ def manual_blocks() -> list:
         "concept",
         "A passing simplified screen means that a more detailed stress-range "
         "assessment is not required for that element. The report still includes "
-        "the detailed calculation and independent strength checks for transparency.",
+        "the detailed calculation and independent strength checks.",
     )
 
     h2("Reinforcement S-N and Miner check")
-    md("For each bar or tendon, the selected fatigue detail supplies $N^*$, slopes "
+    md("For each bar or tendon, the selected fatigue detail supplies $N^{*}$, slopes "
        "$k_1$ and $k_2$, and the characteristic reference range "
        "$\\Delta\\sigma_{Rsk}$. The design knee is\n\n"
        "$$\\Delta\\sigma_{Rd}=\\frac{\\Delta\\sigma_{Rsk}}{\\gamma_s},$$\n\n"
@@ -2093,7 +2094,7 @@ def manual_blocks() -> list:
          "to the corrected contribution is 1.5. Clause 8.2.3(10) applies the "
          "selected duct allowance to the compression-field width. The 2005-family "
          "links check applies its duct allowance to $V_{Rd,max}$ under 6.2.3(6).")
-    md("**2023 chord example:** $M_{Ed}=90$ kNm, $M_{Rd}=100$ kNm, "
+    md("**2023 chord arithmetic example (supplied scalar assumptions):** $M_{Ed}=90$ kNm, $M_{Rd}=100$ kNm, "
        "$N_{Vd}=250$ kN and $z=0.5$ m give "
        "$M_{Ed,total}=90+250\\cdot0.5=215$ kNm and utilisation "
        "$215/100=2.15$: **FAIL**. The opposite chord is assessed separately with "
@@ -2183,10 +2184,13 @@ def manual_blocks() -> list:
          "a further 0.7 on the pure-shear expression for the circulatory shear "
          "flow. Note $\\nu_t$ has NO lower bound: the 0.45 floor of 5.103 NA "
          "belongs to $\\nu_v$ only, so above C50 $\\nu_t$ keeps falling. Only solid and "
-         "single-cell (box) sections are idealised automatically; a multi-cell section "
-         "(two or more voids) and a re-entrant compound outline (T, L, I or flanged) "
-         "require explicit sub-division (6.3.1(3)); the single-tube resistance and "
-         "verdict are withheld until component rectangles are defined. A positive "
+         "single-cell (box) sections are idealised automatically. A re-entrant "
+         "compound outline (T, L, I or flanged) requires supported component "
+         "rectangles under **Subdivide into sub-tubes** (6.3.1(3)). Their union "
+         "must cover the concrete net area without overlap, boundary crossing "
+         "or entry into a void. Multi-cell torsion (two or more voids) requires "
+         "a separate applicable model; entering rectangles does not establish "
+         "that model in Sector. A positive "
          "global $t_{ef}$ override is not transferred to those component tubes and "
           "therefore blocks a subdivided calculation; 0 selects the wall-specific "
           "automatic thickness for each sub-tube. Missing, ambiguous or conflicting "
@@ -2198,7 +2202,7 @@ def manual_blocks() -> list:
          "verdicts are NOT ASSESSED. The requested and permitted limits remain "
          "visible for correction; $T_{Rd,c}$ may remain as angle-independent "
          "cracking context.")
-    md("**Worked** (300 x 600 mm rectangle with implementation-fixture bar centres "
+    md("**Torsion example** (300 x 600 mm rectangle with bar centres "
        "50 mm from every wall, C35, DK NA:2024, closed $\\phi$10 "
        "stirrup at $s = 150$ mm): $A = 0.18$ m$^2$, $u = 1.8$ m, "
        "$A/u = 100$ mm and $2a = 100$ mm, so $t_{ef} = 100$ mm, "
@@ -2449,7 +2453,7 @@ def manual_blocks() -> list:
            ["$V_{Ed}$", "Applied design shear action; kN"],
            ["$\\Delta\\sigma_{Ed}$", "Action-factored fatigue stress range; MPa"],
            ["$\\Delta\\sigma_{Rsk}$", "Characteristic S-N reference range; MPa"],
-           ["$N^*$", "Reference cycle count at the S-N curve knee"],
+           ["$N^{*}$", "Reference cycle count at the S-N curve knee"],
            ["$k_1$, $k_2$", "S-N slopes above and below the knee"],
            ["$D$", "Palmgren-Miner cumulative damage; limit 1.0"],
            ["$\\gamma_{Ff}$", "Partial factor on the cyclic fatigue action increment"],

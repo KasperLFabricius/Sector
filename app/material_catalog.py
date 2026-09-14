@@ -43,12 +43,12 @@ def mild_preset_classification(preset: str) -> str:
 
     selected = str(preset).strip()
     if selected in codes.CODES:
-        return "Curve 3 Eurocode design preset"
+        return "Eurocode design stress-strain diagram"
     if selected == "Curve 2 (elastic-perfectly-plastic)":
-        return "User-defined / project-defined Curve 2 preset; uncited"
+        return "Project-defined elastic-perfectly-plastic diagram; uncited"
     if selected in mp.MILD_PRESETS:
-        return "User-defined / project-defined named-curve preset; uncited"
-    return "Custom / imported user law; uncited"
+        return "Project-defined stress-strain diagram; uncited"
+    return "Custom / imported stress-strain diagram; uncited"
 
 
 def mild_preset_display_label(preset: str) -> str:
@@ -63,12 +63,10 @@ def mild_preset_kernel_note(preset: str) -> str:
 
     selected = str(preset).strip()
     if selected in codes.CODES:
-        return ("General Curve 3 law; the edition preset supplies Eurocode "
-                "design-diagram starting values")
+        return f"Preset: {selected} design stress-strain diagram"
     if selected in mp.MILD_PRESETS:
-        return ("General Curve 3 law; the named project-defined preset supplies "
-                "starting values")
-    return "Custom or imported material law; project-defined"
+        return "Project-defined stress-strain diagram. Record its design basis"
+    return "Custom or imported stress-strain diagram. Record its design basis"
 
 
 def _kind(kind: str) -> str:

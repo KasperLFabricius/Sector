@@ -11,6 +11,21 @@ from collections.abc import Mapping
 import math
 
 
+_CAPABILITY_LABELS = {
+    "reinforcement_fatigue": "Reinforcement fatigue",
+    "concrete_fatigue_equivalent": "Concrete fatigue - equivalent stress",
+    "concrete_fatigue_damage_sum": "Concrete fatigue - Miner damage",
+    "ordinary_crack_width": "Crack width",
+    "heightened_crack_control": "DK heightened crack-control minimum",
+}
+
+
+def capability_display_label(capability):
+    """Name registered calculations without exposing their stored identifiers."""
+
+    return _CAPABILITY_LABELS.get(str(capability or ""), "Unrecognised calculation")
+
+
 def value(record, name, default=None):
     """Read a field from either a mapping or a result dataclass."""
 
