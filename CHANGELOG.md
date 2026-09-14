@@ -4,11 +4,16 @@
 
 ## 0.96.4 - 2026-09-14
 
-Part B's working source identity covers report-profile content, input navigation,
-optional Checker/Approver document control and maintained Python 3.13.15.
-Project schema remains 27 and dependency locks are unchanged. Current guidance
-has a documentation index, corrected module listing and current schema reference.
-Final publication qualification and the integrated portable build remain pending.
+Sector 0.96.4 improves report-profile content, input navigation and manual reading
+paths. Material-stress percentages use absolute magnitudes while stress values
+retain their signs. Reports support optional Checker/Approver fields and
+user-supplied project/action references with section/page locations. Related final
+results share tables, essential notes use larger text, and equation continuations
+retain their parent identity.
+
+The runtime is 64-bit CPython 3.13.15. Project schema remains 27 and dependency
+locks are unchanged. Current guidance has a documentation index, corrected module
+listing and current schema reference.
 
 See [v0.96.4 notes](docs/v0964_release_notes.md). The torsion/M-V-T programme
 remains deferred to a later release.
