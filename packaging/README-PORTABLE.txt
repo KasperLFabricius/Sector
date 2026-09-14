@@ -6,7 +6,7 @@ Building
 
 Extract the complete Sector project, then double-click BUILD.bat in its top
 folder. Do not run BUILD.bat inside Windows Explorer's ZIP preview. Building
-requires 64-bit CPython 3.13, network or cache access to the locked build
+requires 64-bit CPython 3.13.15, network or cache access to the locked build
 dependencies, and no administrator rights.
 
 The build is successful only after the finished Sector.exe has started and its

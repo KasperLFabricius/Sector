@@ -62,7 +62,7 @@ also report the measured clearance and resolved effective tolerance. The
 validation result exposes the floating-point component separately as
 `floating_point_tolerance` for audit.
 
-Project format version 14 is unchanged. Mixed-winding projects and exactly
+The current project schema is 27. Mixed-winding projects and exactly
 closed rings continue to round-trip without reordering. A legacy representation
 that concatenates multiple independently closed rings into one self-touching
 ring is invalid; callers must represent interior rings through the existing

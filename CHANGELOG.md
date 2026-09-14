@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.96.4 - 2026-09-14
+
+Part B's working source identity covers report-profile content, input navigation,
+optional Checker/Approver document control and maintained Python 3.13.15.
+Project schema remains 27 and dependency locks are unchanged. Current guidance
+has a documentation index, corrected module listing and current schema reference.
+Final publication qualification and the integrated portable build remain pending.
+
+See [v0.96.4 notes](docs/v0964_release_notes.md). The torsion/M-V-T programme
+remains deferred to a later release.
+
 ## 0.96.3 - 2026-09-14
 
 Sector 0.96.3 improves engineering wording and numerical result summaries.

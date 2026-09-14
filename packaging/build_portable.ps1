@@ -7,6 +7,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 $sourceRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
+$pythonVersion = (Get-Content -LiteralPath (Join-Path $sourceRoot ".python-version") -Raw).Trim()
+if ($pythonVersion -cnotmatch '^3\.13\.(0|[1-9][0-9]*)$') {
+    throw "The source .python-version must pin an exact Python 3.13 patch"
+}
 
 function Test-SectorPython {
     param(
@@ -17,7 +21,7 @@ function Test-SectorPython {
 
     $probe = @'
 import platform, struct, sys
-print(platform.python_implementation() + '|' + str(sys.version_info[0]) + '|' + str(sys.version_info[1]) + '|' + str(struct.calcsize('P') * 8) + '|' + sys.executable)
+print(platform.python_implementation() + '|' + platform.python_version() + '|' + str(struct.calcsize('P') * 8) + '|' + sys.executable)
 '@
     try {
         $identity = [string](& $Executable @PrefixArguments -I -S -c $probe 2>$null)
@@ -28,19 +32,18 @@ print(platform.python_implementation() + '|' + str(sys.version_info[0]) + '|' + 
     catch {
         return $null
     }
-    $parts = @($identity.Trim() -split '\|', 5)
+    $parts = @($identity.Trim() -split '\|', 4)
     if (
-        $parts.Count -ne 5 -or
+        $parts.Count -ne 4 -or
         $parts[0] -cne "CPython" -or
-        $parts[1] -cne "3" -or
-        $parts[2] -cne "13" -or
-        $parts[3] -cne "64" -or
-        -not (Test-Path -LiteralPath $parts[4] -PathType Leaf)
+        $parts[1] -cne $pythonVersion -or
+        $parts[2] -cne "64" -or
+        -not (Test-Path -LiteralPath $parts[3] -PathType Leaf)
     ) {
         return $null
     }
     return [PSCustomObject]@{
-        Executable = [IO.Path]::GetFullPath($parts[4])
+        Executable = [IO.Path]::GetFullPath($parts[3])
         PrefixArguments = @()
     }
 }
@@ -48,10 +51,11 @@ print(platform.python_implementation() + '|' + str(sys.version_info[0]) + '|' + 
 function Resolve-SectorPython {
     $candidates = @()
     if (-not [string]::IsNullOrWhiteSpace($env:SECTOR_PORTABLE_PYTHON)) {
-        $candidates += [PSCustomObject]@{
-            Executable = [string]$env:SECTOR_PORTABLE_PYTHON
-            PrefixArguments = @()
+        $explicitPython = Test-SectorPython -Executable $env:SECTOR_PORTABLE_PYTHON
+        if ($null -eq $explicitPython) {
+            throw "SECTOR_PORTABLE_PYTHON must select 64-bit CPython $pythonVersion; the explicit override is missing, unusable or incompatible"
         }
+        return $explicitPython
     }
     foreach ($command in @(Get-Command python.exe -CommandType Application -All -ErrorAction SilentlyContinue)) {
         if (-not [string]::IsNullOrWhiteSpace([string]$command.Source)) {
@@ -78,8 +82,8 @@ function Resolve-SectorPython {
         }
     }
     throw (
-        "Sector builds require 64-bit CPython 3.13. " +
-        "Install Python 3.13 from python.org and run BUILD.bat again."
+        "Sector builds require 64-bit CPython $pythonVersion, pinned in .python-version. " +
+        "Install that version from python.org or set SECTOR_PORTABLE_PYTHON to its executable and run BUILD.bat again."
     )
 }
 
@@ -110,7 +114,7 @@ if (-not (Test-Path -LiteralPath $driver -PathType Leaf)) {
     throw "The extracted Sector source is incomplete: tools/build_portable_windows.py is missing"
 }
 
-Write-Host "Sector v0.96.3 portable Windows build"
+Write-Host "Sector v0.96.4 portable Windows build"
 Write-Host "Source: $sourceRoot"
 Write-Host "Output: $OutputDirectory"
 Write-Warning "This internal package is unsigned; Windows may show a SmartScreen warning."
