@@ -250,7 +250,8 @@ def test_pub_m01_current_participants_reach_actual_report_routes(
     if case["name"].startswith("biaxial") and profile != "Brief":
         selected = out["worked_example_selection"]["families"]["shear"]
         component = selected["component"][-1]
-        assert f"Governingworkedexample:V{component},Ed" in "".join(text.split())
+        heading = "Governingdirection" if profile == "Standard" else "Governingworkedexample"
+        assert f"{heading}:V{component},Ed" in "".join(text.split())
         assert "Worked shear calculation unavailable" not in text
         assert "Face-specific shear comparison NOT ASSESSED" not in text
         assert "Candidate face" in text
