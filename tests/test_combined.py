@@ -1828,7 +1828,8 @@ def _assert_current_native_mvt_views(at, *, longitudinal=False):
         target = rows[rows["Check"] == "Combined longitudinal reinforcement"]
         assert len(target) == 1
         assert (target.iloc[0]["Status"], target.iloc[0]["Result"]) == (
-            component["status"], physical_value,
+            component["status"],
+            chr(0x2014) if physical_value == "-" else physical_value,
         )
     return pristine
 
