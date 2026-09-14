@@ -151,8 +151,10 @@ def test_manual_and_every_report_profile_declare_language_and_clean_text_layers(
         assert reader.trailer["/Root"].get("/Lang") == "en", name
         assert "SECTOR-MATH[" not in text, name
         assert "SECTOR-SOURCE-END[" not in text, name
-        if name != "Brief":
+        if name in {"Manual", "Audit"}:
             assert "Mathematical expression:" in text, name
+        else:
+            assert "Mathematical expression:" not in text, name
 
 
 def test_audit_equation_identities_semantics_and_sources_remain_colocated():

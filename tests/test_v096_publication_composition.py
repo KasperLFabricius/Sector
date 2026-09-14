@@ -34,10 +34,11 @@ def _page_text(page) -> str:
 def _contents_pages(reader: PdfReader):
     texts = [_page_text(page) for page in reader.pages]
     start = next(index for index, text in enumerate(texts) if text.startswith("Contents"))
-    end = next(
-        index for index, text in enumerate(texts[start + 1:], start + 1)
-        if text.startswith("1. Results summary")
-    )
+    first_chapter = next(item for item in reader.outline
+                         if not isinstance(item, list)
+                         and str(getattr(item, "title", "")).startswith("1. "))
+    end = reader.get_destination_page_number(first_chapter)
+    assert end > start
     return list(reader.pages[start:end]), "\n".join(texts[start:end])
 
 
@@ -68,8 +69,9 @@ def test_every_profile_has_linked_contents_with_matching_outline_destinations():
     for profile in ("Brief", "Standard", "Audit"):
         reader = PdfReader(io.BytesIO(_profile_pdf(profile)))
         pages, text = _contents_pages(reader)
-        assert "1. Results summary" in text
-        assert re.search(r"Results summary\s+\.?\s*(?:\.\s*)+\d+", text)
+        first_heading = "Governing results and limitations" if profile == "Brief" else "Results summary"
+        assert f"1. {first_heading}" in text
+        assert re.search(re.escape(first_heading) + r"\s+\.?\s*(?:\.\s*)+\d+", text)
 
         annotations = [
             annotation.get_object()

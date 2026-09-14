@@ -34,6 +34,16 @@ APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
     "6d0602b9cdb13ae56b8c5d07ed5a0d5f3c2fe2fa49d037c67114c70a3ab54fdd"
 )
+# Loading normalizes only these newly optional document-control/reference fields.
+# The original download identity remains unchanged above.
+LOADED_REPORT_DEFAULTS = {
+    "rep_checker": "",
+    "rep_approver": "",
+    "rep_source_register": [],
+}
+EXPECTED_LOADED_INPUT_SHA256 = (
+    "81397ccb552a9f58e48b900ad5cfa2b3d57ec5fba02c111290d705e299345079"
+)
 
 
 def _pub_m01_pdf_text(pdf):
@@ -138,6 +148,11 @@ def test_reference_download_is_current_schema_complete_and_identity_stable():
     assert set(tables) == set(project_io.PROJECT_TABLE_KEYS)
     assert reproducible_example.input_sha256() == EXPECTED_INPUT_SHA256
     assert project_io.input_sha256(tables, scalars) == EXPECTED_INPUT_SHA256
+    assert not set(LOADED_REPORT_DEFAULTS).intersection(scalars)
+    loaded_scalars = {**scalars, **LOADED_REPORT_DEFAULTS}
+    assert project_io.input_sha256(tables, loaded_scalars) == (
+        EXPECTED_LOADED_INPUT_SHA256
+    )
     assert scalars["autosave_on"] is True
     assert scalars["capacity_steel_material_id"] == "M1"
     assert scalars["torsion_tef"] == 80.0
@@ -196,7 +211,7 @@ def test_complete_example_retains_results_without_trace_payloads(
 ):
     state = calculated_example.session_state.filtered_state
     results = state["results"]
-    assert state["calculation_record"]["input_sha256"] == EXPECTED_INPUT_SHA256
+    assert state["calculation_record"]["input_sha256"] == EXPECTED_LOADED_INPUT_SHA256
     assert set(results) == {
         "plastic_cases", "plastic", "shear", "torsion", "combined",
         "minimum_reinforcement", "transverse_reinforcement", "elastic_cases",

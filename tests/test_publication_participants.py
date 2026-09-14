@@ -88,7 +88,7 @@ def current_participants(request, tmp_path_factory):
         _select_view(at, "Results Overview")
         assert not at.exception
         overview = next(
-            item.value.copy(deep=True) for item in at.table
+            item.value.copy(deep=True) for item in at.dataframe
             if "Check" in item.value.columns
         )
         yield {
@@ -250,7 +250,8 @@ def test_pub_m01_current_participants_reach_actual_report_routes(
     if case["name"].startswith("biaxial") and profile != "Brief":
         selected = out["worked_example_selection"]["families"]["shear"]
         component = selected["component"][-1]
-        assert f"Governingworkedexample:V{component},Ed" in "".join(text.split())
+        heading = "Governingdirection" if profile == "Standard" else "Governingworkedexample"
+        assert f"{heading}:V{component},Ed" in "".join(text.split())
         assert "Worked shear calculation unavailable" not in text
         assert "Face-specific shear comparison NOT ASSESSED" not in text
         assert "Candidate face" in text
@@ -359,7 +360,7 @@ def test_pub_m01_poisoned_participant_is_withheld_in_native_views(
         assert "876.543" not in all_visible and "947.321" not in all_visible
         _select_view(at, "Results Overview")
         assert not at.exception
-        overview = next(item.value for item in at.table if "Check" in item.value.columns)
+        overview = next(item.value for item in at.dataframe if "Check" in item.value.columns)
         if t.get("directional_interactions"):
             row = overview.loc[
                 overview["Check"] == "Vy+T Formula (6.31) minimum-reinforcement screen"

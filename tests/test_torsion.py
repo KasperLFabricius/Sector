@@ -2811,7 +2811,13 @@ def test_pre_m05_capacity_and_buffered_report_are_hidden_until_recalculated():
     )
     assert "999000" not in overview
     assert "Torsion resistance" not in overview
-    assert "M-V-T" not in overview
+    scope = next(frame.value for frame in at.dataframe
+                 if "Availability / scope" in frame.value.columns)
+    combined_scope = scope.loc[scope["View"] == "M-V-T Combined"]
+    assert not combined_scope.empty
+    assert set(combined_scope["Status"]) == {"NOT RUN"}
+    assert set(combined_scope["Availability / scope"]) == {"-"}
+    assert not overview_table(at)["View"].isin(["Torsion", "M-V-T Combined"]).any()
     assert "Plastic bending" in overview
 
     _goto_page(at, "Report")
@@ -2884,7 +2890,13 @@ def test_pre_m05_contract_with_changed_spacing_hides_old_spacing_until_recalcula
     overview = "\n".join(
         frame.value.to_string(index=False) for frame in (*at.table, *at.dataframe)
     )
-    assert "Reinforcement clear spacing" not in overview
+    scope = next(frame.value for frame in at.dataframe
+                 if "Availability / scope" in frame.value.columns)
+    spacing_scope = scope.loc[scope["Check"] == "Reinforcement clear spacing"]
+    assert len(spacing_scope) == 1
+    assert spacing_scope.iloc[0]["Status"] == "NOT RUN"
+    assert spacing_scope.iloc[0]["Availability / scope"] == "-"
+    assert "Reinforcement clear spacing" not in set(overview_table(at)["Check"])
     assert "40.0 mm" not in overview
     assert f"{chr(0x2265)} 21.0 mm" not in overview
     assert any("recalculation" in item.value for item in at.caption)

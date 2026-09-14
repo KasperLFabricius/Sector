@@ -94,21 +94,25 @@ def test_manual_profile_table_contains_user_information_only():
     assert "hard_page_limit" not in source
 
 
-def test_workflow_table_uses_three_readable_native_markup_columns():
+def test_compact_workflow_index_links_to_complete_native_markup_guidance():
+    blocks = manual.manual_blocks()
     workflow_table = next(
-        block
-        for block in manual.manual_blocks()
-        if block[0] == "table" and block[1][0] == "Workflow / outcome"
+        block for block in blocks
+        if block[0] == "table" and block[1] == ["Task", "Outcome"]
     )
-    assert workflow_table[1] == [
-        "Workflow / outcome",
-        "Before and do",
-        "Expected state / if blocked",
-    ]
-    assert all(len(row) == 3 for row in workflow_table[2])
+    assert all(len(row) == 2 for row in workflow_table[2])
+    assert len(workflow_table[2]) == len(manual.manual_ia.WORKFLOWS)
     visible = " ".join(_visible_strings(workflow_table))
-    assert "**Before:**" in visible
-    assert "**Do:**" in visible
+    for workflow in manual.manual_ia.WORKFLOWS:
+        assert workflow.label in visible
+        guidance = next(block[1] for block in blocks
+                        if block[0] == "md"
+                        and block[1].startswith(f"**{workflow.label}. Before:**"))
+        assert workflow.prerequisite in guidance
+        assert workflow.action in guidance
+        assert workflow.expected_state in guidance
+        assert "**Route:**" in guidance and "**Expected:**" in guidance
+        assert "<b>" not in guidance
     assert "<b>" not in visible
 
 

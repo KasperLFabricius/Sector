@@ -706,7 +706,7 @@ def manual_blocks() -> list:
          "Plastic example: N = 0. Elastic/crack examples: Mx = 150 kNm."],
         ["[Circular hollow](#manual-method-materials)",
          "800/400 mm annulus, C40/50; 12 x 20 mm bars and 8 tendons.",
-         "Tendon-law example: initial strain 5.0 per mille; proof strength 1600 MPa, factor 1.15."],
+         "Tendon-law example: initial strain 5.0 \u2030; proof strength 1600 MPa, factor 1.15."],
         ["[Shear without links](#manual-method-shear)",
          "300 x 600 mm rectangle; C35 with DK NA:2024.",
          "N = 0; supplied Asl = 1473 mm2, d = 550 mm, bw = 300 mm."],

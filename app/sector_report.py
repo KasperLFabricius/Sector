@@ -1891,10 +1891,11 @@ class ReportBuilder:
         else:
             del self.flow[group["start"]:]
         condition = note or ""
-        if source == _DERIVED_EQUATION_SOURCE:
+        if symbol is None or source == _DERIVED_EQUATION_SOURCE:
             condition += ("<br/>" if condition else "") + "Method: " + _equation_math(expr)
         group["rows"].append([
-            f'<a name="{anchor}"/>' + symbol, result, condition or "\u2014",
+            f'<a name="{anchor}"/>' + (symbol or "Method relation"),
+            result, condition or "\u2014",
         ])
         group["item"] = self._table(
             [["Quantity", "Result", "Method / condition"], *group["rows"]],
@@ -2210,7 +2211,9 @@ class ReportBuilder:
                 required = max(
                     required,
                     min(paragraph.minWidth(), authored_width),
-                    numeric_width,
+                    # Table layout may round an exact string-width boundary
+                    # down; retain a negligible guard against splitting a digit.
+                    numeric_width + 1e-6 if numeric_width else 0.0,
                 )
             floors.append(required + 2 * _REPORT_TABLE_HORIZONTAL_PADDING)
         return floors
@@ -4415,16 +4418,19 @@ class ReportBuilder:
         if applicability_note is not None:
             self._small(applicability_note)
         if c.curve == 2:
+            curve_source = (
+                _concrete_ultimate_reference(preset)
+                or "Project-defined concrete law; no Eurocode source inferred."
+            )
             self._formula(
                 "sigma<sub>c</sub> = f<sub>cd</sub> &#183; [1 - (1 - eps<sub>c</sub>/"
                 "eps<sub>c2</sub>)<super>n</super>],  for eps<sub>c</sub> &lt;= eps<sub>c2</sub>; "
                 "then f<sub>cd</sub> up to eps<sub>cu2</sub>",
                 equation_key="materials.concrete.curve-2",
-                ref=(
-                    _concrete_ultimate_reference(preset)
-                    or "Project-defined concrete law; no Eurocode source inferred."
-                ),
+                ref=curve_source,
             )
+            if self.profile.key == "Standard":
+                self._small("Concrete law source: " + _html_escape(curve_source))
         if self.figures:
             self._fig(viz.concrete_curve_figure(c), 130, 80)
 
@@ -8713,8 +8719,8 @@ class ReportBuilder:
             ])
         self._table(
             rows,
-            [18 * mm, 14 * mm, 14 * mm, 14 * mm, 14 * mm, 21 * mm,
-             31 * mm, 17 * mm, 22 * mm],
+            [16 * mm, 14 * mm, 14 * mm, 14 * mm, 14 * mm, 21 * mm,
+             27 * mm, 17 * mm, 30 * mm],
             font=5.8,
         )
         governing_notes = {
@@ -12224,7 +12230,7 @@ class ReportBuilder:
         summary_rows = fatigue_presentation.spectrum_rows(payload)
         self._h2("Spectrum summary")
         rows = [[
-            "Spectrum", "Status", "Bins", "Steel", "Concrete", "Governing",
+            "Spectrum", "Status", "Governing",
             "Max Miner D", "Max yield / proof", "Governing util.",
             "Search upper D",
         ]]
@@ -12232,9 +12238,6 @@ class ReportBuilder:
             [
                 _html_escape(row["spectrum"]),
                 row["status"],
-                row["bins"],
-                row["reinforcement_elements"],
-                row["concrete_fibres"],
                 _html_escape(row["governing"]),
                 _fmt_sig(row["miner_damage"], 6),
                 _pct(row["yield_utilisation"]),
@@ -12245,15 +12248,25 @@ class ReportBuilder:
         ])
         self._table(
             rows,
-            [18 * mm, 14 * mm, 8 * mm, 9 * mm, 10 * mm,
-             28 * mm, 16 * mm, 19 * mm, 18 * mm, 18 * mm],
-            font=5.5,
+            [25 * mm, 18 * mm, 34 * mm, 21 * mm, 25 * mm, 25 * mm, 22 * mm],
+            font=9,
             keep=False,
+            caption="Spectrum results",
         )
         self._small(
             "Each spectrum has its own Miner sum. Governing utilisation is the "
             "maximum applicable simplified screen, Miner range, yield/proof "
             "stress or concrete result."
+        )
+        self._table(
+            [["Spectrum", "Bins", "Steel elements", "Concrete fibres"],
+             *[[_html_escape(row["spectrum"]), row["bins"],
+                row["reinforcement_elements"], row["concrete_fibres"]]
+               for row in summary_rows]],
+            [60 * mm, 30 * mm, 40 * mm, 40 * mm],
+            font=9,
+            keep=False,
+            caption="Spectrum calculation counts",
         )
 
         spectra = fatigue_presentation.items(payload, "spectra")
@@ -12307,8 +12320,8 @@ class ReportBuilder:
             ])
             self._table(
                 rows,
-                [17 * mm, 13 * mm, 24 * mm, 28 * mm, 17 * mm,
-                 24 * mm, 15 * mm, 27 * mm],
+                [20 * mm, 17 * mm, 22 * mm, 28 * mm, 24 * mm,
+                 21 * mm, 12 * mm, 21 * mm],
                 font=5.2,
                 keep=False,
                 repeat_cols=2,
@@ -12408,9 +12421,15 @@ class ReportBuilder:
                 table_key = table_fields.FATIGUE_SPECTRUM_TABLE_KEY
                 rows = [[
                     "Bin", "Description", "Cycles",
-                    _input_table_symbol(table_key, "n_long_ed_kn"),
-                    _input_table_symbol(table_key, "mx_long_ed_knm"),
-                    _input_table_symbol(table_key, "my_long_ed_knm"),
+                    _input_table_symbol(table_key, "n_long_ed_kn").replace(
+                        ",long</sub>", ",<br/>long</sub>"
+                    ),
+                    _input_table_symbol(table_key, "mx_long_ed_knm").replace(
+                        ",long</sub>", ",<br/>long</sub>"
+                    ),
+                    _input_table_symbol(table_key, "my_long_ed_knm").replace(
+                        ",long</sub>", ",<br/>long</sub>"
+                    ),
                     _input_table_symbol(table_key, "n_short_ed_kn"),
                     _input_table_symbol(table_key, "mx_short_ed_knm"),
                     _input_table_symbol(table_key, "my_short_ed_knm"),
@@ -12511,7 +12530,7 @@ class ReportBuilder:
                 ])
                 self._table(
                     rows,
-                    [16 * mm, 12 * mm, 14 * mm, 13 * mm, 29 * mm,
+                    [20 * mm, 12 * mm, 14 * mm, 13 * mm, 29 * mm,
                      15 * mm, 18 * mm, 25 * mm, 16 * mm, 14 * mm],
                     font=5.2,
                     keep=False,
@@ -12587,7 +12606,7 @@ class ReportBuilder:
                             _html_escape(screen["governing_bin"]),
                             _fmt_sig(screen["total_cycles"], 8),
                         ]],
-                        [25 * mm, 34 * mm, 18 * mm, 23 * mm,
+                        [25 * mm, 34 * mm, 29 * mm, 23 * mm,
                          19 * mm, 17 * mm, 21 * mm, 22 * mm],
                         font=5.5,
                         keep=False,
@@ -12758,8 +12777,8 @@ class ReportBuilder:
                 ])
                 self._table(
                     rows,
-                    [11 * mm, 20 * mm, 13 * mm, 13 * mm, 17 * mm,
-                     16 * mm, 18 * mm, 22 * mm, 16 * mm, 14 * mm],
+                    [14 * mm, 18 * mm, 12 * mm, 12 * mm, 17 * mm,
+                     16 * mm, 18 * mm, 26 * mm, 13 * mm, 14 * mm],
                     font=5.4,
                     keep=False,
                     repeat_cols=2,
@@ -12867,8 +12886,8 @@ class ReportBuilder:
                                 search, "points_evaluated", "-"
                             ),
                         ]],
-                        [16 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm,
-                         16 * mm, 16 * mm, 16 * mm, 18 * mm, 18 * mm],
+                        [22 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm,
+                         16 * mm, 16 * mm, 22 * mm, 18 * mm, 18 * mm],
                         font=5.3,
                     )
                 all_bin_rows = fatigue_presentation.concrete_bin_rows(result)
@@ -13575,7 +13594,7 @@ class ReportBuilder:
             )
 
     def _appendix(self):
-        self.flow.append(NotAtTopPageBreak())
+        appendix_start = len(self.flow)
         self._h1("QA appendix - references and notes")
         lines = []
         plastic_results = self._result_values("plastic")
@@ -13763,6 +13782,7 @@ class ReportBuilder:
             self._p("- " + line)
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         self._small(f"Generated {ts} by Sector {self.version}.")
+        self._keep_from(appendix_start)
 
 
 @presentation.publication_calculation_scope()
