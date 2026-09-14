@@ -7400,7 +7400,7 @@ def build_inputs(host=st):
     torsion_tef = _seeded_number(
         sts, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
         "torsion_tef", disabled=not _tors,
-        help="Zero applies A/u together with the wall-specific lower bound from "
+        help="Zero applies A/u with the wall-specific lower bound from "
              "the longitudinal reinforcement centres and the real-wall limit for "
              "a single-cell hollow section. A positive single-tube override must "
              "satisfy every wall interval. For supported subdivision, set this "
