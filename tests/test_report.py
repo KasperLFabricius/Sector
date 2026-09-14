@@ -11208,7 +11208,10 @@ def test_retained_report_includes_combined_section(tmp_path):
     assert "Axial N" in txt
     assert "action acting alone" in flat
     assert "entered biaxial moment direction" in flat
-    assert "does not replace a separate member and detailing assessment" in flat
+    assert (
+        "Scope: cross-section resistance. Complete the applicable Annex F "
+        "member and detailing assessment separately."
+    ) in flat
     assert "Annex F" in flat
     assert "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)" in flat
     assert (
