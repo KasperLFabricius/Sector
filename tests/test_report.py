@@ -2002,7 +2002,7 @@ def test_curvature_selection_is_not_inferred_from_incomplete_retained_evidence(
 
 def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
     text = " ".join(_pdf_text(_build_report_with_selection(
-        {}, _inp(), _out(), figures=False, profile="Audit", qa_appendix=False,
+        {}, _inp(), _out(), figures=False, profile="Audit",
     )).split())
 
     for heading in (
@@ -2043,7 +2043,7 @@ def test_report_uses_retained_nonzero_worked_point_for_both_depth_rows():
     before = copy.deepcopy(out)
 
     text = " ".join(_pdf_text(_build_report_with_selection(
-        {}, _inp(), out, figures=False, profile="Audit", qa_appendix=False,
+        {}, _inp(), out, figures=False, profile="Audit",
     )).split())
 
     assert "Selected sweep point 2 of 2" in text
@@ -2095,7 +2095,7 @@ def test_report_keeps_malformed_compression_depth_unavailable(retained):
     # Standard retains the unavailable final depth; Audit additionally explains
     # why the retained compression-depth working cannot be published.
     audit = " ".join(_pdf_text(_build_report_with_selection(
-        {}, _inp(), out, figures=False, qa_appendix=False, profile="Audit",
+        {}, _inp(), out, figures=False, profile="Audit",
     )).split())
     assert "Compression-depth solution unavailable" in audit
     assert "Solved compression depth" not in audit
@@ -2149,7 +2149,7 @@ def test_textbook_report_fails_closed_when_retained_state_is_incomplete():
     out["elastic"].pop("accepted_states")
 
     text = " ".join(_pdf_text(_build_report_with_selection(
-        {}, _inp(), out, figures=False, profile="Audit", qa_appendix=False,
+        {}, _inp(), out, figures=False, profile="Audit",
     )).split())
 
     assert "Compression-depth solution unavailable" in text
@@ -3262,8 +3262,8 @@ def test_report_publishes_only_governing_fine_and_coarse_crack_examples():
             for row, result in zip(rows, (first, second, third))
     ]
     _retain_named_unit_case_metadata(inp, out)
-    flat = " ".join(_pdf_text(_build_report_with_selection(
-        {}, inp, out, figures=False, profile="Audit", qa_appendix=False,
+    flat = " ".join(_pdf_body_text(_build_report_with_selection(
+        {}, inp, out, figures=False, profile="Audit",
     )).split())
     assert flat.count("Crack width worked - governing case") == 2
     assert "EQ-CRACKING.THRESHOLD" not in flat
@@ -3678,7 +3678,7 @@ def test_crack_2023_tension_zone_cap_is_a_supported_worked_branch():
     )
 
     text = " ".join(_pdf_text(_build_report_with_selection(
-        {}, inp, out, figures=False, profile="Audit", qa_appendix=False,
+        {}, inp, out, figures=False, profile="Audit",
     )).split())
 
     assert "selected: tension-zone-cap" in text
@@ -3837,7 +3837,7 @@ def test_report_publishes_ordinary_cracking_threshold_relation():
     ordinary_inp = _inp()
     ordinary_inp["mode"] = "Elastic"
     ordinary = " ".join(_pdf_text(_build_report_with_selection(
-        {}, ordinary_inp, out, figures=False, profile="Audit", qa_appendix=False,
+        {}, ordinary_inp, out, figures=False, profile="Audit",
     )).split())
     compact_ordinary = ordinary.replace(" ", "")
     assert (
@@ -4078,8 +4078,8 @@ def test_report_publishes_one_retained_critical_user_crack_comparison():
         },
     }
 
-    flat = " ".join(_pdf_text(_build_report_with_selection(
-        {}, _inp(), out, figures=False, profile="Audit", qa_appendix=False,
+    flat = " ".join(_pdf_body_text(_build_report_with_selection(
+        {}, _inp(), out, figures=False, profile="Audit",
     )).split())
 
     assert flat.count(
@@ -4188,8 +4188,8 @@ def test_report_applies_one_duration_criterion_without_noncritical_chapter():
         for row in summaries
     )
 
-    flat = " ".join(_pdf_text(_build_report_with_selection(
-        {}, inp, out, figures=False, profile="Audit", qa_appendix=False,
+    flat = " ".join(_pdf_body_text(_build_report_with_selection(
+        {}, inp, out, figures=False, profile="Audit",
     )).split())
 
     assert flat.count("Crack width worked - governing case") == 1
@@ -4273,7 +4273,7 @@ def test_report_publishes_dual_heightened_crack_chain_from_retained_values():
     out["heightened_crack_control"] = _heightened_crack_result()
 
     flat = " ".join(_pdf_text(_build_report_with_selection(
-        {}, _inp(), out, figures=False, profile="Audit", qa_appendix=False,
+        {}, _inp(), out, figures=False, profile="Audit",
     )).split())
 
     assert "DK heightened crack-control minimum" in flat
@@ -4360,7 +4360,7 @@ def test_report_crack_width_uses_millimetres_not_metres():
 
 def test_report_crack_example_publishes_every_retained_interim_selection():
     flat = " ".join(_pdf_text(_build_report_with_selection(
-        {}, _inp(), _out(), figures=False, profile="Audit", qa_appendix=False,
+        {}, _inp(), _out(), figures=False, profile="Audit",
     )).split())
     assert "2.5(h-d)" in flat
     assert "A c,eff" in flat or "Ac,eff" in flat
@@ -4769,7 +4769,7 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
     absent = _out()
     absent["plastic"].update(util=None, util_valid=True, util_gov=None)
     txt = _pdf_text(_build_report_with_selection({}, _inp(), absent, figures=False))
-    assert "closed envelope has no available utilisation result" in txt
+    assert "closed envelope has no available utilisation result" in " ".join(txt.split())
     assert "open arc" not in txt.casefold()
 
 
@@ -10757,10 +10757,10 @@ def test_report_base_en_keeps_only_the_governing_combined_worked_case(
                                    if result_presentation.action_set(ci,"plastic")["id"] == "PL-INCOMPLETE")
     chapter._combined()
     actual_headings = [item.getPlainText() for item in chapter.flow
-                       if hasattr(item,"getPlainText") and "Representative Base-EN directional calculation:" in item.getPlainText()]
+                       if hasattr(item,"getPlainText") and direction_heading + ":" in item.getPlainText()]
     assert len(actual_headings) == 1
-    assert "Representative Base-EN directional calculation: Vx+T" in actual_headings[0]
-    assert "Representative Base-EN directional calculation: Vx+T" in text
+    assert direction_heading + ": Vx+T" in actual_headings[0]
+    assert direction_heading + ": Vx+T" in text
     assert "NOT ASSESSED" in text
     assert pickle.dumps((inp, out)) == original
 
@@ -10944,7 +10944,7 @@ def test_report_publishes_only_governing_transverse_family_worked_examples(nativ
         aggregate = contexts["PL-GOV"][1][family]
         assert aggregate["biaxial"] is True
         assert set(aggregate["directions"]) == {"vx", "vy"}
-    pdf = _build_report_with_selection({}, inp, out, figures=False, profile="Audit", qa_appendix=False)
+    pdf = _build_report_with_selection({}, inp, out, figures=False, profile="Audit")
     (tmp_path / "native-governing-transverse.pdf").write_bytes(pdf)
     flat = " ".join(_pdf_text(pdf).split())
     assert pickle.dumps((inp, out)) == before
@@ -10956,9 +10956,9 @@ def test_report_publishes_only_governing_transverse_family_worked_examples(nativ
     assert "EQ-SHEAR.2005.VRDC" not in flat
     assert "EQ-TORSION.RESISTANCE.GOVERNING" not in flat
     assert "EQ-COMBINED.DK-NA.SUM" not in flat
-    assert flat.count("The complete shear worked example is published only") == 1
-    assert flat.count("The complete torsion worked example is published only") == 1
-    assert flat.count("complete combined M-V-T worked example is published only") == 1
+    assert flat.count("The complete shear worked example is published in Audit only") == 1
+    assert flat.count("The complete torsion worked example is published in Audit only") == 1
+    assert flat.count("complete combined M-V-T worked example is published in Audit only") == 1
     assert "Vx+T" in flat and "Vy+T" in flat
 
 

@@ -4418,16 +4418,19 @@ class ReportBuilder:
         if applicability_note is not None:
             self._small(applicability_note)
         if c.curve == 2:
+            curve_source = (
+                _concrete_ultimate_reference(preset)
+                or "Project-defined concrete law; no Eurocode source inferred."
+            )
             self._formula(
                 "sigma<sub>c</sub> = f<sub>cd</sub> &#183; [1 - (1 - eps<sub>c</sub>/"
                 "eps<sub>c2</sub>)<super>n</super>],  for eps<sub>c</sub> &lt;= eps<sub>c2</sub>; "
                 "then f<sub>cd</sub> up to eps<sub>cu2</sub>",
                 equation_key="materials.concrete.curve-2",
-                ref=(
-                    _concrete_ultimate_reference(preset)
-                    or "Project-defined concrete law; no Eurocode source inferred."
-                ),
+                ref=curve_source,
             )
+            if self.profile.key == "Standard":
+                self._small("Concrete law source: " + _html_escape(curve_source))
         if self.figures:
             self._fig(viz.concrete_curve_figure(c), 130, 80)
 
