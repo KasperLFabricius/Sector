@@ -267,3 +267,12 @@ def apply_widget_changes(at, changes):
             widget = getattr(at, widget_type)(key=key)
         widget.set_value(value).run()
     return at
+
+
+def overview_table(at):
+    """Read all rendered governing groups, excluding the separate scope table."""
+    import pandas as pd
+    frames = [frame.value for frame in at.dataframe
+              if {"Check", "Governing action", "Status", "Result", "Criterion", "View"}
+              .issubset(frame.value.columns)]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()

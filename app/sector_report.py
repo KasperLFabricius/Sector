@@ -10822,7 +10822,7 @@ class ReportBuilder:
                 ])
             self._table(percent_rows, [22*mm, 20*mm, 25*mm, 25*mm,
                                        26*mm, 26*mm, 26*mm], keep=False)
-            self._small("Signed stress divided by the stated characteristic strength. "
+            self._small("Absolute stress divided by the stated characteristic strength. Actual stress values retain their signs. "
                         "Unavailable means the reference strength or element assignment "
                         "is missing or invalid. These percentages do not assess compliance.")
         corner_rows = el.get("concrete_corners") or []

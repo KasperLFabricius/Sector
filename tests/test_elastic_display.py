@@ -1,4 +1,4 @@
-"""Signed, material-bound presentation ratios do not introduce an assessment."""
+"""Absolute, material-bound presentation ratios do not introduce an assessment."""
 
 import copy
 from types import SimpleNamespace as NS
@@ -28,7 +28,7 @@ def _fixture():
     return inp, {"elements": rows}
 
 
-def test_mixed_materials_signed_components_and_two_tendon_references():
+def test_mixed_materials_absolute_components_and_two_tendon_references():
     inp, elastic = _fixture()
     before = copy.deepcopy((inp, elastic))
     rows = display.element_comparison_rows(inp, elastic["elements"])
@@ -36,11 +36,11 @@ def test_mixed_materials_signed_components_and_two_tendon_references():
         ("R1", "M1", "f_yk"), ("R2", "M2", "f_yk"),
         ("P1", "P7", "f_pk"), ("P1", "P7", "f_p0.1k"),
     ]
-    assert [r["Total"] for r in rows] == pytest.approx([50.0, -50.0, 50.0, 58.125])
+    assert [r["Total"] for r in rows] == pytest.approx([50.0, 50.0, 50.0, 58.125])
     assert [r["Instantaneous response"] for r in rows] == pytest.approx([
-        -10.0, 0.0, -160 / 1860 * 100, -10.0,
+        10.0, 0.0, 160 / 1860 * 100, 10.0,
     ])
-    assert rows[1]["Short-term increment"] == -10.0
+    assert rows[1]["Short-term increment"] == 10.0
     assert (inp, elastic) == before
     assert all("status" not in r and "utilisation" not in r for r in rows)
 
@@ -59,7 +59,7 @@ def test_unavailable_stress_is_explicit(stress):
 
 def test_concrete_signed_corner_and_existing_compression_magnitude():
     inp, elastic = _fixture()
-    assert display.comparison_text(-10.0, {"f_ck": 40.0}) == "-25.0% of f_ck"
+    assert display.comparison_text(-10.0, {"f_ck": 40.0}) == "25.0% of f_ck"
     assert display.output_comparison(inp, elastic, "concrete", {"value": 10.0}) == "25.0% of f_ck"
 
 

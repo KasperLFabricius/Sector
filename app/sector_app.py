@@ -42,6 +42,7 @@ from input_stage_host import (  # noqa: E402
     normalise_stage_selection,
     reset_input_stage_mounts,
     stateful_input_tabs,
+    stateful_input_selector,
 )
 from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
@@ -2473,11 +2474,11 @@ def _case_column_config(key):
     text = {
         load_cases.NAME: st.column_config.TextColumn(
             "Name *", help=definition(load_cases.NAME).help,
-            required=True, pinned=True, width="small",
+            required=True, pinned=True, width=130,
         ),
         load_cases.DESCRIPTION: st.column_config.TextColumn(
             "Description", help=definition(load_cases.DESCRIPTION).help,
-            pinned=True, width="medium",
+            width=220,
         ),
     }
 
@@ -2490,7 +2491,7 @@ def _case_column_config(key):
             ),
             required=False,
             default="0",
-            width="small",
+            width=max(125, len(label) * 9),
         )
 
     if key == load_cases.PLASTIC_TABLE_KEY:
@@ -2518,7 +2519,7 @@ def _case_column_config(key):
                 "Min. reinforcement",
                 help=definition("check_minimum_reinforcement").help,
                 default=False,
-                width="small",
+                width=180,
             ),
         }
     return {
@@ -2532,7 +2533,7 @@ def _case_column_config(key):
         "calculate_crack_width": st.column_config.CheckboxColumn(
             "Calculate crack width",
             help=definition("calculate_crack_width").help,
-            default=False, width="small",
+            default=False, width=190,
         ),
     }
 
@@ -3265,7 +3266,7 @@ def _queue_input_issue_navigation(issue: input_issues.InputIssue) -> None:
         st.session_state["_material_tab_preference"] = target.material_family
     if target.material_id is not None:
         selector_key = {
-            "Mild steel": "_mild_catalog_selected",
+            "Reinforcing steel": "_mild_catalog_selected",
             "Prestressing steel": "_prestress_catalog_selected",
         }[target.material_family]
         durable[selector_key] = target.material_id
@@ -6189,41 +6190,23 @@ def build_inputs(host=st):
     mat_catalog.material_ids(prestress_catalogue, "prestress")
     app_run_probe.stop_phase(st.session_state, normalization_token)
 
-    # Stateful native tabs retain the active stage across reruns. Their bodies
+    # The compact selector retains the active stage across reruns. Stage bodies
     # remain active-only through InputStage, so hidden stages do not execute.
     # Panels carry calculation methodology (Elastic / Plastic), not a limit
     # state -- the same analysis can serve several load combinations.
     input_tab_labels = list(_input_stage_labels().values())
-    aset, sec_tab, mat_tab, loads, project = stateful_input_tabs(
+    aset, sec_tab, mat_tab, loads, project = stateful_input_selector(
         s,
         input_tab_labels,
         key="_input_tab",
         state=st.session_state,
         on_change=_snapshot_completed_input_state,
-        width="stretch",
     )
     # Geometry tables and their drawing remain visible together. The wider input
     # column keeps the four editable point grids practical on a normal laptop.
     sec, sec_preview = sec_tab.columns([1.15, 0.85], gap="large")
     focus = st.session_state.get(_INPUT_ISSUE_FOCUS_KEY, {})
     focus_widget = str(focus.get("widget_key") or "")
-    scw = aset.expander(
-        "Elastic crack-width method",
-        expanded=focus_widget.startswith("sls_"),
-    )
-    det = aset.expander("Reinforcement detailing", expanded=False)
-    fat = aset.expander(
-        "Fatigue",
-        expanded=focus_widget.startswith("fatigue_"),
-    )
-    sts = aset.expander(
-        "Shear, torsion & combined (Plastic)",
-        expanded=focus_widget.startswith(
-            ("shear_", "torsion_", "combined_", "capacity_")
-        ),
-    )
-    about_slot = project.container()
-    save_slot = project.container()
     mode = aset.radio(
         "Bending analysis",
         ["Plastic", "Elastic", "Both"],
@@ -6242,6 +6225,23 @@ def build_inputs(host=st):
     )
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
+    scw = aset.expander(
+        "Elastic crack-width method",
+        expanded=focus_widget.startswith("sls_"),
+    )
+    det = aset.expander("Reinforcement detailing", expanded=False)
+    fat = aset.expander(
+        "Fatigue",
+        expanded=focus_widget.startswith("fatigue_"),
+    )
+    sts = aset.expander(
+        "Shear, torsion & combined (Plastic)",
+        expanded=focus_widget.startswith(
+            ("shear_", "torsion_", "combined_", "capacity_")
+        ),
+    )
+    about_slot = project.container()
+    save_slot = project.container()
     fatigue_on = _seeded_toggle(
         fat,
         "Fatigue analysis",
@@ -6513,21 +6513,27 @@ def build_inputs(host=st):
         "el_phi", disabled=not (elastic_on or fatigue_on),
         help=_creep_coefficient_help(creep_concrete_preset),
     )
-    aset.markdown("**Neutral-axis sweep (plastic)**")
+    if st.session_state.get("_plastic_settings_active") != plastic_on:
+        st.session_state["_plastic_settings_open"] = plastic_on
+    st.session_state["_plastic_settings_active"] = plastic_on
+    sweep = aset.expander(
+        "Plastic bending settings", key="_plastic_settings_open",
+        expanded=plastic_on, on_change="rerun",
+    )
     v_min = _seeded_number(
-        aset, r"Start angle $\varphi_{NA,\min}$ ($^\circ$)",
+        sweep, r"Start angle $\varphi_{NA,\min}$ ($^\circ$)",
         0.0, 360.0, 0.0, 5.0,
         "v_min", disabled=not plastic_on,
         help="First neutral-axis rotation angle of the plastic sweep.",
     )
     v_max = _seeded_number(
-        aset, r"End angle $\varphi_{NA,\max}$ ($^\circ$)",
+        sweep, r"End angle $\varphi_{NA,\max}$ ($^\circ$)",
         0.0, 360.0, 360.0, 5.0,
         "v_max", disabled=not plastic_on,
         help="Last neutral-axis rotation angle of the plastic sweep.",
     )
     v_inc = _seeded_number(
-        aset, r"Maximum increment $\Delta\varphi_{NA}$ ($^\circ$)",
+        sweep, r"Maximum increment $\Delta\varphi_{NA}$ ($^\circ$)",
         1.0, 90.0, 15.0, 1.0,
         "v_inc", disabled=not plastic_on,
         help="Equal spacing includes both sweep limits, so the actual angular "
@@ -6535,13 +6541,13 @@ def build_inputs(host=st):
              "smoother M-M envelope.",
     )
     check_util = _seeded_checkbox(
-        aset, "Check utilisation against applied moment", True, "pl_check_util",
+        sweep, "Check utilisation against applied moment", True, "pl_check_util",
         disabled=not plastic_on,
         help="On: the applied plastic Mx/My are checked against the capacity envelope "
              "(utilisation). Off: report the capacity only -- the applied Mx/My are "
              "ignored and locked.")
     interaction = _seeded_checkbox(
-        aset, "N-M interaction diagrams", False, "pl_interaction",
+        sweep, "N-M interaction diagrams", False, "pl_interaction",
         disabled=not plastic_on,
         help="Trace the axial-moment (N-M) capacity curves about both bending axes "
              "(N-Mx and N-My), from pure tension to the squash load. Shown in the "
@@ -6726,8 +6732,16 @@ def build_inputs(host=st):
                 f"{heightened_guidance.tooltip}"
             ),
         )
+        heightened_active = bool(elastic_on and sls_heightened_on)
+        if st.session_state.get("_heightened_settings_active") != heightened_active:
+            st.session_state["_heightened_settings_open"] = heightened_active
+        st.session_state["_heightened_settings_active"] = heightened_active
+        heightened = scw.expander(
+            "Heightened crack-control settings", key="_heightened_settings_open",
+            expanded=heightened_active, on_change="rerun",
+        )
         sls_heightened_permitted_crack_width_mm = _seeded_number(
-            scw,
+            heightened,
             r"Heightened permitted width $w_{k,Formula\ 7.100}$ (mm)",
             0.0,
             10.0,
@@ -6758,7 +6772,7 @@ def build_inputs(host=st):
                 st.session_state[_HEIGHTENED_AUTO_REFERENCE_KEY] = (
                     sls_heightened_reference_case
                 )
-            scw.caption(
+            heightened.caption(
                 "Reference Elastic case: "
                 f"{sls_heightened_reference_case} (the sole crack-enabled case)."
             )
@@ -6777,7 +6791,7 @@ def build_inputs(host=st):
                 st.session_state[_INPUT_STATE_KEY] = durable
             st.session_state.pop(_HEIGHTENED_AUTO_REFERENCE_KEY, None)
             sls_heightened_reference_case = _seeded_selectbox(
-                scw,
+                heightened,
                 "Reference crack-enabled Elastic case",
                 ["", *crack_reference_names],
                 "",
@@ -6799,12 +6813,12 @@ def build_inputs(host=st):
                 "sls_heightened_reference_case", ""
             )
             if sls_heightened_on:
-                scw.error(
+                heightened.error(
                     "Enable ordinary crack width for at least one Elastic case "
                     "before calculating heightened crack control."
                 )
         sls_heightened_reinforcement_surface = _seeded_selectbox(
-            scw,
+            heightened,
             "Reinforcement surface",
             ["ribbed", "smooth"],
             "ribbed",
@@ -6818,7 +6832,7 @@ def build_inputs(host=st):
                 f"{heightened_guidance.tooltip}"
             ),
         )
-        hc1, hc2 = scw.columns(2)
+        hc1, hc2 = heightened.columns(2)
         sls_heightened_effective_tensile_strength_mpa = _seeded_number(
             hc1,
             r"Effective tensile strength $f_{ct,eff}$ (MPa)",
@@ -6862,7 +6876,7 @@ def build_inputs(host=st):
                 f"system. {heightened_guidance.tooltip}"
             ),
         )
-        scw.caption(
+        heightened.caption(
             "After calculation, bar diameter follows the ordinary override or "
             "largest contributing mild bar; reinforcement modulus is the minimum "
             "among contributing mild materials; provided area is their total area."
@@ -8047,11 +8061,19 @@ def build_inputs(host=st):
     # not make the nested tab widget disappear and revive its first-tab default.
     auto_all_slot = mat_tab.empty()
 
-    material_tab_labels = ["Concrete", "Mild steel", "Prestressing steel"]
+    material_tab_labels = ["Concrete", "Reinforcing steel", "Prestressing steel"]
     if fatigue_on:
         material_tab_labels.append("Fatigue details")
+    material_aliases = {"Mild steel": "Reinforcing steel"}
     selected_material_tab = normalise_stage_selection(
-        st.session_state, "_material_tab", material_tab_labels
+        st.session_state, "_material_tab", material_tab_labels,
+        aliases=material_aliases,
+    )
+    normalise_stage_selection(
+        st.session_state, "_material_tab_preference",
+        [selected_material_tab, *[label for label in material_tab_labels
+                                  if label != selected_material_tab]],
+        aliases=material_aliases,
     )
     material_tab_preference = st.session_state.get("_material_tab_preference")
     if material_tab_preference not in material_tab_labels:
@@ -8166,7 +8188,7 @@ def build_inputs(host=st):
                     context="material definition",
                 )
                 family = (
-                    "Mild steel" if kind == "mild"
+                    "Reinforcing steel" if kind == "mild"
                     else "Prestressing steel"
                 )
                 material_definition_errors.append(input_issues.InputIssue(
@@ -11869,6 +11891,25 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
             app_run_probe.stop_phase(st.session_state, preview_token)
 
 
+def _open_overview_result(row, inp, results):
+    """Open the existing detail destination and its exact named case if present."""
+    st.session_state["view"] = row["view"]
+    st.session_state["_workspace_view"] = row["view"]
+    family = row.get("family")
+    if family in {"plastic", "elastic"}:
+        entries = _case_entries_for_view(inp, results, family)
+        matches = [index for index, entry in enumerate(entries)
+                   if entry.get("name") == row.get("case")]
+        if len(matches) == 1:
+            st.session_state[f"_{family}_result_case_index"] = matches[0]
+    elif family == "fatigue":
+        spectra = fatigue_presentation.spectrum_rows((results or {}).get("fatigue") or {})
+        matches = [item["spectrum"] for item in spectra
+                   if item["spectrum"] == row.get("case")]
+        if len(matches) == 1:
+            st.session_state["_fatigue_result_spectrum"] = matches[0]
+
+
 def results_overview_view(inp, results, *, stale=False):
     """One-screen result register without a global calculation verdict."""
     all_rows = presentation.multi_case_summary_rows(inp, results, stale=stale)
@@ -11922,21 +11963,15 @@ def results_overview_view(inp, results, *, stale=False):
             "The governing results are current; every comparison with a "
             "stated criterion is within it."
         )
+    elif not results:
+        st.info("No results yet. Press Calculate to run the requested checks.")
     else:
-        st.info(
-            "No calculated result is available for this selection. See calculation "
-            "and scope status below."
+        st.info("No assessable result is available. Review the calculation and scope reasons below.")
+    if rows:
+        st.caption(
+            "Each row is an independent result; an overall section verdict is not "
+            "calculated."
         )
-    st.caption(
-        "Each row is an independent result; an overall section verdict is not "
-        "calculated."
-    )
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Governing results", len(rows))
-    c2.metric("Fail / invalid", failure_count)
-    c3.metric("Review / stale", warning_count)
-    c4.metric("Scope and availability", len(information_rows))
 
     display = []
     for row in rows:
@@ -11995,15 +12030,49 @@ def results_overview_view(inp, results, *, stale=False):
         ),
     }
     if not summary.empty:
-        styled = summary.style.map(
-            lambda value: status_colours.get(str(value), ""),
-            subset=["Status"],
+        output_mask = [
+            str(row.get("overview_key") or "").startswith("elastic_stress:")
+            or row.get("overview_key") == "cracking_threshold"
+            or row.get("status") in {"CALCULATED", "CALCULATED - NO LIMIT COMPARISON"}
+            for row in rows
+        ]
+        for title, mask in (
+            ("Checks and criteria", [not value for value in output_mask]),
+            ("Calculated outputs", output_mask),
+        ):
+            group = summary.loc[mask]
+            if group.empty:
+                continue
+            st.markdown(f"**{title}**")
+            styled = group.style.map(
+                lambda value: status_colours.get(str(value), ""),
+                subset=["Status"],
+            )
+            st.dataframe(
+                styled, hide_index=True, width="stretch",
+                height=min(460, 36 * (len(group) + 1)),
+                column_config={
+                    "Check": st.column_config.TextColumn(width=220),
+                    "Governing action": st.column_config.TextColumn(width=130, pinned=True),
+                    "Status": st.column_config.TextColumn(width=250),
+                    "Result": st.column_config.TextColumn(width=250),
+                    "Criterion": st.column_config.TextColumn(width=230),
+                    "View": st.column_config.TextColumn(width=170),
+                },
+            )
+        st.caption(
+            f"{len(rows)} governing results · {failure_count} fail / invalid · "
+            f"{warning_count} review / stale · {len(information_rows)} scope / availability. "
+            "Scroll tables horizontally to read every result and criterion."
         )
-        st.table(
-            styled,
-            hide_index=True,
-            width="stretch",
-            height="content",
+        detail_index = st.selectbox(
+            "Result details", range(len(rows)),
+            format_func=lambda index: f"{rows[index]['check']} — {rows[index]['case']}",
+        )
+        st.button(
+            "Open selected result", key="overview_open_result",
+            on_click=_open_overview_result,
+            args=(rows[detail_index], inp, results),
         )
 
     for row in rows:
@@ -12024,10 +12093,23 @@ def results_overview_view(inp, results, *, stale=False):
 
     if information_rows:
         st.markdown("**Scope and calculation state**")
-        st.text("\n".join(
-            f"{row['check']} | {row['case']} | {row['status']} | {row['result']}"
-            for row in information_rows
-        ))
+        st.dataframe(
+            pd.DataFrame([
+                {"Check": row["check"], "Action": row["case"],
+                 "Status": row["status"], "Availability / scope": row["result"],
+                 "View": row["view"]}
+                for row in information_rows
+            ]),
+            hide_index=True, width="stretch",
+            column_config={
+                "Check": st.column_config.TextColumn(width=220),
+                "Action": st.column_config.TextColumn(width=130, pinned=True),
+                "Status": st.column_config.TextColumn(width=180),
+                "Availability / scope": st.column_config.TextColumn(width=350),
+                "View": st.column_config.TextColumn(width=170),
+            },
+        )
+
 
 
 def _detailing_status_callout(status, message):
@@ -13033,7 +13115,7 @@ def elastic_view(inp, results, *, global_results=None):
              for key, value in row.items()}
             for row in comparisons
         ], hide_index=True, width="stretch")
-        st.caption("Signed stress divided by the stated characteristic strength. "
+        st.caption("Absolute stress divided by the stated characteristic strength. Actual stress values retain their signs. "
                    "Unavailable means the reference strength or element assignment "
                    "is missing or invalid. These percentages do not assess compliance.")
 

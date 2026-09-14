@@ -19,6 +19,7 @@ from input_stage_host import (  # noqa: E402
     normalise_stage_selection,
     reset_input_stage_mounts,
     stateful_input_tabs,
+    stateful_input_selector,
 )
 
 
@@ -336,3 +337,27 @@ def test_live_fragment_edit_controls_project_serialization() -> None:
 
     assert live_fragment_value(state, durable, "autosave_min") == 17
     assert live_fragment_value(state, durable, "fallback") == "retained"
+
+
+@pytest.mark.parametrize("selected", ["first", "last", "unknown"])
+def test_compact_selector_keeps_only_its_authoritative_stage_active(selected):
+    state = {"stage": "last"}
+    host = _Host()
+    host.selectbox = lambda *args, **kwargs: selected
+    stages = stateful_input_selector(
+        host, ("first", "last"), key="stage", state=state,
+    )
+    assert [stage.open for stage in stages] == [False, selected == "last"]
+
+
+@pytest.mark.parametrize("key", ["_material_tab", "_material_tab_preference"])
+def test_legacy_material_stage_alias_survives_every_state_mirror(key):
+    state = {key: "Mild steel", "_pending_input_events": {key: "Mild steel"},
+             "_durable_input_scalars": {key: "Mild steel"}}
+    assert normalise_stage_selection(
+        state, key, ("Concrete", "Reinforcing steel", "Prestressing steel"),
+        aliases={"Mild steel": "Reinforcing steel"},
+    ) == "Reinforcing steel"
+    assert state[key] == "Reinforcing steel"
+    assert state["_pending_input_events"][key] == "Reinforcing steel"
+    assert state["_durable_input_scalars"][key] == "Reinforcing steel"

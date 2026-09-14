@@ -102,7 +102,7 @@ def test_material_definition_routes_to_exact_family_and_unknowns_fail_safe():
     )
 
     assert [issue.target.material_family for issue in issues] == [
-        "Mild steel",
+        "Reinforcing steel",
         "Prestressing steel",
     ]
     assert [issue.target.material_id for issue in issues] == [None, None]
@@ -121,7 +121,7 @@ def test_target_registry_rejects_impossible_stage_family_combinations():
     with pytest.raises(ValueError, match="material-ID destination"):
         input_issues.InputTarget(
             input_issues.MATERIAL_PARAMETERS,
-            material_family="Mild steel",
+            material_family="Reinforcing steel",
             material_id="P2",
         )
 

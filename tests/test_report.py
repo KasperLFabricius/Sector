@@ -13945,6 +13945,7 @@ def test_elastic_characteristic_comparisons_preserve_outputs_across_profiles(pro
     assert "CALCULATED" in text
     assert out["elastic"] == before
     if profile != "Brief":
-        assert "-80.0%" in text  # signed concrete corner -24 MPa / fck
+        assert "80.0%" in text  # absolute concrete corner -24 MPa / fck
+        assert "-24.000 MPa" in text  # actual stress remains signed
         assert "Stress as percentage of characteristic strength" in text
         assert "These percentages do not assess compliance" in text

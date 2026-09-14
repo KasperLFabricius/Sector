@@ -8,6 +8,7 @@ cot(theta) = 1.751 the stirrups and the struts meet at TRd ~ 76.4 kN.m.
 
 from __future__ import annotations
 
+
 import copy
 import math
 from types import SimpleNamespace
@@ -1115,6 +1116,8 @@ import sys  # noqa: E402
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
+
+from app_case_inputs import overview_table
 APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import (  # noqa: E402
@@ -1550,7 +1553,7 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
     assert {"EQ-01", "COMP-01"}.issubset({row["case"] for row in all_rows})
     selected = presentation.governing_summary_rows(all_rows)
     expected = presentation.governing_result_rows(selected)
-    table = next(item.value for item in at.table if "Governing action" in item.value)
+    table = overview_table(at)
     assert list(table[["Check", "Governing action", "Status", "Result"]].itertuples(
         index=False, name=None,
     )) == [
@@ -2039,7 +2042,7 @@ def test_app_stale_formula_628_pass_is_not_published_in_torsion_views(tmp_path):
     assert formula_values["Longitudinal assessment"] == "NOT ASSESSED"
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     torsion_row = overview.loc[overview["Check"] == "Torsion"].iloc[0]
     assert torsion_row["Status"] == "NOT ASSESSED"
     longitudinal_row = overview.loc[
@@ -2804,7 +2807,7 @@ def test_pre_m05_capacity_and_buffered_report_are_hidden_until_recalculated():
 
     _select_view(at, "Results Overview")
     overview = "\n".join(
-        frame.value.to_string(index=False) for frame in at.table
+        frame.value.to_string(index=False) for frame in (*at.table, *at.dataframe)
     )
     assert "999000" not in overview
     assert "Torsion resistance" not in overview
@@ -2879,7 +2882,7 @@ def test_pre_m05_contract_with_changed_spacing_hides_old_spacing_until_recalcula
     _set(at, ("number_input", "detailing_d_upper", 100.0))
     _select_view(at, "Results Overview")
     overview = "\n".join(
-        frame.value.to_string(index=False) for frame in at.table
+        frame.value.to_string(index=False) for frame in (*at.table, *at.dataframe)
     )
     assert "Reinforcement clear spacing" not in overview
     assert "40.0 mm" not in overview
@@ -3590,10 +3593,7 @@ def test_app_min_reinf_screen_evaluated():
     _select_view(at, "Torsion")
     assert not at.exception
     _select_view(at, "Results Overview")
-    overview = next(
-        table.value for table in at.table
-        if "Check" in table.value.columns
-    )
+    overview = overview_table(at)
     screen = overview.loc[
         overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
     ].iloc[0]
@@ -3653,10 +3653,7 @@ def test_app_2023_shear_route_never_receives_formula_631_verdict():
     assert "minimum reinf. suffices" not in captions
 
     _select_view(at, "Results Overview")
-    overview = next(
-        table.value for table in at.table
-        if "Check" in table.value.columns
-    )
+    overview = overview_table(at)
     screen = overview.loc[
         overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
     ].iloc[0]
@@ -3704,10 +3701,7 @@ def test_app_selected_2023_route_without_shear_stays_not_applicable():
     assert "Calculate the first-generation V_Rd,c" not in captions
 
     _select_view(at, "Results Overview")
-    overview = next(
-        table.value for table in at.table
-        if "Check" in table.value.columns
-    )
+    overview = overview_table(at)
     screen = overview.loc[
         overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
     ].iloc[0]
@@ -3752,10 +3746,7 @@ def test_app_hollow_section_never_receives_formula_631_verdict():
     assert "minimum reinf. suffices" not in captions
 
     _select_view(at, "Results Overview")
-    overview = next(
-        table.value for table in at.table
-        if "Check" in table.value.columns
-    )
+    overview = overview_table(at)
     screen = overview.loc[
         overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
     ].iloc[0]
@@ -3879,10 +3870,7 @@ def test_app_formula_631_condition_and_detailing_matrix(
     assert "minimum reinf. suffices" not in captions
 
     _select_view(at, "Results Overview")
-    overview = next(
-        table.value for table in at.table
-        if "Check" in table.value.columns
-    )
+    overview = overview_table(at)
     condition = overview.loc[
         overview["Check"] == "Formula (6.31) minimum-reinforcement screen"
     ].iloc[0]
@@ -4026,10 +4014,7 @@ def test_app_dkna_formula_631_requirement_outranks_other_scope_limits(
         assert "low-action condition satisfied" not in captions
 
         _select_view(at, "Results Overview")
-        overview = next(
-            table.value for table in at.table
-            if "Check" in table.value.columns
-        )
+        overview = overview_table(at)
         screen = overview.loc[
             overview["Check"]
             == "Formula (6.31) minimum-reinforcement screen"
@@ -4263,7 +4248,7 @@ def test_app_torsion_outside_permitted_range_withholds_verdict(tmp_path):
                for metric in at.metric)
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     row = overview.loc[overview["Check"] == "Torsion"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == chr(0x2014)
