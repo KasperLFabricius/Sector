@@ -131,7 +131,7 @@ def test_crack_comparison_guidance_uses_independent_zero_value_contract():
     load_case_contract = (ROOT / "app" / "load_cases.py").read_text(
         encoding="utf-8"
     )
-    assert "A 0 mm limit leaves only that duration's calculated width" in manual_text
+    assert "A 0 mm limit leaves that duration's calculated width" in manual_text
     assert "crack-width-enabled Elastic row" in manual_text
     assert "Independent long-term and short-term crack-width limits" in manual_text
     assert "Independent long-term and short-term crack-width limits" in product_identity

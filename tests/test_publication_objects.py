@@ -310,22 +310,20 @@ def test_manual_long_table_repeats_caption_and_header_when_forced_to_split(
     table = next(
         item
         for item in flow
-        if getattr(item, "_sector_publication_label", None) == "Table B7-3"
+        if getattr(item, "_sector_publication_label", None) == "Table B7-6"
     )
-    leading, page_break, trailing = table.split(170 * mm, 120 * mm)
+    leading, page_break, trailing = table.split(170 * mm, 60 * mm)
     assert table.repeatRows == 2
     assert table.splitInRow == 0
     assert isinstance(page_break, NotAtTopPageBreak)
     assert "(continued)" not in leading._cellvalues[0][0].getPlainText()
-    assert "Table B7-3 (continued)." in (
+    assert "Table B7-6 (continued)." in (
         trailing._cellvalues[0][0].getPlainText()
     )
     expected_header = [
-        "Table",
-        "Field / notation",
-        "Definition and sign",
-        "Blank/default and validation",
-        "Method dependency",
+        "Field / unit",
+        "Meaning / sign",
+        "Default / validation",
     ]
     for fragment in (leading, trailing):
         assert [

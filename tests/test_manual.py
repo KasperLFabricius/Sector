@@ -514,7 +514,7 @@ def test_manual_distinguishes_torsion_basis_and_member_scope_limitations():
     assert "remain attached to the named case when rows are reordered" in text
 
 
-def test_manual_pdf_starts_combined_mvt_after_the_torsion_applicability_page():
+def test_manual_pdf_keeps_ordered_torsion_scope_and_combined_applicability():
     pdf = manual.build_manual_pdf_bytes(figures=False)
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     pages = [" ".join((page.extract_text() or "").split()) for page in reader.pages]
@@ -529,9 +529,17 @@ def test_manual_pdf_starts_combined_mvt_after_the_torsion_applicability_page():
     )
     assert torsion_page > 0
     assert "upper angle limit is 2.5 for class B/C" in pages[torsion_page - 1]
-    assert combined_page > torsion_page
-    assert "6.8 Combined M-V-T interaction" not in pages[combined_page - 1]
-    torsion_section = " ".join(pages[torsion_page:combined_page])
+    assert combined_page >= torsion_page
+    ordered_text = " ".join(pages[torsion_page:combined_page + 1])
+    torsion_section, combined_intro = ordered_text.split(
+        "6.8 Combined M-V-T interaction", 1
+    )
+    assert "With Check combined M-V-T on" in combined_intro
+    assert "otherwise the combined check is not applicable to that row" in (
+        pages[combined_page]
+    )
+    assert "withholds the angle-dependent resistance" in torsion_section
+    assert "NOT ASSESSED until the limits are corrected" in torsion_section
     assert "Subdivide into sub-tubes" in torsion_section
     assert "whether the action is equilibrium torsion" in torsion_section
     assert "open thin-walled members may require warping-torsion" in (
@@ -638,7 +646,7 @@ def test_manual_documents_native_case_tables_results_and_report():
         "Select a Plastic/capacity case",
         "Select an Elastic case",
         "complete effective geometry",
-        "governing results and concise limitations",
+        "governing results and essential limitations",
         "omits non-governing results and worked derivations",
         "selected governing Plastic and Elastic result plots",
         "Brief",
@@ -770,7 +778,7 @@ def test_manual_documents_optional_crack_criterion_and_dk_heightened_boundary():
     assert "Select the limits and action classifications required by the project basis" in text
     assert "separate Formula 7.100 NA permitted width" in text
     assert "separate Formula 7.100 NA permitted-width input" in text
-    assert "A 0 mm limit leaves only that duration's calculated width" in text
+    assert "A 0 mm limit leaves that duration's calculated width" in text
     assert "Independent long-term and short-term crack-width limits" in text
     assert "shared Analysis permitted width" not in text
     assert "supply the shared permitted width" not in text
