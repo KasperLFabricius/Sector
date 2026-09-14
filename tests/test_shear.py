@@ -1523,7 +1523,7 @@ def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately()
         metric for metric in at.metric if "Component utilisation" in metric.label
     )
     assert nominal_metric.value == "96.7 %"
-    assert nominal_metric.delta == "OK"
+    assert nominal_metric.delta == "Component PASS"
     comparison_metric = next(
         metric for metric in at.metric if "Provided-link comparison" in metric.label
     )
@@ -2162,9 +2162,9 @@ def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
     summary = next(
         frame.value
         for frame in at.dataframe
-        if {"Component", "VEd [kN]", "VRd [kN]", "Utilisation", "Status"}
+        if {"Direction", "VEd [kN]", "VRd [kN]", "Utilisation", "Component status"}
         .issubset(frame.value.columns)
-    ).set_index("Component")
+    ).set_index("Direction")
     for component, label in (("vx", "Vx,Ed"), ("vy", "Vy,Ed")):
         direction = sh["directions"][component]
         nominal = direction["nominal_resistance"]
@@ -2175,7 +2175,7 @@ def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
         assert summary.loc[label, "Utilisation"] == pytest.approx(
             nominal["utilisation"]
         )
-        assert summary.loc[label, "Status"] == direction["status"]
+        assert summary.loc[label, "Component status"] == direction["status"]
         assert summary.loc[label, "VRd [kN]"] != pytest.approx(
             direction["links"]["res"]["vrd"]
         )
@@ -2221,7 +2221,7 @@ def test_pub_m01_incomplete_biaxial_wrapper_is_value_free_in_ui_and_overview():
         "Assessment": "NOT ASSESSED",
     }
     assert not any(
-        {"Component", "VEd [kN]", "VRd [kN]", "Utilisation", "Status"}
+        {"Direction", "VEd [kN]", "VRd [kN]", "Utilisation", "Component status"}
         .issubset(frame.value.columns)
         for frame in at.dataframe
     )
@@ -2249,17 +2249,17 @@ def test_app_biaxial_shear_top_table_fails_closed_for_stale_nominal_alias():
     summary = next(
         frame.value
         for frame in at.dataframe
-        if {"Component", "VEd [kN]", "VRd [kN]", "Utilisation", "Status"}
+        if {"Direction", "VEd [kN]", "VRd [kN]", "Utilisation", "Component status"}
         .issubset(frame.value.columns)
-    ).set_index("Component")
-    assert summary.loc["Vx,Ed", "Status"] == "NOT ASSESSED"
+    ).set_index("Direction")
+    assert summary.loc["Vx,Ed", "Component status"] == "NOT ASSESSED"
     assert summary.loc["Vx,Ed", "VRd [kN]"] is None or np.isnan(
         summary.loc["Vx,Ed", "VRd [kN]"]
     )
     assert summary.loc["Vx,Ed", "Utilisation"] is None or np.isnan(
         summary.loc["Vx,Ed", "Utilisation"]
     )
-    assert summary.loc["Vy,Ed", "Status"] == "PASS"
+    assert summary.loc["Vy,Ed", "Component status"] == "PASS"
 
 
 def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
