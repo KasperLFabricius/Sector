@@ -59,24 +59,14 @@ def _tree_contains_key(node, keys):
     return any(_tree_contains_key(child, keys) for child in values)
 
 
-def _direct_tab_labels(node):
-    children = getattr(node, "children", {})
-    values = list(children.values() if isinstance(children, dict) else children)
-    return [
-        getattr(child, "label", None)
-        for child in values
-        if getattr(child, "type", None) == "tab"
-    ]
-
-
-def _tree_parent_of_tab_group(node, labels):
+def _tree_parent_of_key(node, key):
     children = getattr(node, "children", {})
     values = list(children.values() if isinstance(children, dict) else children)
     for child in values:
-        if _direct_tab_labels(child) == list(labels):
+        if getattr(child, "key", None) == key:
             return node
     for child in values:
-        parent = _tree_parent_of_tab_group(child, labels)
+        parent = _tree_parent_of_key(child, key)
         if parent is not None:
             return parent
     return None
@@ -85,18 +75,22 @@ def _tree_parent_of_tab_group(node, labels):
 def discard_retired_qs_fragment(at):
     """Mirror the browser removal of Quick Section after its full rerun."""
 
+    if at.session_state.filtered_state.get("_qs_open", False):
+        return at
     main = next(
         child
         for child in at._tree.children.values()
         if getattr(child, "type", None) == "main"
     )
-    input_host = _tree_parent_of_tab_group(main, _INPUT_STAGE_LABELS)
+    # Input stages now use a selectbox. Locate that current mount before removing
+    # its retired builder siblings; never edit session state or live input nodes.
+    input_host = _tree_parent_of_key(main, "_input_tab")
     if input_host is None:
         return at
     retired_markers = {"qs_apply", "qs_back", "shape"}
     for index, child in list(input_host.children.items()):
         if (
-            _direct_tab_labels(child) != list(_INPUT_STAGE_LABELS)
+            not _tree_contains_key(child, {"_input_tab"})
             and _tree_contains_key(child, retired_markers)
         ):
             del input_host.children[index]

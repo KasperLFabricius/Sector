@@ -7548,6 +7548,12 @@ def test_report_fragment_normalises_hostile_profile_before_strict_mount(
             self.state = state
             self.warnings = []
 
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
         def markdown(self, *_args, **_kwargs):
             return None
 
@@ -7598,6 +7604,15 @@ def test_report_fragment_normalises_hostile_profile_before_strict_mount(
 
         def container(self, **_kwargs):
             return self.box
+
+        def expander(self, *_args, **_kwargs):
+            return self.box
+
+        def selectbox(self, _label, _options, *, key, **_kwargs):
+            return self.session_state[key]
+
+        def text_input(self, _label, *, key, **_kwargs):
+            return self.session_state[key]
 
     fake = FakeStreamlit()
     monkeypatch.setattr(sector_app, "st", fake)
@@ -9918,7 +9933,9 @@ def test_page_navigation_and_input_stages_follow_the_workflow_order():
     _goto_page(at, "Report")
     assert at.segmented_control(key="rep_report_content").value == "Standard"
     assert "rep_proj_no" in {widget.key for widget in at.text_input}
-    assert not at.expander
+    assert [item.label for item in at.expander] == [
+        "Project and action references (optional)"
+    ]
 
 
 def test_v093_hot_reload_purges_schema23_bridge_state_before_widgets_mount():
