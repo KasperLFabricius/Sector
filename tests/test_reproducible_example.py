@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import copy
 import dataclasses
 import io
@@ -16,6 +17,8 @@ from streamlit.testing.v1 import AppTest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
+
+from app_case_inputs import overview_table
 sys.path.insert(0, str(ROOT / "tests"))
 
 import manual  # noqa: E402
@@ -478,7 +481,7 @@ def test_pub_m01_provided_links_publish_their_own_pass_in_native_views(
         "Results Overview"
     ).run()
     assert not pub_m01_example.exception
-    overview = pub_m01_example.table[0].value
+    overview = overview_table(pub_m01_example)
     by_check = {row["Check"]: row for _, row in overview.iterrows()}
     assert by_check["Shear without links"]["Status"] == "PASS"
     assert by_check["Shear without links"]["Result"] == "63.0 % (VEd / VRd,c)"
@@ -539,7 +542,7 @@ def test_pub_m01_matching_primary_plastic_fallback_reaches_native_views(
         assert str(metric.delta) == "PASS"
         at.selectbox(key="view").set_value("Results Overview").run()
         assert not at.exception
-        overview = next(item.value for item in at.table if "Check" in item.value)
+        overview = overview_table(at)
         row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
         assert row["Status"] == "PASS"
         assert row["Result"] == "23.5 % (non-governing)"
@@ -647,7 +650,7 @@ def test_pub_m01_unrelated_primary_is_withheld_in_native_views(pub_m01_example):
         assert not at.metric
         at.selectbox(key="view").set_value("Results Overview").run()
         assert not at.exception
-        overview = next(item.value for item in at.table if "Check" in item.value)
+        overview = overview_table(at)
         combined = overview.loc[overview["Check"].str.startswith("Combined")]
         assert not combined.empty
         assert set(combined["Status"]) == {"NOT ASSESSED"}
@@ -758,7 +761,7 @@ def test_pub_m01_native_required_authority_and_incomplete_child_fail_closed(
             "Results Overview"
         ).run()
         assert not pub_m01_example.exception
-        overview = pub_m01_example.table[0].value
+        overview = overview_table(pub_m01_example)
         by_check = {row["Check"]: row for _, row in overview.iterrows()}
         assert by_check["Shear without links"]["Status"] == "PASS"
         assert by_check["Shear without links"]["Result"] == (
@@ -807,7 +810,7 @@ def test_pub_m01_native_hostile_chord_status_fails_closed_without_raw_copy(
         pub_m01_example.selectbox(key="view").set_value(
             "Results Overview"
         ).run()
-        overview = pub_m01_example.table[0].value
+        overview = overview_table(pub_m01_example)
         by_check = {row["Check"]: row for _, row in overview.iterrows()}
         assert "Shear longitudinal chords" not in by_check
         assert by_check["Shear without links"]["Status"] == "PASS"
@@ -873,7 +876,7 @@ def test_pub_m01_native_stale_concrete_input_is_value_free_in_shear_and_overview
         pub_m01_example.selectbox(key="view").set_value(
             "Results Overview"
         ).run()
-        overview = pub_m01_example.table[0].value
+        overview = overview_table(pub_m01_example)
         by_check = {row["Check"]: row for _, row in overview.iterrows()}
         assert by_check["Shear without links"]["Status"] == "STALE"
         assert by_check["Shear without links"]["Result"] == chr(0x2014)
@@ -944,7 +947,7 @@ def test_pub_m01_selected_link_nominal_route_rejects_stale_child_in_native_views
         pub_m01_example.selectbox(key="view").set_value(
             "Results Overview"
         ).run()
-        overview = pub_m01_example.table[0].value
+        overview = overview_table(pub_m01_example)
         by_check = {row["Check"]: row for _, row in overview.iterrows()}
         assert "Shear without links" not in by_check
         assert by_check["Shear with links"]["Status"] == "NOT ASSESSED"

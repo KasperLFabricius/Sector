@@ -7,6 +7,7 @@ with Asl = 1473 mm2 (d = 550 mm, bw = 300 mm, N = 0): VRd,c ~ 103.4 kN.
 
 from __future__ import annotations
 
+
 import copy
 import json
 import math
@@ -21,6 +22,8 @@ from sector import capacity, codes, combined as combined_core, detailing, shear
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))       # so `import sector_app` works standalone
+
+from app_case_inputs import overview_table
 APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import (  # noqa: E402
@@ -1533,7 +1536,7 @@ def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately()
     assert "It does not replace the nominal concrete route" in visible
 
     _select_view(at, "Results Overview")
-    overview = next(table.value for table in at.table if "Check" in table.value)
+    overview = overview_table(at)
     concrete_row = overview.loc[
         overview["Check"] == "Shear without links"
     ].iloc[0]
@@ -1624,7 +1627,7 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
     assert shear.SHEAR_CIRCULAR_REASON not in visible
 
     _select_view(at, "Results Overview")
-    overview = next(table.value for table in at.table if "Check" in table.value)
+    overview = overview_table(at)
     links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert links_row["Status"] == "NOT ASSESSED"
     assert links_row["Result"] == chr(0x2014)
@@ -1660,7 +1663,7 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
     assert "circular_fitted_section" not in rendered
 
     _select_view(at, "Results Overview")
-    overview = next(table.value for table in at.table if "Check" in table.value)
+    overview = overview_table(at)
     concrete_row = overview.loc[
         overview["Check"] == "Shear without links"
     ].iloc[0]
@@ -1762,7 +1765,7 @@ def test_app_circular_vx_torsion_rejects_invalid_off_axis_arm_then_recovers():
     assert shear.SHEAR_CIRCULAR_REASON not in blocked_visible
 
     _select_view(at, "Results Overview")
-    overview = next(table.value for table in at.table if "Check" in table.value)
+    overview = overview_table(at)
     chord_row = overview.loc[
         overview["Check"] == "Shear longitudinal chords"
     ].iloc[0]
@@ -1849,7 +1852,7 @@ def test_app_unknown_2023_duct_geometry_blocks_no_links_kernel_and_recovers(
     blocked.update(pristine)
 
     _select_view(at, "Results Overview")
-    overview = next(table.value for table in at.table if "Check" in table.value)
+    overview = overview_table(at)
     row = overview.loc[overview["Check"] == "Shear without links"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == chr(0x2014)
@@ -2364,7 +2367,7 @@ def pub_m01_signed_2023_cases(tmp_path_factory):
                 "native": native,
                 "native_copy": native_copy,
                 "native_angle": native_angle,
-                "overview": at.table[0].value.copy(deep=True),
+                "overview": overview_table(at).copy(deep=True),
             }
     return cases
 
@@ -2928,7 +2931,7 @@ def test_app_shear_links_outside_permitted_bounds_are_not_assessed():
     )
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     concrete_row = overview.loc[
         overview["Check"] == "Shear without links"
     ].iloc[0]
@@ -3202,7 +3205,7 @@ def test_app_shear_2023_links_with_axial_compression_fail_closed(monkeypatch):
     assert "non-governing concrete-only context" in visible
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == chr(0x2014)
@@ -3399,7 +3402,7 @@ def test_2023_ductility_class_mismatch_is_fail_closed_but_concrete_stays_current
     )
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     overview_by_check = {
         row["Check"]: row for _, row in overview.iterrows()
     }

@@ -696,8 +696,8 @@ def manual_blocks() -> list:
 
     h1("The workspace")
     md("The **Inputs** page stages *Analysis settings*, *Section*, *Material "
-       "parameters*, *Loads* and *Project* in full-width tabs. The "
-       "*Section* tab places the section drawing beside its point tables, and each "
+       "parameters*, *Loads* and *Project* in the **Input stage** selector. The "
+       "*Section* stage places the section drawing beside its point tables, and each "
        "material panel places the selected stress-strain law beside its parameters. "
        "These previews update live. The **Analysis** workspace contains calculated "
        "results selected with the **View** dropdown. The **Report** workspace, "
@@ -1372,6 +1372,11 @@ def manual_blocks() -> list:
        "**WITHIN USER-SPECIFIED LIMIT** or **EXCEEDS USER-SPECIFIED LIMIT** and "
        "its source. The status compares the calculated width with that entered "
        "project criterion.")
+    md("Stress percentages are 100 times the absolute stress divided by the "
+       "positive characteristic strength: concrete $f_{ck}$, reinforcing steel "
+       "$f_{yk}$ and prestressing steel $f_{pk}$ and $f_{p0.1k}$. Actual stress "
+       "values retain their signs. A missing or invalid strength is unavailable; "
+       "these comparisons do not assess compliance.")
     h2("Fatigue results")
     md("The **Fatigue Results** view first lists every spectrum and its governing "
        "utilisation. Select a spectrum to see the section utilisation map, then "

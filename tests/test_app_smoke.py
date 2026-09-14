@@ -6,6 +6,7 @@ for each analysis mode, and assert it produces results without error.
 
 from __future__ import annotations
 
+
 import dataclasses
 import copy
 import json
@@ -23,6 +24,8 @@ from streamlit.testing.v1 import AppTest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))   # so `import sector_app` / `project_io` works standalone
+
+from app_case_inputs import overview_table
 
 APP = str(ROOT / "app" / "sector_app.py")
 
@@ -668,7 +671,7 @@ def test_interrupted_input_fragment_batches_latest_cross_pane_events():
     assert at.session_state["_inputs_build_in_progress"] is False
     assert "_pending_input_events" not in at.session_state
     assert at.session_state["_input_tab"] == material_stage
-    assert at.session_state["_material_tab"] == "Mild steel"
+    assert at.session_state["_material_tab"] == "Reinforcing steel"
     assert at.session_state["_durable_input_scalars"]["conc_fck"] == pytest.approx(
         47.0
     )
@@ -5519,8 +5522,8 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert tuple(at.session_state["result_fatigue_sig"]).count(token) == 1
     assert at.session_state["result_sig"] == latest["signature"]
 
-    assert len(at.table) == 1
-    summary = at.table[0].value
+    summary = overview_table(at)
+    assert not summary.empty
     assert summary.loc[summary["Check"] == "Fatigue"].shape[0] == 1
     fatigue_summary = summary.loc[summary["Check"] == "Fatigue"].iloc[0]
     assert fatigue_summary["Governing action"] == "Traffic"
@@ -6683,7 +6686,7 @@ def test_actual_result_views_hide_retained_plastic_and_transverse_reasons(
             parts.extend(
                 str(item.value) for item in getattr(at, element_type)
             )
-        parts.extend(frame.value.to_string() for frame in at.table)
+        parts.extend(frame.value.to_string() for frame in (*at.table, *at.dataframe))
         parts.extend(frame.value.to_string() for frame in at.dataframe)
         return " ".join(parts)
 
@@ -9621,9 +9624,8 @@ def test_multi_case_overview_and_result_picker_show_selected_actions():
     _calculate(at)
     assert not at.exception
 
-    assert len(at.table) == 1
-    frame = at.table[0]
-    summary = frame.value
+    summary = overview_table(at)
+    assert not summary.empty
     bending = summary.loc[summary["Check"] == "Plastic bending"]
     assert bending["Governing action"].tolist() == ["PL-HIGH"]
     assert "Governing" not in summary.columns
@@ -9644,9 +9646,10 @@ def test_multi_case_overview_and_result_picker_show_selected_actions():
     assert not at.exception
 
 
-def test_results_overview_uses_one_static_content_height_table(monkeypatch):
+def test_results_overview_uses_scrollable_table_with_pinned_action(monkeypatch):
     import result_presentation
     import sector_app
+    import streamlit
 
     rows = [
         {
@@ -9668,6 +9671,8 @@ def test_results_overview_uses_one_static_content_height_table(monkeypatch):
     rows[0].update(case="-", result="-", criterion=f"{chr(0x2265)} 21.0 mm")
 
     class FakeStreamlit:
+        column_config = streamlit.column_config
+
         def __init__(self):
             self.tables = []
 
@@ -9692,7 +9697,7 @@ def test_results_overview_uses_one_static_content_height_table(monkeypatch):
         def metric(self, *_args, **_kwargs):
             return None
 
-        def table(self, data, **kwargs):
+        def dataframe(self, data, **kwargs):
             self.tables.append((data, kwargs))
 
         def markdown(self, *_args, **_kwargs):
@@ -9700,6 +9705,12 @@ def test_results_overview_uses_one_static_content_height_table(monkeypatch):
 
         def text(self, *_args, **_kwargs):
             return None
+
+        def selectbox(self, *_args, **_kwargs):
+            return 0
+
+        def button(self, *_args, **_kwargs):
+            return False
 
     fake = FakeStreamlit()
     monkeypatch.setattr(sector_app, "st", fake)
@@ -9715,7 +9726,9 @@ def test_results_overview_uses_one_static_content_height_table(monkeypatch):
     assert len(fake.tables) == 1
     styled, options = fake.tables[0]
     assert len(styled.data) == 20
-    assert options["height"] == "content"
+    assert options["height"] == 460
+    assert options["column_config"]["Governing action"]["pinned"] is True
+    assert options["column_config"]["Governing action"]["width"] == 130
     assert options["width"] == "stretch"
     assert styled.data.iloc[0]["Governing action"] == chr(0x2014)
     assert styled.data.iloc[0]["Result"] == chr(0x2014)
@@ -9768,7 +9781,10 @@ def test_results_overview_shows_action_provenance_and_explicit_states():
     at.run()
     _select_view(at, "Results Overview")
     assert not at.table
-    assert any("Plastic bending | PL-01 | NOT RUN" in item.value for item in at.text)
+    scope = next(frame.value for frame in at.dataframe
+                 if "Availability / scope" in frame.value.columns)
+    pending = scope.loc[scope["Check"] == "Plastic bending"].iloc[0]
+    assert (pending["Action"], pending["Status"]) == ("PL-01", "NOT RUN")
 
     _set_and_click(
         at,
@@ -9776,8 +9792,8 @@ def test_results_overview_shows_action_provenance_and_explicit_states():
         ("text_input", "pl_case_id", "PL-GOV-04"),
         ("text_input", "pl_case_source", "Combination register C1"),
     )
-    assert len(at.table) == 1
-    status = at.table[0].value
+    status = overview_table(at)
+    assert not status.empty
     bending = status.loc[status["Check"] == "Plastic bending"].iloc[0]
     assert bending["Governing action"] == "PL-GOV-04"
     assert "Source / description" not in status.columns
@@ -9785,7 +9801,7 @@ def test_results_overview_shows_action_provenance_and_explicit_states():
 
     _set(at, ("text_input", "pl_case_id", "PL-GOV-05"))
     _select_view(at, "Results Overview")
-    stale = at.table[0].value
+    stale = overview_table(at)
     assert set(stale["Status"]) == {"STALE"}
     assert any("inputs changed" in warning.value.lower() for warning in at.warning)
 
@@ -9840,7 +9856,7 @@ def test_page_navigation_and_input_stages_follow_the_workflow_order():
         f"4 {d} Loads",
         "Project",
     ]
-    assert [tab.label for tab in at.tabs] == expected_outer
+    assert at.selectbox(key="_input_tab").options == expected_outer
     assert at.session_state["_input_tab"] == expected_outer[0]
     labels = [ex.label for ex in at.expander]
     assert labels == [
@@ -9848,6 +9864,7 @@ def test_page_navigation_and_input_stages_follow_the_workflow_order():
         "Reinforcement detailing",
         "Fatigue",
         "Shear, torsion & combined (Plastic)",
+        "Plastic bending settings",
     ]
     _goto_input_tab(at, "Project")
     labels = [ex.label for ex in at.expander]
@@ -9955,14 +9972,7 @@ def test_only_selected_material_family_mounts_and_retains_sibling_edits():
     assert at.session_state["_material_tab"] == "Concrete"
     dot = chr(0x00B7)
     assert [tab.label for tab in at.tabs] == [
-        f"1 {dot} Analysis settings",
-        f"2 {dot} Section",
-        f"3 {dot} Material parameters",
-        "Concrete",
-        "Mild steel",
-        "Prestressing steel",
-        f"4 {dot} Loads",
-        "Project",
+        "Concrete", "Reinforcing steel", "Prestressing steel",
     ]
     number_keys = {widget.key for widget in at.number_input}
     assert "conc_fck" in number_keys
@@ -9970,7 +9980,7 @@ def test_only_selected_material_family_mounts_and_retains_sibling_edits():
     assert "pre_fytk" not in number_keys
 
     at.number_input(key="conc_fck").set_value(55.0).run()
-    _goto_material_tab(at, "Mild steel")
+    _goto_material_tab(at, "Reinforcing steel")
     number_keys = {widget.key for widget in at.number_input}
     assert "conc_fck" not in number_keys
     assert "mild_fytk" in number_keys
@@ -9998,7 +10008,7 @@ def test_fatigue_material_family_is_conditional_and_cannot_mount_outside_owner()
     labels = [tab.label for tab in at.tabs]
     start = labels.index("Concrete")
     assert labels[start:start + 4] == [
-        "Concrete", "Mild steel", "Prestressing steel", "Fatigue details",
+        "Concrete", "Reinforcing steel", "Prestressing steel", "Fatigue details",
     ]
     _goto_material_tab(at, "Fatigue details")
     assert any(button.key == "fatigue_catalog_add_mild" for button in at.button)
@@ -10013,7 +10023,7 @@ def test_fatigue_material_family_is_conditional_and_cannot_mount_outside_owner()
     labels = [tab.label for tab in at.tabs]
     start = labels.index("Concrete")
     assert labels[start:start + 3] == [
-        "Concrete", "Mild steel", "Prestressing steel",
+        "Concrete", "Reinforcing steel", "Prestressing steel",
     ]
     assert "Fatigue details" not in labels
     assert at.session_state["_material_tab"] == "Concrete"
@@ -10045,7 +10055,7 @@ def test_auto_all_updates_concrete_while_mild_family_is_mounted():
         "sls_fctm": 3.21,
         "conc_Ec": 34.1,
     }
-    assert at.session_state["_material_tab"] == "Mild steel"
+    assert at.session_state["_material_tab"] == "Reinforcing steel"
     for key, value in expected.items():
         assert at.session_state[key] == pytest.approx(value)
         assert at.session_state["_durable_input_scalars"][key] == pytest.approx(
@@ -10847,11 +10857,7 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
         "heightened_crack_control" not in entry["results"]
         for entry in results["elastic_cases"]
     )
-    overview = next(
-        table.value
-        for table in at.table
-        if {"Check", "Governing action", "Status"}.issubset(table.value.columns)
-    )
+    overview = overview_table(at)
     heightened_summary = overview.loc[
         overview["Check"] == "DK heightened crack-control minimum"
     ]
@@ -11001,11 +11007,11 @@ def test_blocking_issues_are_separate_and_navigate_to_the_exact_input_stage():
     stage = f"1 {chr(0x00B7)} Analysis settings"
     assert at.session_state["_main_page"] == "Inputs"
     assert at.session_state["_input_tab"] == stage
-    assert at.session_state["_material_tab"] == "Mild steel"
+    assert at.session_state["_material_tab"] == "Reinforcing steel"
     durable = at.session_state["_durable_input_scalars"]
     assert durable["_input_tab"] == stage
-    assert durable["_material_tab"] == "Mild steel"
-    assert durable["_material_tab_preference"] == "Mild steel"
+    assert durable["_material_tab"] == "Reinforcing steel"
+    assert durable["_material_tab_preference"] == "Reinforcing steel"
     assert at.number_input(key="sls_heightened_effective_tensile_strength_mpa")
     assert any(
         "Correction target: **Effective tensile strength**" in item.value
@@ -11050,21 +11056,21 @@ def test_material_blocker_navigates_to_its_material_family(monkeypatch):
     material_stage = f"3 {chr(0x00B7)} Material parameters"
     assert at.session_state["_main_page"] == "Inputs"
     assert at.session_state["_input_tab"] == material_stage
-    assert at.session_state["_material_tab"] == "Mild steel"
+    assert at.session_state["_material_tab"] == "Reinforcing steel"
     assert at.session_state["_mild_catalog_selected"] == "M2"
     assert at.session_state["_durable_input_scalars"][
         "_material_tab"
-    ] == "Mild steel"
+    ] == "Reinforcing steel"
     assert at.session_state["_durable_input_scalars"][
         "_material_tab_preference"
-    ] == "Mild steel"
+    ] == "Reinforcing steel"
     assert at.session_state["_durable_input_scalars"][
         "_mild_catalog_selected"
     ] == "M2"
     assert at.selectbox(key="_mild_catalog_selected").value == "M2"
     assert "_pending_input_events" not in at.session_state
     assert any(
-        "Opened **Material parameters / Mild steel**" in item.value
+        "Opened **Material parameters / Reinforcing steel**" in item.value
         for item in at.info
     )
 
@@ -11416,3 +11422,52 @@ def test_crack_width_auto_cover_circular_section():
     e = at.session_state["results"]["elastic"]
     if e["crack"] is not None:
         assert e["crack"]["cover"] > 70.0
+
+
+def test_b2_inactive_settings_restore_values_and_legacy_material_selection():
+    at = _fresh()
+    at.session_state["_input_tab"] = f"3 {chr(0x00B7)} Material parameters"
+    at.session_state["_material_tab"] = "Mild steel"
+    at.run()
+    assert at.session_state["_material_tab"] == "Reinforcing steel"
+    assert at.session_state["_material_tab_preference"] == "Reinforcing steel"
+    assert at.number_input(key="mild_fytk")
+    _goto_input_tab(at, "Analysis settings")
+    at.number_input(key="v_inc").set_value(23.0).run()
+    assert at.session_state["_plastic_settings_open"] is True
+    at.radio(key="mode").set_value("Elastic").run()
+    assert at.session_state["_plastic_settings_open"] is False
+    assert at.number_input(key="v_inc").value == 23.0
+    at.radio(key="mode").set_value("Both").run()
+    assert at.number_input(key="v_inc").value == 23.0
+    assert at.session_state["_plastic_settings_open"] is True
+    at.selectbox(key="sls_code").set_value(_SLS_DK).run()
+    at.toggle(key="sls_heightened_on").set_value(True).run()
+    at.number_input(key="sls_heightened_effective_tensile_strength_mpa").set_value(3.7).run()
+    assert at.session_state["_heightened_settings_open"] is True
+    at.toggle(key="sls_heightened_on").set_value(False).run()
+    assert at.session_state["_heightened_settings_open"] is False
+    _goto_page(at, "Analysis")
+    _goto_page(at, "Inputs")
+    at.toggle(key="sls_heightened_on").set_value(True).run()
+    assert at.number_input(key="sls_heightened_effective_tensile_strength_mpa").value == 3.7
+    assert at.session_state["_heightened_settings_open"] is True
+    assert not at.exception
+
+
+def test_overview_detail_route_selects_the_exact_existing_case_or_spectrum(monkeypatch):
+    import sector_app
+    state = {"_plastic_result_case_index": 0, "_fatigue_result_spectrum": "Earlier"}
+    monkeypatch.setattr(sector_app, "st", types.SimpleNamespace(session_state=state))
+    monkeypatch.setattr(sector_app, "_case_entries_for_view",
+                        lambda *_args: [{"name": "Earlier"}, {"name": "Governing"}])
+    monkeypatch.setattr(sector_app, "fatigue_presentation", types.SimpleNamespace(
+        spectrum_rows=lambda _payload: [{"spectrum": "Earlier"}, {"spectrum": "Governing"}],
+    ))
+    for family, view in (("plastic", "Plastic Results"), ("fatigue", "Fatigue Results")):
+        sector_app._open_overview_result(
+            {"family": family, "view": view, "case": "Governing"}, {}, {},
+        )
+        assert state["view"] == state["_workspace_view"] == view
+    assert state["_plastic_result_case_index"] == 1
+    assert state["_fatigue_result_spectrum"] == "Governing"

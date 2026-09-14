@@ -328,7 +328,20 @@ def stateful_input_tabs(
     )
 
 
-def normalise_stage_selection(state, key, labels: Sequence[str]):
+def stateful_input_selector(host, labels, *, key, state, on_change=None):
+    """Keep the selected stage visible in a compact native selector."""
+    labels = tuple(labels)
+    normalise_stage_selection(state, key, labels)
+    selected = host.selectbox(
+        "Input stage", labels, key=key, on_change=on_change,
+        help="Choose the stage to edit. Other stages retain their entered values.",
+    )
+    if selected not in labels or selected != state.get(key):
+        selected = None
+    return input_stages(host, labels, selected, state=state)
+
+
+def normalise_stage_selection(state, key, labels: Sequence[str], *, aliases=None):
     """Remove unavailable navigation values from live and retained mirrors."""
 
     labels = tuple(labels)
@@ -336,9 +349,13 @@ def normalise_stage_selection(state, key, labels: Sequence[str]):
         raise ValueError("A stage selector requires at least one label")
     allowed = set(labels)
     pending = state.get("_pending_input_events", {})
+    durable = state.get("_durable_input_scalars", {})
+    for values in (state, pending, durable):
+        previous = values.get(key)
+        if aliases and previous in aliases:
+            values[key] = aliases[previous]
     if pending.get(key) not in allowed:
         pending.pop(key, None)
-    durable = state.get("_durable_input_scalars", {})
     if key in durable and durable[key] not in allowed:
         durable[key] = labels[0]
     if state.get(key) not in allowed:

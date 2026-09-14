@@ -28,11 +28,11 @@ def finite_number(value):
 
 
 def percentage(stress, strength):
-    """Keep the stress sign; reject absent, nonfinite or nonpositive strengths."""
+    """Compare stress magnitude; reject absent, nonfinite or nonpositive strengths."""
     stress, strength = finite_number(stress), finite_number(strength)
     if stress is None or strength is None or strength <= 0.0:
         return None
-    result = stress / strength * 100.0
+    result = abs(stress) / strength * 100.0
     return result if math.isfinite(result) else None
 
 

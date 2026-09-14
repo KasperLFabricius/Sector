@@ -29,7 +29,7 @@ INPUT_STAGES = frozenset(
     }
 )
 MATERIAL_FAMILIES = frozenset(
-    {"Concrete", "Mild steel", "Prestressing steel", "Fatigue details"}
+    {"Concrete", "Reinforcing steel", "Prestressing steel", "Fatigue details"}
 )
 
 _CASE_FALLBACK = EngineerMessage(
@@ -103,7 +103,7 @@ class InputTarget:
             )
         if self.material_id is not None:
             expected_prefix = {
-                "Mild steel": "M",
+                "Reinforcing steel": "M",
                 "Prestressing steel": "P",
             }.get(self.material_family)
             if expected_prefix is None or not re.fullmatch(
@@ -286,7 +286,7 @@ def heightened_issues(errors: Iterable[object]) -> tuple[InputIssue, ...]:
 
 def _material_definition_target(message: EngineerMessage) -> InputTarget | None:
     if message.code.startswith("MILD-"):
-        family = "Mild steel"
+        family = "Reinforcing steel"
     elif message.code.startswith("PRESTRESS-"):
         family = "Prestressing steel"
     else:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+
 import copy
 import inspect
 import math
@@ -15,6 +16,8 @@ from sector import capacity, codes, combined, shear
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
+
+from app_case_inputs import overview_table
 APP = str(ROOT / "app" / "sector_app.py")
 
 from app_case_inputs import (  # noqa: E402
@@ -1121,7 +1124,7 @@ def test_biaxial_directional_vt_outside_permitted_range_withholds_verdicts():
     assert minimum_screens[0]["6.31 sum"].isna().all()
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     rows = overview.loc[
         overview["Check"].str.contains("Combined M-V-T", regex=False)
     ]
@@ -1223,7 +1226,7 @@ def test_app_blocked_torsion_retains_shear_and_blocks_every_combined_verdict():
     assert "action_alone" not in results["combined"]
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     torsion_rows = overview.loc[
         overview["Check"].str.contains("Torsion", case=False, regex=False)
     ]
@@ -1532,7 +1535,7 @@ def test_app_combined_mv_independent_uses_max():
     assert "N + M + T and N + V + T" in visible
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     row = overview.loc[
         overview["Check"] == "Combined M-V-T - DK NA sum"
     ].iloc[0]
@@ -1617,7 +1620,7 @@ def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass(shear_force):
     assert "failed numerical check governs" in visible
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     row = overview.loc[
         overview["Check"] == "Combined M-V-T - DK NA sum"
     ].iloc[0]
@@ -1724,7 +1727,7 @@ def test_app_base_en_keeps_physical_interactions_without_dkna_artifacts():
     assert "No shear or torsion is acting" not in visible
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     checks = tuple(str(value) for value in overview["Check"])
     assert any("concrete compression strut" in value.casefold() for value in checks)
     assert any("closed stirrup" in value.casefold() for value in checks)
@@ -1779,7 +1782,7 @@ def test_app_base_en_biaxial_view_keeps_only_directional_physical_checks():
     assert not any("action-alone" in str(column).casefold() for column in direction_table.columns)
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     checks = tuple(str(value) for value in overview["Check"])
     assert "Combined Vx+T concrete compression strut" in checks
     assert "Combined Vx+T closed stirrup" in checks
@@ -1818,7 +1821,7 @@ def _assert_current_native_mvt_views(at, *, longitudinal=False):
         assert chord.delta == component["chord_status"]
         assert str(chord.value) == f"{component['chord_util'] * 100:.1f} %"
     _select_view(at, "Results Overview")
-    overview = next(table.value for table in at.table if "Check" in table.value)
+    overview = overview_table(at)
     rows = overview[overview["Check"].str.startswith("Combined ")]
     assert not rows.empty
     assessed = rows[rows["Status"].isin(["PASS", "FAIL"])]
@@ -1851,7 +1854,7 @@ def _assert_rejected_native_mvt_views(at):
     captions = " ".join(str(item.value) for item in at.caption)
     _select_view(at, "Results Overview")
     assert not at.exception
-    overview = next(table.value for table in at.table if "Check" in table.value)
+    overview = overview_table(at)
     rows = overview[overview["Check"].str.startswith("Combined ")]
     assert not rows.empty
     assert set(rows["Status"]) == {"NOT ASSESSED"}
@@ -1989,7 +1992,7 @@ def test_app_base_en_invalid_utilisations_are_not_published(
 
     _assert_rejected_native_mvt_views(at)
     assert not at.exception
-    overview = at.table[0].value
+    overview = overview_table(at)
     combined_rows = overview[
         overview["Check"].str.startswith("Combined ")
     ]
@@ -2659,7 +2662,7 @@ def test_app_combined_outside_permitted_range_withholds_all_verdicts():
     assert not at.metric
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     combined_rows = overview.loc[
         overview["Check"].str.contains("Combined M-V-T", regex=False)
     ]
@@ -3145,7 +3148,7 @@ def _current_2023_shear_views(at):
                        (*at.warning, *at.info, *at.caption, *at.markdown))
     _select_view(at, "Results Overview")
     assert not at.exception
-    overview = next(item.value.copy(deep=True) for item in at.table if "Check" in item.value)
+    overview = overview_table(at).copy(deep=True)
     chord_row = overview[overview["Check"] == "Shear longitudinal chords"].iloc[0]
     assert (chord_row["Status"], chord_row["Result"]) == (
         chord["assessment"]["status"], f"{chord['assessment']['util'] * 100:.1f} %",
@@ -3187,7 +3190,7 @@ def _assert_rejected_native_2023_shear(at):
                    for item in at.metric)
     _select_view(at, "Results Overview")
     assert not at.exception
-    overview = next(item.value for item in at.table if "Check" in item.value)
+    overview = overview_table(at)
     links = overview[overview["Check"].str.startswith("Shear")
                      & overview["Check"].str.endswith("with links")]
     assert not links.empty
@@ -3457,7 +3460,7 @@ def test_app_2023_failed_required_chord_propagates_to_shear_and_overview(
     assert set(face_table["Status"]) == {"FAIL", "PASS"}
     leaf.radio(key="unit_surface").set_value("Overview").run()
     assert not leaf.exception
-    overview = leaf.table[0].value
+    overview = overview_table(leaf)
     row = overview.loc[overview["Check"] == "Shear longitudinal chords"].iloc[0]
     assert row["Status"] == "FAIL"
     assert row["Result"] == "215.0 %"
@@ -3575,7 +3578,7 @@ def test_app_2023_incomplete_chord_coverage_is_not_assessed(monkeypatch):
     assert "Complete both required longitudinal chord checks" in visible
 
     _select_view(at, "Results Overview")
-    overview = at.table[0].value
+    overview = overview_table(at)
     # Transverse link resistance and required longitudinal coverage are
     # separate checks; an unavailable chord must not erase a valid link result.
     inp = at.session_state["result_input_snapshot"]
@@ -3694,7 +3697,7 @@ def test_app_2023_zero_chord_candidates_remain_visibly_not_assessed(
     assert "Complete both required longitudinal chord checks" in visible
     leaf.radio(key="unit_surface").set_value("Overview").run()
     assert not leaf.exception
-    overview = leaf.table[0].value
+    overview = overview_table(leaf)
     row = overview.loc[overview["Check"] == "Shear longitudinal chords"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
     assert row["Result"] == chr(0x2014)
@@ -4638,7 +4641,7 @@ def test_pub_h01_subtube_total_forgery_fails_closed_in_torsion_and_overview():
 
     _select_view(at, "Results Overview")
     assert not at.exception
-    overview = at.table[0].value
+    overview = overview_table(at)
     torsion_rows = overview.loc[
         overview["Check"].astype(str).str.startswith("Torsion")
     ]
@@ -5647,7 +5650,7 @@ def pub_m01_exact_minimax_case(pub_m01_native_environment):
 
     _select_view(at, "Results Overview")
     assert not at.exception
-    overview = at.table[0].value.copy(deep=True)
+    overview = overview_table(at).copy(deep=True)
 
     _run_member(
         at,
@@ -5701,7 +5704,7 @@ def pub_m01_exact_minimax_case(pub_m01_native_environment):
     )
     _select_view(at, "Results Overview")
     assert not at.exception
-    poisoned_overview = at.table[0].value.copy(deep=True)
+    poisoned_overview = overview_table(at).copy(deep=True)
     return {
         "wide_input": wide_input,
         "wide_results": wide_results,
@@ -6264,7 +6267,7 @@ def test_pub_h01_current_native_failure_rejects_isolated_candidate_inventory(
             assert not view_metrics
         runner.radio(key="surface").set_value("Results Overview").run()
         assert not runner.exception
-        table = next(item.value for item in runner.table if "Check" in item.value)
+        table = overview_table(runner)
         combined_rows = table[table["Check"].str.startswith("Combined ")]
         assert not combined_rows.empty
         if current:
