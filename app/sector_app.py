@@ -398,10 +398,9 @@ def _warm_solver():
     return True
 
 _logo = ROOT / "assets" / "logo.png"
-with st.container(horizontal=True, vertical_alignment="center"):
-    if _logo.exists():
-        st.image(str(_logo), width=90)
-    st.title(f"Sector v{APP_VERSION}", width="content")
+if _logo.exists():
+    st.image(str(_logo), width=180)
+st.title(f"Sector v{APP_VERSION}")
 st.caption("Reinforced-concrete cross-section analysis - elastic stresses and plastic capacity")
 
 
