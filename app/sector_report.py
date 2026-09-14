@@ -12320,8 +12320,8 @@ class ReportBuilder:
             ])
             self._table(
                 rows,
-                [17 * mm, 13 * mm, 24 * mm, 28 * mm, 17 * mm,
-                 24 * mm, 15 * mm, 27 * mm],
+                [20 * mm, 17 * mm, 22 * mm, 28 * mm, 24 * mm,
+                 21 * mm, 12 * mm, 21 * mm],
                 font=5.2,
                 keep=False,
                 repeat_cols=2,
@@ -12777,8 +12777,8 @@ class ReportBuilder:
                 ])
                 self._table(
                     rows,
-                    [11 * mm, 20 * mm, 13 * mm, 13 * mm, 17 * mm,
-                     16 * mm, 18 * mm, 22 * mm, 16 * mm, 14 * mm],
+                    [14 * mm, 18 * mm, 12 * mm, 12 * mm, 17 * mm,
+                     16 * mm, 18 * mm, 26 * mm, 13 * mm, 14 * mm],
                     font=5.4,
                     keep=False,
                     repeat_cols=2,
