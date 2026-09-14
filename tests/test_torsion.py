@@ -1553,7 +1553,15 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
     table = next(item.value for item in at.table if "Governing action" in item.value)
     assert list(table[["Check", "Governing action", "Status", "Result"]].itertuples(
         index=False, name=None,
-    )) == [(row["check"], row["case"], row["status"], row["result"]) for row in expected]
+    )) == [
+        (
+            row["check"],
+            chr(0x2014) if row["case"] == "-" else row["case"],
+            row["status"],
+            chr(0x2014) if row["result"] == "-" else row["result"],
+        )
+        for row in expected
+    ]
     assert "EQ-01" in set(table["Governing action"])
 
     _select_view(at, "Torsion")
@@ -4449,7 +4457,10 @@ def _assert_native_torsion_longitudinal_rows(out, proof, status):
     assert longitudinal["util"] == pytest.approx(
         native["required_asl_mm2"] / native["provided_equivalent_area_mm2"],
     )
-    assert "1177 /" in longitudinal["result"]
+    assert longitudinal["result"] == (
+        "Required 1177 mm2; modelled upper bound "
+        f"{native['provided_equivalent_area_mm2']:.0f} mm2; provision unverified"
+    )
     assert presentation.overall_summary_status(list(rows.values())) == status
     assert presentation.overall_summary_status(proof["rows"]) == status
     for key in ("distribution_verified", "bending_reserve_verified", "anchorage_verified"):
