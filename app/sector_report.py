@@ -8716,8 +8716,8 @@ class ReportBuilder:
             ])
         self._table(
             rows,
-            [18 * mm, 14 * mm, 14 * mm, 14 * mm, 14 * mm, 21 * mm,
-             31 * mm, 17 * mm, 22 * mm],
+            [16 * mm, 14 * mm, 14 * mm, 14 * mm, 14 * mm, 21 * mm,
+             27 * mm, 17 * mm, 30 * mm],
             font=5.8,
         )
         governing_notes = {
@@ -12249,7 +12249,7 @@ class ReportBuilder:
         self._table(
             rows,
             [18 * mm, 14 * mm, 8 * mm, 9 * mm, 10 * mm,
-             28 * mm, 16 * mm, 19 * mm, 18 * mm, 18 * mm],
+             23 * mm, 16 * mm, 19 * mm, 23 * mm, 18 * mm],
             font=5.5,
             keep=False,
         )
