@@ -52,8 +52,8 @@ REPORT_TEXT = MappingProxyType({
         11.5, before=8, after=4, color=PALETTE.primary,
         bold=True, keep_next=True,
     ),
-    "body": TextStyle(9.5, leading=13, after=4),
-    "small": TextStyle(8.5, leading=11, color=PALETTE.muted),
+    "body": TextStyle(10, leading=13.5, after=4),
+    "small": TextStyle(10, leading=13.5, color=PALETTE.ink),
     "publication_ref": TextStyle(
         8, leading=10, before=2, after=2, color=PALETTE.muted,
         keep_next=True,
@@ -76,9 +76,9 @@ MANUAL_TEXT = MappingProxyType({
     ),
     "h2": TextStyle(12.5, before=9, after=4, bold=True, keep_next=True),
     "h3": TextStyle(11, before=6, after=3, bold=True, keep_next=True),
-    "body": TextStyle(9.5, leading=13, after=4),
+    "body": TextStyle(10, leading=13.5, after=4),
     "math": TextStyle(11, leading=15, before=6, after=6),
-    "small": TextStyle(9.5, leading=12, color=PALETTE.manual_muted),
+    "small": TextStyle(9.5, leading=12, color=PALETTE.ink),
     "publication_ref": TextStyle(
         9.5, leading=12, before=2, after=2, color=PALETTE.manual_muted,
         keep_next=True,

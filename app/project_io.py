@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 import reinforcement_table as rebar_table
 
-from app import engineer_messages, modelled_direction, report_profiles
+from app import engineer_messages, modelled_direction, report_profiles, report_sources
 from app import heightened_crack_adapter
 from app.table_field_definitions import (
     decimal_issue_ledger,
@@ -275,7 +275,7 @@ SCALAR_KEYS = [
     "capacity_steel_material_id", "label_scale", "label_min_gap",
     # Project/report document metadata. Roles do not imply approval status.
     "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev",
-    "rep_author", "rep_checker", "rep_approver", "rep_comments",
+    "rep_author", "rep_checker", "rep_approver", "rep_comments", report_sources.KEY,
     # Local application preferences that are meaningful on restore.
     "autosave_on", "autosave_min",
 ]
@@ -394,6 +394,7 @@ _TEXT_SCALAR_KEYS = frozenset({
 })
 
 _NESTED_SCALAR_KEYS = frozenset({
+    report_sources.KEY,
     material_catalog.MILD_CATALOG_KEY,
     material_catalog.PRESTRESS_CATALOG_KEY,
     fatigue_inputs.DETAIL_CATALOG_KEY,
@@ -722,6 +723,11 @@ def _validate_torsion_case_authorities(value, key: str) -> dict:
 
 
 def _validate_nested_scalar(value, key: str):
+    if key == report_sources.KEY:
+        try:
+            return report_sources.validate(value)
+        except ValueError as error:
+            raise _invalid_input(str(error)) from error
     if key == material_catalog.MILD_CATALOG_KEY:
         return _validate_material_catalog(value, "mild", key)
     if key == material_catalog.PRESTRESS_CATALOG_KEY:

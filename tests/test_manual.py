@@ -667,38 +667,31 @@ def test_manual_documents_current_analysis_hover_semantics():
 
 
 def test_manual_editable_table_matrix_is_generated_from_shared_registry():
-    headers = ["Editable table", "Fields / notation", "Blank / default"]
-    matrix_blocks = [
-        block for block in manual.manual_blocks()
-        if block[0] == "table" and block[1] == headers
-    ]
-
-    assert len(matrix_blocks) == 1
-    rows = matrix_blocks[0][2]
-    assert rows == manual.editable_table_reference_rows()
-    assert len(rows) == len(table_fields.TABLE_KEYS) == 7
-    assert [row[0] for row in rows] == [
-        table_fields.TABLE_TITLES[key] for key in table_fields.TABLE_KEYS
-    ]
-    for key, row in zip(table_fields.TABLE_KEYS, rows, strict=True):
-        for definition in table_fields.table_fields(key):
-            assert definition.label in row[1]
+    headers = ["Field / unit", "Meaning / sign", "Default / validation"]
+    tables = [block[2] for block in manual.manual_blocks()
+              if block[0] == "table" and block[1] == headers]
+    assert len(tables) == len(table_fields.TABLE_KEYS) == 7
+    assert sum(map(len, tables)) == 50
+    for key, rows in zip(table_fields.TABLE_KEYS, tables, strict=True):
+        definitions = table_fields.table_fields(key)
+        assert len(rows) == len(definitions)
+        for definition, row in zip(definitions, rows, strict=True):
+            assert definition.label in row[0]
             if definition.math_symbol != "-":
-                assert f"${definition.math_symbol}$" in row[1]
+                assert f"${definition.math_symbol}$" in row[0]
             if definition.unit != "-":
-                assert (
-                    f"[${table_fields.latex_unit(definition.unit)}$]" in row[1]
-                )
-                assert f"[{definition.unit}]" not in row[1]
-            input_rule = table_fields.input_rule(definition)
-            if input_rule == "Blank = False":
-                input_rule = "Blank = off"
-            elif input_rule == "Blank = True":
-                input_rule = "Blank = on"
-            assert f"{input_rule}:" in row[2]
-    assert manual._latex_to_rl(table_fields.latex_unit("mm^2")) == (
-        "mm<super>2</super>"
-    )
+                assert f"[${table_fields.latex_unit(definition.unit)}$]" in row[0]
+            rule = table_fields.input_rule(definition)
+            rule = rule.replace("Blank = False", "Blank = off").replace("Blank = True", "Blank = on")
+            assert rule in row[2]
+            assert definition.definition in row[1]
+            if definition.source != "User input":
+                assert definition.source in row[1]
+    text = str(tables)
+    assert "physical sign" not in text
+    assert "field-specific sign" not in text
+    assert "stated in this table" not in text
+    assert manual._latex_to_rl(table_fields.latex_unit("mm^2")) == "mm<super>2</super>"
 
 
 def test_manual_documents_decimal_blank_and_precision_contracts():

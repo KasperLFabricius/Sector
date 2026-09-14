@@ -35,7 +35,7 @@ from app import input_issues  # noqa: E402
 from app import engineer_messages  # noqa: E402
 from app import elastic_display  # noqa: E402
 from app import manual_information_architecture as manual_ia  # noqa: E402
-from app import report_profiles  # noqa: E402
+from app import report_profiles, report_sources  # noqa: E402
 from deferred_import import deferred_module  # noqa: E402
 from input_stage_host import (  # noqa: E402
     live_fragment_value,
@@ -2981,6 +2981,7 @@ def _fatigue_spectrum_signature(value):
 # than project inputs, but they need the same treatment while their controls are
 # off-screen.
 _REPORT_STATE_SCALARS = (
+    report_sources.KEY,
     "rep_proj_no",
     "rep_proj_name",
     "rep_section",
@@ -3945,7 +3946,8 @@ def _apply_project_text(text: str) -> None:
     for key in _REPORT_STATE_SCALARS:
         report_durable.setdefault(
             key,
-            _REPORT_DEFAULT if key == project_io.REPORT_PROFILE_KEY else "",
+            _REPORT_DEFAULT if key == project_io.REPORT_PROFILE_KEY
+            else [] if key == report_sources.KEY else "",
         )
     st.session_state[_REPORT_STATE_KEY] = report_durable
     # Keep each preset's change-marker in step with the loaded preset so the panel
@@ -4172,11 +4174,71 @@ _REPORT_PROFILE_ERROR_KEY = "_report_profile_error"
 _REPORT_PROG = None
 
 
+def _store_report_source(scope, case_name):
+    st.session_state[report_sources.KEY] = report_sources.replace_entry(
+        st.session_state.get(report_sources.KEY, []), scope, case_name,
+        st.session_state.get("_report_source_document", ""),
+        st.session_state.get("_report_source_locator", ""),
+    )
+    _record_input_event(report_sources.KEY)
+    _snapshot_report_state()
+
+
+def _report_source_editor(inp):
+    register = report_sources.validate(st.session_state.get(report_sources.KEY, []))
+    current = report_sources.available_assignments(inp)
+    options = list(dict.fromkeys(current + [
+        (entry["scope"], entry["case_name"]) for entry in register
+    ]))
+    with st.expander("Project and action references (optional)"):
+        st.caption(
+            "User-supplied document or record identifiers and section/page locators. "
+            "Project references describe project assumptions; they do not automatically "
+            "apply to every action. Sector does not verify these references."
+        )
+        key = "_report_source_assignment"
+        if st.session_state.get(key) not in options:
+            st.session_state[key] = options[0]
+        selected = st.selectbox(
+            "Reference scope", options, key=key,
+            format_func=lambda item: (
+                item[0] + (" \u2014 " + item[1] if item[1] else " assumptions")
+                + (" (unmatched)" if item not in current else "")
+            ),
+        )
+        entry = next((item for item in register
+                      if (item["scope"], item["case_name"]) == selected), {})
+        # Editor keys are transient. Restore from the exact report-owned record
+        # each mount, including after project replacement and scope changes.
+        st.session_state["_report_source_document"] = entry.get("document", "")
+        st.session_state["_report_source_locator"] = entry.get("locator", "")
+        st.text_input(
+            "Document or record", key="_report_source_document",
+            on_change=_store_report_source, args=selected,
+        )
+        st.text_input(
+            "Section / page locator", key="_report_source_locator",
+            help="Identify the section or page; a record entry may add detail.",
+            on_change=_store_report_source, args=selected,
+        )
+        if selected not in current:
+            _manual_warning(st, "report-source-unmatched",
+                            "This reference has no matching current case or spectrum. "
+                            "It remains saved; clear both fields to remove it.")
+        st.caption(report_sources.reference_status({
+            "document": entry.get("document", ""),
+            "locator": entry.get("locator", ""),
+        }))
+
+
 def _report_meta():
     """Return the report metadata exactly as shown in the current widgets."""
     meta = {k: st.session_state.get(f"rep_{k}", "")
             for k, _ in _REPORT_FIELDS}
     meta["comments"] = st.session_state.get("rep_comments", "")
+    meta["source_register"] = report_sources.validate(
+        st.session_state.get(report_sources.KEY, [])
+    )
     meta[modelled_direction.ALIAS_KEY] = st.session_state.get(
         modelled_direction.ALIAS_KEY, ""
     )
@@ -4258,7 +4320,8 @@ def _normalise_report_profile_session_state() -> None:
     for key in _REPORT_STATE_SCALARS:
         report_durable.setdefault(
             key,
-            _REPORT_DEFAULT if key == project_io.REPORT_PROFILE_KEY else "",
+            _REPORT_DEFAULT if key == project_io.REPORT_PROFILE_KEY
+            else [] if key == report_sources.KEY else "",
         )
     st.session_state[_REPORT_STATE_KEY] = report_durable
 
@@ -4280,6 +4343,7 @@ def _report_signature(
     document_values = tuple(str(meta.get(k, "")) for k, _ in _REPORT_FIELDS)
     document_values += (
         str(meta.get("comments", "")),
+        report_sources.signature(meta.get("source_register", [])),
         str(report_content),
         modelled_direction.normalise_alias(
             meta.get(modelled_direction.ALIAS_KEY)
@@ -4553,6 +4617,8 @@ def _report_workspace(inp):
     _seeded_text_area(
         metadata_box, "Comments", "", "rep_comments", height=100
     )
+
+    _report_source_editor(inp or {})
 
     publication_box = st.container(border=True)
     publication_box.markdown("**Publication**")
@@ -12070,13 +12136,13 @@ def results_overview_view(inp, results, *, stale=False):
                 },
             )
         st.caption(
-            f"{len(rows)} governing results · {failure_count} fail / invalid · "
-            f"{warning_count} review / stale · {len(information_rows)} scope / availability. "
+            f"{len(rows)} governing results \u00b7 {failure_count} fail / invalid \u00b7 "
+            f"{warning_count} review / stale \u00b7 {len(information_rows)} scope / availability. "
             "Scroll tables horizontally to read every result and criterion."
         )
         detail_index = st.selectbox(
             "Result details", range(len(rows)),
-            format_func=lambda index: f"{rows[index]['check']} — {rows[index]['case']}",
+            format_func=lambda index: f"{rows[index]['check']} \u2014 {rows[index]['case']}",
         )
         st.button(
             "Open selected result", key="overview_open_result",
