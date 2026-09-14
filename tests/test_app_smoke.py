@@ -2287,7 +2287,6 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
         "P1 0.000 -250.000 1000.000 35.682",
         "Elastic modulus Ep 195.0 GPa",
         "P1 P1 195000.0 0.002564 500.000 1000.0 500.000",
-        "= 1 - 6.85 / 6.85",
         "Long-term 0.000 0.000 0.000 Short-term 0.000 0.000 0.000",
         "Locked-in prestress remains fixed",
         "A prestress-only fibre above",
@@ -2299,6 +2298,21 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
         "below 1: cracked; 1 or above: uncracked",
     ):
         assert expected in report_text
+    assert "Report profile Standard" in report_text
+    assert "= 1 - 6.85 / 6.85" not in report_text
+
+    # The same calculated state supplies Audit's detailed substitution chain;
+    # Standard above must still build and retain its relation and cracked result.
+    audit_buffer = io.BytesIO()
+    sector_report.ReportBuilder(
+        audit_buffer, {}, latest, results,
+        figures=False, profile="Audit",
+    ).build()
+    audit_text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in pypdf.PdfReader(io.BytesIO(audit_buffer.getvalue())).pages
+    )
+    assert "= 1 - 6.85 / 6.85" in audit_text
 
 
 def test_elastic_result_contract_invalidates_every_pre_contract_reuse_gate():
