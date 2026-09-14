@@ -1937,6 +1937,33 @@ class ReportBuilder:
         if not isinstance(source, str) or not source.strip():
             raise ValueError(f"Equation {equation_key} requires source text.")
 
+        if self.profile.key == "Standard":
+            # Validate the complete retained calculation above before projecting
+            # its result and provenance. Audit owns the numerical worked chain.
+            anchor = (
+                f"sector-method-{self._chapter}-{self._subsection}-"
+                + _equation_anchor_key(equation_key)
+            )
+            self._equations[scope] = {
+                "key": equation_key, "anchor": anchor, "number": None,
+            }
+            if not report_profiles.standard_retains_equation_result(equation_key):
+                return
+            self._p(f'<a name="{anchor}"/>')
+            self._table(
+                [["Quantity", "Result"],
+                 [contract.result_symbol,
+                  _compact_equation_numbers(result) if result else
+                  "Method relation; result reported in the assessment table."]],
+                [55 * mm, 110 * mm],
+            )
+            if note:
+                self._small(note)
+            if source == _DERIVED_EQUATION_SOURCE:
+                self._small(f"<b>Method relation:</b> {_equation_math(expr)}")
+            self._small(f"<b>Source / method:</b> {source}")
+            return
+
         display_substitution = (
             _compact_equation_numbers(subst) if subst else None
         )
@@ -2505,13 +2532,15 @@ class ReportBuilder:
         self._tick(0.05, "Cover and conventions...")
         self._cover()
         self._contents()
-        self._results_dashboard()
         if self.profile.key == "Brief":
-            self._brief_input_summary()
             self._brief_governing_register()
+            self._brief_fatigue_screen_results()
+            self._brief_warning_summary()
             self._brief_key_figures()
+            self._brief_input_summary()
             self._write_pdf()
             return
+        self._results_dashboard()
         self._conventions()
         if self.profile.key == "Audit":
             self._theory()
@@ -2750,14 +2779,13 @@ class ReportBuilder:
         self._small(
             "This input summary records the geometry, assigned materials, "
             "actions and active analysis settings used for the reported results. "
-            "Generate Standard or Audit for calculation derivations, intermediate "
-            "values and references."
+            "Standard adds complete result tables, criteria and method references; "
+            "Audit includes the calculation steps and substitutions."
         )
         self._brief_geometry_summary()
         self._brief_material_summary()
         self._brief_actions_summary()
         self._brief_settings_summary()
-        self._brief_warning_summary()
 
     def _brief_geometry_summary(self):
         """Publish every concrete-ring and reinforcement input row compactly."""
@@ -3650,7 +3678,11 @@ class ReportBuilder:
                     seen_detail_ids.add(detail_id)
                     ordered_details.append(source_details[detail_id])
                 detail_basis = tuple(ordered_details)
+            unique_details = []
             for detail in detail_basis:
+                if detail not in unique_details:
+                    unique_details.append(detail)
+            for detail in unique_details:
                 bend_reduction = bool(detail.get("bend_reduction"))
                 modifiers = [
                     "kind = "
@@ -3691,62 +3723,77 @@ class ReportBuilder:
                         + "; ".join(modifiers)
                     ),
                 ])
-            if reinforcement_fatigue:
-                for spectrum in fatigue_presentation.items(
-                    fatigue, "spectra"
-                ):
-                    spectrum_name = str(fatigue_presentation.value(
-                        spectrum, "spectrum_name", "-"
-                    ))
-                    for row in fatigue_presentation.reinforcement_rows(
-                        spectrum
-                    ):
-                        fatigue_rows.append([
-                            "Simplified stress-range screen - "
-                            + _html_escape(spectrum_name)
-                            + " / "
-                            + _html_escape(row["element_id"]),
-                            (
-                                _html_escape(row["screen_status"])
-                                + "; detail = "
-                                + _html_escape(row["screen_detail_class"])
-                                + "; basis = "
-                                + _html_escape(row["screen_range_basis"])
-                                + "; range / limit = "
-                                + _fmt(row["screen_range_mpa"], 3)
-                                + " / "
-                                + _fmt(row["screen_threshold_mpa"], 3)
-                                + " MPa; utilisation = "
-                                + _pct(row["screen_utilisation"])
-                                + "; governing bin = "
-                                + _html_escape(row["screen_governing_bin"])
-                                + "; Miner D = "
-                                + _fmt_sig(row["damage"], 6)
-                                + "; Yield / proof util. = "
-                                + _pct(row["yield_utilisation"])
-                                + "; "
-                                + _html_escape(
-                                    _result_reason(
-                                        row["screen_reason"],
-                                        "fatigue",
-                                        "brief report fatigue-screen reason",
-                                    )
-                                    if row["screen_reason"]
-                                    else "-"
-                                )
-                                + (
-                                    "; source = "
-                                    + _html_escape(row["screen_source"])
-                                    if row["screen_source"]
-                                    else ""
-                                )
-                            ),
-                        ])
             self._brief_settings_table(
                 fatigue_rows,
                 caption=(
                     "Grouped fatigue calculation settings and detail definitions"
                 ),
+            )
+
+    def _brief_fatigue_screen_results(self):
+        """Keep retained fatigue-screen outcomes with Brief results, not inputs."""
+        fatigue = self._base_out.get("fatigue") or {}
+        checks = fatigue.get("checks") or {}
+        if not checks.get("reinforcement", self._base_inp.get("fatigue_check_steel")):
+            return
+        fatigue_rows = [["Screen", "Result, criterion and source"]]
+        for spectrum in fatigue_presentation.items(
+            fatigue, "spectra"
+        ):
+            spectrum_name = str(fatigue_presentation.value(
+                spectrum, "spectrum_name", "-"
+            ))
+            for row in fatigue_presentation.reinforcement_rows(
+                spectrum
+            ):
+                fatigue_rows.append([
+                    "Simplified stress-range screen - "
+                    + _html_escape(spectrum_name)
+                    + " / "
+                    + _html_escape(row["element_id"]),
+                    (
+                        _html_escape(row["screen_status"])
+                        + "; detail = "
+                        + _html_escape(row["screen_detail_class"])
+                        + "; basis = "
+                        + _html_escape(row["screen_range_basis"])
+                        + "; range / limit = "
+                        + _fmt(row["screen_range_mpa"], 3)
+                        + " / "
+                        + _fmt(row["screen_threshold_mpa"], 3)
+                        + " MPa; utilisation = "
+                        + _pct(row["screen_utilisation"])
+                        + "; governing bin = "
+                        + _html_escape(row["screen_governing_bin"])
+                        + "; Miner D = "
+                        + _fmt_sig(row["damage"], 6)
+                        + "; Yield / proof util. = "
+                        + _pct(row["yield_utilisation"])
+                        + "; "
+                        + _html_escape(
+                            _result_reason(
+                                row["screen_reason"],
+                                "fatigue",
+                                "brief report fatigue-screen reason",
+                            )
+                            if row["screen_reason"]
+                            else "-"
+                        )
+                        + (
+                            "; source = "
+                            + _html_escape(row["screen_source"])
+                            if row["screen_source"]
+                            else ""
+                        )
+                    ),
+                ])
+        if len(fatigue_rows) > 1:
+            self._h2("Fatigue stress-range results", reserve=90)
+            self._table(
+                fatigue_rows,
+                [45 * mm, 125 * mm],
+                keep=False,
+                caption="Fatigue stress-range screen outcomes",
             )
 
     def _brief_warning_summary(self):
@@ -3785,19 +3832,11 @@ class ReportBuilder:
         )
 
     def _brief_governing_register(self):
-        """State the governing-only Brief depth after the complete input inventory."""
+        """Lead with the canonical governing values, criteria, statuses and limits."""
 
         self._h1("Governing results and limitations", reserve=110)
-        self._p(
-            "Brief pairs the complete effective calculation inputs with the most "
-            "unfavourable available result for each check type: governing action or "
-            "direction, value, criterion and status. Worked derivations, result "
-            "chains and non-governing results begin in Standard."
-        )
-        self._small(
-            "Use Standard for governing calculation steps and Audit for complete "
-            "intermediate results, substitutions and source references."
-        )
+        self._results_overview()
+        self._page_break()
 
     def _selected_brief_result_context(self, result_key, family):
         """Return one exact retained selected context without report-side ranking."""
@@ -5666,6 +5705,8 @@ class ReportBuilder:
     def _minimum_reinforcement(self):
         result = self.out["minimum_reinforcement"]
         publish_worked = (
+            self.profile.substitution_scope != "none"
+            and
             self._selected_family("minimum_reinforcement", self.inp) is not None
         )
         direction_label = _modelled_direction_report_label(
@@ -5976,7 +6017,7 @@ class ReportBuilder:
 
         if checks and not publish_worked:
             self._small(
-                "The complete minimum-reinforcement worked example is published "
+                "The complete minimum-reinforcement worked example is published in Audit "
                 "only for the governing utilisation across all plastic cases."
             )
 
@@ -5986,6 +6027,8 @@ class ReportBuilder:
     def _transverse_reinforcement(self):
         result = self.out["transverse_reinforcement"]
         publish_worked = (
+            self.profile.substitution_scope != "none"
+            and
             self._selected_family("transverse_reinforcement", self.inp) is not None
         )
         self._case_heading("Shear/torsion link detailing", "plastic")
@@ -6211,7 +6254,7 @@ class ReportBuilder:
                 )
         elif result.get("checks"):
             self._small(
-                "The complete link-detailing worked example is published only "
+                "The complete link-detailing worked example is published in Audit only "
                 "for the governing utilisation across all plastic cases."
             )
         for check in result.get("checks") or []:
@@ -6433,7 +6476,7 @@ class ReportBuilder:
             self._plastic_worked(pl)
         else:
             self._small(
-                "The complete plastic worked example is published only for the "
+                "The complete plastic worked example is published in Audit only for the "
                 "governing utilisation (or capacity extremum when no utilisation "
                 "is assessed) across all plastic cases."
             )
@@ -6564,7 +6607,11 @@ class ReportBuilder:
             return
         gov = pts[worked_index]
         basis = retained_basis
-        heading = f"Worked plastic calculation ({basis})"
+        heading = (
+            f"Governing plastic state ({basis})"
+            if self.profile.key == "Standard"
+            else f"Worked plastic calculation ({basis})"
+        )
         state_rows = presentation.plastic_state_rows(gov)
         start = len(self.flow)
         self._h2(heading)
@@ -6615,6 +6662,38 @@ class ReportBuilder:
                  f"{_fmt(gov['Mx'], 3)}, {_fmt(gov['My'], 3)} kNm"]]
         self._table(rows, [70 * mm, 30 * mm, 60 * mm])
         self._keep_from(start)
+        if self.profile.key == "Standard":
+            governing_candidate = next(
+                (item for item in gov.get("curvature_candidates") or ()
+                 if item.get("selected")),
+                None,
+            )
+            if governing_candidate is not None:
+                mode_labels = {
+                    "concrete_crushing": "Concrete crushing",
+                    "bar_tension_rupture": "Bar tension rupture",
+                    "bar_compression_rupture": "Bar compression rupture",
+                    "tendon_tension_rupture": "Tendon tension rupture",
+                }
+                mode = governing_candidate.get("mode")
+                element = governing_candidate.get("element_id")
+                self._small(
+                    "<b>Governing strain limit:</b> "
+                    + _html_escape(mode_labels.get(mode, str(mode or "-")))
+                    + "; "
+                    + ("element " + _html_escape(str(element))
+                       if element else "extreme concrete fibre")
+                )
+                self._small(
+                    "Sector governing-curvature minimum; the governing material "
+                    "candidate is stated with the result."
+                )
+            self._small(
+                "Method: plane-section strain compatibility and force equilibrium "
+                "at the retained governing capacity point. The calculation sequence "
+                "and element equilibrium contributions are in Audit."
+            )
+            return
         if self.profile.key == "Audit":
             self._h2("Face-specific effective depth")
             effective_depths = pl.get("effective_depths") or ()
@@ -7291,16 +7370,16 @@ class ReportBuilder:
                 )
             if not critical:
                 self._small(
-                    "The complete shear worked example is published only for the "
+                    "The complete shear worked example is published in Audit only for the "
                     "governing utilisation across all plastic cases."
                 )
                 return
             self._small(
                 "All calculated shear cases remain in the results overview. The "
-                "complete shear worked example is published only for the governing "
+                "complete shear worked example is published in Audit only for the governing "
                 "utilisation across all plastic cases."
             )
-            self._h2(f"Governing worked example: {action}")
+            self._h2(f"Governing direction: {action}" if self.profile.key == "Standard" else f"Governing worked example: {action}")
             self._shear_direction(
                 aggregate, include_case_heading=False, component=component
             )
@@ -7350,13 +7429,13 @@ class ReportBuilder:
                 )
         if not critical:
             self._small(
-                "The complete shear worked example is published only for the "
+                "The complete shear worked example is published in Audit only for the "
                 "governing utilisation across all plastic cases."
             )
             return
         self._small(
             "All calculated shear cases and directions remain in the results "
-            "overview. The complete shear worked example is published only for "
+            "overview. The complete shear worked example is published in Audit only for "
             "the governing utilisation across all plastic cases."
         )
         component = selected.get("component")
@@ -7368,7 +7447,7 @@ class ReportBuilder:
             )
             return
         label = "V<sub>x,Ed</sub>" if component == "vx" else "V<sub>y,Ed</sub>"
-        self._h2(f"Governing worked example: {label}")
+        self._h2(f"Governing direction: {label}" if self.profile.key == "Standard" else f"Governing worked example: {label}")
         self._shear_direction(
             directions[component], include_case_heading=False,
             component=component,
@@ -8528,7 +8607,7 @@ class ReportBuilder:
                     next(iter(directions)),
                 )
             label = "Vx+T" if selected_component == "vx" else "Vy+T"
-            self._h2(f"Representative Base-EN directional calculation: {label}")
+            self._h2(f"Base-EN directional result: {label}" if self.profile.key == "Standard" else f"Representative Base-EN directional calculation: {label}")
             self._combined_base_en_direction(directions[selected_component])
             return
         self._combined_base_en_direction(aggregate)
@@ -8663,25 +8742,25 @@ class ReportBuilder:
                 return
             self._small(
                 "All calculated combined-action cases remain in the results "
-                "overview. The complete combined M-V-T worked example is published "
+                "overview. The complete combined M-V-T worked example is published in Audit "
                 "only for the governing utilisation across all plastic "
                 "cases."
             )
-            self._h2("Governing combined worked example")
+            self._h2("Governing combined result" if self.profile.key == "Standard" else "Governing combined worked example")
             self._combined_direction(aggregate, include_case_heading=False)
             return
 
         self._combined_directional_summary(directions)
         if not critical:
             self._small(
-                "The complete combined M-V-T worked example is published only for "
+                "The complete combined M-V-T worked example is published in Audit only for "
                 "the governing utilisation across all plastic cases."
             )
             return
         self._small(
             "All calculated combined-action cases and directions remain in the "
             "results overview. The complete combined M-V-T worked example is "
-            "published only for the governing utilisation across all "
+            "published in Audit only for the governing utilisation across all "
             "plastic cases."
         )
         component = selected.get("component")
@@ -8695,7 +8774,7 @@ class ReportBuilder:
         block_start = len(self.flow)
         label = "V<sub>x,Ed</sub> + T<sub>Ed</sub>" if component == "vx" \
             else "V<sub>y,Ed</sub> + T<sub>Ed</sub>"
-        self._h2(f"Governing directional worked example: {label}")
+        self._h2(f"Governing directional result: {label}" if self.profile.key == "Standard" else f"Governing directional worked example: {label}")
         self._combined_direction(
             directions[component], include_case_heading=False,
             component=component,
@@ -10090,13 +10169,13 @@ class ReportBuilder:
         self._torsion_longitudinal_block(t)
         if not critical:
             self._small(
-                "The complete torsion worked example is published only for the "
+                "The complete torsion worked example is published in Audit only for the "
                 "governing utilisation across all plastic cases."
             )
             return
         self._small(
             "All calculated torsion cases remain in the results overview. The "
-            "complete torsion worked example is published only for the governing "
+            "complete torsion worked example is published in Audit only for the governing "
             "utilisation across all plastic cases."
         )
         self._small(
@@ -10370,6 +10449,14 @@ class ReportBuilder:
             )
             return
 
+        if self.profile.key == "Standard":
+            self._small(
+                "Method: cracked-section elastic equilibrium with long-term and "
+                "instantaneous response, including retained prestress neutralisation. "
+                "The state-by-state calculation is in Audit."
+            )
+            return
+
         self._p(
             "The elastic analysis uses an E<sub>c</sub> = 1 reference-stress plane. "
             "Physical concrete strain equals the reference stress divided by "
@@ -10606,7 +10693,7 @@ class ReportBuilder:
             self._elastic_worked(el)
         else:
             self._small(
-                "The complete elastic worked example is published only for the "
+                "The complete elastic worked example is published in Audit only for the "
                 "governing stress extremum across all elastic cases."
             )
         checks = el.get("stress_outputs") or {}
@@ -11054,7 +11141,7 @@ class ReportBuilder:
             note=(
                 "The largest calculated ordinary crack width is selected; a "
                 "smaller width with a tighter criterion cannot govern the "
-                "worked example."
+                "governing comparison."
             ),
             subst=(
                 f"= {_fmt(assessment.get('value'), 3)} mm / "
@@ -11110,8 +11197,9 @@ class ReportBuilder:
     def _crack_worked(self, cw, which=""):
         if not cw:
             return
-        self._h2(f"Crack width worked - governing case ({which})" if which
-                 else "Crack width worked (governing element)")
+        if self.profile.key == "Audit":
+            self._h2(f"Crack width worked - governing case ({which})" if which
+                     else "Crack width worked (governing element)")
         missing = self._crack_worked_missing_operands(cw)
         if missing:
             self._small(
@@ -11119,6 +11207,15 @@ class ReportBuilder:
                 "calculation is incomplete (missing: "
                 + _html_escape(", ".join(missing))
                 + "). Recalculate before issuing the report."
+            )
+            return
+        if self.profile.key == "Standard":
+            self._small(
+                "Governing crack-width method: "
+                + _html_escape(str(self.out["elastic"].get("crack_code") or
+                                   "source unavailable"))
+                + ". The retained element result and criterion are reported above; "
+                "the numerical worked calculation is in Audit."
             )
             return
         self._small(f"Governing element (largest w<sub>k</sub>): "
@@ -12890,6 +12987,9 @@ class ReportBuilder:
             )
             return
         source = _html_escape(str(reference))
+        if self.profile.key == "Standard":
+            self._small(f"<b>Governing fatigue method:</b> {source}")
+            return
         self._h2("Worked calculation - governing reinforcement fatigue")
         calculation_start = len(self.flow) - 1
         self._p(
@@ -13073,7 +13173,11 @@ class ReportBuilder:
             )
             return
         source = _html_escape(str(reference))
-        self._h2("Worked calculation - governing concrete fatigue")
+        self._h2(
+            "Governing concrete fatigue result"
+            if self.profile.key == "Standard"
+            else "Worked calculation - governing concrete fatigue"
+        )
         edition = str(fatigue_presentation.value(strength, "edition", ""))
         strength_published = False
         if edition == fatigue_core.EC2_2005:

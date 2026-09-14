@@ -5018,7 +5018,7 @@ def test_report_ec2_2023_material_strength_is_edition_aware():
 
 def test_concrete_table_and_design_strength_equation_share_one_layout_group():
     builder = sector_report.ReportBuilder(
-        io.BytesIO(), {}, _inp(), _out(), figures=False,
+        io.BytesIO(), {}, _inp(), _out(), figures=False, profile="Audit",
     )
     builder._h1("Inputs")
     builder._h2("Concrete")
@@ -5057,7 +5057,7 @@ def test_concrete_table_and_design_strength_equation_share_one_layout_group():
     import pypdf
 
     paginated = sector_report.ReportBuilder(
-        io.BytesIO(), {}, _inp(), _out(), figures=False,
+        io.BytesIO(), {}, _inp(), _out(), figures=False, profile="Audit",
     )
     paginated._h1("Inputs")
     paginated.flow.append(sector_report.Spacer(1, 500))
@@ -11555,7 +11555,7 @@ def test_report_keeps_only_governing_biaxial_combined_worked_block(native_schedu
     assert out["worked_example_selection"]["families"]["combined"] == {
         "case_id":"PL-GOV", "component":"vy",
     }
-    builder = sector_report.ReportBuilder(io.BytesIO(), {}, inp, out, figures=False)
+    builder = sector_report.ReportBuilder(io.BytesIO(), {}, inp, out, figures=False, profile="Audit")
     actual_contexts = builder._case_contexts("plastic")
     matching = [
         values for values in actual_contexts

@@ -28,9 +28,9 @@ GAMMA = chr(0x03B3)
 SUM = chr(0x2211)
 
 
-def _builder():
+def _builder(*, profile="Standard"):
     return sector_report.ReportBuilder(
-        io.BytesIO(), {}, {}, {}, figures=False, qa_appendix=False
+        io.BytesIO(), {}, {}, {}, figures=False, profile=profile
     )
 
 
@@ -133,7 +133,7 @@ def _assert_denominator(node, expected):
 
 @pytest.mark.parametrize("edition", ["2005", "2023"])
 def test_authored_crack_reduction_keeps_the_multiplier_outside_rho(edition, monkeypatch):
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Mean strain")
     captured = []
     original = builder._formula
@@ -205,7 +205,7 @@ def test_authored_fatigue_substitution_keeps_mpa_outside_the_fraction(key, numer
         return eval(compile(expression, "authored-fatigue-substitution", "eval"),
                     {"__builtins__": {}}, values)
     substitution = authored("subst")
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Fatigue units")
     builder._formula(ast.literal_eval(call.args[0]), equation_key=key,
                      subst=substitution, result=authored("result"),
@@ -248,7 +248,7 @@ def test_authored_fatigue_strength_keeps_reduction_outside_gamma():
 
 @pytest.mark.parametrize("key", ["torsion.utilisation", "torsion.subtube.governing-utilisation"])
 def test_torsion_qualifier_is_literal_but_unrelated_results_remain_math(key):
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Torsion component")
     builder._formula("T<sub>Ed</sub> / T<sub>Rd</sub>", equation_key=key,
                      subst="17.05 / 10", result="170.5% (transverse/strut component FAIL)")
@@ -267,7 +267,7 @@ def test_torsion_qualifier_is_literal_but_unrelated_results_remain_math(key):
 def test_every_supported_contract_publishes_one_complete_ordered_role_block(
     catalogue_identity, contract
 ):
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Contract probe")
     kwargs = {}
     if contract.substitution_role == "numerical":
@@ -321,7 +321,7 @@ def test_every_supported_contract_publishes_one_complete_ordered_role_block(
 
 
 def test_every_supported_contract_identity_passes_semantic_vector_and_raster_qa():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Complete equation catalogue")
     equations = []
 
@@ -422,7 +422,7 @@ def test_every_supported_contract_identity_passes_semantic_vector_and_raster_qa(
 
 
 def test_numerical_result_has_explicit_roles_canonical_identity_and_symbols():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Materials")
     builder._formula(
         "f<sub>cd</sub> = eta<sub>cc</sub> k<sub>tc</sub> "
@@ -462,7 +462,7 @@ def test_numerical_result_has_explicit_roles_canonical_identity_and_symbols():
 
 
 def test_applicability_note_is_distinct_from_the_numerical_substitution():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Combined")
     builder._formula(
         "max(r<sub>M</sub> + r<sub>T</sub>, r<sub>V</sub> + r<sub>T</sub>)",
@@ -486,7 +486,7 @@ def test_applicability_note_is_distinct_from_the_numerical_substitution():
 
 
 def test_relation_only_block_has_no_intermediate_or_result_row():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Basis")
     builder._formula(
         "F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> - N = 0",
@@ -521,7 +521,7 @@ def test_equation_only_math_tokens_do_not_rewrite_symbol_meanings():
         result_unit="kN",
         substitution_role="numerical",
     )
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Math tokens")
     builder._formula(
         "Delta R = sum(x)",
@@ -549,7 +549,7 @@ def test_long_unbroken_expression_and_maximum_symbol_inventory_fit_a4():
     )
     contract = contracts.EquationContract(symbols=symbols)
     terms = " + ".join("abcdefghij" for _index in range(24))
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Long expression")
     builder._formula(
         "q<sub>1</sub> = " + terms,

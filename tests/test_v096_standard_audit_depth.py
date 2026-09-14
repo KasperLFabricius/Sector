@@ -71,12 +71,12 @@ def test_profile_policy_explains_standard_and_audit_depth_to_engineers():
     standard = sector_report.report_profiles.STANDARD_PROFILE
     audit = sector_report.report_profiles.AUDIT_PROFILE
 
-    assert standard.substitution_scope == "governing"
-    assert "one governing worked calculation per active check family" in (
+    assert standard.substitution_scope == "none"
+    assert "complete result tables, governing criteria" in (
         standard.description
     )
-    assert "intermediate results" in standard.omitted_detail
-    assert "complete method theory" in standard.omitted_detail
+    assert "Detailed substitutions" in standard.omitted_detail
+    assert "calculation sequences" in standard.omitted_detail
     for expected in (
         "all calculation inputs",
         "non-governing results",
@@ -89,7 +89,7 @@ def test_profile_policy_explains_standard_and_audit_depth_to_engineers():
     assert "All available calculation evidence is included" in audit.omitted_detail
 
 
-def test_standard_omits_plastic_populations_but_keeps_selected_calculation():
+def test_standard_omits_plastic_populations_but_keeps_selected_state():
     captured = {}
     payloads = {}
     for profile in ("Standard", "Audit"):
@@ -148,7 +148,7 @@ def test_standard_omits_plastic_populations_but_keeps_selected_calculation():
         "plastic.worked.curvature-selection",
         "plastic.worked.axial-equilibrium",
     ):
-        assert key in standard_equations
+        assert key not in standard_equations
         assert key in audit_equations
     assert all(_snapshot(current) == before for current, before in payloads.values())
 
@@ -183,12 +183,12 @@ def test_standard_names_the_retained_bar_governing_curvature_candidate():
     builder._plastic_worked(plastic)
 
     assert any(
-        "Selected candidate:" in note
+        "Governing strain limit:" in note
         and "Bar tension rupture" in note
         and "element R-GOV-7" in note
         for note in notes
     )
-    assert "plastic.worked.curvature-selection" in equations
+    assert "plastic.worked.curvature-selection" not in equations
     assert _snapshot(builder._base_out) == before
 
 
@@ -205,6 +205,10 @@ def test_curvature_selection_source_is_profile_neutral():
                 references.append(kwargs.get("ref"))
 
         builder._formula = capture_formula
+        builder._small = lambda text, **_kwargs: (
+            references.append(text)
+            if text.startswith("Sector governing-curvature minimum;") else None
+        )
         builder._plastic_worked(builder.out["plastic"])
 
     assert references == [
@@ -288,8 +292,8 @@ def test_standard_fatigue_population_tables_keep_only_governing_element_and_fibr
     assert [row[0] for row in audit_concrete[1:]] == [0, 1, 2, 3, 4]
 
 
-def test_standard_miner_sums_keep_all_retained_bin_operands():
-    builder = _builder("Standard")
+def test_audit_miner_sums_keep_all_retained_bin_operands():
+    builder = _builder("Audit")
     before = _snapshot(builder._base_out)
     _headings, tables, _equations = _capture(builder)
     formulas = {}
@@ -362,8 +366,8 @@ def test_standard_miner_sums_keep_all_retained_bin_operands():
         rows for rows in tables
         if rows and rows[0][:4] == ["Bin", "Cycles", "Status", "Long comp."]
     )
-    assert len(reinforcement_table) == 2
-    assert len(concrete_table) == 2
+    assert len(reinforcement_table) == len(reinforcement_bins) + 1
+    assert len(concrete_table) == len(concrete_bins) + 1
     assert _snapshot(builder._base_out) == before
 
 
@@ -392,6 +396,45 @@ def test_existing_audit_only_solver_and_crack_candidate_ledgers_remain_separate(
     ):
         assert heading in texts["Standard"]
         assert heading in texts["Audit"]
+
+
+def test_brief_separates_fatigue_results_and_keeps_conflicting_detail_records():
+    builder = _builder("Brief")
+    payload = builder._base_out["fatigue"]
+    original = copy.deepcopy(payload["fatigue_detail_basis"][0])
+    conflicting = {**original, "source": "Different retained detail source"}
+    payload["fatigue_detail_basis"] = (original, copy.deepcopy(original), conflicting)
+    before = _snapshot(builder._base_out)
+    _headings, tables, _equations = _capture(builder)
+    builder._brief_settings_summary()
+    input_rows = [row[offset:offset + 2] for table in tables for row in table
+                  for offset in (0, 2)]
+    details = [row for row in input_rows if str(row[0]).startswith("Fatigue detail ")]
+    assert len(details) == 2
+    assert original["source"] in details[0][1]
+    assert "Different retained detail source" in details[1][1]
+    assert not any("Simplified stress-range screen" in str(row) for row in input_rows)
+
+    tables.clear()
+    builder._brief_fatigue_screen_results()
+    assert tables[0][0] == ["Screen", "Result, criterion and source"]
+    screen_rows = [row for table in tables for row in table
+                   if str(row[0]).startswith("Simplified stress-range screen")]
+    expected = [
+        (spectrum, row)
+        for spectrum in fatigue_presentation.items(payload, "spectra")
+        for row in fatigue_presentation.reinforcement_rows(spectrum)
+    ]
+    assert len(screen_rows) == len(expected)
+    for published, (spectrum, row) in zip(screen_rows, expected):
+        assert row["element_id"] in published[0]
+        assert fatigue_presentation.value(spectrum, "spectrum_name") in published[0]
+        assert row["screen_status"] in published[1]
+        assert sector_report._fmt(row["screen_range_mpa"], 3) in published[1]
+        assert sector_report._fmt(row["screen_threshold_mpa"], 3) in published[1]
+        assert row["screen_governing_bin"] in published[1]
+        assert row["screen_source"] in published[1]
+    assert _snapshot(builder._base_out) == before
 
 
 def test_fixture_retains_multiple_fatigue_candidates_for_depth_test():

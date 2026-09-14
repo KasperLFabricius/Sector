@@ -756,9 +756,9 @@ def test_manual_uses_exact_elastic_state_and_crack_example_terminology():
         "solves a reference-stress plane",
         "physical concrete strain",
         "three code options give four method/system results",
-        "globally governing worked crack width in Standard and Audit",
-        "one global fine-system",
-        "one global coarse-system worked example",
+        "globally governing crack-width result in Standard and Audit",
+        "fine-system and coarse-system",
+        "governing worked examples in Audit",
         "Brief includes the complete effective inputs",
         "no worked example or non-governing case register",
     ):

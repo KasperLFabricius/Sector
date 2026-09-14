@@ -129,7 +129,7 @@ def test_equation_number_compaction_is_bounded_trimmed_and_honest(
 
 
 def test_equation_substitution_and_result_publish_only_compact_numbers():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Compact equation values")
     builder._formula(
         "R = a + b + c",
@@ -169,7 +169,7 @@ def test_equation_substitution_and_result_publish_only_compact_numbers():
 
 
 def test_equation_compaction_does_not_change_symbolic_source_note_or_table():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Compact equation scope")
     builder._table(
         [["Quantity", "Value"], ["Retained table value", "14.000"]],
@@ -242,7 +242,7 @@ def test_equation_flowable_seals_public_identity_number_and_source():
 
 
 def test_derived_source_is_explicit_and_unnumbered_relation_does_not_consume_number():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Basis")
     builder._formula(
         "a = b", equation_key="basis.informative", numbered=False
@@ -291,7 +291,7 @@ def test_invalid_duplicate_and_blank_source_fail_before_publication():
 def test_renderer_compilation_failures_leave_publication_state_atomic(
     expression, substitution, result, contract,
 ):
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Atomic renderer failure")
     flow_before = tuple(builder.flow)
     equations_before = dict(builder._equations)
@@ -320,7 +320,7 @@ def test_literal_result_compiler_is_whitelisted_to_exact_text_result_identities(
     })
     assert sector_report._LITERAL_REPORT_RESULT_IDENTITIES == expected
 
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Literal result boundary")
     flow_before = tuple(builder.flow)
     for key, variant in expected:
@@ -343,7 +343,7 @@ def test_literal_result_compiler_is_whitelisted_to_exact_text_result_identities(
 
 
 def test_unknown_reference_is_atomic_and_valid_prior_links_render():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Resistance")
     builder._h2("Components")
     with pytest.raises(ValueError, match="unknown prior key"):
@@ -383,7 +383,7 @@ def test_unknown_reference_is_atomic_and_valid_prior_links_render():
 
 
 def test_equation_anchor_encoding_preserves_dot_and_hyphen_identity():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Resistance")
     builder._h2("Components")
     builder._formula("R1 = 10", equation_key="capacity.x-y")
@@ -436,7 +436,7 @@ def test_grouping_preserves_equation_without_publishing_internal_identifier():
 
 
 def test_equation_keep_measurement_adds_only_unapplied_visible_leading_space():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Pagination measurement")
     builder._formula("x = y", equation_key="pagination.measurement")
     equation = builder.flow[-1]
@@ -460,7 +460,7 @@ def test_equation_keep_measurement_adds_only_unapplied_visible_leading_space():
 
 
 def test_grouping_still_flattens_an_ordinary_keep_together_wrapper():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Tables")
     start = len(builder.flow)
     inner_paragraph = Paragraph("short table stand-in", builder.s["body"])
@@ -510,7 +510,7 @@ def test_oversized_outer_group_releases_without_splitting_equation_text():
 
 
 def test_same_semantic_key_is_reusable_in_a_new_titled_subsection():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Shear")
     builder._h2("Direction x")
     builder._formula("u = 0.5", equation_key="shear.utilisation")

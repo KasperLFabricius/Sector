@@ -4568,8 +4568,9 @@ def _report_workspace(inp):
         project_io.REPORT_PROFILE_KEY,
         width="stretch",
         help=(
-            "Brief is a rapid-review summary, Standard is the default design-"
-            "review report, and Audit adds complete calculation details. The "
+            "Brief leads with governing outcomes and limits. Standard contains "
+            "used inputs, results, criteria and references. Audit adds calculation "
+            "sequences, numerical substitutions and worked examples. The "
             "profile changes presentation depth only; figures remain separate."
         ),
     )
