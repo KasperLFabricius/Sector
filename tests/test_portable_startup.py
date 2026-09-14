@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import ClassVar
 
@@ -12,6 +13,22 @@ from streamlit.testing.v1 import AppTest
 from tools import verify_portable_startup as startup
 
 APP = Path(__file__).resolve().parents[1] / "app" / "sector_app.py"
+
+
+def _input_stage(**changes):
+    return replace(
+        startup._SelectboxEvidence(
+            "$$ID-input-stage-_input_tab",
+            "Input stage",
+            startup._INPUT_STAGE_OPTIONS,
+            0,
+            None,
+            False,
+            False,
+            False,
+        ),
+        **changes,
+    )
 
 
 def _varint(value: int) -> bytes:
@@ -148,21 +165,124 @@ def test_button_group_protocol_roundtrip_matches_browser_widget_state():
     ) == _bytes_field(11, _bytes_field(2, _bytes_field(1, tab_widget)))
 
 
-def test_page_protocol_extracts_project_notice_and_stateful_tabs():
-    alert = _bytes_field(1, b"Restored autosaved session.") + _varint(
-        (2 << 3) | 0
-    ) + _varint(4)
-    alert_forward = _bytes_field(5, _bytes_field(3, _bytes_field(30, alert)))
-    # Proto3 omits the zero-valued default index on the actual wire.
-    tab = _bytes_field(2, b"$$ID-input-tabs")
-    tab_forward = _bytes_field(5, _bytes_field(6, _bytes_field(6, tab)))
+def test_page_protocol_extracts_project_notice_and_actual_selectbox_protobuf():
+    from streamlit.proto.ForwardMsg_pb2 import ForwardMsg
 
-    assert startup._page_alerts(alert_forward) == (
-        (4, "Restored autosaved session."),
+    alert = (
+        _bytes_field(1, b"Restored autosaved session.")
+        + _varint((2 << 3) | 0)
+        + _varint(4)
     )
-    assert startup._page_tab_containers(tab_forward) == (
-        ("$$ID-input-tabs", 0),
+    alert_forward = _bytes_field(5, _bytes_field(3, _bytes_field(30, alert)))
+    forward = ForwardMsg()
+    selector = forward.delta.new_element.selectbox
+    selector.id = "$$ID-input-stage-_input_tab"
+    selector.label = "Input stage"
+    selector.options.extend(startup._INPUT_STAGE_OPTIONS)
+    selector.default = 0  # optional scalar presence is significant, including zero
+
+    assert startup._page_alerts(alert_forward) == ((4, "Restored autosaved session."),)
+    assert startup._page_selectboxes(forward.SerializeToString()) == (_input_stage(),)
+    selector.raw_value = "Project"
+    selector.set_value = True
+    assert startup._page_selectboxes(forward.SerializeToString()) == (
+        _input_stage(raw_value="Project", set_value=True),
     )
+    selector.ClearField("default")
+    assert (
+        startup._page_selectboxes(forward.SerializeToString())[0].default_index is None
+    )
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        _bytes_field(1, b"duplicate"),
+        _bytes_field(3, b"wrong wire type"),
+        _varint(3 << 3) + _varint(99),
+        _varint(9 << 3) + _varint(2),
+    ],
+)
+def test_selectbox_parser_rejects_malformed_fields(extra):
+    payload = (
+        _bytes_field(1, b"selector")
+        + _bytes_field(2, b"Input stage")
+        + _bytes_field(4, b"Project")
+        + extra
+    )
+    with pytest.raises(startup.PortableStartupError, match="selectbox is malformed"):
+        startup._page_selectboxes(
+            _bytes_field(5, _bytes_field(3, _bytes_field(25, payload)))
+        )
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"options": ("Project",)},
+        {"disabled": True},
+        {"accept_new_options": True},
+        {"widget_id": "unrelated"},
+        {"label": "Old stage"},
+        {"default_index": None},
+        {"default_index": 4},
+        {"raw_value": "Project", "set_value": True},
+    ],
+)
+def test_input_stage_contract_rejects_wrong_initial_selection_or_identity(changes):
+    selector = _input_stage(**changes)
+    surface = _stage_surface(selector)
+    with pytest.raises(startup.PortableStartupError, match="input.stage|input stage"):
+        startup._required_input_stage(surface, startup._INPUT_STAGE_OPTIONS[0])
+
+
+def _stage_surface(selector):
+    return startup._PageSurfaceEvidence(
+        {
+            "Workspace": startup._ButtonGroupEvidence(
+                "workspace-id",
+                "Workspace",
+                ("Inputs", "Analysis", "Report"),
+                ("Inputs",),
+            )
+        },
+        (),
+        {selector.widget_id: selector},
+    )
+
+
+def test_input_stage_rerun_preserves_client_selection_but_rejects_server_override():
+    selector = _input_stage()
+    surface = _stage_surface(selector)
+    assert (
+        startup._required_input_stage(surface, "Project", selector.widget_id)
+        == selector.widget_id
+    )
+    # A correction overrides the submitted Project value; default alone does not.
+    with pytest.raises(startup.PortableStartupError, match="did not select"):
+        startup._required_input_stage(
+            _stage_surface(
+                _input_stage(raw_value=startup._INPUT_STAGE_OPTIONS[0], set_value=True)
+            ),
+            "Project",
+            selector.widget_id,
+        )
+    with pytest.raises(startup.PortableStartupError, match="unexpected contract"):
+        startup._required_input_stage(surface, "Project", "old-widget-id")
+    surface.selectboxes["duplicate"] = _input_stage(
+        widget_id="$$ID-duplicate-_input_tab"
+    )
+    with pytest.raises(startup.PortableStartupError, match="exactly one"):
+        startup._required_input_stage(surface, "Project", selector.widget_id)
+
+
+def test_input_stage_requires_inputs_workspace():
+    surface = _stage_surface(_input_stage())
+    surface.button_groups["Workspace"] = replace(
+        surface.button_groups["Workspace"], selected=("Report",)
+    )
+    with pytest.raises(startup.PortableStartupError, match="outside the Inputs"):
+        startup._required_input_stage(surface, startup._INPUT_STAGE_OPTIONS[0])
 
 
 def test_page_protocol_extracts_document_controls_and_editable_grid():
@@ -275,12 +395,12 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
     first_surface = startup._PageSurfaceEvidence(
         button_groups={"Workspace": workspace},
         alerts=(),
-        tab_containers={"input-tabs-id": 0},
+        selectboxes={"$$ID-input-stage-_input_tab": _input_stage()},
     )
     section_surface = startup._PageSurfaceEvidence(
         button_groups={"Workspace": workspace},
         alerts=(),
-        tab_containers={"input-tabs-id": 1},
+        selectboxes={"$$ID-input-stage-_input_tab": _input_stage()},
         bidi_components={
             "grid-id": startup._BidiComponentEvidence(
                 "grid-id", "sector.point_grid_rich_v1", True
@@ -290,7 +410,7 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
     project_surface = startup._PageSurfaceEvidence(
         button_groups={"Workspace": workspace},
         alerts=(alert,),
-        tab_containers={"input-tabs-id": 4},
+        selectboxes={"$$ID-input-stage-_input_tab": _input_stage()},
         downloads={
             startup._PROJECT_DOWNLOAD_LABEL: startup._DownloadEvidence(
                 "project-download-id",
@@ -306,14 +426,26 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
             "Report profile": report_profile,
         },
         alerts=(),
-        tab_containers={},
+        selectboxes={},
     )
     runs = iter(
         (
-            (startup._PageExecutionEvidence(10, "finished-successfully"), first_surface),
-            (startup._PageExecutionEvidence(4, "finished-successfully"), section_surface),
-            (startup._PageExecutionEvidence(5, "finished-successfully"), project_surface),
-            (startup._PageExecutionEvidence(6, "finished-successfully"), report_surface),
+            (
+                startup._PageExecutionEvidence(10, "finished-successfully"),
+                first_surface,
+            ),
+            (
+                startup._PageExecutionEvidence(4, "finished-successfully"),
+                section_surface,
+            ),
+            (
+                startup._PageExecutionEvidence(5, "finished-successfully"),
+                project_surface,
+            ),
+            (
+                startup._PageExecutionEvidence(6, "finished-successfully"),
+                report_surface,
+            ),
         )
     )
     backmsgs = []
@@ -339,8 +471,10 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
     monkeypatch.setattr(
         startup,
         "_execute_page_run",
-        lambda _process, _connection, _reader, _deadline, backmsg,
-        **_kwargs: (backmsgs.append(backmsg), next(runs))[1],
+        lambda _process, _connection, _reader, _deadline, backmsg, **_kwargs: (
+            backmsgs.append(backmsg),
+            next(runs),
+        )[1],
     )
     monkeypatch.setattr(
         startup,
@@ -353,9 +487,7 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
         lambda *_args: (document_probes.append("report"), 9)[1],
     )
 
-    evidence = startup._run_page_session(
-        _FakeProcess([]), 54321, 30, scenario
-    )
+    evidence = startup._run_page_session(_FakeProcess([]), 54321, 30, scenario)
 
     expected_probes = (
         (
@@ -381,17 +513,15 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
         expected_probes,
     )
     assert document_probes == (
-        ["manual", "report"]
-        if scenario == startup._LEGACY_SCENARIO
-        else []
+        ["manual", "report"] if scenario == startup._LEGACY_SCENARIO else []
     )
     assert backmsgs == [
         startup._PAGE_RERUN_BACKMSG,
         startup._string_widget_rerun_backmsg(
-            (("input-tabs-id", startup._SECTION_TAB_LABEL),)
+            (("$$ID-input-stage-_input_tab", startup._SECTION_STAGE_LABEL),)
         ),
         startup._string_widget_rerun_backmsg(
-            (("input-tabs-id", "Project"),)
+            (("$$ID-input-stage-_input_tab", "Project"),)
         ),
         startup._widget_rerun_backmsg((("workspace-id", "Report"),)),
     ]
@@ -419,6 +549,18 @@ def test_exact_entrypoint_recovers_legacy_or_hostile_profile_on_startup(
     app.run()
 
     assert not app.exception
+    # AppTest's pre-seeded Project selection is client-known state: the actual
+    # proto still declares default zero and does not request a server correction.
+    from streamlit.proto.ForwardMsg_pb2 import ForwardMsg
+
+    message = ForwardMsg()
+    message.delta.new_element.selectbox.CopyFrom(app.selectbox(key="_input_tab").proto)
+    selector, = startup._page_selectboxes(message.SerializeToString())
+    assert app.selectbox(key="_input_tab").value == "Project"
+    assert selector.default_index == 0 and not selector.set_value
+    assert startup._required_input_stage(
+        _stage_surface(selector), "Project", selector.widget_id,
+    ) == selector.widget_id
     if persisted_profile == startup._LEGACY_REPORT_PROFILE:
         assert startup._AUTOSAVE_RESTORED_TEXT in [
             item.value for item in app.success
