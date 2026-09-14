@@ -12227,7 +12227,7 @@ class ReportBuilder:
         summary_rows = fatigue_presentation.spectrum_rows(payload)
         self._h2("Spectrum summary")
         rows = [[
-            "Spectrum", "Status", "Bins", "Steel", "Concrete", "Governing",
+            "Spectrum", "Status", "Governing",
             "Max Miner D", "Max yield / proof", "Governing util.",
             "Search upper D",
         ]]
@@ -12235,9 +12235,6 @@ class ReportBuilder:
             [
                 _html_escape(row["spectrum"]),
                 row["status"],
-                row["bins"],
-                row["reinforcement_elements"],
-                row["concrete_fibres"],
                 _html_escape(row["governing"]),
                 _fmt_sig(row["miner_damage"], 6),
                 _pct(row["yield_utilisation"]),
@@ -12248,15 +12245,25 @@ class ReportBuilder:
         ])
         self._table(
             rows,
-            [18 * mm, 14 * mm, 8 * mm, 9 * mm, 10 * mm,
-             23 * mm, 16 * mm, 19 * mm, 23 * mm, 18 * mm],
-            font=5.5,
+            [25 * mm, 18 * mm, 34 * mm, 21 * mm, 25 * mm, 25 * mm, 22 * mm],
+            font=9,
             keep=False,
+            caption="Spectrum results",
         )
         self._small(
             "Each spectrum has its own Miner sum. Governing utilisation is the "
             "maximum applicable simplified screen, Miner range, yield/proof "
             "stress or concrete result."
+        )
+        self._table(
+            [["Spectrum", "Bins", "Steel elements", "Concrete fibres"],
+             *[[_html_escape(row["spectrum"]), row["bins"],
+                row["reinforcement_elements"], row["concrete_fibres"]]
+               for row in summary_rows]],
+            [60 * mm, 30 * mm, 40 * mm, 40 * mm],
+            font=9,
+            keep=False,
+            caption="Spectrum calculation counts",
         )
 
         spectra = fatigue_presentation.items(payload, "spectra")
