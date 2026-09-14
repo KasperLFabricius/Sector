@@ -30,8 +30,16 @@ _INPUT_WORKSPACE = "Inputs"
 _REPORT_WORKSPACE = "Report"
 _REPORT_PROFILE_LABEL = "Report profile"
 _REPORT_PROFILE_DEFAULT = "Standard"
-_SECTION_TAB_LABEL = "2 \u00b7 Section"
-_PROJECT_TAB_LABEL = "Project"
+_INPUT_STAGE_LABEL = "Input stage"
+_INPUT_STAGE_OPTIONS = (
+    "1 \u00b7 Analysis settings",
+    "2 \u00b7 Section",
+    "3 \u00b7 Material parameters",
+    "4 \u00b7 Loads",
+    "Project",
+)
+_SECTION_STAGE_LABEL = "2 \u00b7 Section"
+_PROJECT_STAGE_LABEL = "Project"
 _PROJECT_DOWNLOAD_LABEL = "Download project"
 _USER_MANUAL_BUTTON_LABEL = "User manual"
 _MANUAL_GENERATE_BUTTON_LABEL = "Generate PDF"
@@ -110,6 +118,18 @@ class _ButtonEvidence:
 
 
 @dataclass(frozen=True)
+class _SelectboxEvidence:
+    widget_id: str
+    label: str
+    options: tuple[str, ...]
+    default_index: int | None
+    raw_value: str | None
+    set_value: bool
+    disabled: bool
+    accept_new_options: bool
+
+
+@dataclass(frozen=True)
 class _DownloadEvidence:
     widget_id: str
     label: str
@@ -134,13 +154,11 @@ class _BidiComponentEvidence:
 class _PageSurfaceEvidence:
     button_groups: dict[str, _ButtonGroupEvidence]
     alerts: tuple[tuple[int, str], ...]
-    tab_containers: dict[str, int]
+    selectboxes: dict[str, _SelectboxEvidence]
     buttons: dict[str, _ButtonEvidence] = field(default_factory=dict)
     downloads: dict[str, _DownloadEvidence] = field(default_factory=dict)
     dataframes: dict[str, _DataframeEvidence] = field(default_factory=dict)
-    bidi_components: dict[str, _BidiComponentEvidence] = field(
-        default_factory=dict
-    )
+    bidi_components: dict[str, _BidiComponentEvidence] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -308,7 +326,7 @@ def _widget_rerun_backmsg(states: tuple[tuple[str, str], ...]) -> bytes:
 
 
 def _string_widget_rerun_backmsg(states: tuple[tuple[str, str], ...]) -> bytes:
-    """Encode ordinary string widget state, as used by stateful ``st.tabs``."""
+    """Encode string widget state, as used by the current input-stage selectbox."""
 
     widgets = bytearray()
     for widget_id, value in states:
@@ -727,24 +745,61 @@ def _page_alerts(payload: bytes) -> tuple[tuple[int, str], ...]:
     return tuple(alerts)
 
 
-def _page_tab_containers(payload: bytes) -> tuple[tuple[str, int], ...]:
-    """Extract stateful tab-container ids and their selected default indices."""
+def _page_selectboxes(payload: bytes) -> tuple[_SelectboxEvidence, ...]:
+    """Read Selectbox's default and optional server correction separately.
 
-    containers = []
+    A rerun normally retains the browser's submitted string; default is not the
+    current selection. Only set_value asks the browser to apply raw_value.
+    """
+    selectors = []
     for delta_payload in _nested_bytes(_protobuf_fields(payload), 5):
-        for block_payload in _nested_bytes(_protobuf_fields(delta_payload), 6):
-            for tab_payload in _nested_bytes(_protobuf_fields(block_payload), 6):
-                fields = _protobuf_fields(tab_payload)
-                widget_ids = _utf8_fields(fields, 2, "tab-container id")
-                indices = [
-                    cast(int, field.value)
-                    for field in fields
-                    if field.number == 1 and field.wire_type == 0
-                ]
-                if len(widget_ids) != 1 or len(indices) > 1:
-                    raise PortableStartupError("page tab container is malformed")
-                containers.append((widget_ids[0], indices[0] if indices else 0))
-    return tuple(containers)
+        for element_payload in _nested_bytes(_protobuf_fields(delta_payload), 3):
+            for selector_payload in _nested_bytes(
+                _protobuf_fields(element_payload), 25
+            ):
+                fields = _protobuf_fields(selector_payload)
+                singular = {
+                    number: [item for item in fields if item.number == number]
+                    for number in (1, 2, 3, 8, 9, 12, 13)
+                }
+                if any(len(items) > 1 for items in singular.values()) or any(
+                    item.wire_type != (2 if number in {1, 2, 13} else 0)
+                    for number, items in singular.items()
+                    for item in items
+                ):
+                    raise PortableStartupError("page selectbox is malformed")
+                ids = _utf8_fields(fields, 1, "selectbox id")
+                labels = _utf8_fields(fields, 2, "selectbox label")
+                options = _utf8_fields(fields, 4, "selectbox option")
+                raw = _utf8_fields(fields, 13, "selectbox raw value")
+                default = cast(int, singular[3][0].value) if singular[3] else None
+                flags = {
+                    number: cast(int, items[0].value) if items else 0
+                    for number, items in singular.items()
+                    if number in {8, 9, 12}
+                }
+                if (
+                    len(ids) != 1
+                    or not ids[0]
+                    or len(labels) != 1
+                    or any(value not in {0, 1} for value in flags.values())
+                    or (default is not None and not 0 <= default < len(options))
+                    or any(item.number == 4 and item.wire_type != 2 for item in fields)
+                ):
+                    raise PortableStartupError("page selectbox is malformed")
+                selectors.append(
+                    _SelectboxEvidence(
+                        ids[0],
+                        labels[0],
+                        options,
+                        default,
+                        raw[0] if raw else None,
+                        bool(flags[8]),
+                        bool(flags[9]),
+                        bool(flags[12]),
+                    )
+                )
+    return tuple(selectors)
 
 
 def _page_exception(payload: bytes) -> tuple[str, str] | None:
@@ -899,7 +954,7 @@ def _execute_page_run(
     dataframes: dict[str, _DataframeEvidence] = {}
     bidi_components: dict[str, _BidiComponentEvidence] = {}
     alerts: list[tuple[int, str]] = []
-    tab_containers: dict[str, int] = {}
+    selectboxes: dict[str, _SelectboxEvidence] = {}
     connection.sendall(_masked_websocket_frame(2, backmsg))
     while time.monotonic() < deadline:
         if (returncode := process.poll()) is not None:
@@ -915,9 +970,7 @@ def _execute_page_run(
             connection.sendall(_masked_websocket_frame(10, payload))
             continue
         if opcode == 8:
-            raise PortableStartupError(
-                "page WebSocket closed before script completion"
-            )
+            raise PortableStartupError("page WebSocket closed before script completion")
         if opcode != 2:
             raise PortableStartupError(
                 "page WebSocket returned a non-binary application frame"
@@ -931,9 +984,7 @@ def _execute_page_run(
         if exception := _page_exception(payload):
             exception_type, message = exception
             detail = f": {message}" if message else ""
-            raise PortableStartupError(
-                f"packaged page raised {exception_type}{detail}"
-            )
+            raise PortableStartupError(f"packaged page raised {exception_type}{detail}")
         saw_element = saw_element or _page_has_element(payload)
         for group in _page_button_groups(payload):
             button_groups[group.label] = group
@@ -946,8 +997,8 @@ def _execute_page_run(
         for component in _page_bidi_components(payload):
             bidi_components[component.widget_id] = component
         alerts.extend(_page_alerts(payload))
-        for widget_id, default_index in _page_tab_containers(payload):
-            tab_containers[widget_id] = default_index
+        for selector in _page_selectboxes(payload):
+            selectboxes[selector.widget_id] = selector
         if (status := _page_finished_status(payload)) is not None:
             if status == _PAGE_EARLY_RERUN_STATUS:
                 continue
@@ -970,7 +1021,7 @@ def _execute_page_run(
                 _PageSurfaceEvidence(
                     button_groups=button_groups,
                     alerts=tuple(alerts),
-                    tab_containers=tab_containers,
+                    selectboxes=selectboxes,
                     buttons=buttons,
                     downloads=downloads,
                     dataframes=dataframes,
@@ -1027,17 +1078,58 @@ def _require_editable_grid(surface: _PageSurfaceEvidence) -> None:
         )
 
 
-def _required_input_tabs(surface: _PageSurfaceEvidence) -> str:
-    if len(surface.tab_containers) != 1:
+def _required_input_stage(
+    surface: _PageSurfaceEvidence,
+    expected: str,
+    submitted_widget_id: str | None = None,
+) -> str:
+    workspace = _required_button_group(
+        surface.button_groups, _WORKSPACE_LABEL, _INPUT_WORKSPACE
+    )
+    if workspace.options != ("Inputs", "Analysis", "Report") or (
+        workspace.selected and workspace.selected != (_INPUT_WORKSPACE,)
+    ):
         raise PortableStartupError(
-            "packaged page did not expose exactly one input tab container"
+            "packaged input stage is outside the Inputs workspace"
         )
-    widget_id, default_index = next(iter(surface.tab_containers.items()))
-    if default_index != 0:
+    selectors = [
+        item
+        for item in surface.selectboxes.values()
+        if item.label == _INPUT_STAGE_LABEL or item.widget_id.endswith("-_input_tab")
+    ]
+    if len(selectors) != 1:
         raise PortableStartupError(
-            "packaged page did not start on the first input tab"
+            "packaged page did not expose exactly one input-stage selector"
         )
-    return widget_id
+    selector = selectors[0]
+    if (
+        selector.label != _INPUT_STAGE_LABEL
+        or not selector.widget_id.endswith("-_input_tab")
+        or selector.options != _INPUT_STAGE_OPTIONS
+        or selector.disabled
+        or selector.accept_new_options
+        or (
+            submitted_widget_id is not None
+            and selector.widget_id != submitted_widget_id
+        )
+    ):
+        raise PortableStartupError(
+            "packaged input-stage selector has an unexpected contract"
+        )
+    selected = (
+        selector.raw_value
+        if selector.set_value
+        else expected
+        if submitted_widget_id is not None
+        else selector.options[selector.default_index]
+        if selector.default_index is not None
+        else None
+    )
+    if selected != expected:
+        raise PortableStartupError(
+            f"packaged page did not select input stage {expected!r}"
+        )
+    return selector.widget_id
 
 
 def _require_autosave_notice(
@@ -1074,14 +1166,12 @@ def _run_manual_document_probe(
     reader: _SocketReader,
     deadline: float,
     workspace: _ButtonGroupEvidence,
-    input_tabs_id: str,
+    input_stage_id: str,
     project_surface: _PageSurfaceEvidence,
 ) -> int:
     """Open the frozen manual, generate both formats, then close the dialog."""
 
-    manual = _required_button(
-        project_surface.buttons, _USER_MANUAL_BUTTON_LABEL
-    )
+    manual = _required_button(project_surface.buttons, _USER_MANUAL_BUTTON_LABEL)
     open_page, surface = _execute_page_run(
         process,
         connection,
@@ -1090,13 +1180,11 @@ def _run_manual_document_probe(
         _trigger_widget_rerun_backmsg(
             manual.widget_id,
             string_arrays=((workspace.widget_id, _INPUT_WORKSPACE),),
-            strings=((input_tabs_id, _PROJECT_TAB_LABEL),),
+            strings=((input_stage_id, _PROJECT_STAGE_LABEL),),
         ),
         require_new_session=False,
     )
-    generate = _required_button(
-        surface.buttons, _MANUAL_GENERATE_BUTTON_LABEL
-    )
+    generate = _required_button(surface.buttons, _MANUAL_GENERATE_BUTTON_LABEL)
     generated_page, surface = _execute_page_run(
         process,
         connection,
@@ -1105,7 +1193,7 @@ def _run_manual_document_probe(
         _trigger_widget_rerun_backmsg(
             generate.widget_id,
             string_arrays=((workspace.widget_id, _INPUT_WORKSPACE),),
-            strings=((input_tabs_id, _PROJECT_TAB_LABEL),),
+            strings=((input_stage_id, _PROJECT_STAGE_LABEL),),
         ),
         require_new_session=False,
     )
@@ -1120,7 +1208,7 @@ def _run_manual_document_probe(
         _trigger_widget_rerun_backmsg(
             close.widget_id,
             string_arrays=((workspace.widget_id, _INPUT_WORKSPACE),),
-            strings=((input_tabs_id, _PROJECT_TAB_LABEL),),
+            strings=((input_stage_id, _PROJECT_STAGE_LABEL),),
         ),
         require_new_session=False,
     )
@@ -1194,17 +1282,16 @@ def _run_page_session(
             _PAGE_RERUN_BACKMSG,
             require_new_session=True,
         )
-        input_tabs_id = _required_input_tabs(surface)
+        input_stage_id = _required_input_stage(surface, _INPUT_STAGE_OPTIONS[0])
         section_page, section_surface = _execute_page_run(
             process,
             connection,
             reader,
             deadline,
-            _string_widget_rerun_backmsg(
-                ((input_tabs_id, _SECTION_TAB_LABEL),)
-            ),
+            _string_widget_rerun_backmsg(((input_stage_id, _SECTION_STAGE_LABEL),)),
             require_new_session=False,
         )
+        _required_input_stage(section_surface, _SECTION_STAGE_LABEL, input_stage_id)
         _require_editable_grid(section_surface)
         probes = ["editable-data-grid"]
         project_page, project_surface = _execute_page_run(
@@ -1212,20 +1299,17 @@ def _run_page_session(
             connection,
             reader,
             deadline,
-            _string_widget_rerun_backmsg(
-                ((input_tabs_id, _PROJECT_TAB_LABEL),)
-            ),
+            _string_widget_rerun_backmsg(((input_stage_id, _PROJECT_STAGE_LABEL),)),
             require_new_session=False,
         )
+        _required_input_stage(project_surface, _PROJECT_STAGE_LABEL, input_stage_id)
         _require_autosave_notice(project_surface.alerts, scenario)
         probes.append(
             "project-load"
             if scenario == _LEGACY_SCENARIO
             else "invalid-project-rejection"
         )
-        _required_download(
-            project_surface.downloads, _PROJECT_DOWNLOAD_LABEL
-        )
+        _required_download(project_surface.downloads, _PROJECT_DOWNLOAD_LABEL)
         probes.append("project-save")
         workspace = _required_button_group(
             project_surface.button_groups, _WORKSPACE_LABEL, _REPORT_WORKSPACE
@@ -1238,7 +1322,7 @@ def _run_page_session(
                 reader,
                 deadline,
                 workspace,
-                input_tabs_id,
+                input_stage_id,
                 project_surface,
             )
             probes.extend(("manual-pdf", "manual-html"))
@@ -1247,9 +1331,7 @@ def _run_page_session(
             connection,
             reader,
             deadline,
-            _widget_rerun_backmsg(
-                ((workspace.widget_id, _REPORT_WORKSPACE),)
-            ),
+            _widget_rerun_backmsg(((workspace.widget_id, _REPORT_WORKSPACE),)),
             require_new_session=False,
         )
         report_profile = _required_button_group(
