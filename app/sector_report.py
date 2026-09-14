@@ -12410,9 +12410,15 @@ class ReportBuilder:
                 table_key = table_fields.FATIGUE_SPECTRUM_TABLE_KEY
                 rows = [[
                     "Bin", "Description", "Cycles",
-                    _input_table_symbol(table_key, "n_long_ed_kn"),
-                    _input_table_symbol(table_key, "mx_long_ed_knm"),
-                    _input_table_symbol(table_key, "my_long_ed_knm"),
+                    _input_table_symbol(table_key, "n_long_ed_kn").replace(
+                        ",long</sub>", ",<br/>long</sub>"
+                    ),
+                    _input_table_symbol(table_key, "mx_long_ed_knm").replace(
+                        ",long</sub>", ",<br/>long</sub>"
+                    ),
+                    _input_table_symbol(table_key, "my_long_ed_knm").replace(
+                        ",long</sub>", ",<br/>long</sub>"
+                    ),
                     _input_table_symbol(table_key, "n_short_ed_kn"),
                     _input_table_symbol(table_key, "mx_short_ed_knm"),
                     _input_table_symbol(table_key, "my_short_ed_knm"),
@@ -12513,7 +12519,7 @@ class ReportBuilder:
                 ])
                 self._table(
                     rows,
-                    [16 * mm, 12 * mm, 14 * mm, 13 * mm, 29 * mm,
+                    [20 * mm, 12 * mm, 14 * mm, 13 * mm, 29 * mm,
                      15 * mm, 18 * mm, 25 * mm, 16 * mm, 14 * mm],
                     font=5.2,
                     keep=False,
@@ -12589,7 +12595,7 @@ class ReportBuilder:
                             _html_escape(screen["governing_bin"]),
                             _fmt_sig(screen["total_cycles"], 8),
                         ]],
-                        [25 * mm, 34 * mm, 18 * mm, 23 * mm,
+                        [25 * mm, 34 * mm, 29 * mm, 23 * mm,
                          19 * mm, 17 * mm, 21 * mm, 22 * mm],
                         font=5.5,
                         keep=False,
@@ -12869,8 +12875,8 @@ class ReportBuilder:
                                 search, "points_evaluated", "-"
                             ),
                         ]],
-                        [16 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm,
-                         16 * mm, 16 * mm, 16 * mm, 18 * mm, 18 * mm],
+                        [22 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm,
+                         16 * mm, 16 * mm, 22 * mm, 18 * mm, 18 * mm],
                         font=5.3,
                     )
                 all_bin_rows = fatigue_presentation.concrete_bin_rows(result)
@@ -13577,7 +13583,8 @@ class ReportBuilder:
             )
 
     def _appendix(self):
-        self._h1("QA appendix - references and notes", reserve=110)
+        appendix_start = len(self.flow)
+        self._h1("QA appendix - references and notes")
         lines = []
         plastic_results = self._result_values("plastic")
         elastic_results = self._result_values("elastic")
@@ -13764,6 +13771,7 @@ class ReportBuilder:
             self._p("- " + line)
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
         self._small(f"Generated {ts} by Sector {self.version}.")
+        self._keep_from(appendix_start)
 
 
 @presentation.publication_calculation_scope()
