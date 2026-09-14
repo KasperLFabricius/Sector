@@ -4881,7 +4881,7 @@ def test_save_load_round_trip_through_the_app():
     assert at.session_state["_loaded_project_provenance"]["input_hash_valid"] is True
     _goto_input_tab(at, "Project")
     assert any(
-        "saved-input check matches the current saved inputs" in caption.value
+        "Saved-file input record: matches" in caption.value
         for caption in at.caption
     )
     assert not any("file integrity" in caption.value.casefold() for caption in at.caption)
@@ -4914,10 +4914,8 @@ def test_project_record_copy_distinguishes_independent_input_checks():
         project_io.project_provenance(json.dumps(changed_provenance))
     )
     assert provenance_copy == (
-        "Loaded project | recorded Sector version 0.96.1 | saved-input check does "
-        "not match the current saved inputs",
-        "Recorded calculation: 2026-08-25 12:30 UTC | recorded input check "
-        "matches the current saved inputs",
+        "Loaded project | recorded Sector version 0.96.1 | Saved-file input record: does not match",
+        "Recorded calculation: 2026-08-25 12:30 UTC | Inputs match the recorded calculation",
     )
 
     changed_calculation = copy.deepcopy(original)
@@ -4926,10 +4924,9 @@ def test_project_record_copy_distinguishes_independent_input_checks():
         project_io.project_provenance(json.dumps(changed_calculation))
     )
     assert calculation_copy == (
-        "Loaded project | recorded Sector version 0.96.1 | saved-input check "
-        "matches the current saved inputs",
-        "Recorded calculation: 2026-08-25 12:30 UTC | recorded input check "
-        "differs from the current saved inputs",
+        "Loaded project | recorded Sector version 0.96.1 | Saved-file input record: matches",
+        "Recorded calculation: 2026-08-25 12:30 UTC | Inputs differ from the recorded calculation. "
+        "Press Calculate to update the results",
     )
 
     published = " ".join((*provenance_copy, *calculation_copy)).casefold()
@@ -4991,10 +4988,8 @@ def test_real_project_upload_hides_invalid_records_and_shows_precise_copy():
 
     upload(base, "valid-record.json")
     expected_captions = (
-        "Loaded project | recorded Sector version 0.96.1 | saved-input check "
-        "matches the current saved inputs",
-        "Recorded calculation: 2026-08-25 12:30 UTC | recorded input check "
-        "matches the current saved inputs",
+        "Loaded project | recorded Sector version 0.96.1 | Saved-file input record: matches",
+        "Recorded calculation: 2026-08-25 12:30 UTC | Inputs match the recorded calculation",
     )
     visible_captions = tuple(str(item.value) for item in at.caption)
     assert all(expected in visible_captions for expected in expected_captions)
@@ -5048,8 +5043,8 @@ def test_real_project_upload_hides_invalid_records_and_shows_precise_copy():
     visible_captions = tuple(str(item.value) for item in at.caption)
     assert expected_captions[0] in visible_captions
     assert (
-        "Recorded calculation: 2026-08-25 12:30 UTC | recorded input check "
-        "differs from the current saved inputs"
+        "Recorded calculation: 2026-08-25 12:30 UTC | Inputs differ from the recorded calculation. "
+        "Press Calculate to update the results"
     ) in visible_captions
     assert any("Project loaded" in str(item.value) for item in at.success)
     assert "results" not in at.session_state
@@ -5697,12 +5692,12 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
         for frame in at.dataframe
         if {
             "Check",
-            "Method",
+            "Calculation",
             "Reference",
             "Scope",
         }.issubset(frame.value.columns)
     )
-    assert capability_table.iloc[0]["Method"] == "Reinforcement fatigue"
+    assert capability_table.iloc[0]["Calculation"] == "Reinforcement fatigue"
     assert "first-generation fatigue equations" in capability_table.iloc[0]["Scope"]
     assert "user-supplied factors" in capability_table.iloc[0]["Scope"]
 
@@ -8000,12 +7995,12 @@ def test_mild_preset_selector_exposes_concrete_identity_without_rewriting_value(
     selector = at.selectbox(key="mild_preset")
     assert any(
         "Curve 2 (elastic-perfectly-plastic)" in option
-        and "User-defined / project-defined Curve 2 preset; uncited" in option
+        and "Project-defined elastic-perfectly-plastic diagram; uncited" in option
         for option in selector.options
     )
     assert any(
         "DS/EN 1992-1-1:2005 + DK NA:2024" in option
-        and "Curve 3 Eurocode design preset" in option
+        and "Eurocode design stress-strain diagram" in option
         for option in selector.options
     )
 
@@ -8014,8 +8009,8 @@ def test_mild_preset_selector_exposes_concrete_identity_without_rewriting_value(
         "Curve 2 (elastic-perfectly-plastic)"
     )
     captions = "\n".join(str(item.value) for item in at.caption)
-    assert "Preset source: User-defined / project-defined Curve 2 preset" in captions
-    assert "Every material field remains a direct calculation input" in captions
+    assert "Project-defined stress-strain diagram. Record its design basis" in captions
+    assert "The values below are editable and are used in the calculation." in captions
 
 
 def test_material_catalogue_add_duplicate_delete_and_assignment_guard():

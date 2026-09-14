@@ -70,7 +70,7 @@ def calculated_example(isolated_native_module):
     ]
     assert any(
         message.value == (
-            "Interpret each row independently; an aggregate section status is not "
+            "Each row is an independent result; an overall section verdict is not "
             "calculated."
         )
         for message in at.caption

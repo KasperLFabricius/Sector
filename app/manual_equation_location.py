@@ -68,7 +68,7 @@ MANUAL_EQUATION_LOCATIONS = (
     ),
     _location(
         2, "manual.material.steel-law", "C3-2", "Material laws",
-        "Mild steel",
+        "Reinforcing steel",
         "5972f92c2cf2dd2c16ab580e95c70f98ebe947a2baaef960c67252ac294a9c11",
     ),
     _location(

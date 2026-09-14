@@ -3913,7 +3913,7 @@ class ReportBuilder:
             )
         )
         if non_governing:
-            self._h2("Non-governing requested results", reserve=90)
+            self._h2("Other case results and calculation states", reserve=90)
             self._table(
                 [["Check", "Action set", "Status", "Result"], *[
                     [
@@ -4675,11 +4675,6 @@ class ReportBuilder:
     def _loads_block(self):
         inp = self._base_inp
         out = self._base_out
-        self._small(
-            "Load-table input accepts a dot or comma as the decimal separator; "
-            "blank action cells are treated as zero; calculations use the "
-            "parsed numeric precision."
-        )
         if "plastic_cases" in inp or "elastic_cases" in inp:
             plastic = (
                 case_analysis.case_records(inp, "plastic")
@@ -8783,9 +8778,8 @@ class ReportBuilder:
             "DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)."
         )
         self._small(
-            "This is an internal cross-section resistance check. It does not "
-            "replace a separate member and detailing assessment under Annex F "
-            "where that assessment applies."
+            "Scope: cross-section resistance. Complete the applicable Annex F "
+            "member and detailing assessment separately."
         )
         self._h2(
             "DK NA 6.3.2(6): "
@@ -8860,7 +8854,7 @@ class ReportBuilder:
             component["key"]: component for component in physical_components
         }
         concrete = physical_by_key["concrete"]
-        component_rows = [["Component", "Utilisation", "Status", "QA note"]]
+        component_rows = [["Component", "Utilisation", "Status", "Assessment note"]]
         component_rows.extend([
             [
                 component["label"],
@@ -10901,7 +10895,7 @@ class ReportBuilder:
             text = (
                 f"{label} crack-width output | w<sub>k</sub> "
                 f"{'-' if value is None else _fmt(value, 3) + ' mm'} | "
-                f"branch {assessment.get('case') or '-'} | "
+                f"crack calculation {assessment.get('case') or '-'} | "
                 f"element {assessment.get('governing') or '-'}"
             )
             self._p(text)
@@ -10988,8 +10982,9 @@ class ReportBuilder:
             f"{_html_escape(duration_label)} calculation state: "
             f"{_html_escape(status)}. User-specified "
             f"criterion = {_fmt(criterion, 3)} mm; source: "
-            f"{_html_escape(source or 'NOT RETAINED')}. This is a bounded "
-            "comparison only; no exposure or owner criterion is inferred."
+            f"{_html_escape(source or 'NOT RETAINED')}. Comparison basis: "
+            "user-specified crack-width limit; exposure and project requirements "
+            "require separate confirmation."
         )
         if reason:
             self._small(_html_escape(reason))
@@ -11960,12 +11955,14 @@ class ReportBuilder:
             self._h2("Calculation sources and capability scope")
             evidence_keys = tuple(dict.fromkeys((*references, *bindings)))
             evidence_rows = [[
-                "Check", "Registered capability", "Source", "Scope disclosure",
+                "Check", "Calculation", "Source", "Scope disclosure",
             ]]
             for key in evidence_keys:
                 binding = bindings.get(key)
                 if isinstance(binding, Mapping):
-                    capability = str(binding.get("capability") or "-")
+                    capability = fatigue_presentation.capability_display_label(
+                        binding.get("capability")
+                    )
                     source = str(
                         binding.get("source") or references.get(key) or "-"
                     )
@@ -12858,7 +12855,7 @@ class ReportBuilder:
             )
             return
         source = _html_escape(str(reference))
-        self._h2("Textbook calculation - governing reinforcement fatigue")
+        self._h2("Worked calculation - governing reinforcement fatigue")
         calculation_start = len(self.flow) - 1
         self._p(
             "The globally governing reinforcement element and bin are used once "
@@ -13041,7 +13038,7 @@ class ReportBuilder:
             )
             return
         source = _html_escape(str(reference))
-        self._h2("Textbook calculation - governing concrete fatigue")
+        self._h2("Worked calculation - governing concrete fatigue")
         edition = str(fatigue_presentation.value(strength, "edition", ""))
         strength_published = False
         if edition == fatigue_core.EC2_2005:

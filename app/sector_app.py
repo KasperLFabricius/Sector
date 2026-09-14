@@ -991,7 +991,7 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
     crack-width mean strain and so stays editable.
     """
     if heading:
-        box.markdown("**Mild steel**")
+        box.markdown("**Reinforcing steel**")
     catalogue_mode = entry is not None
     entry = dict(entry or mat_catalog.default_entry("mild"))
     _seed_material_entry_widgets(entry, "mild", prefix)
@@ -1014,10 +1014,8 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
         format_func=mat_catalog.mild_preset_display_label,
     )
     box.caption(
-        "Preset source: "
-        f"{mat_catalog.mild_preset_classification(preset)}. "
         f"{mat_catalog.mild_preset_kernel_note(preset)}. "
-        "Every material field remains a direct calculation input."
+        "The values below are editable and are used in the calculation."
     )
     # Selecting a preset whose compression yield is active (fyck > 0) turns the
     # "Active in compression" toggle on, so the preset's compression is not
@@ -3692,14 +3690,14 @@ def _project_not_applied_message(error: Exception) -> str:
 
 def _saved_input_check_copy(matches: object) -> str:
     if matches is True:
-        return "saved-input check matches the current saved inputs"
-    return "saved-input check does not match the current saved inputs"
+        return "Saved-file input record: matches"
+    return "Saved-file input record: does not match"
 
 
 def _calculation_input_check_copy(matches: object) -> str:
     if matches is True:
-        return "recorded input check matches the current saved inputs"
-    return "recorded input check differs from the current saved inputs"
+        return "Inputs match the recorded calculation"
+    return "Inputs differ from the recorded calculation. Press Calculate to update the results"
 
 
 def _project_record_captions(loaded: object) -> tuple[str, ...]:
@@ -4100,7 +4098,7 @@ def _save_load_panel() -> None:
     if project_error:
         box.error(f"Project download blocked: {project_error}.")
     box.caption(
-        f"Saved with Sector {APP_VERSION}; results are recalculated on load."
+        f"Saved with Sector {APP_VERSION}. After loading, review the inputs and press Calculate."
     )
     loaded = st.session_state.get("_loaded_project_provenance")
     if loaded:
@@ -7401,10 +7399,11 @@ def build_inputs(host=st):
     torsion_tef = _seeded_number(
         sts, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
         "torsion_tef", disabled=not _tors,
-        help="Zero applies A/u together with the wall-specific lower bound from "
+        help="Zero applies A/u with the wall-specific lower bound from "
              "the longitudinal reinforcement centres and the real-wall limit for "
              "a single-cell hollow section. A positive single-tube override must "
-             "satisfy every wall interval; subdivided tubes require zero and "
+             "satisfy every wall interval. For supported subdivision, set this "
+             "global effective-wall-thickness override to 0 mm and provide "
              "complete reinforcement locations for each sub-tube.")
     torsion_gamma_ct = _seeded_number(
         sts,
@@ -7700,9 +7699,7 @@ def build_inputs(host=st):
             )
 
     # (Section / Material / Loads tabs were created at the top; fill them now.)
-    sec.caption("The section is a set of explicit points (the source of truth). "
-                "Use the Quick Section builder to generate a parametric shape and "
-                "write its points here, or edit the point tables directly.")
+    sec.caption("Define the section with Quick Section or edit the point tables below.")
     if "pts_init" not in st.session_state:
         # Seed the tables once from the default Quick Section (metres -> mm).
         d_outer, d_holes, d_bars, d_tendons = _default_quick_section()
@@ -7821,7 +7818,7 @@ def build_inputs(host=st):
             st.session_state.pop("_clear_section_undo", None)
             undo_slot.empty()
 
-    sec.markdown("**Cross-section points** (the analysis uses these)")
+    sec.markdown("**Section geometry and reinforcement**")
     provenance_notice = st.session_state.pop(_QS_PROVENANCE_NOTICE_KEY, None)
     if provenance_notice:
         sec.success(provenance_notice)
@@ -11916,7 +11913,7 @@ def results_overview_view(inp, results, *, stale=False):
         _manual_warning(
             st,
             "results-review",
-            "Some governing results require review. Review the "
+            "Some governing results need attention. See the "
             "highlighted rows below."
         )
     elif rows:
@@ -11926,19 +11923,19 @@ def results_overview_view(inp, results, *, stale=False):
         )
     else:
         st.info(
-            "No applicable calculated result is available. Scope and calculation "
-            "states are listed below; no pass conclusion is implied."
+            "No calculated result is available for this selection. See calculation "
+            "and scope status below."
         )
     st.caption(
-        "Interpret each row independently; an aggregate section status is not "
+        "Each row is an independent result; an overall section verdict is not "
         "calculated."
     )
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Governing result types", len(rows))
+    c1.metric("Governing results", len(rows))
     c2.metric("Fail / invalid", failure_count)
     c3.metric("Review / stale", warning_count)
-    c4.metric("Scope states", len(information_rows))
+    c4.metric("Scope and availability", len(information_rows))
 
     display = []
     for row in rows:
@@ -13251,7 +13248,7 @@ def _crack_width_panel(e):
             f"{label} calculated crack width",
             "-" if value is None else f"{value:.3f} mm",
         )
-        identity = f"branch {case}; longitudinal element {governing}"
+        identity = f"governing crack calculation: {case}; reinforcement element {governing}"
         if criterion in (None, 0.0):
             comparison = "User limit: 0 mm; no comparison requested."
         else:
@@ -13259,7 +13256,7 @@ def _crack_width_panel(e):
                 f"User limit: {criterion:.3f} mm"
                 + (f" ({criterion_source})" if criterion_source else "")
                 + (
-                    f"; retained wk / limit ratio = {ratio:.3f}."
+                    f"; wk / limit = {ratio:.3f}."
                     if ratio is not None
                     else "."
                 )
@@ -13926,9 +13923,9 @@ def _fatigue_result_basis_panel(payload):
         _fatigue_result_table([
             {
                 "Check": key.capitalize(),
-                "Method": str(
-                    binding.get("capability") or "-"
-                ).replace("_", " ").capitalize(),
+                "Calculation": fatigue_presentation.capability_display_label(
+                    binding.get("capability")
+                ),
                 "Reference": binding.get("source") or "-",
                 "Scope": binding.get("disclosure") or "-",
             }
@@ -14031,7 +14028,7 @@ def fatigue_view(inp, results, *, stale=False):
     ], height=360)
     st.caption(
         "Each spectrum is assessed independently. The governing utilisation is "
-        "the maximum applicable Miner, yield/proof or concrete result."
+        "the maximum applicable simplified screen, Miner stress-range, yield/proof-stress or concrete result."
     )
 
     options = [row["spectrum"] for row in summary_rows]
@@ -16360,9 +16357,8 @@ def combined_view(inp, results):
         "the M resistance follows the entered biaxial moment direction."
     )
     st.caption(
-        "This is an internal cross-section resistance check. It does not replace "
-        "a separate member and detailing assessment under Annex F where that "
-        "assessment applies."
+        "Scope: cross-section resistance. Complete the applicable Annex F "
+        "member and detailing assessment separately."
     )
 
     st.divider()
@@ -16443,7 +16439,7 @@ def combined_view(inp, results):
             d2.caption(
                 "The separate M/V route is selected as a design assumption. "
                 "N + M + T and N + V + T are calculated independently, and "
-                "the governing sum is retained as numerical component evidence. "
+                "the governing sum is the DK NA component result. "
                 "It is not an overall M-V-T verdict while the torsion "
                 "longitudinal-reinforcement requirement governs."
             )
@@ -16454,8 +16450,7 @@ def combined_view(inp, results):
             )
         else:
             d2.caption(
-                "The DK NA action-alone sum is retained as numerical component "
-                "evidence. It is not an overall M-V-T verdict while the torsion "
+                "The DK NA action-alone sum is a component result. It is not an overall M-V-T verdict while the torsion "
                 "longitudinal-reinforcement requirement governs."
             )
         _manual_warning(

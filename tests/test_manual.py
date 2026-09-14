@@ -129,7 +129,7 @@ def test_manual_dkna_combined_rule_includes_n_and_action_alone_resistances():
     assert "ordinary simultaneous sum cannot be smaller" in text
     assert "reinforcement area, distribution and anchorage" in text
     assert "does **not** condition the DK NA action-alone denominators" in text
-    assert "does not replace a separate member and detailing assessment" in text
+    assert "Scope: cross-section resistance. Complete the applicable Annex F member and detailing assessment separately." in text
     assert "Annex F" in text
     assert "N$ is folded" not in text
 
@@ -320,7 +320,7 @@ def test_manual_pins_the_tendon_projection_sign_and_per_element_extreme():
         "s_{p,j}",
         "\\varepsilon_{p,IS,j}",
         "s_{p,min}=\\min_j s_{p,j}",
-        "calculation still evaluates every tendon",
+        "Each tendon is checked using its own position, initial strain and material limit",
     ):
         assert expected in text
     assert "s_{cab,min}" not in text
@@ -328,7 +328,7 @@ def test_manual_pins_the_tendon_projection_sign_and_per_element_extreme():
 
 def test_manual_distinguishes_user_curve2_from_eurocode_curve3_identity():
     text = "\n".join(str(block) for block in manual.manual_blocks())
-    assert "Curve 3 Eurocode design preset" in text
+    assert "Eurocode design stress-strain diagram" in text
     assert "Curve 2 (elastic-perfectly-plastic)" in text
     assert "user-defined/project-defined and uncited preset" in text
     assert "Edited values remain associated with the selected preset label" in text
@@ -489,13 +489,13 @@ def test_manual_documents_direct_torsion_tensile_factor_and_benchmark():
 def test_manual_documents_automatic_subtube_wall_thickness_boundary():
     text = "\n".join(str(block) for block in manual.manual_blocks())
 
-    assert "subdivided tubes require zero" in text.casefold()
-    assert "complete bar-to-wall evidence for every sub-tube" in text
+    assert "global effective-wall-thickness override to 0 mm" in text.casefold()
+    assert "complete bar-to-wall evidence is required for every sub-tube" in text
     assert "positive global $t_{ef}$ override" in text
     assert "wall-specific automatic thickness for each sub-tube" in text
     assert "$t_{ef,i}\\\\geq2a_i$" in text
     assert "A manual override does not replace that location evidence" in text
-    assert "implementation-fixture bar centres" in text
+    assert "**Torsion example** (300 x 600 mm rectangle with bar centres" in text
 
 
 def test_manual_distinguishes_torsion_basis_and_member_scope_limitations():
@@ -751,9 +751,9 @@ def test_manual_uses_exact_elastic_state_and_crack_example_terminology():
     text = "\n".join(str(block) for block in manual.manual_blocks())
 
     for expected in (
-        "E_c=1",
+        "normalises $E_c$ to 1",
         "reference-stress plane",
-        "not a physical strain/curvature plane",
+        "solves a reference-stress plane",
         "physical concrete strain",
         "three code options give four method/system results",
         "globally governing worked crack width in Standard and Audit",

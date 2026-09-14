@@ -295,8 +295,11 @@ def validation_rule(definition: FieldDefinition) -> str:
         return "Sector-generated read-only ID, prefixed R for bars or P for tendons."
     if definition.key == "cycles":
         return "Required finite number greater than zero."
-    if definition.key in {"name", "spectrum"}:
-        return "Required name; it must be unique within this table."
+    if definition.key == "spectrum":
+        return ("Required. Use the same Spectrum name for bins belonging to one "
+                "spectrum. Names that differ only by letter case are rejected.")
+    if definition.key == "name":
+        return "Required. Use a unique case or bin name across the action tables."
     if definition.key == "description":
         return "Optional project text."
     if definition.key == "material_id":

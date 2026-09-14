@@ -105,7 +105,7 @@ def test_brief_retains_relevant_input_rows_without_standard_derivations():
     ):
         assert expected in text
     assert "Converged strain plane" not in text
-    assert "Textbook calculation" not in text
+    assert "Worked calculation - governing" not in text
 
 
 def test_brief_retains_tendon_layout_assignment_and_fixed_curve_properties():
@@ -1055,7 +1055,7 @@ def test_deeper_profiles_retain_torsion_wall_selection_operands():
 
 def test_brief_omits_non_governing_requested_results_and_statuses():
     expected = (
-        "Non-governing requested results",
+        "Other case results and calculation states",
         "Plastic bending PL-QA-1 FAIL 141.3 %",
         "Crack width - Long-term EL-QA-2 NOT REQUESTED",
         "Crack width - Short-term EL-QA-2 NOT REQUESTED",
@@ -1166,8 +1166,8 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
         "Governing cracking threshold",
         "Step 2 - neutralise the long-term concrete stress",
         "Governing reinforcement element - R1",
-        "Textbook calculation - governing reinforcement fatigue",
-        "Textbook calculation - governing concrete fatigue",
+        "Worked calculation - governing reinforcement fatigue",
+        "Worked calculation - governing concrete fatigue",
     )
     for profile in ("Standard", "Audit"):
         pdf = report_render_fixture.sector_report.build_report(

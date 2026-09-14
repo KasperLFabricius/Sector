@@ -337,7 +337,7 @@ def test_current_and_dormant_generator_paths_exactly_cover_vocabulary(monkeypatc
     assert {
         values["scope"] for values in current.attributes["th"] if "scope" in values
     } == set(vocabulary.th_scopes)
-    assert '<code class="math" aria-label="Mathematical expression: N^*">' in (
+    assert '<code class="math" aria-label="Mathematical expression: N*">' in (
         CURRENT_HTML
     )
     fragment_pattern = re.compile(vocabulary.fragment_href_pattern)
