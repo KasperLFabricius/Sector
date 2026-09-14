@@ -2,14 +2,17 @@
 
 **Reinforced-concrete cross-section analysis for structural engineering.**
 
-Current internal version: **Sector 0.96.3**. See [CHANGELOG.md](CHANGELOG.md) and
-the [v0.96.3 release notes](docs/v0963_release_notes.md).
+Current internal version: **Sector 0.96.4**. See [CHANGELOG.md](CHANGELOG.md) and
+the [v0.96.4 release notes](docs/v0964_release_notes.md).
 
 Sector is a transparent structural calculation tool, not a compliance,
 certification, sign-off or code-completeness system. The engineer controls
 methods, action sets and coefficients; selected standards supply equations,
 references, defaults and warnings. See the governing
 [product identity](docs/product_identity.md).
+
+Use the [documentation index](docs/README.md) for current guidance and the
+retained history of earlier decisions and acceptance work.
 
 Sector analyses a polygonal reinforced (and optionally prestressed) concrete
 cross-section and reports, for the same section:
@@ -67,6 +70,9 @@ applicability.
 
 ## Running the app
 
+Use 64-bit CPython 3.13.15, as pinned in `.python-version`, in an isolated virtual
+environment. Install the existing hash-locked requirements for that environment.
+
 ```
 pip install --require-hashes -r requirements.txt
 python run_app.py          # or: streamlit run app/sector_app.py
@@ -87,7 +93,7 @@ Download or clone the complete project, choose **Extract All** when using a ZIP,
 then double-click the root `BUILD.bat`. Do not run a BAT inside Explorer's ZIP
 preview because Windows may copy only that file to a temporary folder. The
 legacy `BUILD_SECTOR_PORTABLE.bat` name remains an alias. Building requires
-64-bit CPython 3.13 and enough disk space, but no administrator elevation or
+64-bit CPython 3.13.15 and enough disk space, but no administrator elevation or
 separately entered PowerShell command.
 
 The generated artifact is a complete ONEDIR folder and matching ZIP. Keep or
@@ -122,7 +128,6 @@ sector/        computation core (headless, regression-tested)
   capacity     headless shear, torsion, and M-V-T result orchestration
   detailing    modelled-direction reinforcement, link detailing and clear spacing
   serviceability  cracking threshold, tension stiffening, crack width
-  bridge       typed decommission marker for retired component-mapped kernels
   design_standards  capability-scoped basis and source registry
   templates    parametric section + reinforcement builders
 app/           Streamlit interface and canonical input models
@@ -173,7 +178,7 @@ does not grant a personal or public licence. See [LICENSE](LICENSE). Windows bui
 include a generated third-party notice bundle beside `Sector.exe`; the source
 process is documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-`BUILD.bat` creates `Sector-v0.96.3-windows-portable.zip` and a SHA-256 sidecar.
+`BUILD.bat` creates `Sector-v0.96.4-windows-portable.zip` and a SHA-256 sidecar.
 The archive is unsigned and is not an installer. The checksum detects transfer
 damage; it is not a publisher certificate. Internal distribution remains
 subject to the Sector licence and organisational security policy.

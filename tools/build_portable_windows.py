@@ -7,6 +7,7 @@ import ast
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -20,6 +21,7 @@ MAX_WINDOWS_RUNTIME_PATH_CHARS = 240
 _BUFFER_BYTES = 1024 * 1024
 _RUNTIME_SUFFIXES = {".dll", ".exe", ".pyd"}
 _REQUIRED_SOURCE_PATHS = (
+    ".python-version",
     "LICENSE",
     "app/point_grid_frontend/LICENSE",
     "app/publication_image_export_worker.py",
@@ -124,6 +126,35 @@ def _validate_output(source: Path, output: Path) -> Path:
     except OSError as exc:
         raise PortableBuildError("cannot create the portable output parent") from exc
     return destination
+
+
+def _validate_python(source: Path, python: Path) -> None:
+    """Enforce the source pin even when the driver is invoked directly."""
+    try:
+        version = (source / ".python-version").read_text(encoding="ascii").strip()
+    except (OSError, UnicodeError) as exc:
+        raise PortableBuildError("cannot read .python-version") from exc
+    if re.fullmatch(r"3\.13\.(0|[1-9][0-9]*)", version) is None:
+        raise PortableBuildError(".python-version must pin an exact Python 3.13 patch")
+    probe = (
+        "import platform, struct; "
+        "print(platform.python_implementation() + '|' + platform.python_version() "
+        "+ '|' + str(struct.calcsize('P') * 8))"
+    )
+    try:
+        identity = subprocess.run(
+            [str(python), "-I", "-S", "-c", probe],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PortableBuildError(f"cannot probe Python executable: {python}") from exc
+    if identity.returncode != 0 or identity.stdout.strip() != f"CPython|{version}|64":
+        raise PortableBuildError(
+            f"Sector builds require 64-bit CPython {version}, pinned in .python-version"
+        )
 
 
 def _resolve_revision(value: str | None) -> str:
@@ -284,6 +315,7 @@ def build_portable_windows(
     python = Path(python_executable or sys.executable).resolve()
     if not python.is_file():
         raise PortableBuildError(f"Python executable does not exist: {python}")
+    _validate_python(source, python)
 
     environment = dict(os.environ)
     environment["PYTHONNOUSERSITE"] = "1"
