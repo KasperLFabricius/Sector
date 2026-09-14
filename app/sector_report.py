@@ -10798,6 +10798,8 @@ class ReportBuilder:
             heading = "Governing crack-width comparison"
         else:
             heading = "Cracking threshold"
+        # Leave the chapter's conditional page break outside the measured block.
+        threshold_start = len(self.flow) + 1
         self._case_heading(
             heading,
             "elastic",
@@ -10852,6 +10854,8 @@ class ReportBuilder:
                     )
                 ),
             )
+            if not publish_crack_width:
+                self._keep_measured_calculation_from(threshold_start)
             if prestressed:
                 self._small(
                     "Locked-in prestress remains fixed. A prestress-only fibre "
