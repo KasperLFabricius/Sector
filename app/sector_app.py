@@ -33,6 +33,7 @@ import streamlit as st  # noqa: E402
 import app_run_probe  # noqa: E402
 from app import input_issues  # noqa: E402
 from app import engineer_messages  # noqa: E402
+from app import elastic_display  # noqa: E402
 from app import manual_information_architecture as manual_ia  # noqa: E402
 from app import report_profiles  # noqa: E402
 from deferred_import import deferred_module  # noqa: E402
@@ -12646,6 +12647,9 @@ def plastic_view(inp, results):
             f"{pt['comp_force']:.3f} kN",
             f"- **Compression-zone depth $c$**: {compression_depth_text}",
             f"- **Internal lever arm $z$**: {pt['lever'] * _MM:.3f} mm",
+            *[f"- **Effective depth $d$ ({face})**: "
+              + ("Unavailable" if depth is None else f"{depth:.3f} mm")
+              for face, depth in presentation.plastic_face_depth_summary(p)],
             f"- **Lever-arm components $z_x$ / $z_y$**: "
             f"{pt['dx'] * _MM:.3f} / {pt['dy'] * _MM:.3f} mm",
             f"- **Concrete strain $\\varepsilon_c$**: {pt['eps_c']:.3f} %",
@@ -12887,17 +12891,19 @@ def elastic_view(inp, results, *, global_results=None):
     st.markdown("### Elastic stress outputs")
     checks = e.get("stress_outputs", {})
     enabled = [
-        ("Concrete compression", checks.get("concrete", {})),
-        ("Reinforcement tension", checks.get("reinforcement", {})),
+        ("Concrete compression", "concrete", checks.get("concrete", {})),
+        ("Reinforcement tension", "reinforcement", checks.get("reinforcement", {})),
     ]
     if inp.get("tendons"):
-        enabled.append(("Tendon tension", checks.get("prestress", {})))
+        enabled.append(("Tendon tension", "prestress", checks.get("prestress", {})))
     metric_cols = st.columns(len(enabled))
-    for col, (label, output) in zip(metric_cols, enabled):
+    for col, (label, key, output) in zip(metric_cols, enabled):
         _calculation_output_metric(col, label, output)
+        col.caption(elastic_display.output_comparison(inp, e, key, output))
     st.caption(
         "Concrete compression and longitudinal reinforcement/tendon tension are "
-        "reported for the actual named Elastic action. No stress limit is applied."
+        "reported for the actual named Elastic action. Strength percentages are "
+        "comparisons with characteristic strengths; no stress limit is applied."
     )
 
     # Modular ratios are derived per assigned material.
@@ -13002,22 +13008,34 @@ def elastic_view(inp, results, *, global_results=None):
                 "Material": material_labels,
                 "x (mm)": [round(r["x_mm"], 2) for r in element_rows],
                 "y (mm)": [round(r["y_mm"], 2) for r in element_rows],
-                "Area (mm2)": [round(r["area_mm2"], 2) for r in element_rows],
+                f"Area (mm{chr(0x00B2)})": [round(r["area_mm2"], 2) for r in element_rows],
                 f"Strain ({_EPS}, {_PERMILLE})": [
                     round(r["strain_permille"], 5) for r in element_rows],
-                "Total (MPa)": [round(r["total_mpa"], 3) for r in element_rows],
-                "Long (MPa)": [round(r["long_mpa"], 3) for r in element_rows],
-                "Dif (MPa)": [round(r["dif_mpa"], 3) for r in element_rows],
-                "RST1 (MPa)": [round(r["rst1_mpa"], 3) for r in element_rows],
+                "Total stress (MPa)": [round(r["total_mpa"], 3) for r in element_rows],
+                "Long-term stress (MPa)": [round(r["long_mpa"], 3) for r in element_rows],
+                "Short-term increment (MPa)": [round(r["dif_mpa"], 3) for r in element_rows],
+                "Instantaneous response (MPa)": [round(r["rst1_mpa"], 3) for r in element_rows],
             },
             hide_index=True, width="stretch",
             height=min(35 * (len(element_rows) + 1) + 3, 560))
     st.caption(
-        "**Total** = long + short  \n"
-        "**Long** = long-term alone  \n"
-        "**Dif** = total - long  \n"
-        "**RST1** = instantaneous response with the long-term concrete stresses "
+        "**Total** = long + short; **long-term** = long-term alone.  \n"
+        "**Short-term increment** = total - long.  \n"
+        "**Instantaneous response (RST1)** = response with the long-term concrete stresses "
         "neutralised.")
+
+    if element_rows:
+        st.markdown("**Stress as percentage of characteristic strength**")
+        comparisons = elastic_display.element_comparison_rows(inp, element_rows)
+        st.dataframe([
+            {key: ("Unavailable" if value is None else f"{value:.1f}%")
+             if key in dict(elastic_display.COMPONENTS).values() else value
+             for key, value in row.items()}
+            for row in comparisons
+        ], hide_index=True, width="stretch")
+        st.caption("Signed stress divided by the stated characteristic strength. "
+                   "Unavailable means the reference strength or element assignment "
+                   "is missing or invalid. These percentages do not assess compliance.")
 
     corner_rows = e.get("concrete_corners", [])
     if corner_rows:
@@ -13033,6 +13051,10 @@ def elastic_view(inp, results, *, global_results=None):
                         round(r["strain_permille"], 5) for r in corner_rows],
                     f"Concrete stress ({_SIGMA}c, MPa)": [
                         round(r["stress_mpa"], 3) for r in corner_rows],
+                    "Stress / f_ck": [
+                        elastic_display.comparison_text(
+                            r["stress_mpa"], {"f_ck": getattr(inp.get("concrete"), "fck", None)}
+                        ) for r in corner_rows],
                 },
                 hide_index=True, width="stretch",
                 height=min(35 * (len(corner_rows) + 1) + 3, 560))

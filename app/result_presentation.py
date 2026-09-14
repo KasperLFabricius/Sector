@@ -25,6 +25,7 @@ import load_cases
 import viz
 
 from app import engineer_messages
+from app import elastic_display
 from app import modelled_direction
 from sector import capacity, codes, combined as combined_core
 from sector import geometry as section_geometry
@@ -5875,6 +5876,37 @@ def plastic_compression_depth_mm(point):
     return depth_mm if math.isfinite(depth_mm) else None
 
 
+
+def plastic_face_depth_summary(plastic):
+    """Label existing face-specific depths; never derive a state-normal depth."""
+    retained = plastic.get("effective_depths") or ()
+    by_face = {}
+    for row in retained:
+        if not isinstance(row, Mapping):
+            return ()
+        axis, low = row.get("axis"), row.get("tension_low")
+        if axis not in ("x", "y") or not isinstance(low, bool):
+            return ()
+        if (axis, low) in by_face:
+            return ()
+        coordinate, arm = ("y", "z_y") if axis == "x" else ("x", "z_x")
+        if row.get("coordinate") != coordinate or row.get("arm_component") != arm:
+            return ()
+        depth = elastic_display.finite_number(row.get("d_mm"))
+        area = elastic_display.finite_number(row.get("asl_mm2"))
+        centroid = elastic_display.finite_number(row.get("asl_cg_m"))
+        valid = (depth is not None and depth > 0.0 and area is not None
+                 and area > 0.0 and centroid is not None
+                 and bool(row.get("asl_bar_ids")))
+        by_face[(axis, low)] = (
+            f"M{axis}, {viz.tension_face_label(low, axis)} tension face",
+            depth if valid else None,
+        )
+    if set(by_face) != {("x", True), ("x", False), ("y", True), ("y", False)}:
+        return ()
+    return tuple(by_face[(axis, low)] for axis in ("x", "y") for low in (True, False))
+
+
 def nm_boundary_rows(interaction):
     """Return a point-by-point table for both numerical N-M boundaries."""
     x_data = (interaction or {}).get("x") or {}
@@ -7452,6 +7484,9 @@ def result_summary_rows(inp, results, *, stale=False):
                 )
                 value = output.get("value")
                 result = "-" if value is None else f"{value:.3f} MPa"
+                result += "; " + elastic_display.output_comparison(
+                    inp, elastic, key, output
+                )
                 rows.append(_summary_row(
                     label, "elastic", status, result, "Output only",
                     None, "Elastic Results",

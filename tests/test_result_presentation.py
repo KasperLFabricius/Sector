@@ -5641,3 +5641,25 @@ def _unbound_torsion_summary(inp, results):
     }.intersection(by_check)
     assert pickle.dumps((inp, results), protocol=pickle.HIGHEST_PROTOCOL) == before
     return rows
+
+
+def test_primary_plastic_depths_keep_existing_face_axis_identity():
+    inp = {"outer": [(0, 0), (0.3, 0), (0.3, 0.6), (0, 0.6)], "holes": [],
+           "bars": [(0.15, 0.04, 100), (0.15, 0.53, 200),
+                    (0.03, 0.30, 300), (0.26, 0.30, 400)]}
+    retained = {"effective_depths": capacity.plastic_effective_depths(inp)}
+    before = copy.deepcopy(retained)
+    rows = presentation.plastic_face_depth_summary(retained)
+    assert [label for label, _ in rows] == [
+        "Mx, bottom (-y) tension face", "Mx, top (+y) tension face",
+        "My, left (-x) tension face", "My, right (+x) tension face",
+    ]
+    assert [depth for _, depth in rows] == pytest.approx([560, 530, 270, 260])
+    assert retained == before
+    malformed = copy.deepcopy(retained)
+    malformed["effective_depths"][0]["arm_component"] = "z_x"
+    assert presentation.plastic_face_depth_summary(malformed) == ()
+    unavailable = copy.deepcopy(retained)
+    unavailable["effective_depths"][0]["d_mm"] = float("nan")
+    assert presentation.plastic_face_depth_summary(unavailable)[0][1] is None
+    assert presentation.plastic_face_depth_summary({}) == ()

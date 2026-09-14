@@ -13924,3 +13924,24 @@ def test_native_report_rejects_isolated_consumed_transverse_terms(native_schedul
                          "positive_selection":positive_selection,"negative_selection":negative_selection})
     (tmp_path/"native-missing-term-evidence.json").write_text(json.dumps(evidence,indent=2))
     assert pickle.dumps((inp,out))==original
+
+
+@pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
+def test_elastic_characteristic_comparisons_preserve_outputs_across_profiles(profile):
+    inp, out = _inp(), _out()
+    inp["bar_elements"] = [{"id": "bar 1", "material_id": "M1", "x_mm": 0.0,
+                            "y_mm": -120.0, "area_mm2": 500.0}]
+    inp["bar_materials"] = [inp["steel"]]
+    out["elastic"]["elements"][0]["material_id"] = "M1"
+    before = copy.deepcopy(out["elastic"])
+    text = " ".join(_pdf_text(_build_report_with_selection(
+        {}, inp, out, figures=False, profile=profile,
+    )).split())
+    assert "40.0%" in text  # retained 12 MPa compression / fck 30 MPa
+    assert "30.0%" in text  # retained 150 MPa tension / fyk 500 MPa
+    assert "CALCULATED" in text
+    assert out["elastic"] == before
+    if profile != "Brief":
+        assert "-80.0%" in text  # signed concrete corner -24 MPa / fck
+        assert "Stress as percentage of characteristic strength" in text
+        assert "These percentages do not assess compliance" in text
