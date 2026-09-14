@@ -2511,3 +2511,23 @@ def test_document_roles_reject_nontext_project_values(key, invalid):
     })
     with pytest.raises(project_io.ProjectInputError, match=f"{key} must be text"):
         project_io.parse_project(json.dumps(payload))
+
+
+@pytest.mark.parametrize("register", [[], [
+    dict(scope="Project", case_name="", document="A & <B>", locator="Section 3"),
+    dict(scope="Elastic", case_name="Renamed old case", document="QA register", locator=""),
+]])
+def test_report_source_register_roundtrips_without_changing_schema(register):
+    tables, scalars = _current_project()
+    scalars["rep_source_register"] = register
+    text = project_io.dump_project(tables, scalars)
+    assert json.loads(text)["version"] == 27
+    _, loaded = project_io.parse_project(text)
+    assert loaded["rep_source_register"] == register
+
+
+def test_report_source_register_rejects_malformed_saved_record():
+    tables, scalars = _current_project()
+    scalars["rep_source_register"] = [dict(scope="Project", case_name="", document="X", locator=5)]
+    with pytest.raises(project_io.ProjectInputError, match="entry fields must be text"):
+        project_io.dump_project(tables, scalars)

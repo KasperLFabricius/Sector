@@ -110,6 +110,11 @@ WORKSPACES: Final[tuple[ManualDestination, ...]] = (
 )
 
 
+PUBLICATION_REFERENCES: Final[tuple[ManualDestination, ...]] = (
+    _destination("status-reference", "Result statuses", "Result status reference", "result-view"),
+)
+
+
 RESULT_VIEWS: Final[tuple[ManualDestination, ...]] = (
     _destination(
         "results-overview", "Results Overview", "Results overview", "result-view"
@@ -237,8 +242,8 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
         "Results Overview shows one or more governing results requiring review.",
         "At least one requested calculation failed, is invalid, is not assessed, "
         "or has a calculation warning.",
-        "Open Analysis > Results Overview, follow the row's View entry to the named "
-        "detail view, and read its criterion and warning before changing the cited "
+        "Open Analysis > Results Overview, select the check in Result details and "
+        "choose Open selected result. Read its criterion and warning before changing the cited "
         "Inputs stage. The overview is not a global compliance verdict.",
     ),
     WarningReference(
@@ -274,6 +279,14 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
         "Analysis > Results Overview and press Calculate; otherwise correct the named "
         "Report input or publication dependency and retry.",
     ),
+    WarningReference(
+        "report-source-unmatched",
+        "A report reference has no matching current case or spectrum.",
+        "The reference's exact action name was renamed or removed.",
+        "Open Report > Project and action references. Retain the unmatched entry "
+        "as historical context, or clear both fields to remove it and enter the "
+        "reference for the intended current action. Sector never remaps it automatically.",
+    ),
 )
 
 
@@ -305,12 +318,12 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
     Workflow(
         "elastic-crack", "Calculate elastic response and crack width",
         "Calculated stresses, cracking state and optional crack width", "elastic-results",
-        "Valid section, materials and Elastic row", "Calculated or bounded not-assessed state",
-        "crack-criterion-missing",
+        "Valid section, materials and Elastic row", "Calculated results or an explicit reason assessment is unavailable",
+        "crack-not-requested",
         "Select Elastic and the crack-width method and limits under Inputs > "
         "Analysis settings. Define the Elastic row under Inputs > Loads, enable "
         "Calculate crack width when required, then open Analysis > Elastic Results, "
-        "press Calculate, and review the result.",
+        "review the result.",
     ),
     Workflow(
         "plastic-capacity", "Calculate plastic capacity",
@@ -319,33 +332,33 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "results-stale",
         "Select Plastic under Inputs > Analysis settings. Define the Plastic/capacity "
         "row under Inputs > Loads, then open Analysis > Plastic Results or Analysis > "
-        "N-M Interaction, press Calculate, and review the result.",
+        "N-M Interaction and review the result.",
     ),
     Workflow(
         "fatigue", "Calculate grouped fatigue", "Spectrum and governing element results",
         "fatigue-results", "Valid fatigue spectra and material details",
-        "Calculated or bounded not-assessed state", "results-stale",
+        "Calculated results or an explicit reason assessment is unavailable", "results-stale",
         "Enable Fatigue under Inputs > Analysis settings. Define fatigue details "
         "under Inputs > Material parameters, assign them under Inputs > Section, "
         "enter grouped spectra under Inputs > Loads, then open Analysis > Fatigue "
-        "Results, press Calculate, and review the result.",
+        "Results and review the result.",
     ),
     Workflow(
         "detailing", "Review detailing", "Minimum reinforcement, links and spacing results",
-        "detailing", "Calculated relevant action rows", "Each requested check has a bounded status",
+        "detailing", "Calculated relevant action rows", "Each requested check has a status and reason",
         "results-stale",
         "Enable each required detailing check under Inputs > Analysis settings, "
         "and complete its dependent link or member inputs. For minimum reinforcement, "
         "use Inputs > Loads to select Check minimum reinforcement for every relevant "
-        "Plastic/capacity row. Open Analysis > Detailing, press Calculate, and review "
+        "Plastic/capacity row. Open Analysis > Detailing and review "
         "each requested status.",
     ),
     Workflow(
         "review-results", "Review results", "A complete requested-calculation register",
         "results-overview", "Current calculation results", "Warnings and governing rows are visible",
         "results-review",
-        "Open Analysis > Results Overview, press Calculate after the final input edit, "
-        "then follow each governing row's View entry to its named detail view "
+        "Open Analysis > Results Overview, "
+        "select a check in Result details and choose Open selected result "
         "and review every warning or not-assessed state.",
     ),
     Workflow(
@@ -354,7 +367,7 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "Loaded inputs require a fresh calculation", "project-file",
         "Open Inputs > Project. Download the project to save the current inputs, or "
         "select a project file to load it. After loading, review the restored inputs, "
-        "then open Analysis > Results Overview, press Calculate, and review the fresh "
+        "then open Analysis > Results Overview and review the fresh "
         "results before using them.",
     ),
     Workflow(
@@ -369,6 +382,7 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
 
 ALL_DESTINATIONS: Final[tuple[ManualDestination, ...]] = (
     *READING_PATHS,
+    *PUBLICATION_REFERENCES,
     *INPUT_STAGES,
     *WORKSPACES,
     *RESULT_VIEWS,

@@ -41,7 +41,8 @@ EXPECTED_LABELS = (
     "Figure B5-1", "Figure B5-2", "Figure B5-3",
     "Figure B6-1", "Table B6-1", "Table B6-2", "Table B6-3",
     "Table B6-4", "Table B6-5", "Table B6-6", "Table B6-7", "Table B6-8",
-    "Table B7-1", "Table B7-2", "Table B7-3", "Table B8-1",
+    "Table B7-1", "Table B7-2", "Table B7-3", "Table B7-4", "Table B7-5",
+    "Table B7-6", "Table B7-7", "Table B7-8", "Table B8-1", "Table B8-2",
     "Table C1-1", "Figure C2-1", "Figure C3-1", "Figure C3-2",
     "Figure C3-3", "Figure C4-1", "Figure C4-2", "Figure C6-1",
     "Table C7-1", "Table C8-1", "Figure C8-1", "Figure C8-2",
@@ -102,7 +103,7 @@ def test_manual_inventory_has_exact_objects_labels_and_destinations():
 
     assert tuple(item.label for item in items) == EXPECTED_LABELS
     assert len(MANUAL_FIGURE_SPECS) == 16
-    assert len(MANUAL_TABLE_SPECS) == 26
+    assert len(MANUAL_TABLE_SPECS) == 32
     assert len({item.label for item in items}) == len(items)
     assert len({item.anchor for item in items}) == len(items)
     assert all(item.caption.strip() for item in items)
@@ -171,12 +172,12 @@ def test_manual_pdf_contains_every_reference_caption_and_resolved_link():
     ]
 
     for item in items:
-        assert f"See {item.label}." in text
+        assert f"{item.label}." in text
         caption = re.sub(
             r"\s+", " ", item.caption.replace("*", "").replace("$", "")
         )
         assert caption in flat
-    assert len(links) >= len(items)
+    assert len(links) >= len(manual.manual_ia.ALL_DESTINATIONS)
     assert all(link.get("/Dest") for link in links)
 
 
@@ -231,11 +232,11 @@ def test_streamlit_manual_uses_matching_reference_heading_and_caption(monkeypatc
 
     manual.render_manual_streamlit()
 
-    assert "[See Figure A3-1](#figure-a3-1)." in fake.markdowns
+    assert "[See Figure A3-1](#figure-a3-1)." not in fake.markdowns
     assert "##### Figure A3-1" in fake.markdowns
-    assert "[See Table A5-1](#table-a5-1)." in fake.markdowns
+    assert "[See Table A5-1](#table-a5-1)." not in fake.markdowns
     assert "##### Table A5-1" in fake.markdowns
-    assert any("Worked-example section" in text for text in fake.captions)
+    assert any("Named worked examples" in text for text in fake.captions)
 
 
 def test_streamlit_manual_figure_failure_hides_software_diagnostics(monkeypatch):
@@ -309,22 +310,20 @@ def test_manual_long_table_repeats_caption_and_header_when_forced_to_split(
     table = next(
         item
         for item in flow
-        if getattr(item, "_sector_publication_label", None) == "Table B7-3"
+        if getattr(item, "_sector_publication_label", None) == "Table B7-6"
     )
-    leading, page_break, trailing = table.split(170 * mm, 120 * mm)
+    leading, page_break, trailing = table.split(170 * mm, 60 * mm)
     assert table.repeatRows == 2
     assert table.splitInRow == 0
     assert isinstance(page_break, NotAtTopPageBreak)
     assert "(continued)" not in leading._cellvalues[0][0].getPlainText()
-    assert "Table B7-3 (continued)." in (
+    assert "Table B7-6 (continued)." in (
         trailing._cellvalues[0][0].getPlainText()
     )
     expected_header = [
-        "Table",
-        "Field / notation",
-        "Definition and sign",
-        "Blank/default and validation",
-        "Method dependency",
+        "Field / unit",
+        "Meaning / sign",
+        "Default / validation",
     ]
     for fragment in (leading, trailing):
         assert [

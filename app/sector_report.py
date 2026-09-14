@@ -46,7 +46,7 @@ import material_catalog
 from app import modelled_direction
 from app import elastic_display
 from app import publication_equation_layout as publication_equations
-from app import report_profiles
+from app import report_profiles, report_sources
 from app import table_field_definitions as table_fields
 import publication_image_export
 from publication_items import PublicationCounter
@@ -78,7 +78,7 @@ _HEAD_BG = colors.HexColor(publication_theme.PALETTE.report_header)
 _A4_CONTENT_WIDTH = A4[0] - 40 * mm
 _REPORT_FRAME_PADDING = 6.0
 _A4_FRAME_USABLE_HEIGHT = A4[1] - 45 * mm - 2 * _REPORT_FRAME_PADDING
-_MIN_REPORT_TABLE_FONT = 7.2
+_MIN_REPORT_TABLE_FONT = 9.0
 _REPORT_TABLE_HORIZONTAL_PADDING = 3.0
 _REPORT_TABLE_SCRIPT_PADDING = 2.0
 _REPORT_TABLE_SUBSCRIPT_RISE_FACTOR = 0.15
@@ -1182,6 +1182,9 @@ class ReportBuilder:
     ):
         self.buffer = buffer
         self.meta = meta or {}
+        self._source_register = report_sources.validate(
+            self.meta.get("source_register", [])
+        )
         self.inp = inp
         self.out = out or {}
         # Keep the complete table-level payload available while detail renderers
@@ -1508,7 +1511,9 @@ class ReportBuilder:
         self.flow.append(KeepTogether(table))
 
     def _case_line(self, family, title=""):
-        self._small("<b>Case:</b> " + _report_action_set_text(self.inp, family))
+        case_name = presentation.action_set(self.inp, family)["id"]
+        self._small("<b>Case:</b> " + _report_action_set_text(self.inp, family)
+                    + self._project_source_link(family.title(), case_name))
         actions = self.inp.get("_report_case_actions") or {}
         if family == "plastic" and actions:
             self._table(
@@ -1874,6 +1879,34 @@ class ReportBuilder:
         group._sector_equations = tuple(equations)
         self.flow[start:] = [group]
 
+    def _standard_result_projection(self, anchor, symbol, result, source, note, expr):
+        """Combine only adjacent final outputs with one exact method/source scope."""
+        scope = (self._chapter, self._subsection,
+                 self._table_section_context, self._table_subsection_context,
+                 self._table_assessment_context, source)
+        group = getattr(self, "_standard_projection_group", None)
+        if group is None or group["scope"] != scope or group["end"] != len(self.flow) or any(
+                old is not new for old, new in zip(group["tail"], self.flow[group["start"]:])):
+            group = {"scope": scope, "start": len(self.flow), "rows": [], "item": None}
+        else:
+            del self.flow[group["start"]:]
+        condition = note or ""
+        if source == _DERIVED_EQUATION_SOURCE:
+            condition += ("<br/>" if condition else "") + "Method: " + _equation_math(expr)
+        group["rows"].append([
+            f'<a name="{anchor}"/>' + symbol, result, condition or "\u2014",
+        ])
+        group["item"] = self._table(
+            [["Quantity", "Result", "Method / condition"], *group["rows"]],
+            [35 * mm, 65 * mm, 65 * mm], font=9,
+            caption="Final results and used design parameters",
+            publication_item=group["item"],
+        )
+        self._small(f"<b>Source / method:</b> {source}")
+        group["end"] = len(self.flow)
+        group["tail"] = tuple(self.flow[group["start"]:])
+        self._standard_projection_group = group
+
     def _formula(
         self,
         expr,
@@ -1949,19 +1982,12 @@ class ReportBuilder:
             }
             if not report_profiles.standard_retains_equation_result(equation_key):
                 return
-            self._p(f'<a name="{anchor}"/>')
-            self._table(
-                [["Quantity", "Result"],
-                 [contract.result_symbol,
-                  _compact_equation_numbers(result) if result else
-                  "Method relation; result reported in the assessment table."]],
-                [55 * mm, 110 * mm],
+            self._standard_result_projection(
+                anchor, contract.result_symbol,
+                _compact_equation_numbers(result) if result else
+                "Method relation; result reported in the assessment table.",
+                source, note, expr,
             )
-            if note:
-                self._small(note)
-            if source == _DERIVED_EQUATION_SOURCE:
-                self._small(f"<b>Method relation:</b> {_equation_math(expr)}")
-            self._small(f"<b>Source / method:</b> {source}")
             return
 
         display_substitution = (
@@ -2252,6 +2278,7 @@ class ReportBuilder:
         keep=True,
         repeat_cols=1,
         caption=None,
+        publication_item=None,
     ):
         if not data or not data[0]:
             raise ValueError("A report table requires at least one cell.")
@@ -2313,7 +2340,7 @@ class ReportBuilder:
             caption = subject
             if first_header.lower() not in subject.lower():
                 caption += f": {first_header}"
-        table_item = self._publication_counter.issue("Table", str(caption))
+        table_item = publication_item or self._publication_counter.issue("Table", str(caption))
         # A long table (the sweep / per-bar tables) may split across pages; a short
         # one is kept whole so it never strands a row on an otherwise empty page.
         # The first caption row owns the destination, so it cannot be separated
@@ -2441,6 +2468,7 @@ class ReportBuilder:
             table.setStyle(TableStyle(table_style))
             self.flow.append(KeepTogether(table) if keep else table)
             self._gap(4)
+        return table_item
 
     def _fig(self, fig, w_mm=150, h_mm=95, caption=None):
         if not self.figures:
@@ -2706,6 +2734,8 @@ class ReportBuilder:
 
     def _write_pdf(self):
         """Write the already assembled presentation flow without recalculation."""
+        if getattr(self, "_project_sources_linked", False):
+            self._project_source_register()
 
         self._tick(0.92, "Writing PDF...")
         footer = f"Sector {self.version}  -  {SECTOR_LICENSEE}".strip()
@@ -3142,6 +3172,7 @@ class ReportBuilder:
 
         self._h2("Actions", reserve=85)
         self._loads_block()
+        self._project_source_register()
 
     @staticmethod
     def _brief_switch(value):
@@ -4123,13 +4154,12 @@ class ReportBuilder:
             self._prestress_block()
             self._keep_from(start)
             self._prestress_initial_block()
-        # Loads and settings each start on a predictable, dedicated page. Their
-        # data tables retain the universal split contract rather than entering one
-        # combined KeepTogether block.
+        # Start the load schedules together; let settings follow the source
+        # register with the normal heading keep rather than an empty page tail.
         self._page_break()
         self._h2("Loads")
         self._loads_block()
-        self._page_break()
+        self._project_source_register()
         self._h2("Analysis settings")
         self._settings_block()
 
@@ -4715,6 +4745,51 @@ class ReportBuilder:
             references=("prestress.element-force",),
         )
 
+    def _project_source_link(self, scope, case_name):
+        self._project_sources_linked = True
+        for index, entry in enumerate(self._source_register, start=1):
+            if (entry["scope"], entry["case_name"]) == (scope, case_name):
+                return (' | User reference: <link href="#sector-project-sources">'
+                        f'R{index}</link>')
+        return ""
+
+    def _project_source_register(self):
+        if getattr(self, "_project_sources_emitted", False):
+            return
+        self._project_sources_emitted = True
+        self._h2("User-supplied project and action references", reserve=70)
+        self._p('<a name="sector-project-sources"/>Project references concern '
+                'project assumptions; action references apply only to their named '
+                'case or spectrum. These references are supplied by the user and '
+                'are separate from the calculation-method sources.')
+        current = report_sources.available_assignments(self._base_inp)
+        if not self._source_register:
+            self._p("References incomplete: no user-supplied document or record "
+                    "and section/page locator has been provided.")
+            return
+        rows = [["Ref. / scope", "Document / section or page", "Reference status"]]
+        assigned = set()
+        for index, entry in enumerate(self._source_register, start=1):
+            identity = entry["scope"], entry["case_name"]
+            assigned.add(identity)
+            scope = entry["scope"] + (" / " + entry["case_name"]
+                                      if entry["case_name"] else " assumptions")
+            status = report_sources.reference_status(entry)
+            if identity not in current:
+                status += "; unmatched current case or spectrum"
+            rows.append([
+                f"R{index}: " + _html_escape(scope),
+                _html_escape(entry["document"] or "Document not supplied")
+                + "<br/>" + _html_escape(entry["locator"] or "Section/page not supplied"),
+                _html_escape(status),
+            ])
+        self._table(rows, [47 * mm, 77 * mm, 46 * mm], font=9, keep=False,
+                    caption="User-supplied references and their exact scopes")
+        missing = [scope + (" / " + name if name else " assumptions")
+                   for scope, name in current if (scope, name) not in assigned]
+        if missing:
+            self._p("References incomplete for: " + _html_escape("; ".join(missing)) + ".")
+
     def _loads_block(self):
         inp = self._base_inp
         out = self._base_out
@@ -4774,7 +4849,7 @@ class ReportBuilder:
                 rows = [[
                     "Case", "Description", "Part", "N<sub>Ed</sub>",
                     "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>",
-                    "Stress output", "Crack output",
+                    "Stress", "Crack width",
                 ]]
                 for row in elastic:
                     common = [
@@ -4819,39 +4894,32 @@ class ReportBuilder:
                 self._small("<b>Grouped fatigue spectra</b>")
                 if self.profile.key == "Brief":
                     self.flow[-1].keepWithNext = 1
-                table_key = table_fields.FATIGUE_SPECTRUM_TABLE_KEY
-                rows = [[
-                    "Spectrum", "Bin", "Description", "Cycles",
-                    _input_table_symbol(table_key, "n_long_ed_kn"),
-                    _input_table_symbol(table_key, "mx_long_ed_knm"),
-                    _input_table_symbol(table_key, "my_long_ed_knm"),
-                    _input_table_symbol(table_key, "n_short_ed_kn"),
-                    _input_table_symbol(table_key, "mx_short_ed_knm"),
-                    _input_table_symbol(table_key, "my_short_ed_knm"),
-                ]]
+                rows = [["Spectrum", "Bin", "Description", "Cycles"]]
                 rows.extend([
-                    [
-                        _html_escape(row[fatigue_inputs.SPECTRUM]),
-                        _html_escape(row[fatigue_inputs.NAME]),
-                        _html_escape(row[fatigue_inputs.DESCRIPTION]),
-                        _fmt(row[fatigue_inputs.CYCLES], 3),
-                        _fmt(row["n_long_ed_kn"], 3),
-                        _fmt(row["mx_long_ed_knm"], 3),
-                        _fmt(row["my_long_ed_knm"], 3),
-                        _fmt(row["n_short_ed_kn"], 3),
-                        _fmt(row["mx_short_ed_knm"], 3),
-                        _fmt(row["my_short_ed_knm"], 3),
-                    ]
+                    [_html_escape(row[fatigue_inputs.SPECTRUM]),
+                     _html_escape(row[fatigue_inputs.NAME]),
+                     _html_escape(row[fatigue_inputs.DESCRIPTION]),
+                     _fmt(row[fatigue_inputs.CYCLES], 3)]
                     for row in fatigue_rows
                 ])
-                self._table(
-                    rows,
-                    [18 * mm, 18 * mm, 24 * mm, 15 * mm]
-                    + [15 * mm] * 6,
-                    font=5.1,
-                    keep=False,
-                    repeat_cols=3,
-                )
+                self._table(rows, [35 * mm, 35 * mm, 65 * mm, 35 * mm],
+                            keep=False, repeat_cols=2,
+                            caption="Fatigue spectrum records and cycle counts")
+                action_rows = [["Spectrum", "Bin", "Part", "N<sub>Ed</sub>",
+                                "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>"]]
+                for row in fatigue_rows:
+                    for part, label in (("long", "Long"), ("short", "Short")):
+                        action_rows.append([
+                            _html_escape(row[fatigue_inputs.SPECTRUM]),
+                            _html_escape(row[fatigue_inputs.NAME]), label,
+                            _fmt(row[f"n_{part}_ed_kn"], 3),
+                            _fmt(row[f"mx_{part}_ed_knm"], 3),
+                            _fmt(row[f"my_{part}_ed_knm"], 3),
+                        ])
+                self._table(action_rows,
+                            [35 * mm, 35 * mm, 19 * mm, 27 * mm, 27 * mm, 27 * mm],
+                            keep=False, repeat_cols=3,
+                            caption="Fatigue action components")
                 self._small(
                     "N in kN; M in kNm. Long is the sustained state; short is "
                     "the cyclic increment. N is tension-positive."
@@ -10784,13 +10852,13 @@ class ReportBuilder:
         # Complete, explicitly typed bar/tendon evidence.
         self._h2("Reinforcement and tendon response")
         self._small("Total = long + short; Long-term = long-term alone; "
-                    "Increment = Total - Long-term; "
+                    "Increment (Incr.) = Total - Long-term; "
                     "Instantaneous (RST1) = response after neutralising the "
                     "long-term concrete stress. Tension positive.")
         element_rows = el.get("elements") or []
         if element_rows:
             rows = [["Element", "Material", "x", "y", "Area", "Strain", "Total",
-                     "Long-term", "Increment", "Instant."]]
+                     "Long-<br/>term", "Incr.", "Instant."]]
             for row in element_rows:
                 rows.append([
                     row["element_id"],
@@ -12305,6 +12373,9 @@ class ReportBuilder:
             # detailed report units. Every other spectrum remains in the summary.
             spectrum_status = fatigue_presentation.result_status(spectrum)
             self._h2("Spectrum - " + _html_escape(spectrum_name))
+            source_link = self._project_source_link("Fatigue", spectrum_name)
+            if source_link:
+                self._p(source_link.removeprefix(" | "))
             self._status_block(
                 f"{spectrum_status} - governing utilisation "
                 f"{_pct(fatigue_presentation.evidence_number(

@@ -131,7 +131,7 @@ def test_crack_comparison_guidance_uses_independent_zero_value_contract():
     load_case_contract = (ROOT / "app" / "load_cases.py").read_text(
         encoding="utf-8"
     )
-    assert "A 0 mm limit leaves only that duration's calculated width" in manual_text
+    assert "A 0 mm limit leaves that duration's calculated width" in manual_text
     assert "crack-width-enabled Elastic row" in manual_text
     assert "Independent long-term and short-term crack-width limits" in manual_text
     assert "Independent long-term and short-term crack-width limits" in product_identity
@@ -193,12 +193,11 @@ def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
         ),
         "review-results": (
             "Analysis > Results Overview",
-            "View",
+            "Open selected result",
         ),
         "save-load": (
             "Inputs > Project",
             "Analysis > Results Overview",
-            "Calculate",
         ),
         "report-profile": ("Report", "generate", "download"),
     }
@@ -355,3 +354,20 @@ def test_manual_numeric_field_retains_decimal_validation():
     row = next(row for row in manual.editable_field_reference_rows()
                if row[0] == fields.TABLE_TITLES["bars_base"] and "x coordinate" in row[1])
     assert fields.validation_rule(definition) in row[3]
+
+
+def test_task_index_is_compact_with_guidance_at_each_destination():
+    blocks = manual.manual_blocks()
+    index = next(block for block in blocks if block[0] == "table" and block[1] == ["Task", "Outcome"])
+    assert len(index[2]) == 10
+    for workflow in ia.WORKFLOWS:
+        destination = ia.destination(workflow.destination_key)
+        heading = next(i for i, block in enumerate(blocks) if block[0] in {"h1", "h2"} and block[1] == destination.heading)
+        guidance = blocks[heading + 1]
+        assert guidance[0] == "md"
+        assert workflow.prerequisite in guidance[1]
+        assert workflow.action in guidance[1]
+    assert ia.destination("status-reference") not in ia.RESULT_VIEWS
+    table = next(block for block in blocks if block[0] == "table" and block[1] == ["Status", "Meaning", "Next action"])
+    labels = [row[0] for row in table[2]]
+    assert all(label in labels for label in ("NOT ASSESSED", "NOT REQUESTED", "NOT RUN", "NOT CALCULATED", "NOT APPLICABLE", "STALE", "CALCULATED - NO LIMIT COMPARISON"))

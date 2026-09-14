@@ -59,15 +59,15 @@ _MANUAL_CROPS = (
         "manual contents navigation",
         1,
         (0.09, 0.18, 0.92, 0.45),
-        "0d13dd844f7f38462edf70d1da98c8af523ea00391c3781511c6e44620f29729",
+        "125e9ed48f82f2c00206bc9494dea7b12ac4c82dd401d928ed814e227d29a00f",
     ),
     RasterCrop(
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # The reviewed 0.96.3 footer has the current version and 76-page count;
+        # The reviewed 0.96.4 footer has the current version and 72-page count;
         # the crop geometry is unchanged.
-        "072e326950b9450ba95ab262834bfe91c8adb17fc726e9c4fb6f6edc774f1724",
+        "859ff9a36ca25b19de6c74d92fc10551f401b83c23640f57eb71d4dec156355a",
     ),
 )
 
@@ -360,8 +360,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Bulk assignments",
         "one fully expanded governing row for each engineering check type",
         "PDF report",
-        "Standard adds one governing worked calculation for each active check "
-        "family",
+        "Standard includes used inputs, complete results, criteria, statuses and",
+        "Audit adds the detailed",
         "Editable table",
         "Plastic/capacity and Elastic action fields",
         "accept either a dot or comma as the decimal separator",

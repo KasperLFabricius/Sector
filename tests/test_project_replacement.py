@@ -198,6 +198,7 @@ def _replacement_snapshot(at: AppTest) -> tuple[str, str]:
                 "rep_checker",
                 "rep_approver",
                 "rep_comments",
+                "rep_source_register",
                 project_io.REPORT_PROFILE_KEY,
             }
             else input_durable
@@ -440,9 +441,14 @@ def test_old_project_clears_optional_document_roles():
     _goto_page(at, "Report")
     at.text_input(key="rep_checker").set_value("Previous checker").run()
     at.text_input(key="rep_approver").set_value("Previous approver").run()
+    at.text_input(key="_report_source_document").set_value("Old basis").run()
+    at.text_input(key="_report_source_locator").set_value("p. 1").run()
     _upload_sparse_project(at)
     _goto_page(at, "Report")
     for key in ("rep_checker", "rep_approver"):
         assert at.text_input(key=key).value == ""
         assert at.session_state["_durable_report_scalars"][key] == ""
+    assert at.session_state["_durable_report_scalars"]["rep_source_register"] == []
+    assert at.text_input(key="_report_source_document").value == ""
+    assert at.text_input(key="_report_source_locator").value == ""
     assert not at.exception

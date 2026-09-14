@@ -27,21 +27,21 @@ REPORT_MATRIX = {
     "subtitle": (11, None, 0, 2, "#5a5a5a", False, False),
     "h1": (14, None, 10, 6, "#1f3b66", True, True),
     "h2": (11.5, None, 8, 4, "#1f3b66", True, True),
-    "body": (9.5, 13, 0, 4, None, False, False),
-    "small": (8.5, 11, 0, 0, "#5a5a5a", False, False),
+    "body": (10, 13.5, 0, 4, None, False, False),
+    "small": (10, 13.5, 0, 0, "#2c2c2a", False, False),
     "publication_ref": (8, 10, 2, 2, "#5a5a5a", False, True),
     "publication_caption": (8, 10, 2, 2, "#2c2c2a", False, True),
 }
 
 MANUAL_MATRIX = {
-    "title": (20, None, 0, 6, None, True, False),
+    "title": (20, 24, 0, 6, None, True, False),
     "part": (17, None, 18, 8, "#0d2440", True, True),
     "h1": (15, None, 14, 8, "#1f3b66", True, True),
     "h2": (12.5, None, 9, 4, None, True, True),
     "h3": (11, None, 6, 3, None, True, True),
-    "body": (9.5, 13, 0, 4, None, False, False),
+    "body": (10, 13.5, 0, 4, None, False, False),
     "math": (11, 15, 6, 6, None, False, False),
-    "small": (9.5, 12, 0, 0, "#5a5a5a", False, False),
+    "small": (9.5, 12, 0, 0, "#2c2c2a", False, False),
     "publication_ref": (9.5, 12, 2, 2, "#5a5a5a", False, True),
     "publication_caption": (9.5, 12, 2, 3, "#2c2c2a", False, True),
 }

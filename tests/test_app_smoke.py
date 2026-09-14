@@ -7386,6 +7386,33 @@ def test_metadata_only_report_edit_reuses_frozen_engineering_results(
             "reused-current-analysis-results"
         )
         assert at.session_state["calculation_record"] == calculation
+    from app import report_sources
+    at.text_input(key="_report_source_document").set_value("Project basis").run()
+    at.text_input(key="_report_source_locator").set_value("Section 3").run()
+    assert any("Report out of date" in warning.value for warning in at.warning)
+    identity = next(item for item in report_sources.available_assignments(
+        at.session_state["_latest_inputs"]
+    ) if item[0] == "Elastic")
+    at.selectbox(key="_report_source_assignment").set_value(identity).run()
+    assert at.text_input(key="_report_source_document").value == ""
+    at.text_input(key="_report_source_document").set_value("Action record").run()
+    at.text_input(key="_report_source_locator").set_value("p. 8").run()
+    at.selectbox(key="_report_source_assignment").set_value(("Project", "")).run()
+    assert at.text_input(key="_report_source_document").value == "Project basis"
+    assert at.text_input(key="_report_source_locator").value == "Section 3"
+    at.selectbox(key="_report_source_assignment").set_value(identity).run()
+    assert at.text_input(key="_report_source_document").value == "Action record"
+    _goto_page(at, "Inputs")
+    _goto_page(at, "Report")
+    at.button(key="gen_report").click().run()
+    assert captured["meta"]["source_register"] == [
+        dict(scope="Project", case_name="", document="Project basis", locator="Section 3"),
+        dict(scope=identity[0], case_name=identity[1], document="Action record", locator="p. 8"),
+    ]
+    assert at.session_state["report_generation_record"]["result_source"] == (
+        "reused-current-analysis-results"
+    )
+    assert at.session_state["calculation_record"] == calculation
     assert at.text_input(key="rep_author").value == ""
     assert not at.exception
 
