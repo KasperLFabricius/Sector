@@ -70,7 +70,7 @@ def test_profile_depth_and_page_controls_match_the_frozen_policy():
         standard.substitution_scope,
         standard.provenance_scope,
         standard.glossary_scope,
-    ) == ("used", "complete", "used", "governing", "key", "used")
+    ) == ("used", "complete", "used", "none", "key", "used")
     assert not standard.include_qa_appendix
     assert not any("page_limit" in field.name for field in fields(standard))
     assert not any("page_target" in field.name for field in fields(standard))
@@ -107,6 +107,20 @@ def test_profiles_describe_omissions_and_audit_depth_for_engineers():
 def test_figures_remain_outside_the_profile_policy():
     field_names = {field.name for field in fields(profiles.ReportProfilePolicy)}
     assert not any("figure" in name for name in field_names)
+
+
+def test_standard_retains_final_outputs_without_intermediate_calculation_rows():
+    for key in (
+        "materials.concrete.fcd", "materials.steel.fyd-2",
+        "cracking.threshold", "shear.links.vrd", "combined.dk-na.sum",
+    ):
+        assert profiles.standard_retains_equation_result(key)
+    for key in (
+        "geometry.concrete.net-area", "shear.2023.axial-factor",
+        "elastic.combined.neutralising-n", "plastic.worked.curvature-selection",
+        "fatigue.reinforcement.bin-damage", "fatigue.concrete.life",
+    ):
+        assert not profiles.standard_retains_equation_result(key)
 
 
 @pytest.mark.parametrize(

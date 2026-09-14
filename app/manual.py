@@ -1437,14 +1437,16 @@ def manual_blocks() -> list:
             for policy in report_profiles.REPORT_PROFILES.values()
         ],
     )
-    md("Brief publishes the complete effective geometry, assigned-material, "
-       "reinforcement, tendon, action and active-setting inputs for every result it "
-       "reports, followed by governing results and concise limitations. It omits "
+    md("Brief leads with project and section identity, requested-check outcomes, "
+       "governing results and essential limitations. The complete effective geometry, "
+       "assigned-material, reinforcement, tendon, action and active-setting inputs "
+       "follow the results. It omits "
        "non-governing results and worked derivations. When figures are requested, Brief keeps "
        "only the selected governing Plastic and Elastic result plots when available. "
-       "Standard adds one governing worked calculation for each active check family; "
-       "Audit adds all available intermediate results, substitutions, source "
-       "references and method theory. Calculation values and statuses are identical "
+       "Standard includes used inputs, complete results, criteria, statuses and "
+       "concise methods, references and limitations. Audit adds the detailed "
+       "calculation sequences, numerical substitutions, worked examples and method "
+       "theory. Calculation values and statuses are identical "
        "in all three profiles.")
 
     # =====================================================================
@@ -1853,15 +1855,15 @@ def manual_blocks() -> list:
          "2005, DS/EN 1992-1-1 + DK NA and DS/EN 1992-1-1:2023. The DK NA option "
          "reports the fine and the coarse system together (all four columns above), "
          "each for the long-term and short-term load. Ordinary methods show one "
-         "globally governing worked crack width in Standard and Audit; DK/NA shows "
-         "one global fine-system and one global coarse-system worked example there. "
+         "globally governing crack-width result in Standard and Audit; Audit includes "
+         "the worked calculation. DK/NA retains the fine-system and coarse-system "
+         "results, with their governing worked examples in Audit. "
          "Brief includes the complete effective inputs and the governing "
          "crack-width rows, but no worked example or non-governing case register. "
          "If user criteria are present, Standard and Audit show one comparison for "
          "the largest calculated ordinary width, selected by width rather than "
-         "ratio, plus "
-         "at most one section-level Formula 7.100 NA worked example when that "
-         "separate DK option is enabled.")
+         "ratio. The separate DK option retains its section-level Formula 7.100 NA "
+         "assessment, with its numerical worked example in Audit.")
 
     h1("Grouped fatigue")
     h2("Elastic stress ranges")

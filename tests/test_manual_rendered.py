@@ -100,8 +100,8 @@ def test_accessible_html_fixture_is_self_contained_and_semantic():
     text = validate_html_content(build_fixture_html())
     assert "Standard is the default" in text
     assert (
-        "Standard adds one governing worked calculation for each active check "
-        "family"
+        "Standard includes used inputs, complete results, criteria, statuses and "
+        "concise methods, references and limitations"
     ) in text
     assert "Values and statuses match the other report profiles" in text
 

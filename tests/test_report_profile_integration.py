@@ -69,7 +69,6 @@ def test_brief_frozen_fixture_is_a_compact_auditable_engineering_report():
         "Shear, torsion and detailing settings",
         "Grouped fatigue settings",
         "Governing results and limitations",
-        "Worked derivations, result chains and non-governing results begin in Standard",
     ):
         assert expected in text
 
@@ -1120,6 +1119,41 @@ def test_internal_equation_keys_are_not_published_and_standard_is_default_depth(
     assert "Values and statuses match the other report profiles" in audit
 
 
+def test_standard_keeps_results_and_sources_while_audit_owns_worked_sequences():
+    standard = _profile_text("Standard")
+    audit = _profile_text("Audit")
+    for detail in (
+        "Numerical substitution:",
+        "Step 1 - converged long-term state",
+        "Step 2 - neutralise the long-term concrete stress",
+        "Converged strain plane",
+        "Worked calculation - governing reinforcement fatigue",
+        "Worked calculation - governing concrete fatigue",
+    ):
+        assert detail not in standard
+        assert detail in audit
+    for retained in (
+        "Internal lever arm", "Effective depth", "Concrete corner stress and strain",
+        "Stress as percentage of characteristic strength", "fcd,fat",
+        "Cracking threshold", "Source / method",
+    ):
+        assert retained in standard
+    assert "Governing worked example:" not in standard
+    assert "Governing combined worked example" not in standard
+
+
+def test_brief_governing_register_contains_results_before_complete_inputs():
+    text = _profile_text("Brief")
+    start = text.rfind("Governing results and limitations")
+    inputs = text.rfind("Analysis input summary")
+    assert start < inputs
+    summary = text[start:inputs]
+    assert "Plastic bending PL-QA-2 FAIL 220.8 %" in summary
+    assert "Crack width - Long-term EL-QA-1" in summary
+    assert "0.529 mm" in summary
+    assert "0.200 mm" in summary
+    assert "Torsion transverse/strut resistance PL-QA-1 FAIL 170.5 %" in summary
+
 def test_profile_depth_is_monotonic_without_changing_figures_policy():
     pages = {
         profile: len(PdfReader(io.BytesIO(_profile_pdf(profile))).pages)
@@ -1173,6 +1207,16 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
         pdf = report_render_fixture.sector_report.build_report(
             {}, inp, out, figures=False, profile=profile,
         )
+        profile_headings = tuple(
+            heading for heading in headings
+            if profile == "Audit" or heading not in {
+                "Converged strain plane", "Section resultants at convergence",
+                "Governing reinforcement and tendon response",
+                "Step 2 - neutralise the long-term concrete stress",
+                "Worked calculation - governing reinforcement fatigue",
+                "Worked calculation - governing concrete fatigue",
+            }
+        )
         reader = PdfReader(io.BytesIO(pdf))
         seen = set()
         for page in reader.pages:
@@ -1188,7 +1232,7 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
                     ))
 
             page.extract_text(visitor_text=collect)
-            for heading in headings:
+            for heading in profile_headings:
                 matches = [
                     y for value, size, y in fragments
                     if (
@@ -1207,7 +1251,7 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
                         )
                         for value, _size, y in fragments
                     ), (profile, heading)
-        assert set(headings) <= seen
+        assert set(profile_headings) <= seen
 
 
 @pytest.mark.parametrize("profile", ("Standard", "Audit"))
@@ -1233,6 +1277,12 @@ def test_distinct_cracking_threshold_section_retains_its_first_equation(profile,
         )]
         for heading_y in headings:
             seen.append(page_number)
-            assert any(y < heading_y - 4 and value.startswith("Mathematical expression:")
+            result_prefix = (
+                # PDF visitors split lambda and its subscript into separate
+                # fragments; bind the Standard assertion to the actual result.
+                "Mathematical expression:" if profile == "Audit"
+                else "= 0.105 -> section is cracked"
+            )
+            assert any(y < heading_y - 4 and value.startswith(result_prefix)
                        for value, y, _size in fragments), (profile, page_number)
     assert len(seen) == 1

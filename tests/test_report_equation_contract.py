@@ -211,9 +211,9 @@ def _authored_pairs(call):
     return {(key, variant) for variant in variants}
 
 
-def _builder():
+def _builder(*, profile="Standard"):
     return sector_report.ReportBuilder(
-        io.BytesIO(), {}, {}, {}, figures=False, qa_appendix=False
+        io.BytesIO(), {}, {}, {}, figures=False, profile=profile
     )
 
 
@@ -442,7 +442,7 @@ def test_incompatible_missing_and_sibling_evidence_fail_atomically(
 
 
 def test_contract_metadata_reaches_the_equation_flowable_unchanged():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Materials")
     builder._formula(
         "f<sub>cd</sub> = eta<sub>cc</sub> k<sub>tc</sub> "
@@ -477,7 +477,7 @@ def test_contract_metadata_reaches_the_equation_flowable_unchanged():
 
 
 def test_numerical_substitution_and_applicability_note_are_independent():
-    builder = _builder()
+    builder = _builder(profile="Audit")
     builder._h1("Independent publication rows")
     contract = contracts.EquationContract(
         symbols=(

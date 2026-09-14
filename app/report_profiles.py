@@ -48,12 +48,13 @@ BRIEF_PROFILE: Final = ReportProfilePolicy(
     key="Brief",
     label="Brief",
     description=(
-        "Concise report with all inputs relevant to each reported result, "
-        "governing results and concise limitations."
+        "Project and section identity, requested-check outcomes, governing "
+        "results and essential limitations, followed by all inputs relevant "
+        "to each reported result."
     ),
     omitted_detail=(
-        "Worked derivations and non-governing results are omitted; use Standard "
-        "or Audit when those details are required."
+        "Non-governing results are available in Standard and Audit. "
+        "Calculation sequences, substitutions and worked examples are in Audit."
     ),
     input_scope="effective",
     non_governing_scope="governing-only",
@@ -68,17 +69,17 @@ STANDARD_PROFILE: Final = ReportProfilePolicy(
     key="Standard",
     label="Standard",
     description=(
-        "Default calculation report with all used inputs, complete result tables "
-        "and one governing worked calculation per active check family, with key "
-        "references."
+        "Default design-review report with all used inputs, complete result "
+        "tables, governing criteria, statuses, methods, references and limitations."
     ),
     omitted_detail=(
-        "Audit-only intermediate results and complete method theory are omitted."
+        "Detailed substitutions, calculation sequences and numerical worked "
+        "examples are in Audit."
     ),
     input_scope="used",
     non_governing_scope="complete",
     equation_scope="used",
-    substitution_scope="governing",
+    substitution_scope="none",
     provenance_scope="key",
     glossary_scope="used",
     include_qa_appendix=False,
@@ -120,6 +121,36 @@ REPORT_PROFILE_KEYS: Final[tuple[ReportProfileKey, ...]] = (
     "Audit",
 )
 DEFAULT_PROFILE: Final = STANDARD_PROFILE
+
+# Final outputs or used design parameters whose only legacy publication is an
+# equation unit. Intermediate arithmetic and worked-chain operands stay in Audit.
+STANDARD_RETAINED_RESULTS: Final = frozenset({
+    "geometry.concrete.centroid-x", "geometry.concrete.centroid-y",
+    "geometry.concrete.centroidal-ix", "geometry.concrete.centroidal-iy",
+    "geometry.concrete.centroidal-ixy", "materials.concrete.fcd",
+    "prestress.resultant-n", "prestress.resultant-mx", "prestress.resultant-my",
+    "elastic.concrete.effective-modulus",
+    "elastic.modular-ratio.short", "elastic.modular-ratio.long",
+    "detailing.clear-spacing.requirement",
+    "shear.2023.vrdc", "shear.2023.utilisation",
+    "shear.2005.vrdc", "shear.2005.utilisation",
+    "shear.links.vrd", "shear.links.utilisation",
+    "shear.chord.demand", "shear.chord.utilisation",
+    "combined.dk-na.sum", "combined.chord.demand", "combined.chord.utilisation",
+    "combined.crushing.interaction", "combined.stirrup.utilisation",
+    "torsion.off-axis-chord.demand", "torsion.off-axis-chord.utilisation",
+    "torsion.resistance.governing", "torsion.subtube.governing-utilisation",
+    "torsion.shear.crushing-interaction", "torsion.cracking.resistance",
+    "torsion.utilisation", "torsion.longitudinal-steel",
+    "cracking.threshold", "crack.user-limit.comparison",
+    "crack.heightened.required-area", "crack.heightened.area-comparison",
+    "fatigue.reinforcement.utilisation", "fatigue.concrete.utilisation",
+})
+
+
+def standard_retains_equation_result(key: str) -> bool:
+    """Keep used strengths and final outputs, never an arithmetic sequence."""
+    return key in STANDARD_RETAINED_RESULTS or key.startswith("materials.steel.fyd-")
 
 
 def resolve_profile(
