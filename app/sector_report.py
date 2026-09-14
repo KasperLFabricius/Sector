@@ -1891,10 +1891,11 @@ class ReportBuilder:
         else:
             del self.flow[group["start"]:]
         condition = note or ""
-        if source == _DERIVED_EQUATION_SOURCE:
+        if symbol is None or source == _DERIVED_EQUATION_SOURCE:
             condition += ("<br/>" if condition else "") + "Method: " + _equation_math(expr)
         group["rows"].append([
-            f'<a name="{anchor}"/>' + symbol, result, condition or "\u2014",
+            f'<a name="{anchor}"/>' + (symbol or "Method relation"),
+            result, condition or "\u2014",
         ])
         group["item"] = self._table(
             [["Quantity", "Result", "Method / condition"], *group["rows"]],
