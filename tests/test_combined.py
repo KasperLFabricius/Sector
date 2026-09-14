@@ -1326,7 +1326,10 @@ def test_app_dkna_publishes_signed_n_biaxial_m_and_action_alone_resistances():
     ).lower()
     assert "acting alone" in visible
     assert "biaxial moment direction" in visible
-    assert "does not replace" in visible
+    assert (
+        "scope: cross-section resistance. complete the applicable annex f "
+        "member and detailing assessment separately."
+    ) in visible
     assert "annex f" in visible
     assert "folded" not in visible
 
