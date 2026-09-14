@@ -2875,7 +2875,7 @@ def test_pre_m05_contract_with_changed_spacing_hides_old_spacing_until_recalcula
     )
     assert "Reinforcement clear spacing" not in overview
     assert "40.0 mm" not in overview
-    assert ">= 21.0 mm" not in overview
+    assert f"{chr(0x2265)} 21.0 mm" not in overview
     assert any("recalculation" in item.value for item in at.caption)
 
     _calculate(at)
@@ -4251,7 +4251,7 @@ def test_app_torsion_outside_permitted_range_withholds_verdict(tmp_path):
         == r"Transverse/strut utilisation $T_{Ed}/T_{Rd}$"
         for metric in at.metric
     )
-    assert all(metric.delta not in {"PASS", "FAIL", "OK", "Over limit"}
+    assert all(metric.delta not in {"PASS", "FAIL", "OK", "Over limit", "Component PASS", "Component FAIL"}
                for metric in at.metric)
 
     _select_view(at, "Results Overview")

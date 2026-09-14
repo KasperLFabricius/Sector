@@ -926,7 +926,7 @@ def test_pub_m01_selected_link_nominal_route_rejects_stale_child_in_native_views
             for metric in pub_m01_example.metric
         )
         assert not any(
-            "Nominal utilisation" in metric.label
+            "Component utilisation" in metric.label
             or "Utilisation" in metric.label
             for metric in pub_m01_example.metric
         )

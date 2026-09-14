@@ -1520,7 +1520,7 @@ def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately()
         for metric in at.metric
     )
     nominal_metric = next(
-        metric for metric in at.metric if "Nominal utilisation" in metric.label
+        metric for metric in at.metric if "Component utilisation" in metric.label
     )
     assert nominal_metric.value == "96.7 %"
     assert nominal_metric.delta == "OK"
@@ -1619,7 +1619,7 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
         if "V_{Rd" in metric.label or "Utilisation" in metric.label
     ]
     assert relevant_metrics
-    assert all(metric.delta not in {"OK", "Over limit", "PASS", "FAIL"}
+    assert all(metric.delta not in {"OK", "Over limit", "PASS", "FAIL", "Component PASS", "Component FAIL"}
                for metric in relevant_metrics)
     assert shear.SHEAR_CIRCULAR_REASON not in visible
 
@@ -2729,12 +2729,12 @@ def test_app_shear_view_renders_and_shows_utilisation():
     metrics = {metric.label: metric for metric in at.metric}
     resistance = at.session_state["results"]["shear"]["res"]["vrd_c"]
     assert metrics[r"Applied $V_{y,Ed}$"].value == "80.000 kN"
-    assert metrics[r"Selected resistance $V_{Rd,c}$"].value == (
+    assert metrics[r"Component resistance $V_{Rd,c}$"].value == (
         f"{resistance:.3f} kN"
     )
-    utilisation = metrics[r"Nominal utilisation $|V_{Ed}|/V_{Rd,c}$"]
+    utilisation = metrics[r"Component utilisation $|V_{Ed}|/V_{Rd,c}$"]
     assert utilisation.value == f"{100.0 * 80.0 / resistance:.1f} %"
-    assert utilisation.delta == "OK"
+    assert utilisation.delta == "Component PASS"
     captions = " ".join(item.value for item in at.caption)
     assert "2005 no-links resistance has no z operand" in captions
     shear_figure = next(
@@ -3198,7 +3198,7 @@ def test_app_shear_2023_links_with_axial_compression_fail_closed(monkeypatch):
     )
     assert screening_metric.value == "20.7 %"
     assert screening_metric.delta == ""
-    assert all(metric.delta not in {"OK", "Over limit"} for metric in at.metric)
+    assert all(metric.delta not in {"OK", "Over limit", "Component PASS", "Component FAIL"} for metric in at.metric)
     assert "non-governing concrete-only context" in visible
 
     _select_view(at, "Results Overview")

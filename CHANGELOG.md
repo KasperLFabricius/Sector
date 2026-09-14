@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.96.3 - 2026-09-14
+
+Sector 0.96.3 improves engineering wording and numerical result summaries.
+Project schema remains 27; calculation methods and assessment rules are unchanged.
+
+- Elastic stresses include signed percentages of the corresponding characteristic
+  strengths, using each element's assigned material. Missing references remain
+  unavailable, and the percentages do not create an acceptance check.
+- Primary plastic summaries include the existing face-specific effective depths
+  beside the internal lever arm, with their bending axis and tension face.
+- Corrected project-load, fatigue Spectrum and governing-screen descriptions;
+  clarified multi-cell torsion limits and manual example variants.
+- Calculation reports omit interface-entry instructions and use clearer method
+  labels. Report-profile content depth remains unchanged.
+- Fixed spacing comparison and missing-value display, identified component and
+  overall shear status, and moved the logo into the main header.
+
+See [v0.96.3 release notes](docs/v0963_release_notes.md). The larger Part B
+presentation programme and the separate 0.96.4 torsion programme remain deferred.
+
 ## 0.96.2 - 2026-09-08
 
 Sector 0.96.2 strengthens project replacement, calculation boundaries and the

@@ -12404,11 +12404,11 @@ def test_report_directional_shear_table_retains_chord_assessment_status(
         assert "Shear Vy longitudinal chords PL-TEST PASS" not in text
     else:
         assert re.search(
-            r"Vy,Ed 50\.000 kN [0-9.]+ kN [0-9.]+ % NOT ASSESSED",
+            r"Vy,Ed 50\.000 kN [0-9.]+ kN [0-9.]+ % PASS NOT ASSESSED",
             text,
         )
         assert not re.search(
-            r"Vy,Ed 50\.000 kN [0-9.]+ kN [0-9.]+ % PASS",
+            r"Vy,Ed 50\.000 kN [0-9.]+ kN [0-9.]+ % PASS PASS",
             text,
         )
 

@@ -5198,6 +5198,7 @@ def test_detailing_summary_reports_values_status_and_target_view():
     spacing_row = by_check["Reinforcement clear spacing"]
     assert spacing_row["status"] == "FAIL"
     assert spacing_row["result"] == "18.0 mm (R1-R2)"
+    assert spacing_row["criterion"] == f"{chr(0x2265)} 25.0 mm"
     assert spacing_row["note"] == "8.2(2)"
     assert presentation.overall_summary_status(rows) == "FAIL"
 
