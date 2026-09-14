@@ -5692,12 +5692,12 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
         for frame in at.dataframe
         if {
             "Check",
-            "Method",
+            "Calculation",
             "Reference",
             "Scope",
         }.issubset(frame.value.columns)
     )
-    assert capability_table.iloc[0]["Method"] == "Reinforcement fatigue"
+    assert capability_table.iloc[0]["Calculation"] == "Reinforcement fatigue"
     assert "first-generation fatigue equations" in capability_table.iloc[0]["Scope"]
     assert "user-supplied factors" in capability_table.iloc[0]["Scope"]
 
@@ -8009,8 +8009,8 @@ def test_mild_preset_selector_exposes_concrete_identity_without_rewriting_value(
         "Curve 2 (elastic-perfectly-plastic)"
     )
     captions = "\n".join(str(item.value) for item in at.caption)
-    assert "Preset source: User-defined / project-defined Curve 2 preset" in captions
-    assert "Every material field remains a direct calculation input" in captions
+    assert "Project-defined stress-strain diagram. Record its design basis" in captions
+    assert "The values below are editable and are used in the calculation." in captions
 
 
 def test_material_catalogue_add_duplicate_delete_and_assignment_guard():
