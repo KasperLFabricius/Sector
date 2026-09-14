@@ -722,36 +722,26 @@ def manual_blocks() -> list:
     ])
 
     h1("Common use cases")
-    md("- **Ultimate capacity check.** Read the $M_x$-$M_y$ envelope at the design "
-       "axial force and the utilisation of the applied moment.\n"
-       "- **Biaxial column.** Sweep the neutral-axis angle to get the full biaxial "
-       "interaction diagram, not just the two principal directions.\n"
-       "- **Crack-width calculation.** Calculate the service crack width with the "
-       "selected numerical method and the actual named action.\n"
-       "- **Grouped fatigue verification.** Check several independently defined "
-       "spectra and review each bar, tendon, concrete fibre and spectrum bin.\n"
-       "- **Comparing layouts.** Change the bars or the concrete grade and read the "
-       "capacity and crack width straight back.")
+    md("Check ultimate capacity, review biaxial columns, calculate service crack "
+       "widths, verify grouped fatigue, or compare reinforcement layouts and "
+       "concrete grades. The outputs below remain tied to the named actions.")
 
     h2("What Sector computes - at a glance")
-    md("- **Plastic bending capacity.** The biaxial $M_x$-$M_y$ interaction "
-       "envelope at the given axial force, from the full nonlinear material laws, "
-       "and the utilisation of an applied load against it.\n"
-       "- **Cracked-section elastic stresses.** The concrete and reinforcement "
-       "stresses from long- and short-term action components, on the cracked "
-       "(tension-ignored) section, with creep through the modular ratio.\n"
-       "- **Elastic and crack outputs.** Cracking threshold, transformed section "
-       "properties, stresses and requested long- and short-term crack widths. "
-       "A 0 mm limit leaves only that duration's calculated width; a positive "
-       "limit produces only the matching specified-limit comparison and source.\n"
+    md("- **Plastic bending capacity.** Full biaxial $M_x$-$M_y$ interaction "
+       "at the given axial force using nonlinear material laws, and applied-load utilisation.\n"
+       "- **Elastic response.** Cracked-section concrete and reinforcement stresses "
+       "from long- and short-term actions, with creep through the modular ratio; "
+       "cracking threshold and transformed section properties.\n"
+       "- **Crack width.** Requested long- and short-term widths. A 0 mm limit "
+       "leaves that duration's calculated width; a positive limit adds the matching "
+       "specified-limit comparison and source.\n"
        "- **Grouped fatigue.** Reinforcement S-N/Miner and concrete compression "
-       "checks from named spectra of sustained states and cyclic increments.\n"
-       "- **Longitudinal detailing.** Edition-specific minimum-reinforcement "
-       "checks per selected capacity case and a section-wide clear-spacing check.\n"
-       "- **Multi-case review and reporting.** Named Plastic/capacity, Elastic and "
-       "fatigue rows are summarised together, remain selectable individually, and "
-       "are included in a calculation PDF with formulas and code references. A project file "
-       "saves the whole input set.")
+       "checks for each bar, tendon, concrete fibre and bin in independent named spectra.\n"
+       "- **Longitudinal detailing.** Edition-specific minimum reinforcement "
+       "per capacity case and section-wide clear spacing.\n"
+       "- **Multi-case reporting.** Select individual Plastic/capacity, Elastic and "
+       "fatigue results or review their summary. PDF profiles provide results and "
+       "references, with detailed calculations in Audit; project files save the inputs.")
 
 
     # =====================================================================
@@ -3063,7 +3053,7 @@ def build_manual_pdf(buffer, figures=True):
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import cm
-    from reportlab.platypus import (Image, KeepTogether, PageBreak, Paragraph,
+    from reportlab.platypus import (CondPageBreak, Image, KeepTogether, PageBreak, Paragraph,
                                     SimpleDocTemplate, Spacer, Table, TableStyle)
     from reportlab.platypus.tableofcontents import TableOfContents
 
@@ -3201,13 +3191,11 @@ def build_manual_pdf(buffer, figures=True):
                 title, styles["MH1"], block[1], 1, toc_entry=True
             ))
         elif kind == "h2":
-            if _strip_num(block[1]) in {
-                "Torsion (TRd, thin-walled tube)",
-                "Combined M-V-T interaction",
-            }:
-                # Start the two safety-heavy torsion sections on fresh pages so
-                # their applicability and wall-selection evidence stays together.
+            if _strip_num(block[1]) == "Torsion (TRd, thin-walled tube)":
                 flow.append(PageBreak())
+            elif _strip_num(block[1]) == "Combined M-V-T interaction":
+                # Keep room for the heading and its first applicability guidance.
+                flow.append(CondPageBreak(7 * cm))
             n2 += 1
             title = f"{n1}.{n2} " + _inline_md_to_rl(_strip_num(block[1]))
             flow.append(_heading(
@@ -3247,7 +3235,7 @@ def build_manual_pdf(buffer, figures=True):
             t = Table([[inner]], colWidths=[page_w])
             t.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(
-                    publication_theme.PALETTE.manual_surface
+                    publication_theme.PALETTE.manual_callout_surface
                 )),
                 ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor(
                     publication_theme.PALETTE.manual_rule

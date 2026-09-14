@@ -4154,14 +4154,12 @@ class ReportBuilder:
             self._prestress_block()
             self._keep_from(start)
             self._prestress_initial_block()
-        # Loads and settings each start on a predictable, dedicated page. Their
-        # data tables retain the universal split contract rather than entering one
-        # combined KeepTogether block.
+        # Start the load schedules together; let settings follow the source
+        # register with the normal heading keep rather than an empty page tail.
         self._page_break()
         self._h2("Loads")
         self._loads_block()
         self._project_source_register()
-        self._page_break()
         self._h2("Analysis settings")
         self._settings_block()
 
@@ -4851,7 +4849,7 @@ class ReportBuilder:
                 rows = [[
                     "Case", "Description", "Part", "N<sub>Ed</sub>",
                     "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>",
-                    "Stress output", "Crack output",
+                    "Stress", "Crack width",
                 ]]
                 for row in elastic:
                     common = [
@@ -4896,39 +4894,32 @@ class ReportBuilder:
                 self._small("<b>Grouped fatigue spectra</b>")
                 if self.profile.key == "Brief":
                     self.flow[-1].keepWithNext = 1
-                table_key = table_fields.FATIGUE_SPECTRUM_TABLE_KEY
-                rows = [[
-                    "Spectrum", "Bin", "Description", "Cycles",
-                    _input_table_symbol(table_key, "n_long_ed_kn"),
-                    _input_table_symbol(table_key, "mx_long_ed_knm"),
-                    _input_table_symbol(table_key, "my_long_ed_knm"),
-                    _input_table_symbol(table_key, "n_short_ed_kn"),
-                    _input_table_symbol(table_key, "mx_short_ed_knm"),
-                    _input_table_symbol(table_key, "my_short_ed_knm"),
-                ]]
+                rows = [["Spectrum", "Bin", "Description", "Cycles"]]
                 rows.extend([
-                    [
-                        _html_escape(row[fatigue_inputs.SPECTRUM]),
-                        _html_escape(row[fatigue_inputs.NAME]),
-                        _html_escape(row[fatigue_inputs.DESCRIPTION]),
-                        _fmt(row[fatigue_inputs.CYCLES], 3),
-                        _fmt(row["n_long_ed_kn"], 3),
-                        _fmt(row["mx_long_ed_knm"], 3),
-                        _fmt(row["my_long_ed_knm"], 3),
-                        _fmt(row["n_short_ed_kn"], 3),
-                        _fmt(row["mx_short_ed_knm"], 3),
-                        _fmt(row["my_short_ed_knm"], 3),
-                    ]
+                    [_html_escape(row[fatigue_inputs.SPECTRUM]),
+                     _html_escape(row[fatigue_inputs.NAME]),
+                     _html_escape(row[fatigue_inputs.DESCRIPTION]),
+                     _fmt(row[fatigue_inputs.CYCLES], 3)]
                     for row in fatigue_rows
                 ])
-                self._table(
-                    rows,
-                    [18 * mm, 18 * mm, 24 * mm, 15 * mm]
-                    + [15 * mm] * 6,
-                    font=5.1,
-                    keep=False,
-                    repeat_cols=3,
-                )
+                self._table(rows, [35 * mm, 35 * mm, 65 * mm, 35 * mm],
+                            keep=False, repeat_cols=2,
+                            caption="Fatigue spectrum records and cycle counts")
+                action_rows = [["Spectrum", "Bin", "Part", "N<sub>Ed</sub>",
+                                "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>"]]
+                for row in fatigue_rows:
+                    for part, label in (("long", "Long"), ("short", "Short")):
+                        action_rows.append([
+                            _html_escape(row[fatigue_inputs.SPECTRUM]),
+                            _html_escape(row[fatigue_inputs.NAME]), label,
+                            _fmt(row[f"n_{part}_ed_kn"], 3),
+                            _fmt(row[f"mx_{part}_ed_knm"], 3),
+                            _fmt(row[f"my_{part}_ed_knm"], 3),
+                        ])
+                self._table(action_rows,
+                            [35 * mm, 35 * mm, 19 * mm, 27 * mm, 27 * mm, 27 * mm],
+                            keep=False, repeat_cols=3,
+                            caption="Fatigue action components")
                 self._small(
                     "N in kN; M in kNm. Long is the sustained state; short is "
                     "the cyclic increment. N is tension-positive."
@@ -10861,13 +10852,13 @@ class ReportBuilder:
         # Complete, explicitly typed bar/tendon evidence.
         self._h2("Reinforcement and tendon response")
         self._small("Total = long + short; Long-term = long-term alone; "
-                    "Increment = Total - Long-term; "
+                    "Increment (Incr.) = Total - Long-term; "
                     "Instantaneous (RST1) = response after neutralising the "
                     "long-term concrete stress. Tension positive.")
         element_rows = el.get("elements") or []
         if element_rows:
             rows = [["Element", "Material", "x", "y", "Area", "Strain", "Total",
-                     "Long-term", "Increment", "Instant."]]
+                     "Long-<br/>term", "Incr.", "Instant."]]
             for row in element_rows:
                 rows.append([
                     row["element_id"],

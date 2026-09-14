@@ -360,8 +360,8 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Bulk assignments",
         "one fully expanded governing row for each engineering check type",
         "PDF report",
-        "Standard adds one governing worked calculation for each active check "
-        "family",
+        "Standard includes used inputs, complete results, criteria, statuses and",
+        "Audit adds the detailed",
         "Editable table",
         "Plastic/capacity and Elastic action fields",
         "accept either a dot or comma as the decimal separator",

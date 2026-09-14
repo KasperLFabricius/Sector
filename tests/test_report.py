@@ -4604,12 +4604,20 @@ def test_tables_only_load_tables_omit_entry_guidance_without_raw_tex(profile):
     assert not any(token in text for token in (r"\Delta", "_{", "}"))
 
 
-def test_fatigue_action_headers_use_registry_in_loads_and_detail(monkeypatch):
+def test_fatigue_action_schedule_preserves_parts_values_and_detailed_registry(monkeypatch):
     inp, out = _fatigue_report_fixture()
     # Enter the current table-based Loads route without adding calculation
     # results for either ordinary case family.
     inp["plastic_cases"] = []
     inp["elastic_cases"] = []
+    tables = []
+    original_table = sector_report.ReportBuilder._table
+
+    def capture_table(self, rows, *args, **kwargs):
+        tables.append(rows)
+        return original_table(self, rows, *args, **kwargs)
+
+    monkeypatch.setattr(sector_report.ReportBuilder, "_table", capture_table)
     calls = []
     original = sector_report._input_table_symbol
 
@@ -4625,8 +4633,26 @@ def test_fatigue_action_headers_use_registry_in_loads_and_detail(monkeypatch):
     ))
     table_key = sector_report.table_fields.FATIGUE_SPECTRUM_TABLE_KEY
     for field_key in fatigue_inputs.ACTION_COLUMNS:
-        # Once in Loads and again in each selected detailed spectrum unit.
-        assert calls.count((table_key, field_key)) >= 2
+        # Detailed spectrum evidence retains the duration-specific notation.
+        assert calls.count((table_key, field_key)) >= 1
+    schedule = next(rows for rows in tables
+                    if rows[0][:3] == ["Spectrum", "Bin", "Part"])
+    entered = fatigue_inputs.spectrum_records(inp[fatigue_inputs.SPECTRUM_TABLE_KEY])
+    expected = []
+    for row in entered:
+        for part, label in (("long", "Long"), ("short", "Short")):
+            expected.append([
+                sector_report._html_escape(row[fatigue_inputs.SPECTRUM]),
+                sector_report._html_escape(row[fatigue_inputs.NAME]), label,
+                *[sector_report._fmt(row[f"{action}_{part}_ed_{unit}"], 3)
+                  for action, unit in (("n", "kn"), ("mx", "knm"), ("my", "knm"))],
+            ])
+    assert schedule[1:] == expected
+    identities = next(rows for rows in tables
+                      if rows[0] == ["Spectrum", "Bin", "Description", "Cycles"])
+    assert [row[3] for row in identities[1:]] == [
+        sector_report._fmt(row[fatigue_inputs.CYCLES], 3) for row in entered
+    ]
     assert chr(0x394) in text
     assert r"\Delta" not in text
     assert "_{" not in text

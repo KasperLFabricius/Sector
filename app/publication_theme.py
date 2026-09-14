@@ -24,6 +24,7 @@ class Palette:
     rule: str = "#9AA5B1"
     report_header: str = "#E8ECF2"
     manual_surface: str = "#EEF2F7"
+    manual_callout_surface: str = "#F8FAFC"
     manual_rule: str = "#9FB3C8"
     grid: str = "#D3D3D3"
 
