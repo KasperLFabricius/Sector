@@ -34,7 +34,7 @@ REPORT_MATRIX = {
 }
 
 MANUAL_MATRIX = {
-    "title": (20, None, 0, 6, None, True, False),
+    "title": (20, 24, 0, 6, None, True, False),
     "part": (17, None, 18, 8, "#0d2440", True, True),
     "h1": (15, None, 14, 8, "#1f3b66", True, True),
     "h2": (12.5, None, 9, 4, None, True, True),

@@ -66,7 +66,7 @@ REPORT_TEXT = MappingProxyType({
 })
 
 MANUAL_TEXT = MappingProxyType({
-    "title": TextStyle(20, after=6, bold=True),
+    "title": TextStyle(20, leading=24, after=6, bold=True),
     "part": TextStyle(
         17, before=18, after=8, color=PALETTE.primary_dark,
         bold=True, keep_next=True,
