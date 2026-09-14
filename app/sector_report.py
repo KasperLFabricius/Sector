@@ -44,6 +44,7 @@ import fatigue_inputs
 import fatigue_presentation
 import material_catalog
 from app import modelled_direction
+from app import elastic_display
 from app import publication_equation_layout as publication_equations
 from app import report_profiles
 from app import table_field_definitions as table_fields
@@ -6605,6 +6606,9 @@ class ReportBuilder:
                     else f"{_fmt(compression_depth_mm, 3)} mm"
                 )],
                 ["Internal lever arm", "z", f"{_fmt(gov['lever']*_MM, 3)} mm"],
+                *[[f"Effective depth ({face})", "d",
+                   "Unavailable" if depth is None else f"{depth:.3f} mm"]
+                  for face, depth in presentation.plastic_face_depth_summary(pl)],
                 ["Lever components", "z<sub>x</sub>, z<sub>y</sub>",
                  f"{_fmt(gov['dx']*_MM, 3)}, {_fmt(gov['dy']*_MM, 3)} mm"],
                 ["Capacity", "M<sub>x</sub>, M<sub>y</sub>",
@@ -10617,7 +10621,10 @@ class ReportBuilder:
                 rows.append([
                     label,
                     "-" if item.get("value") is None else
-                    f"{_fmt(item.get('value'), 3)} MPa",
+                    f"{_fmt(item.get('value'), 3)} MPa; "
+                    + _html_escape(elastic_display.output_comparison(
+                        self.inp, el, key, item
+                    )),
                     item.get("governing") or "-",
                     item.get("calculation_state") or "NOT CALCULATED",
                 ])
@@ -10625,7 +10632,8 @@ class ReportBuilder:
                         font=7.5)
             self._small(
                 "Numerical outputs for the actual named Elastic action. No "
-                "stress-limit criterion is applied."
+                "stress-limit criterion is applied. Percentages compare the displayed "
+                "stress with the stated characteristic strength."
             )
         # Elastic state diagram (bars coloured by stress sign, compression zone).
         if self.figures and el.get("max_conc", 0.0) > 0.0:
@@ -10682,13 +10690,14 @@ class ReportBuilder:
                     "cracked column drops the concrete in tension.")
         # Complete, explicitly typed bar/tendon evidence.
         self._h2("Reinforcement and tendon response")
-        self._small("TOTAL = long + short; LONG = long-term; DIF = TOTAL - LONG; "
-                    "RST1 = instantaneous response after neutralising the "
+        self._small("Total = long + short; Long-term = long-term alone; "
+                    "Increment = Total - Long-term; "
+                    "Instantaneous (RST1) = response after neutralising the "
                     "long-term concrete stress. Tension positive.")
         element_rows = el.get("elements") or []
         if element_rows:
-            rows = [["Element", "Material", "x", "y", "Area", "Strain", "TOTAL",
-                     "LONG", "DIF", "RST1"]]
+            rows = [["Element", "Material", "x", "y", "Area", "Strain", "Total",
+                     "Long-term", "Increment", "Instant."]]
             for row in element_rows:
                 rows.append([
                     row["element_id"],
@@ -10711,17 +10720,36 @@ class ReportBuilder:
             )
             self._small("Coordinates in mm; area in mm<super>2</super>; strain in "
                         "&#8240;; stresses in MPa.")
+        if element_rows:
+            self._h2("Stress as percentage of characteristic strength")
+            percent_rows = [["Element", "Material", "Reference", "Total",
+                             "Long-term", "Increment", "Instant."]]
+            for item in elastic_display.element_comparison_rows(self.inp, element_rows):
+                percent_rows.append([
+                    item["Element"], item["Material"], item["Reference"],
+                    *["Unavailable" if item[label] is None else f"{item[label]:.1f}%"
+                      for _, label in elastic_display.COMPONENTS],
+                ])
+            self._table(percent_rows, [22*mm, 20*mm, 25*mm, 25*mm,
+                                       26*mm, 26*mm, 26*mm], keep=False)
+            self._small("Signed stress divided by the stated characteristic strength. "
+                        "Unavailable means the reference strength or element assignment "
+                        "is missing or invalid. These percentages do not assess compliance.")
         corner_rows = el.get("concrete_corners") or []
         if corner_rows:
             self._h2("Concrete corner stress and strain")
             rows = [["Point", "Ring", "Ring point", "x", "y",
-                     "Strain", "Concrete stress"]]
+                     "Strain", "Concrete stress / f_ck"]]
             for row in corner_rows:
                 rows.append([
                     row["point_no"], row["ring"], row["ring_point_no"],
                     _fmt(row["x_mm"], 1), _fmt(row["y_mm"], 1),
                     _fmt(row["strain_permille"], 5),
-                    _fmt(row["stress_mpa"], 3),
+                    _fmt(row["stress_mpa"], 3) + " MPa; "
+                    + _html_escape(elastic_display.comparison_text(
+                        row["stress_mpa"],
+                        {"f_ck": getattr(self.inp.get("concrete"), "fck", None)},
+                    )),
                 ])
             self._table(
                 rows,
@@ -10770,6 +10798,8 @@ class ReportBuilder:
             heading = "Governing crack-width comparison"
         else:
             heading = "Cracking threshold"
+        # Leave the chapter's conditional page break outside the measured block.
+        threshold_start = len(self.flow) + 1
         self._case_heading(
             heading,
             "elastic",
@@ -10824,6 +10854,8 @@ class ReportBuilder:
                     )
                 ),
             )
+            if not publish_crack_width:
+                self._keep_measured_calculation_from(threshold_start)
             if prestressed:
                 self._small(
                     "Locked-in prestress remains fixed. A prestress-only fibre "
