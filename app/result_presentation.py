@@ -7284,7 +7284,8 @@ def _torsion_component_summary_rows(inp, results, torsion):
             required = longitudinal.get("required_asl_mm2")
             provided = longitudinal.get("provided_equivalent_area_mm2")
             result_text = (
-                f"{required:.0f} / {provided:.0f} mm2"
+                f"Required {required:.0f} mm2; modelled upper bound "
+                f"{provided:.0f} mm2; provision unverified"
                 if required is not None and provided is not None
                 else "-"
             )
@@ -7783,7 +7784,7 @@ def result_summary_rows(inp, results, *, stale=False):
             f"{governing.get('second_id', '?')})"
             if clear is not None else "-"
         )
-        criterion = f">= {required:.1f} mm" if required is not None else "-"
+        criterion = f"{chr(0x2265)} {required:.1f} mm" if required is not None else "-"
         rows.append(_summary_row(
             "Reinforcement clear spacing",
             "section",

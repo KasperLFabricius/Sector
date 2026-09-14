@@ -1553,7 +1553,15 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
     table = next(item.value for item in at.table if "Governing action" in item.value)
     assert list(table[["Check", "Governing action", "Status", "Result"]].itertuples(
         index=False, name=None,
-    )) == [(row["check"], row["case"], row["status"], row["result"]) for row in expected]
+    )) == [
+        (
+            row["check"],
+            chr(0x2014) if row["case"] == "-" else row["case"],
+            row["status"],
+            chr(0x2014) if row["result"] == "-" else row["result"],
+        )
+        for row in expected
+    ]
     assert "EQ-01" in set(table["Governing action"])
 
     _select_view(at, "Torsion")
@@ -2038,7 +2046,7 @@ def test_app_stale_formula_628_pass_is_not_published_in_torsion_views(tmp_path):
         overview["Check"] == "Torsion longitudinal reinforcement"
     ].iloc[0]
     assert longitudinal_row["Status"] == "NOT ASSESSED"
-    assert longitudinal_row["Result"] == "-"
+    assert longitudinal_row["Result"] == chr(0x2014)
 
 
 def test_app_combined_without_links_withholds_torsion_dependent_verdicts(tmp_path):
@@ -2875,7 +2883,7 @@ def test_pre_m05_contract_with_changed_spacing_hides_old_spacing_until_recalcula
     )
     assert "Reinforcement clear spacing" not in overview
     assert "40.0 mm" not in overview
-    assert ">= 21.0 mm" not in overview
+    assert f"{chr(0x2265)} 21.0 mm" not in overview
     assert any("recalculation" in item.value for item in at.caption)
 
     _calculate(at)
@@ -4251,20 +4259,20 @@ def test_app_torsion_outside_permitted_range_withholds_verdict(tmp_path):
         == r"Transverse/strut utilisation $T_{Ed}/T_{Rd}$"
         for metric in at.metric
     )
-    assert all(metric.delta not in {"PASS", "FAIL", "OK", "Over limit"}
+    assert all(metric.delta not in {"PASS", "FAIL", "OK", "Over limit", "Component PASS", "Component FAIL"}
                for metric in at.metric)
 
     _select_view(at, "Results Overview")
     overview = at.table[0].value
     row = overview.loc[overview["Check"] == "Torsion"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == "-"
+    assert row["Result"] == chr(0x2014)
     detailing_rows = overview.loc[
         overview["Check"].str.startswith("Torsion Tube")
     ]
     assert len(detailing_rows) == 2
     assert set(detailing_rows["Status"]) <= {"PASS", "FAIL"}
-    assert all(value != "-" for value in detailing_rows["Result"])
+    assert all(value not in {"-", chr(0x2014)} for value in detailing_rows["Result"])
 
 
 def test_app_subdivided_out_of_range_keeps_each_tube_detailing():
@@ -4449,7 +4457,10 @@ def _assert_native_torsion_longitudinal_rows(out, proof, status):
     assert longitudinal["util"] == pytest.approx(
         native["required_asl_mm2"] / native["provided_equivalent_area_mm2"],
     )
-    assert "1177 /" in longitudinal["result"]
+    assert longitudinal["result"] == (
+        "Required 1177 mm2; modelled upper bound "
+        f"{native['provided_equivalent_area_mm2']:.0f} mm2; provision unverified"
+    )
     assert presentation.overall_summary_status(list(rows.values())) == status
     assert presentation.overall_summary_status(proof["rows"]) == status
     for key in ("distribution_verified", "bending_reserve_verified", "anchorage_verified"):

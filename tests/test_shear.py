@@ -1520,10 +1520,10 @@ def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately()
         for metric in at.metric
     )
     nominal_metric = next(
-        metric for metric in at.metric if "Nominal utilisation" in metric.label
+        metric for metric in at.metric if "Component utilisation" in metric.label
     )
     assert nominal_metric.value == "96.7 %"
-    assert nominal_metric.delta == "OK"
+    assert nominal_metric.delta == "Component PASS"
     comparison_metric = next(
         metric for metric in at.metric if "Provided-link comparison" in metric.label
     )
@@ -1619,7 +1619,7 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
         if "V_{Rd" in metric.label or "Utilisation" in metric.label
     ]
     assert relevant_metrics
-    assert all(metric.delta not in {"OK", "Over limit", "PASS", "FAIL"}
+    assert all(metric.delta not in {"OK", "Over limit", "PASS", "FAIL", "Component PASS", "Component FAIL"}
                for metric in relevant_metrics)
     assert shear.SHEAR_CIRCULAR_REASON not in visible
 
@@ -1627,7 +1627,7 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
     overview = next(table.value for table in at.table if "Check" in table.value)
     links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert links_row["Status"] == "NOT ASSESSED"
-    assert links_row["Result"] == "-"
+    assert links_row["Result"] == chr(0x2014)
 
     _set_and_click(
         at,
@@ -1852,7 +1852,7 @@ def test_app_unknown_2023_duct_geometry_blocks_no_links_kernel_and_recovers(
     overview = next(table.value for table in at.table if "Check" in table.value)
     row = overview.loc[overview["Check"] == "Shear without links"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == "-"
+    assert row["Result"] == chr(0x2014)
 
     _set_and_click(
         at,
@@ -2162,9 +2162,9 @@ def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
     summary = next(
         frame.value
         for frame in at.dataframe
-        if {"Component", "VEd [kN]", "VRd [kN]", "Utilisation", "Status"}
+        if {"Direction", "VEd [kN]", "VRd [kN]", "Utilisation", "Component status"}
         .issubset(frame.value.columns)
-    ).set_index("Component")
+    ).set_index("Direction")
     for component, label in (("vx", "Vx,Ed"), ("vy", "Vy,Ed")):
         direction = sh["directions"][component]
         nominal = direction["nominal_resistance"]
@@ -2175,7 +2175,7 @@ def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
         assert summary.loc[label, "Utilisation"] == pytest.approx(
             nominal["utilisation"]
         )
-        assert summary.loc[label, "Status"] == direction["status"]
+        assert summary.loc[label, "Component status"] == direction["status"]
         assert summary.loc[label, "VRd [kN]"] != pytest.approx(
             direction["links"]["res"]["vrd"]
         )
@@ -2221,7 +2221,7 @@ def test_pub_m01_incomplete_biaxial_wrapper_is_value_free_in_ui_and_overview():
         "Assessment": "NOT ASSESSED",
     }
     assert not any(
-        {"Component", "VEd [kN]", "VRd [kN]", "Utilisation", "Status"}
+        {"Direction", "VEd [kN]", "VRd [kN]", "Utilisation", "Component status"}
         .issubset(frame.value.columns)
         for frame in at.dataframe
     )
@@ -2249,17 +2249,17 @@ def test_app_biaxial_shear_top_table_fails_closed_for_stale_nominal_alias():
     summary = next(
         frame.value
         for frame in at.dataframe
-        if {"Component", "VEd [kN]", "VRd [kN]", "Utilisation", "Status"}
+        if {"Direction", "VEd [kN]", "VRd [kN]", "Utilisation", "Component status"}
         .issubset(frame.value.columns)
-    ).set_index("Component")
-    assert summary.loc["Vx,Ed", "Status"] == "NOT ASSESSED"
+    ).set_index("Direction")
+    assert summary.loc["Vx,Ed", "Component status"] == "NOT ASSESSED"
     assert summary.loc["Vx,Ed", "VRd [kN]"] is None or np.isnan(
         summary.loc["Vx,Ed", "VRd [kN]"]
     )
     assert summary.loc["Vx,Ed", "Utilisation"] is None or np.isnan(
         summary.loc["Vx,Ed", "Utilisation"]
     )
-    assert summary.loc["Vy,Ed", "Status"] == "PASS"
+    assert summary.loc["Vy,Ed", "Component status"] == "PASS"
 
 
 def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
@@ -2729,12 +2729,12 @@ def test_app_shear_view_renders_and_shows_utilisation():
     metrics = {metric.label: metric for metric in at.metric}
     resistance = at.session_state["results"]["shear"]["res"]["vrd_c"]
     assert metrics[r"Applied $V_{y,Ed}$"].value == "80.000 kN"
-    assert metrics[r"Selected resistance $V_{Rd,c}$"].value == (
+    assert metrics[r"Component resistance $V_{Rd,c}$"].value == (
         f"{resistance:.3f} kN"
     )
-    utilisation = metrics[r"Nominal utilisation $|V_{Ed}|/V_{Rd,c}$"]
+    utilisation = metrics[r"Component utilisation $|V_{Ed}|/V_{Rd,c}$"]
     assert utilisation.value == f"{100.0 * 80.0 / resistance:.1f} %"
-    assert utilisation.delta == "OK"
+    assert utilisation.delta == "Component PASS"
     captions = " ".join(item.value for item in at.caption)
     assert "2005 no-links resistance has no z operand" in captions
     shear_figure = next(
@@ -2935,7 +2935,7 @@ def test_app_shear_links_outside_permitted_bounds_are_not_assessed():
     link_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert concrete_row["Status"] == "PASS"
     assert link_row["Status"] == "NOT ASSESSED"
-    assert link_row["Result"] == "-"
+    assert link_row["Result"] == chr(0x2014)
 
 
 def test_app_invalid_strut_angle_caption_omits_hostile_optional_operands():
@@ -3198,14 +3198,14 @@ def test_app_shear_2023_links_with_axial_compression_fail_closed(monkeypatch):
     )
     assert screening_metric.value == "20.7 %"
     assert screening_metric.delta == ""
-    assert all(metric.delta not in {"OK", "Over limit"} for metric in at.metric)
+    assert all(metric.delta not in {"OK", "Over limit", "Component PASS", "Component FAIL"} for metric in at.metric)
     assert "non-governing concrete-only context" in visible
 
     _select_view(at, "Results Overview")
     overview = at.table[0].value
     row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == "-"
+    assert row["Result"] == chr(0x2014)
     import result_presentation as _presentation
 
     retained_rows = _presentation.governing_result_rows(
@@ -3404,9 +3404,9 @@ def test_2023_ductility_class_mismatch_is_fail_closed_but_concrete_stays_current
         row["Check"]: row for _, row in overview.iterrows()
     }
     assert overview_by_check["Shear with links"]["Status"] == "STALE"
-    assert overview_by_check["Shear with links"]["Result"] == "-"
+    assert overview_by_check["Shear with links"]["Result"] == chr(0x2014)
     assert overview_by_check["Shear without links"]["Status"] == "STALE"
-    assert overview_by_check["Shear without links"]["Result"] != "-"
+    assert overview_by_check["Shear without links"]["Result"] not in {"-", chr(0x2014)}
 
     old_link_percentage = f"{100.0 * shear_result['links']['util']:.1f} %"
     for profile in ("Brief", "Standard", "Audit"):

@@ -455,7 +455,7 @@ def test_probe_encloses_every_top_level_streamlit_message():
     source = pathlib.Path(APP).read_text(encoding="utf-8")
     opened = source.index("app_run_probe.open_run(st.session_state)")
     page_config = source.index("st.set_page_config(")
-    logo = source.index("st.sidebar.image(")
+    logo = source.index("st.image(str(_logo)")
     title = source.index("st.title(")
     caption = source.index("st.caption(")
     closed = source.rindex("app_run_probe.close_run(st.session_state)")

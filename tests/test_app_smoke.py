@@ -9665,6 +9665,8 @@ def test_results_overview_uses_one_static_content_height_table(monkeypatch):
         for index in range(20)
     ]
 
+    rows[0].update(case="-", result="-", criterion=f"{chr(0x2265)} 21.0 mm")
+
     class FakeStreamlit:
         def __init__(self):
             self.tables = []
@@ -9715,6 +9717,10 @@ def test_results_overview_uses_one_static_content_height_table(monkeypatch):
     assert len(styled.data) == 20
     assert options["height"] == "content"
     assert options["width"] == "stretch"
+    assert styled.data.iloc[0]["Governing action"] == chr(0x2014)
+    assert styled.data.iloc[0]["Result"] == chr(0x2014)
+    assert styled.data.iloc[0]["Criterion"] == f"{chr(0x2265)} 21.0 mm"
+    assert rows[0]["case"] == rows[0]["result"] == "-"
 
 
 def test_elastic_case_picker_shows_action_parts_and_crack_choice():
@@ -10849,7 +10855,7 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
     heightened_summary = overview.loc[
         overview["Check"] == "DK heightened crack-control minimum"
     ]
-    assert heightened_summary["Governing action"].tolist() == ["-"]
+    assert heightened_summary["Governing action"].tolist() == [chr(0x2014)]
 
     _select_view(at, "Elastic Results")
     assert sum(

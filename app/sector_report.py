@@ -7107,7 +7107,7 @@ class ReportBuilder:
 
     def _shear_directional_summary(self, aggregate, directions):
         rows = [["Direction", "V<sub>Ed</sub>", "V<sub>Rd</sub>",
-                 "Utilisation", "Status", "Tension face"]]
+                 "Component utilisation", "Component status", "Overall shear status", "Tension face"]]
         for component in ("vx", "vy"):
             if component not in directions:
                 continue
@@ -7145,13 +7145,16 @@ class ReportBuilder:
                     else f"{_fmt(resistance, 3)} kN"
                 ),
                 "-" if selected_unavailable else _pct(utilisation),
+                "NOT ASSESSED" if selected_unavailable else str(
+                    selected_resistance.get("status") or "NOT ASSESSED"
+                ).upper(),
                 (
                     "NOT ASSESSED" if selected_unavailable
                     else retained_status
                 ),
                 viz.tension_face_label(item.get("tension_low", True), item.get("axis")),
             ])
-        self._table(rows, [25 * mm, 27 * mm, 27 * mm, 27 * mm, 28 * mm, 38 * mm])
+        self._table(rows, [22 * mm, 25 * mm, 25 * mm, 25 * mm, 24 * mm, 25 * mm, 26 * mm])
         if aggregate.get("biaxial"):
             self._small(
                 "V<sub>x</sub> and V<sub>y</sub> are calculated independently. "

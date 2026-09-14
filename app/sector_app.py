@@ -399,8 +399,7 @@ def _warm_solver():
 
 _logo = ROOT / "assets" / "logo.png"
 if _logo.exists():
-    st.sidebar.image(str(_logo), width="stretch")
-
+    st.image(str(_logo), width=180)
 st.title(f"Sector v{APP_VERSION}")
 st.caption("Reinforced-concrete cross-section analysis - elastic stresses and plastic capacity")
 
@@ -11942,10 +11941,10 @@ def results_overview_view(inp, results, *, stale=False):
     for row in rows:
         display.append({
             "Check": row["check"],
-            "Governing action": row["case"],
+            "Governing action": (chr(0x2014) if row["case"] == "-" else row["case"]),
             "Status": row["status"],
-            "Result": row["result"],
-            "Criterion": row["criterion"],
+            "Result": (chr(0x2014) if row["result"] == "-" else row["result"]),
+            "Criterion": (chr(0x2014) if row["criterion"] == "-" else row["criterion"]),
             "View": row["view"],
         })
     summary = pd.DataFrame(
@@ -14317,7 +14316,7 @@ def shear_view(inp, results, *, global_results=None):
             )
             selected_available = nominal.get("valid") is True
             summary.append({
-                "Component": "Vx,Ed" if component == "vx" else "Vy,Ed",
+                "Direction": "Vx,Ed" if component == "vx" else "Vy,Ed",
                 "VEd [kN]": (
                     item.get("signed_v_ed", item.get("v_ed"))
                     if selected_available
@@ -14329,7 +14328,7 @@ def shear_view(inp, results, *, global_results=None):
                 "Utilisation": (
                     nominal.get("utilisation") if selected_available else None
                 ),
-                "Status": (
+                "Component status": (
                     str(nominal.get("status") or "NOT ASSESSED").upper()
                     if selected_available
                     else "NOT ASSESSED"
@@ -14493,6 +14492,24 @@ def shear_view(inp, results, *, global_results=None):
         and presentation.concrete_shear_publication_input_is_current(inp, sh)[0]
         is True
     )
+    early_chord_publication = None
+    if inp.get("shear_links") is True and sh.get("links") is not None:
+        early_chord_publication = (
+            presentation.provided_link_longitudinal_publication_assessment(
+                inp, sh, torsion_result=results.get("torsion"),
+            )
+        )
+        chord_assessment = early_chord_publication.get("assessment")
+        if early_chord_publication.get("valid") is not True:
+            chord_assessment = {
+                "status": "NOT ASSESSED",
+                "ok": None,
+                "util": None,
+                "reason": "longitudinal chord evidence is unavailable",
+                "coverage_complete": False,
+                "governing": None,
+            }
+        _render_shear_longitudinal_assessment(chord_assessment)
     m1, m2, m3 = st.columns(3)
     m1.metric(f"Applied {action_math}", f"{signed_v_ed:.3f} kN")
     resistance_symbol = r"$V_{Rd,c}$" if nominal_route == "concrete" else r"$V_{Rd}$"
@@ -14505,7 +14522,7 @@ def shear_view(inp, results, *, global_results=None):
     )
     m2.metric(
         (
-            f"Selected resistance {resistance_symbol}"
+            f"Component resistance {resistance_symbol}"
             if nominal_valid
             else r"Concrete-only context $V_{Rd,c}$"
             if concrete_context_current
@@ -14532,7 +14549,7 @@ def shear_view(inp, results, *, global_results=None):
     util_txt = _pct(displayed_util) if displayed_util is not None else "-"
     m3.metric(
         (
-            f"Nominal utilisation {util_label}"
+            f"Component utilisation {util_label}"
             if nominal_valid
             else r"Non-governing concrete utilisation $|V_{Ed}|/V_{Rd,c}$"
             if concrete_context_current
@@ -14542,9 +14559,9 @@ def shear_view(inp, results, *, global_results=None):
         delta=(
             None
             if not nominal_valid
-            else "OK"
+            else "Component PASS"
             if nominal.get("ok") is True
-            else "Over limit"
+            else "Component FAIL"
         ),
         delta_color=(
             "off"
@@ -14864,7 +14881,7 @@ def shear_view(inp, results, *, global_results=None):
                 r"It does not replace the nominal concrete route while "
                 r"$|V_{Ed}|\leq V_{Rd,c}$, and link detailing is assessed separately."
             )
-        chord_publication = (
+        chord_publication = early_chord_publication or (
             presentation.provided_link_longitudinal_publication_assessment(
                 inp,
                 sh,
@@ -14881,7 +14898,8 @@ def shear_view(inp, results, *, global_results=None):
                 "coverage_complete": False,
                 "governing": None,
             }
-        _render_shear_longitudinal_assessment(chord_assessment)
+        if early_chord_publication is None:
+            _render_shear_longitudinal_assessment(chord_assessment)
         if links.get("model_2023"):
             effective_asw_over_s = links.get(
                 "effective_asw_over_s", links.get("asw_over_s", 0.0)

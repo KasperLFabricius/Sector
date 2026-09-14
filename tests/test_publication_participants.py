@@ -364,10 +364,10 @@ def test_pub_m01_poisoned_participant_is_withheld_in_native_views(
             row = overview.loc[
                 overview["Check"] == "Vy+T Formula (6.31) minimum-reinforcement screen"
             ].iloc[0]
-            assert row["Status"] == "NOT ASSESSED" and row["Result"] == "-"
+            assert row["Status"] == "NOT ASSESSED" and row["Result"] == chr(0x2014)
         else:
             row = overview.loc[overview["Check"] == "Torsion"].iloc[0]
-            assert row["Status"] == "NOT ASSESSED" and row["Result"] == "-"
+            assert row["Status"] == "NOT ASSESSED" and row["Result"] == chr(0x2014)
     finally:
         at.session_state["results"] = baseline
         at.run()
