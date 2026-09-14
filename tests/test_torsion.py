@@ -2038,7 +2038,7 @@ def test_app_stale_formula_628_pass_is_not_published_in_torsion_views(tmp_path):
         overview["Check"] == "Torsion longitudinal reinforcement"
     ].iloc[0]
     assert longitudinal_row["Status"] == "NOT ASSESSED"
-    assert longitudinal_row["Result"] == "-"
+    assert longitudinal_row["Result"] == chr(0x2014)
 
 
 def test_app_combined_without_links_withholds_torsion_dependent_verdicts(tmp_path):
@@ -4258,13 +4258,13 @@ def test_app_torsion_outside_permitted_range_withholds_verdict(tmp_path):
     overview = at.table[0].value
     row = overview.loc[overview["Check"] == "Torsion"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == "-"
+    assert row["Result"] == chr(0x2014)
     detailing_rows = overview.loc[
         overview["Check"].str.startswith("Torsion Tube")
     ]
     assert len(detailing_rows) == 2
     assert set(detailing_rows["Status"]) <= {"PASS", "FAIL"}
-    assert all(value != "-" for value in detailing_rows["Result"])
+    assert all(value not in {"-", chr(0x2014)} for value in detailing_rows["Result"])
 
 
 def test_app_subdivided_out_of_range_keeps_each_tube_detailing():

@@ -10855,7 +10855,7 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
     heightened_summary = overview.loc[
         overview["Check"] == "DK heightened crack-control minimum"
     ]
-    assert heightened_summary["Governing action"].tolist() == ["-"]
+    assert heightened_summary["Governing action"].tolist() == [chr(0x2014)]
 
     _select_view(at, "Elastic Results")
     assert sum(

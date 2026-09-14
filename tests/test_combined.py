@@ -1127,7 +1127,7 @@ def test_biaxial_directional_vt_outside_permitted_range_withholds_verdicts():
     ]
     assert not rows.empty
     assert set(rows["Status"]) == {"NOT ASSESSED"}
-    assert set(rows["Result"]) == {"-"}
+    assert set(rows["Result"]) == {chr(0x2014)}
 
 
 
@@ -1229,7 +1229,7 @@ def test_app_blocked_torsion_retains_shear_and_blocks_every_combined_verdict():
     ]
     assert "NOT ASSESSED" in set(torsion_rows["Status"])
     assert not any(
-        value not in {"-", "NOT ASSESSED"}
+        value not in {chr(0x2014), "NOT ASSESSED"}
         for value in torsion_rows.loc[
             torsion_rows["Status"] == "NOT ASSESSED", "Result"
         ]
@@ -1820,7 +1820,7 @@ def _assert_current_native_mvt_views(at, *, longitudinal=False):
     assert not rows.empty
     assessed = rows[rows["Status"].isin(["PASS", "FAIL"])]
     assert not assessed.empty
-    assert all(value != "-" for value in assessed["Result"])
+    assert all(value not in {"-", chr(0x2014)} for value in assessed["Result"])
     if longitudinal:
         target = rows[rows["Check"] == "Combined longitudinal reinforcement"]
         assert len(target) == 1
@@ -1851,7 +1851,7 @@ def _assert_rejected_native_mvt_views(at):
     rows = overview[overview["Check"].str.startswith("Combined ")]
     assert not rows.empty
     assert set(rows["Status"]) == {"NOT ASSESSED"}
-    assert set(rows["Result"]) == {"-"}
+    assert set(rows["Result"]) == {chr(0x2014)}
     return {"rows": rows, "values": values, "captions": captions}
 
 
@@ -1911,7 +1911,7 @@ def test_app_base_en_missing_biaxial_direction_fails_closed(malformed_vy):
     combined_rows = proof["rows"]
     assert tuple(combined_rows["Check"]) == ("Combined M-V-T supported components",)
     assert tuple(combined_rows["Status"]) == ("NOT ASSESSED",)
-    assert tuple(combined_rows["Result"]) == ("-",)
+    assert tuple(combined_rows["Result"]) == (chr(0x2014),)
     _restore_current_native_mvt_views(at, pristine)
 
 
@@ -2661,7 +2661,7 @@ def test_app_combined_outside_permitted_range_withholds_all_verdicts():
     ]
     assert not combined_rows.empty
     assert set(combined_rows["Status"]) == {"NOT ASSESSED"}
-    assert set(combined_rows["Result"]) == {"-"}
+    assert set(combined_rows["Result"]) == {chr(0x2014)}
 
 
 @pytest.mark.parametrize("torsion_action", (40.0, -40.0))
@@ -3188,7 +3188,7 @@ def _assert_rejected_native_2023_shear(at):
                      & overview["Check"].str.endswith("with links")]
     assert not links.empty
     assert set(links["Status"]) == {"NOT ASSESSED"}
-    assert set(links["Result"]) == {"-"}
+    assert set(links["Result"]) == {chr(0x2014)}
     return current, reason
 
 
@@ -3693,7 +3693,7 @@ def test_app_2023_zero_chord_candidates_remain_visibly_not_assessed(
     overview = leaf.table[0].value
     row = overview.loc[overview["Check"] == "Shear longitudinal chords"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == "-"
+    assert row["Result"] == chr(0x2014)
 
     _recalculate_after_2023_solver_fault(at, monkeypatch)
     recovered = _current_2023_shear_views(at)
@@ -4640,7 +4640,7 @@ def test_pub_h01_subtube_total_forgery_fails_closed_in_torsion_and_overview():
     ]
     assert not torsion_rows.empty
     assert set(torsion_rows["Status"]) == {"NOT ASSESSED"}
-    assert set(torsion_rows["Result"]) == {"-"}
+    assert set(torsion_rows["Result"]) == {chr(0x2014)}
     assert result_presentation.torsion_publication_component_is_current(
         at.session_state["result_input_snapshot"], retained["shear"], torsion,
     )[0] is False
@@ -5881,7 +5881,7 @@ def test_pub_m01_fixed_angle_torsion_transplant_is_withheld_from_native_views(
     rows = case["poisoned_overview"]
     torsion = rows.loc[rows["Check"] == "Torsion"].iloc[0]
     assert torsion["Status"] == "NOT ASSESSED"
-    assert torsion["Result"] == "-"
+    assert torsion["Result"] == chr(0x2014)
     assert not rows["Result"].astype(str).str.contains("101.4", regex=False).any()
     assert not rows["Result"].astype(str).str.contains("3084", regex=False).any()
 
@@ -6268,7 +6268,7 @@ def test_pub_h01_current_native_failure_rejects_isolated_candidate_inventory(
             assert (row["Status"], row["Result"]) == ("FAIL", "206.0 %")
         else:
             assert set(combined_rows["Status"]) == {"NOT ASSESSED"}
-            assert set(combined_rows["Result"]) == {"-"}
+            assert set(combined_rows["Result"]) == {chr(0x2014)}
         assessment = capacity.combined_longitudinal_assessment(root_output["combined"])
         assert assessment["status"] == assessment["chord_status"] == "FAIL"
         expected_util = failed["m_total"] / failed["m_rd"]

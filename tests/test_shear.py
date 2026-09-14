@@ -1627,7 +1627,7 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
     overview = next(table.value for table in at.table if "Check" in table.value)
     links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert links_row["Status"] == "NOT ASSESSED"
-    assert links_row["Result"] == "-"
+    assert links_row["Result"] == chr(0x2014)
 
     _set_and_click(
         at,
@@ -1852,7 +1852,7 @@ def test_app_unknown_2023_duct_geometry_blocks_no_links_kernel_and_recovers(
     overview = next(table.value for table in at.table if "Check" in table.value)
     row = overview.loc[overview["Check"] == "Shear without links"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == "-"
+    assert row["Result"] == chr(0x2014)
 
     _set_and_click(
         at,
@@ -2935,7 +2935,7 @@ def test_app_shear_links_outside_permitted_bounds_are_not_assessed():
     link_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert concrete_row["Status"] == "PASS"
     assert link_row["Status"] == "NOT ASSESSED"
-    assert link_row["Result"] == "-"
+    assert link_row["Result"] == chr(0x2014)
 
 
 def test_app_invalid_strut_angle_caption_omits_hostile_optional_operands():
@@ -3205,7 +3205,7 @@ def test_app_shear_2023_links_with_axial_compression_fail_closed(monkeypatch):
     overview = at.table[0].value
     row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == "-"
+    assert row["Result"] == chr(0x2014)
     import result_presentation as _presentation
 
     retained_rows = _presentation.governing_result_rows(
@@ -3404,9 +3404,9 @@ def test_2023_ductility_class_mismatch_is_fail_closed_but_concrete_stays_current
         row["Check"]: row for _, row in overview.iterrows()
     }
     assert overview_by_check["Shear with links"]["Status"] == "STALE"
-    assert overview_by_check["Shear with links"]["Result"] == "-"
+    assert overview_by_check["Shear with links"]["Result"] == chr(0x2014)
     assert overview_by_check["Shear without links"]["Status"] == "STALE"
-    assert overview_by_check["Shear without links"]["Result"] != "-"
+    assert overview_by_check["Shear without links"]["Result"] not in {"-", chr(0x2014)}
 
     old_link_percentage = f"{100.0 * shear_result['links']['util']:.1f} %"
     for profile in ("Brief", "Standard", "Audit"):
