@@ -6398,6 +6398,7 @@ class ReportBuilder:
             bar_elements=self.inp.get("bar_elements") or [],
             tendon_elements=self.inp.get("tendon_elements") or [],
             spacing_pair=governing,
+            slab_density=self.inp.get("slab_density"),
             title="Governing clear-spacing pair",
         ), 150, 108)
         if governing:
