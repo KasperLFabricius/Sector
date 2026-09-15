@@ -4997,6 +4997,7 @@ def _slab_density_layout(
     layer_spacing_m,
     bottom_interleave_diameter_mm=0.0,
     top_interleave_diameter_mm=0.0,
+    legacy_analysis_points=False,
 ):
     """Build one traceable slab-density analysis and physical-layout record."""
 
@@ -5111,7 +5112,9 @@ def _slab_density_layout(
         for face in faces
     }
     for spec in specs:
-        group = templates.unit_width_bar_layers(
+        layer_builder = (templates.unit_width_bar_layers if legacy_analysis_points
+                         else templates.unit_width_nominal_bar_layers)
+        group = layer_builder(
             spec["y_face"],
             spec["direction"],
             spec["layers"],
@@ -5159,13 +5162,7 @@ def _slab_density_layout(
         groups.append((group, spec["diameter_mm"], series_record))
         series.append(series_record)
 
-        row_count = len(templates.unit_width_bar_row(
-            spec["y_face"],
-            1.0,
-            spec["spacing_m"],
-            spec["diameter_mm"],
-            staggered=spec["staggered"],
-        ))
+        row_count = len(group) // spec["layers"]
         nearest_spacing_mm = spec["spacing_m"] * _MM * (
             0.5 if face_has_interleave[spec["face"]] else 1.0
         )
@@ -5230,7 +5227,7 @@ def _slab_density_layout(
     }
 
 
-def _slab_density_layout_from_state(state):
+def _slab_density_layout_from_state(state, *, legacy_analysis_points=False):
     """Rebuild the saved slab-density intent without trusting point history."""
 
     if (
@@ -5252,6 +5249,7 @@ def _slab_density_layout_from_state(state):
         layer_spacing_m=float(state.get("qsv_layer_s", 60.0)) / _MM,
         bottom_interleave_diameter_mm=float(state.get("qsv_bot_off_d", 0.0)),
         top_interleave_diameter_mm=float(state.get("qsv_top_off_d", 0.0)),
+        legacy_analysis_points=legacy_analysis_points,
     )
 
 
@@ -5296,38 +5294,41 @@ def _slab_density_reconciliation(state, outer, holes, bar_frame):
         )
 
     geometry_matches = points_match(outer, expected_outer) and not holes
+
+    def matches_layout(rows, candidate):
+        if len(rows) != len(candidate["bars"]):
+            return False
+        for row, point, diameter in zip(
+            rows, candidate["bars"], candidate["diameters_mm"]
+        ):
+            actual = (row.get(rebar_table.X), row.get(rebar_table.Y),
+                      row.get(rebar_table.AREA), row.get(rebar_table.DIAMETER))
+            expected = (point[0] * _MM, point[1] * _MM, point[2], diameter)
+            if (
+                row.get(rebar_table.SIZE_MODE) != rebar_table.INDEPENDENT_MODE
+                or not all(
+                    value is not None and math.isclose(
+                        float(value), float(reference), rel_tol=1.0e-10,
+                        abs_tol=1.0e-6,
+                    )
+                    for value, reference in zip(actual, expected)
+                )
+            ):
+                return False
+        return True
+
     try:
         frame = rebar_table.normalise_table(bar_frame, "bar")
         rows = frame.to_dict("records")
-        bars_match = len(rows) == len(layout["bars"])
-        if bars_match:
-            for row, point, diameter in zip(
-                rows, layout["bars"], layout["diameters_mm"]
-            ):
-                actual = (
-                    row.get(rebar_table.X),
-                    row.get(rebar_table.Y),
-                    row.get(rebar_table.AREA),
-                    row.get(rebar_table.DIAMETER),
-                )
-                expected = (
-                    point[0] * _MM,
-                    point[1] * _MM,
-                    point[2],
-                    diameter,
-                )
-                if (
-                    row.get(rebar_table.SIZE_MODE) != rebar_table.INDEPENDENT_MODE
-                    or not all(
-                        value is not None and math.isclose(
-                            float(value), float(reference), rel_tol=1.0e-10,
-                            abs_tol=1.0e-6,
-                        )
-                        for value, reference in zip(actual, expected)
-                    )
-                ):
-                    bars_match = False
-                    break
+        bars_match = matches_layout(rows, layout)
+        if not bars_match:
+            # Preserve saved density-point sections until the user applies a
+            # new nominal layout. Both representations require an exact match.
+            legacy = _slab_density_layout_from_state(
+                intent_state, legacy_analysis_points=True
+            )
+            if matches_layout(rows, legacy):
+                layout, bars_match = legacy, True
     except (TypeError, ValueError, OverflowError):
         bars_match = False
     if not geometry_matches or not bars_match:
@@ -6018,8 +6019,8 @@ def _quick_section_viewport():
             else:
                 bar_xy = [(x, y, a) for x, y, a in bars]
                 if slab_density_layout is not None:
-                    # Draw nominal bar axes and diameters; the density quadrature
-                    # remains the analysis input when applying the section.
+                    # Draw the nominal bar axes used by Apply, with marker sizes
+                    # representing diameter rather than strip-edge area weights.
                     bar_xy = [
                         (element["x_mm"] / _MM, element["y_mm"] / _MM,
                          templates.bar_area(element["diameter_mm"]))

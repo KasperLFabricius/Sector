@@ -2850,7 +2850,7 @@ def test_quick_section_separate_upper_layer_bar_count():
 
 
 def test_quick_section_builder_places_bars_by_spacing():
-    # A non-divisible slab spacing uses a symmetric converged quadrature whose
+    # A non-divisible slab spacing uses symmetric nominal positions whose
     # total area is the exact per-metre density, not seven full bars.
     import reinforcement_table as rt
     from sector.templates import bar_area
@@ -2866,10 +2866,10 @@ def test_quick_section_builder_places_bars_by_spacing():
         ("number_input", "top_s", 150.0),
     )
     assert not at.exception
-    assert len(at.session_state["bars_base"]) == 64
+    assert len(at.session_state["bars_base"]) == 14
     bars = at.session_state["bars_base"]
     assert set(bars[rt.SIZE_MODE]) == {rt.INDEPENDENT_MODE}
-    assert bars[rt.DIAMETER].tolist() == pytest.approx([20.0] * 64)
+    assert bars[rt.DIAMETER].tolist() == pytest.approx([20.0] * 14)
     by_face = bars.groupby(rt.Y)[rt.AREA].sum().tolist()
     assert by_face == pytest.approx([bar_area(20.0) / 0.15] * 2)
     assert max(by_face) < 7.0 * bar_area(20.0)
@@ -2892,7 +2892,12 @@ def test_slab_100_spacing_has_ten_symmetric_bars_per_metre():
         assert len(xs) == 10
     _apply_qs(at)
     assert not at.exception
-    areas = at.session_state["bars_base"].groupby("y (mm)")["area (mm2)"].sum()
+    bars = at.session_state["bars_base"]
+    assert len(bars) == 20
+    for y, row in bars.groupby("y (mm)"):
+        assert sorted(row["x (mm)"].tolist()) == pytest.approx(list(range(-450, 451, 100)))
+        assert row["area (mm2)"].tolist() == pytest.approx([math.pi * 20**2 / 4] * 10)
+    areas = bars.groupby("y (mm)")["area (mm2)"].sum()
     assert areas.tolist() == pytest.approx([10 * math.pi * 20**2 / 4] * 2)
 
 
@@ -2996,9 +3001,9 @@ def test_slab_t20_at_200_renders_five_equivalents_and_matches_five_entered_bars(
     _apply_qs(spaced)
     assert not spaced.exception
     spacing_bars = spaced.session_state["bars_base"]
-    assert len(spacing_bars) == 64
+    assert len(spacing_bars) == 10
     assert set(spacing_bars[rt.SIZE_MODE]) == {rt.INDEPENDENT_MODE}
-    assert spacing_bars[rt.DIAMETER].tolist() == pytest.approx([20.0] * 64)
+    assert spacing_bars[rt.DIAMETER].tolist() == pytest.approx([20.0] * 10)
     spacing_areas = sorted(spacing_bars.groupby(rt.Y)[rt.AREA].sum())
     assert spacing_areas == pytest.approx([1570.7963267948965] * 2)
     _calculate(spaced)
@@ -3051,13 +3056,13 @@ def test_slab_spacing_interleave_uses_periodic_midpoints_and_exact_density():
     bottom = bars[bars[rt.Y] < 0.0]
     primary = bottom[bottom[rt.DIAMETER] == 20.0]
     interleaved = bottom[bottom[rt.DIAMETER] == 16.0]
-    assert len(primary) == 32
-    assert len(interleaved) == 33
+    assert len(primary) == 5
+    assert len(interleaved) == 6
     assert interleaved[rt.X].tolist()[1:-1] == pytest.approx(
         [
             0.5 * (primary[rt.X].tolist()[index]
                    + primary[rt.X].tolist()[index + 1])
-            for index in range(31)
+            for index in range(4)
         ]
     )
     assert interleaved[rt.X].iloc[0] == pytest.approx(-500.0)
