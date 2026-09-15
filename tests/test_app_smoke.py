@@ -10021,6 +10021,12 @@ def test_only_selected_outer_stage_mounts_and_retains_material_edits():
     at = _fresh()
     at.run()
 
+    dot = chr(0x00B7)
+    assert [tab.label for tab in at.tabs] == [
+        f"1 {dot} Analysis settings", f"2 {dot} Section",
+        f"3 {dot} Material parameters", f"4 {dot} Loads", "Project",
+    ]
+    assert "_input_tab" not in {widget.key for widget in at.selectbox}
     assert "conc_fck" not in {widget.key for widget in at.number_input}
     assert "section_label_scale" not in {widget.key for widget in at.number_input}
     assert not at.get("data_editor")
@@ -10046,7 +10052,11 @@ def test_only_selected_material_family_mounts_and_retains_sibling_edits():
 
     assert at.session_state["_material_tab"] == "Concrete"
     dot = chr(0x00B7)
-    assert [tab.label for tab in at.tabs] == [
+    outer_labels = {
+        f"1 {dot} Analysis settings", f"2 {dot} Section",
+        f"3 {dot} Material parameters", f"4 {dot} Loads", "Project",
+    }
+    assert [tab.label for tab in at.tabs if tab.label not in outer_labels] == [
         "Concrete", "Reinforcing steel", "Prestressing steel",
     ]
     number_keys = {widget.key for widget in at.number_input}
