@@ -144,9 +144,9 @@ def test_manual_distinguishes_slab_density_from_finite_face_spacing():
     assert r"5A_{bar}=1570.796\,\mathrm{mm^2/m}" in text
     assert "second complete series at the true half-spacing positions" in text
     assert "summed $A_s$ per layer and per face" in text
-    assert "symmetric equal-area integration" in text
-    assert "within 0.1% of a 200-point reference" in text
-    assert "analysis points are not treated as physical bar axes" in text
+    assert "Apply writes the nominal reinforcement positions" in text
+    assert "each layer has ten bars" in text
+    assert "Previously saved integration-point sections retain their original points" in text
     assert "entered nominal c/c spacing" in text
     assert "artificial sides of the unit strip" in text
     assert "reported as Not assessed" in text
