@@ -1245,3 +1245,16 @@ def test_crack_spacing_comparison_labels_each_edition_without_changing_values():
     assert preceding[0] == "md"
     assert "$s_{r,max}$ for 2005/DK NA" in preceding[1]
     assert "$s_{r,m,cal}$ for 2023" in preceding[1]
+
+
+def test_manual_explains_displaced_concrete_and_plastic_only_compression_switch():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    assert "Active in compression (plastic)" in text
+    assert "concrete occupied by reinforcement" in text
+    assert "$(n_i-1)A_i$" in text
+    assert "refinement off" not in text
+    ex = manual.example_beam()
+    result = analyse_cracking(_section(ex), 0, 150, 0, 6,
+                              fctm=fctm(ex["concrete"].fck), bar_diameter=25)
+    # Keep the printed worked cracking factor aligned with the calculation.
+    assert f"lambda_{{cr}}={result.lambda_cr:.2f}<1" in text

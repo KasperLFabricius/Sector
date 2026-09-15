@@ -8438,6 +8438,7 @@ def test_material_laws_locked_in_elastic_only_mode():
                    "mild_gamma_y", "mild_k", "mild_ey0t"):
         assert at.number_input(key=locked).disabled is True, locked
     assert at.number_input(key="mild_Es").disabled is False
+    assert at.checkbox(key="mild_active_comp").label == "Active in compression (plastic)"
 
 
 def test_prestress_law_locked_in_elastic_only_mode():

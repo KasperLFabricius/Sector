@@ -65,7 +65,8 @@ WORKED_CASES = [
 @pytest.mark.parametrize("case", WORKED_CASES, ids=[c[0] for c in WORKED_CASES])
 def test_worked_rectangular_example(case):
     name, P, Mx, My, n, max_comp, comp_pt, bars, x_int, y_int = case
-    res = solve_elastic(rectangular_section(), P, Mx, My, n)
+    # The original printout uses gross concrete plus n*A.
+    res = solve_elastic(rectangular_section(), P, Mx, My, n, displace_concrete=False)
 
     assert res.converged
     # Stresses to ~0.5% (worst published case LC1 differs by ~0.1%).
@@ -87,7 +88,7 @@ def test_worked_rectangular_example(case):
 def test_pure_axial_compression_is_uniform():
     # Concentric axial load (centroid at the origin, no moments): the section is
     # uniformly compressed (no neutral axis), so the stress follows the closed
-    # form sigma = P / (A_concrete + n * A_steel).
+    # form sigma = P / (A_gross + (n - 1) * A_steel).
     sec = centered_section()
     n = 25.0
     P = 1000.0
@@ -95,7 +96,7 @@ def test_pure_axial_compression_is_uniform():
 
     a_concrete = 1.0
     a_steel = 4 * 491.0e-6
-    eps0 = -P / (a_concrete + n * a_steel)
+    eps0 = -P / (a_concrete + (n - 1) * a_steel)
     assert res.converged
     assert res.eps0 == pytest.approx(eps0)
     assert res.kx == pytest.approx(0.0, abs=1e-9)

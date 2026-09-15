@@ -37,7 +37,9 @@ def internal_resultants(section: Section, res, n: float):
         my += eps0 * m.sx + kx * m.sxx + ky * m.sxy
     x, y, a = section.bar_arrays()
     if x.size:
-        f = n * (eps0 + kx * x + ky * y) * a
+        eps = eps0 + kx * x + ky * y
+        # Net force: physical steel less concrete counted at compression bars.
+        f = (n * eps - np.minimum(eps, 0.0)) * a
         n_ += f.sum()
         mx += (f * y).sum()
         my += (f * x).sum()

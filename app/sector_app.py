@@ -1033,7 +1033,7 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
         st.session_state[f"{prefix}_prev"] = preset
     st.session_state.setdefault(f"{prefix}_active_comp", True)
     active_comp = box.checkbox(
-        "Active in compression",
+        "Active in compression (plastic)",
         key=f"{prefix}_active_comp",
         **_input_widget_kwargs(
             f"{prefix}_active_comp",
@@ -6151,6 +6151,7 @@ _PLASTIC_RESULT_CONTRACT_TOKEN = (
 )
 _ELASTIC_RESULT_CONTRACT_TOKEN = (
     "elastic-result-contract",
+    "displaced-concrete-v1",
     "prestress-only-cracking-v1",
     "dual-crack-criteria-v1",
 )
@@ -6168,6 +6169,7 @@ _CAPACITY_RESULT_CONTRACT_TOKEN = (
 )
 _FATIGUE_RESULT_CONTRACT_TOKEN = (
     "fatigue-result-contract",
+    "displaced-concrete-v1",
     "simplified-reinforcement-stress-range-screen-v1",
 )
 _ELASTIC_CONTEXT_SIG_KEYS = (
@@ -9725,9 +9727,8 @@ def _run_single_analysis(
             cracked, lambda_cr, sigma_ct = (cr_l.cracked, cr_l.lambda_cr,
                                             cr_l.sigma_ct)
             gov_state = cr_l.cracked_state
-        # Reinforcement enters the transformed properties at n*A, or n*(Ep/Es)*A per
-        # tendon via n_mult -- the same per-bar modular ratio the elastic and cracking
-        # solves use, so the reported section properties are consistent with them.
+        # Each material uses its own modular ratio; deduct the concrete occupied
+        # by reinforcement wherever concrete remains active.
         props_un = transformed_properties(sec, inp["nl"], cracked=False, n_mult=n_mult)
         props_cr = (transformed_properties(
             sec, inp["nl"], eps0=gov_state.eps0, kx=gov_state.kx, ky=gov_state.ky,
@@ -13046,6 +13047,10 @@ def elastic_view(inp, results, *, global_results=None):
                  "diagnostic only.")
 
     st.markdown("### Elastic stress outputs")
+    st.caption(
+        "Reinforcement carries tension and compression. Concrete occupied by "
+        "reinforcement is deducted from the active concrete area."
+    )
     checks = e.get("stress_outputs", {})
     enabled = [
         ("Concrete compression", "concrete", checks.get("concrete", {})),

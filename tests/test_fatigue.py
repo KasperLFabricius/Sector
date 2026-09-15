@@ -1537,7 +1537,7 @@ def test_uniform_compression_matches_transformed_section_hand_calculation():
     n_ratio = 10.0
     long_force = 1000.0
     short_force = 200.0
-    transformed_area = section.gross_area + n_ratio * sum(
+    transformed_area = section.gross_area + (n_ratio - 1) * sum(
         bar.area for bar in section.bars
     )
     expected_concrete_long = long_force / transformed_area / 1000.0
@@ -1851,7 +1851,7 @@ def test_nonzero_uniform_cyclic_action_matches_independent_damage_oracle():
     action_factor = 1.25
     cycles = 100_000.0
     material_factor = 1.15
-    transformed_area = section.gross_area + modular_ratio * sum(
+    transformed_area = section.gross_area + (modular_ratio - 1) * sum(
         bar.area for bar in section.bars
     )
     expected_range = (

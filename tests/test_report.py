@@ -4889,6 +4889,8 @@ def test_report_elastic_only_omits_plastic_theory():
     txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "Plastic section capacity" not in txt
     assert "Cracked-section elastic stresses" in txt
+    assert "Concrete occupied by reinforcement is deducted" in " ".join(txt.split())
+    assert "uncracked section deducts concrete occupied by reinforcement" in " ".join(txt.split())
 
 
 def test_report_capacity_only_omits_utilisation():
@@ -13998,6 +14000,7 @@ def test_elastic_characteristic_comparisons_preserve_outputs_across_profiles(pro
     text = " ".join(_pdf_text(_build_report_with_selection(
         {}, inp, out, figures=False, profile=profile,
     )).split())
+    assert "Concrete occupied by reinforcement is deducted" in text
     assert "40.0%" in text  # retained 12 MPa compression / fck 30 MPa
     assert "30.0%" in text  # retained 150 MPa tension / fyk 500 MPa
     assert "CALCULATED" in text

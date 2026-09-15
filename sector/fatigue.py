@@ -1452,7 +1452,7 @@ def solve_fatigue_bin(
     gamma_ff: float = 1.0,
     n_mult: np.ndarray | None = None,
     prestress_stress: np.ndarray | None = None,
-    displace_concrete: bool = False,
+    displace_concrete: bool = True,
 ) -> FatigueBinState:
     """Solve characteristic and action-factored cyclic endpoints."""
 
@@ -2561,7 +2561,7 @@ def analyse_fatigue_spectrum(
     check_concrete: bool = True,
     n_mult: np.ndarray | None = None,
     prestress_stress: np.ndarray | None = None,
-    displace_concrete: bool = False,
+    displace_concrete: bool = True,
     concrete_search_initial_divisions: int = (
         _DEFAULT_FIBRE_SEARCH_DIVISIONS
     ),

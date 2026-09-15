@@ -166,6 +166,20 @@ def test_prestressed_cracking_factor_keeps_small_positive_external_increment():
     assert 0.0 < factor < 1.0
 
 
+def _one_tendon_top_stress(n, prestress=0.0, moment=0.0):
+    # Independent transformed rectangle: 0.3 x 0.6 m, As=0.001 at y=-0.25.
+    weight = (n * 0.975 - 1.0) * 0.001
+    area = 0.18 + weight
+    sy = -0.25 * weight
+    inertia_origin = 0.3 * 0.6**3 / 12 + weight * 0.25**2
+    axial = -prestress * 0.001
+    bending = -moment + prestress * 0.001 * 0.25
+    determinant = area * inertia_origin - sy**2
+    eps = (axial * inertia_origin - bending * sy) / determinant
+    curvature = (bending * area - axial * sy) / determinant
+    return (eps + curvature * 0.3) / 1000
+
+
 def test_eccentric_prestress_alone_cracks_single_and_combined_routes():
     # F095-002: the fixed prestress already puts the upper fibres above fctm.
     # Zero external action therefore owns lambda_cr=0; it is not a no-candidate
@@ -178,7 +192,7 @@ def test_eccentric_prestress_alone_cracks_single_and_combined_routes():
     n = 6.85
     n_mult = np.array([0.975])
     prestress = np.array([500_000.0])
-    expected_sigma_ct = 3.7389176145082486
+    expected_sigma_ct = _one_tendon_top_stress(n, prestress=500_000)
 
     single = analyse_cracking(
         sec,
@@ -292,7 +306,10 @@ def test_combined_cracking_factors_only_nonzero_external_superposition():
     )
     n_mult = np.array([0.975])
     prestress = np.array([200_000.0])
-    expected_lambda = 0.5566877809474418
+    sigma_pre = _one_tendon_top_stress(10, prestress=200_000)
+    sigma_ext = (_one_tendon_top_stress(10, moment=-20)
+                 + _one_tendon_top_stress(6.85, moment=-30))
+    expected_lambda = (2.9 - sigma_pre) / sigma_ext
 
     cracked, factor, sigma_ct = combined_cracking(
         sec,
@@ -305,7 +322,7 @@ def test_combined_cracking_factors_only_nonzero_external_superposition():
 
     assert cracked is True
     assert factor == pytest.approx(expected_lambda, rel=1.0e-12)
-    assert sigma_ct == pytest.approx(4.072094510631632, rel=1.0e-12)
+    assert sigma_ct == pytest.approx(sigma_pre + sigma_ext, rel=1.0e-12)
 
     at_threshold = combined_cracking(
         sec,
