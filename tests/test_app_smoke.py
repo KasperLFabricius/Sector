@@ -2877,6 +2877,57 @@ def test_quick_section_builder_places_bars_by_spacing():
     assert not at.exception
 
 
+def test_slab_100_spacing_has_ten_symmetric_bars_per_metre():
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Slab strip").run()
+    _set(at, ("radio", "qs_rebar_mode", "By spacing"),
+         ("number_input", "bot_s", 100.0), ("number_input", "top_s", 100.0))
+    spec = next(json.loads(chart.proto.spec) for chart in at.get("plotly_chart")
+                if json.loads(chart.proto.spec).get("layout", {}).get(
+                    "title", {}).get("text") == "Preview")
+    trace = next(t for t in spec["data"] if t.get("name") == "reinforcing bar")
+    for y in (-100.0, 100.0):
+        xs = sorted(x for x, row_y in zip(trace["x"], trace["y"]) if row_y == pytest.approx(y))
+        assert xs == pytest.approx(list(range(-450, 451, 100)))
+        assert len(xs) == 10
+    _apply_qs(at)
+    assert not at.exception
+    areas = at.session_state["bars_base"].groupby("y (mm)")["area (mm2)"].sum()
+    assert areas.tolist() == pytest.approx([10 * math.pi * 20**2 / 4] * 2)
+
+
+def test_slab_spacing_preview_tracks_nominal_spacing_and_interleave():
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Slab strip").run()
+    _set(at, ("radio", "qs_rebar_mode", "By spacing"),
+         ("number_input", "top_s", 200.0))
+
+    def row_positions(y):
+        spec = next(json.loads(chart.proto.spec) for chart in at.get("plotly_chart")
+                    if json.loads(chart.proto.spec).get("layout", {}).get(
+                        "title", {}).get("text") == "Preview")
+        trace = next(t for t in spec["data"] if t.get("name") == "reinforcing bar")
+        return sorted(x for x, row_y in zip(trace["x"], trace["y"])
+                      if row_y == pytest.approx(y))
+
+    for spacing in (150.0, 250.0):
+        _set(at, ("number_input", "bot_s", spacing))
+        assert not at.exception
+        bottom = row_positions(-100.0)
+        assert np.diff(bottom) == pytest.approx(spacing)
+        assert np.diff(row_positions(100.0)) == pytest.approx(200.0)
+
+    _set(at, ("number_input", "bot_off_d", 16.0))
+    assert np.diff(row_positions(-100.0)) == pytest.approx(125.0)
+    assert np.diff(row_positions(100.0)) == pytest.approx(200.0)
+    # Applying the preview retains the exact per-metre steel area in the solver.
+    _apply_qs(at)
+    bars = at.session_state["bars_base"]
+    areas = bars.groupby("y (mm)")["area (mm2)"].sum()
+    assert areas.loc[-100.0] == pytest.approx(math.pi/4*(20**2+16**2)/0.25)
+    assert areas.loc[100.0] == pytest.approx(math.pi/4*20**2/0.2)
+
+
 def test_slab_t20_at_200_renders_five_equivalents_and_matches_five_entered_bars():
     import reinforcement_table as rt
     from sector.templates import bar_area
@@ -2923,7 +2974,7 @@ def test_slab_t20_at_200_renders_five_equivalents_and_matches_five_entered_bars(
         "per layer and 1,570.796 mm\u00b2/m in total."
     ) in preview_captions
     assert (
-        "4 concrete corners, 0 void(s), 64 slab-density analysis points, 0 tendons."
+        "4 concrete corners, 0 void(s), 10 nominal bar positions, 0 tendons."
     ) in preview_captions
 
     preview = next(
@@ -2938,9 +2989,7 @@ def test_slab_t20_at_200_renders_five_equivalents_and_matches_five_entered_bars(
         trace for trace in preview["data"] if trace.get("name") == "reinforcing bar"
     )
     x_values = sorted(set(marker_trace["x"]))
-    assert len(x_values) == 32
-    assert x_values[0] == pytest.approx(-484.375)
-    assert x_values[-1] == pytest.approx(484.375)
+    assert x_values == pytest.approx([-400.0, -200.0, 0.0, 200.0, 400.0])
     assert x_values == pytest.approx([-value for value in reversed(x_values)])
     assert sorted(set(marker_trace["y"])) == pytest.approx([-105.0, 95.0])
 

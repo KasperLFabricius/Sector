@@ -6017,6 +6017,14 @@ def _quick_section_viewport():
                 st.info("Preview unavailable until the dimensions are valid.")
             else:
                 bar_xy = [(x, y, a) for x, y, a in bars]
+                if slab_density_layout is not None:
+                    # Draw nominal bar axes and diameters; the density quadrature
+                    # remains the analysis input when applying the section.
+                    bar_xy = [
+                        (element["x_mm"] / _MM, element["y_mm"] / _MM,
+                         templates.bar_area(element["diameter_mm"]))
+                        for element in slab_density_layout["physical_elements"]
+                    ]
                 tendon_xy = [(x, y, a) for x, y, a in tendons]
                 st.plotly_chart(
                     viz.section_figure(outer, holes, bar_xy, tendons=tendon_xy,
@@ -6030,7 +6038,7 @@ def _quick_section_viewport():
                     st.caption(_slab_density_preview_caption(
                         slab_density_layout, "Top"
                     ))
-                    bar_summary = f"{len(bars)} slab-density analysis points"
+                    bar_summary = f"{len(bar_xy)} nominal bar positions"
                 elif bar_diameters is None:
                     bar_summary = f"{len(bars)} bars"
                 else:
