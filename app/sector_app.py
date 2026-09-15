@@ -42,7 +42,6 @@ from input_stage_host import (  # noqa: E402
     normalise_stage_selection,
     reset_input_stage_mounts,
     stateful_input_tabs,
-    stateful_input_selector,
 )
 from point_grid import point_grid, _rows_to_df, _versioned_rows  # noqa: E402
 from sector import __author__ as sector_author  # noqa: E402
@@ -6265,12 +6264,12 @@ def build_inputs(host=st):
     mat_catalog.material_ids(prestress_catalogue, "prestress")
     app_run_probe.stop_phase(st.session_state, normalization_token)
 
-    # The compact selector retains the active stage across reruns. Stage bodies
+    # Native tabs retain the active stage across reruns. Stage bodies
     # remain active-only through InputStage, so hidden stages do not execute.
     # Panels carry calculation methodology (Elastic / Plastic), not a limit
     # state -- the same analysis can serve several load combinations.
     input_tab_labels = list(_input_stage_labels().values())
-    aset, sec_tab, mat_tab, loads, project = stateful_input_selector(
+    aset, sec_tab, mat_tab, loads, project = stateful_input_tabs(
         s,
         input_tab_labels,
         key="_input_tab",
