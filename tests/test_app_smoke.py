@@ -8002,6 +8002,73 @@ def test_prestress_always_available_without_a_toggle():
     assert "tendons_base" in at.session_state                # tendon table mounted
 
 
+@pytest.mark.parametrize("fck", [44.0, 70.0])
+def test_auto_material_precision_survives_analysis_inputs_and_autosave(
+    fck, tmp_path, monkeypatch,
+):
+    from sector import codes
+    import project_io
+
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
+    at = _fresh()
+    at.run()
+    _set_and_click(
+        at, "auto_all_btn",
+        ("radio", "mode", "Both"),
+        ("selectbox", "conc_preset", "Curve 2 (parabola-rectangle)"),
+        ("number_input", "conc_fck", fck),
+    )
+    expected = {
+        "conc_Ec": codes.ecm(fck) / 1000.0,
+        "sls_fctm": codes.fctm(fck),
+        "conc_eps_c2": codes.eps_c2(fck) * 1000.0,
+        "conc_eps_cu2": codes.eps_cu2(fck) * 1000.0,
+        "conc_n": codes.n_exponent(fck),
+    }
+    at.session_state["_autosave_t"] = 0.0
+    _goto_input_tab(at, "Loads")
+    assert not at.exception
+    inp = at.session_state["_latest_inputs"]
+    actual = {
+        "conc_Ec": inp["conc_Ec"], "sls_fctm": inp["sls_fctm"],
+        "conc_eps_c2": inp["concrete"].eps_c2 * 1000.0,
+        "conc_eps_cu2": inp["concrete"].eps_cu2 * 1000.0,
+        "conc_n": inp["concrete"].n,
+    }
+    assert actual == pytest.approx(expected, rel=1e-12, abs=1e-12)
+    assert inp["ns"] == pytest.approx(200.0 / expected["conc_Ec"], rel=1e-12)
+    _, saved = project_io.parse_project(
+        (tmp_path / "autosave.json").read_text(encoding="utf-8")
+    )
+    assert {key: saved[key] for key in expected} == pytest.approx(
+        expected, rel=1e-12, abs=1e-12,
+    )
+    _goto_material_tab(at, "Concrete")
+    if fck == 44.0:
+        widget = at.number_input(key="conc_Ec")
+        assert widget.value == pytest.approx(36.07644073348219, rel=1e-12)
+        assert widget.proto.format % widget.value == "36.08"
+        assert "36.08 GPa" in at.button(key="conc_Ec_auto").label
+    # Manual values remain editable and are not replaced on an ordinary rerun.
+    at.number_input(key="conc_Ec").set_value(33.123456789).run()
+    _goto_input_tab(at, "Loads")
+    assert at.session_state["_latest_inputs"]["conc_Ec"] == 33.123456789
+    assert not at.exception
+
+
+def test_quick_section_wall_limit_preserves_fractional_millimetres():
+    at = _fresh_qs()
+    at.selectbox(key="shape").set_value("Box girder").run()
+    at.number_input(key="b_mm").set_value(800.4).run()
+    assert at.number_input(key="wall_mm").max == pytest.approx(390.2, abs=1e-10)
+    at.number_input(key="wall_mm").set_value(390.1).run()
+    assert at.session_state["wall_mm"] == 390.1
+    at.number_input(key="h_mm").set_value(780.3).run()
+    assert at.number_input(key="wall_mm").max == pytest.approx(380.15, abs=1e-10)
+    assert at.session_state["wall_mm"] == pytest.approx(380.15, abs=1e-10)
+    assert not at.exception
+
+
 def test_auto_calc_all_updates_every_derived_value():
     # One button recomputes all the auto-derived values from the current inputs.
     at = _fresh()
