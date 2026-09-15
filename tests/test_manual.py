@@ -144,12 +144,10 @@ def test_manual_distinguishes_slab_density_from_finite_face_spacing():
     assert r"5A_{bar}=1570.796\,\mathrm{mm^2/m}" in text
     assert "second complete series at the true half-spacing positions" in text
     assert "summed $A_s$ per layer and per face" in text
-    assert "Apply writes the nominal reinforcement positions" in text
-    assert "each layer has ten bars" in text
-    assert "Previously saved integration-point sections retain their original points" in text
-    assert "entered nominal c/c spacing" in text
-    assert "artificial sides of the unit strip" in text
-    assert "reported as Not assessed" in text
+    assert "contains ten bars per layer with 50 mm edge offsets" in text
+    assert "weights preserve the specified steel area per metre" in text
+    assert "nominal spacing and face cover" in text
+    assert "strip sides are not physical concrete edges" in text
     assert "spacing is instead a maximum gap" in text
     assert "derived count and actual centre-to-centre spacing" in text
 

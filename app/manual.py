@@ -859,19 +859,13 @@ def manual_blocks() -> list:
        r"rejected. For finite sections, spacing "
        r"is instead a maximum gap "
        r"over the covered face; the builder displays the derived count and actual "
-       r"centre-to-centre spacing before Apply.")
-    md("Apply writes the nominal reinforcement positions shown in the slab-strip "
-       "preview to the point tables. At 100 mm centres, each layer has ten bars "
-       "with symmetric 50 mm edge offsets. Capacity and stress calculations use "
-       "these positions. For spacing that does not divide 1 m exactly, symmetric "
-       "edge-area weights retain the specified reinforcement area per metre. "
-       "Previously saved integration-point sections retain their original points "
-       "until a new layout is applied. Clear spacing and both crack-width methods "
-       "use the entered nominal c/c spacing "
-       "and the applicable face cover, excluding the artificial sides of the "
-       "unit strip. If the generated geometry or reinforcement sizes are edited "
-       "directly, reapply the slab layout or define explicit bars; until then those "
-       "physical spacing and crack checks are reported as Not assessed.")
+       r"centre-to-centre spacing.")
+    md("Slab-strip bars are placed symmetrically: at 100 mm centres, a 1 m strip "
+       "contains ten bars per layer with 50 mm edge offsets. Symmetric edge-area "
+       "weights preserve the specified steel area per metre when the spacing "
+       "does not divide the strip width exactly. Clear-spacing and crack-width "
+       "calculations use the nominal spacing and face cover; the strip sides "
+       "are not physical concrete edges.")
     table(["Shape", "Produces"],
           [["Rectangle", "A solid rectangle b x h"],
            ["Slab strip", "A 1 m-wide strip of a given thickness"],
