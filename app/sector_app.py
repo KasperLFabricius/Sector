@@ -855,9 +855,10 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     _ec2_f, _ecu2_f, _n_f = (_code.strain_law(fck) if _code is not None
                              else (codes.eps_c2(fck), codes.eps_cu2(fck),
                                    codes.n_exponent(fck)))
-    a_ec2 = round(_ec2_f * 1000.0, 2)
-    a_ecu2 = round(_ecu2_f * 1000.0, 2)
-    a_n = round(_n_f, 3)
+    # Keep calculated precision in the material law; format only the labels.
+    a_ec2 = _ec2_f * 1000.0
+    a_ecu2 = _ecu2_f * 1000.0
+    a_n = _n_f
     auto_all = st.session_state.get("_auto_all", False)
     if (box.button(f"Auto $\\varepsilon$/n (EC2: {a_ec2:.2f}/{a_ecu2:.2f} {_PERMILLE}, n={a_n:.2f})",
                    key="conc_strain_auto", width="stretch", disabled=strain_lock,
@@ -903,7 +904,7 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     # Mean tensile strength fctm feeds the serviceability cracking check. It lives
     # with the concrete (not the loads); the Auto button refreshes it from the
     # current grade because the number_input persists across a grade change.
-    fctm_ec = round(codes.fctm(fck), 3)
+    fctm_ec = codes.fctm(fck)
     st.session_state.setdefault("sls_fctm", fctm_ec)
     if (box.button(f"Auto $f_{{ctm}}$ (EC2: {fctm_ec:.2f} MPa)", key="sls_fctm_auto",
                    width="stretch", disabled=lock_elastic,
@@ -929,9 +930,9 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
 
     # Elastic modulus Ec: only used by the elastic analysis, to derive the modular
     # ratios n = Es/Ec. The Auto button sets the EC2 secant modulus for the grade.
-    ecm_gpa = round(codes.ecm(fck) / 1000.0, 1)
+    ecm_gpa = codes.ecm(fck) / 1000.0
     st.session_state.setdefault("conc_Ec", ecm_gpa)
-    if (box.button(f"Auto $E_c$ (EC2: {ecm_gpa:.1f} GPa)", key="conc_Ec_auto",
+    if (box.button(f"Auto $E_c$ (EC2: {ecm_gpa:.2f} GPa)", key="conc_Ec_auto",
                    width="stretch", disabled=lock_elastic,
                    help=r"Set $E_c=E_{cm}=22(f_{cm}/10)^{0.3}$ GPa (EC2 Table 3.1) for the "
                         "current grade.")
@@ -5559,7 +5560,7 @@ def _quick_section_geometry(box):
                            help="Overall outer width of the box.") / 1000.0
         h = _seeded_number(box, r"Height $h$ (mm)", 200.0, 12000.0, 1000.0, 10.0, "h_mm",
                            help="Overall outer height of the box.") / 1000.0
-        max_wall = round((min(b, h) / 2 - 0.01) * 1000.0, 0)
+        max_wall = (min(b, h) / 2 - 0.01) * 1000.0
         # wall_mm has a dimension-dependent maximum, so clamp the seeded value into
         # range before the widget (a wider box left a wall that the narrower one can
         # no longer accept would otherwise error).
