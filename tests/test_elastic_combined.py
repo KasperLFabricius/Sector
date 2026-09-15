@@ -1,6 +1,7 @@
 """Verification of the combined long/short-term elastic analysis.
 
-These cases come from real cross-section analysis output: one from the worked
+These legacy cases explicitly retain gross concrete plus n*A.
+They come from real cross-section analysis output: one from the worked
 rectangular example (combined load case) and two from 2024 production runs whose
 output PDFs report the TOTAL / LONG / RST1 steel-stress columns. The production
 section TD_3.31 reproduces to the integer; the rest are within rounding.
@@ -54,7 +55,8 @@ def dx90703_section() -> Section:
 def test_worked_rectangular_combined_lc2():
     # LONG (1000, 200, 200, n=25) + SHORT (300, 60, 40, n=8).
     res = solve_elastic_combined(
-        rectangular_section(), 1000.0, 200.0, 200.0, 25.0, 300.0, 60.0, 40.0, 8.0
+        rectangular_section(), 1000.0, 200.0, 200.0, 25.0, 300.0, 60.0, 40.0, 8.0,
+        displace_concrete=False,
     )
     assert res.converged
     # Combined (RST) steel stresses and the RST1 column from the printout.
@@ -71,7 +73,8 @@ def test_worked_rectangular_combined_lc2():
 def test_production_td_3_31_matches_to_the_integer():
     # 2024 production run (the handcalc reference); reproduces exactly.
     res = solve_elastic_combined(
-        td_3_31_section(), 794.380, 67.820, 0.0, 22.930, -0.050, -1.870, 0.0, 5.733
+        td_3_31_section(), 794.380, 67.820, 0.0, 22.930, -0.050, -1.870, 0.0, 5.733,
+        displace_concrete=False,
     )
     assert res.converged
     total_exp = [-214964, -191269, -184381, -146220, -101309, -95110, -88910, -82711]
@@ -95,7 +98,8 @@ def test_production_td_3_31_matches_to_the_integer():
 def test_production_dx90703_within_tolerance():
     # 2024 production run; within ~1% (uniaxial, two bar levels).
     res = solve_elastic_combined(
-        dx90703_section(), 503.0, 7.81, 0.0, 21.52, 0.0, 3.10, 0.0, 5.38
+        dx90703_section(), 503.0, 7.81, 0.0, 21.52, 0.0, 3.10, 0.0, 5.38,
+        displace_concrete=False,
     )
     assert res.converged
     # Bars 1-5 at y=-0.063, bars 6-7 at y=+0.063.
@@ -144,7 +148,8 @@ def test_production_understotning_cracked(case):
     # match within that noise.
     _, L, S, comp, pt, y_int, total = case
     res = solve_elastic_combined(
-        understotning_section(), L[0], L[1], L[2], L[3], S[0], S[1], S[2], S[3]
+        understotning_section(), L[0], L[1], L[2], L[3], S[0], S[1], S[2], S[3],
+        displace_concrete=False,
     )
     assert res.converged
     assert res.max_concrete_compression == pytest.approx(comp, rel=0.01)
@@ -170,7 +175,8 @@ def ecr_section() -> Section:
 def test_production_test_ecr_combined():
     # Combined case (nl=23.25, ns=5.81); reproduces the printout closely.
     res = solve_elastic_combined(
-        ecr_section(), 408.98, -49.87, 0.0, 23.25, -2.23, -14.75, 0.0, 5.81
+        ecr_section(), 408.98, -49.87, 0.0, 23.25, -2.23, -14.75, 0.0, 5.81,
+        displace_concrete=False,
     )
     assert res.converged
     total_exp = [27233, -83976, -116304, -296048]
@@ -185,7 +191,10 @@ def test_production_test_ecr_combined():
 
 def test_production_handcalc_long_single_load():
     # Pure long-term load (single load, n=23.25): the simple single-column output.
-    res = solve_elastic(understotning_section(), 408.98, -49.87, 0.0, 23.25)
+    res = solve_elastic(
+        understotning_section(), 408.98, -49.87, 0.0, 23.25,
+        displace_concrete=False,
+    )
     assert res.converged
     bars_exp = [2002, -95424, -123746, -280647]
     # Deepest bar and concrete compression are well conditioned; near-axis bars
@@ -201,7 +210,8 @@ def test_production_handcalc_short_zero_long_term():
     # Long-term load is zero: TOTAL must equal RST1 and the LONG column must be
     # zero. Exercises the zero-long-term path of the superposition.
     res = solve_elastic_combined(
-        understotning_section(), 0.0, 0.0, 0.0, 23.25, -5.45, -36.12, 0.0, 5.81
+        understotning_section(), 0.0, 0.0, 0.0, 23.25, -5.45, -36.12, 0.0, 5.81,
+        displace_concrete=False,
     )
     assert res.converged
     assert all(abs(v) < 1e-6 for v in res.bar_stress_long)

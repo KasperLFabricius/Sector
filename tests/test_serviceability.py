@@ -105,8 +105,14 @@ def test_rectangular_beam_matches_hand_calc():
     r = analyse_cracking(sec, 0.0, 150.0, 0.0, 6.0, fctm=fc,
                          Es=200_000.0, beta=0.5, kt=0.4, cover=37.5)
     assert r.cracked
-    assert r.lambda_cr == pytest.approx(0.3969, abs=2e-3)
-    assert r.zeta == pytest.approx(0.9212, abs=2e-3)
+    # Stage I: gross rectangle plus (n-1)As, about its transformed centroid.
+    weight = 5 * 3 * 491e-6
+    area = 0.18 + weight
+    cy = (0.18 * 0.3 + weight * 0.05) / area
+    inertia = 0.3 * 0.6**3 / 12 + 0.18 * (0.3-cy)**2 + weight * (0.05-cy)**2
+    expected_lambda = fc * 1000 * inertia / (150 * cy)
+    assert r.lambda_cr == pytest.approx(expected_lambda)
+    assert r.zeta == pytest.approx(1 - 0.5 * expected_lambda**2)
     assert gov_stress_mpa(r.cracked_state) == pytest.approx(204.0, rel=0.01)
     assert r.cracked_state.max_concrete_compression / 1000.0 == pytest.approx(13.10, rel=0.01)
 
@@ -752,17 +758,17 @@ def test_pure_compression_never_cracks():
 
 
 def test_transformed_section_properties_match_hand_calc():
-    # The uncracked transformed section and the cracked transformed section
+    # Legacy gross-concrete hand calculation. The uncracked transformed section and the cracked transformed section
     # (compression block + n*As) reproduce the hand-worked area, centroid and
     # second moment about the bending (x) axis.
     sec = beam_section()
-    pu = transformed_properties(sec, 6.0, cracked=False)
+    pu = transformed_properties(sec, 6.0, cracked=False, displace_concrete=False)
     assert pu.area == pytest.approx(0.18884, rel=1e-3)
     assert pu.cy == pytest.approx(0.28830, abs=1e-4)
     assert pu.Ix == pytest.approx(0.0059265, rel=1e-3)
 
-    r = solve_elastic(sec, 0.0, 150.0, 0.0, 6.0)
-    pc = transformed_properties(sec, 6.0, eps0=r.eps0, kx=r.kx, ky=r.ky, cracked=True)
+    r = solve_elastic(sec, 0.0, 150.0, 0.0, 6.0, displace_concrete=False)
+    pc = transformed_properties(sec, 6.0, eps0=r.eps0, kx=r.kx, ky=r.ky, cracked=True, displace_concrete=False)
     assert pc.Ix == pytest.approx(0.0017511, rel=1e-3)
     assert pc.area < pu.area          # cracked section drops the tension concrete
     # For pure bending the cracked centroid sits on the neutral axis.

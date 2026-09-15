@@ -3262,6 +3262,7 @@ class ReportBuilder:
                 inp.get("concrete_preset") or inp.get("conc_preset")
             )
             rows.extend([
+                ["Elastic area model", "Concrete occupied by reinforcement is deducted"],
                 ["Concrete elastic modulus E<sub>c</sub>", f"{_fmt(inp.get('conc_Ec'), 3)} GPa"],
                 ["Creep coefficient phi", _fmt(inp.get("el_phi"), 3)],
                 [
@@ -5630,9 +5631,15 @@ class ReportBuilder:
                     "tendon uses its assigned n<sub>i</sub> = E<sub>i</sub>/"
                     "E<sub>c</sub>, creep-reduced to "
                     "E/E<sub>c,eff</sub> with E<sub>c,eff</sub> = "
-                    "E<sub>c</sub>/(1+&#966;) for the long-term state.")
+                    "E<sub>c</sub>/(1+&#966;) for the long-term state. "
+                    "Concrete occupied by reinforcement is deducted: the added "
+                    "transformed area is (n<sub>i</sub>-1)A<sub>i</sub> in the "
+                    "compression zone and n<sub>i</sub>A<sub>i</sub> in the "
+                    "cracked tension zone. Steel carries tension and compression.")
             self._p("<b>Cracking threshold.</b> The Stage-I extreme tensile stress "
-                    "is compared with f<sub>ct,eff</sub>.")
+                    "is compared with f<sub>ct,eff</sub>. The uncracked section "
+                    "deducts concrete occupied by reinforcement in both tension "
+                    "and compression.")
             if any(result.get("show_cw") for result in elastic_results):
                 self._p("<b>Crack width.</b> The requested crack-width calculation "
                         "follows the selected code method and is worked below.")
@@ -10530,6 +10537,7 @@ class ReportBuilder:
             self._small(
                 "Method: cracked-section elastic equilibrium with long-term and "
                 "instantaneous response, including retained prestress neutralisation. "
+                "Concrete occupied by reinforcement is deducted. "
                 "The state-by-state calculation is in Audit."
             )
             return

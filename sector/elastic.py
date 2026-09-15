@@ -322,9 +322,9 @@ def _resultants_and_jacobian(
         coef = (np.full(bx.shape, float(n)) if n_mult is None
                 else float(n) * np.asarray(n_mult, dtype=float))
         if displace_concrete:
-            # Compression bars sit in concrete already integrated above; net
-            # stiffness there is (modulus - 1) instead of the full modulus.
-            coef = np.where(eps_b < 0.0, coef - 1.0, coef)
+            # Deduct concrete already integrated at each bar. In Stage I it
+            # is active in both signs; in Stage II only in compression.
+            coef = coef - (eps_b < 0.0 if cracked else 1.0)
         g = coef * ba  # stiffness weight per bar
         f = g * eps_b  # bar force (tension positive)
         res = res + np.array([f.sum(), (f * by).sum(), (f * bx).sum()])
@@ -362,7 +362,7 @@ def _newton_solve(
     compression zone, so the active (cracked) set settles in a few steps.
     """
     _, J0 = _resultants_and_jacobian(
-        rings, bx, by, ba, np.zeros(3), n, displace_concrete=False, cracked=False,
+        rings, bx, by, ba, np.zeros(3), n, displace_concrete=displace_concrete, cracked=False,
         n_mult=n_mult,
     )
     try:
@@ -500,7 +500,7 @@ def solve_elastic(
     My: float,
     n: float,
     *,
-    displace_concrete: bool = False,
+    displace_concrete: bool = True,
     max_iter: int = 100,
     tol: float = _DEFAULT_TOL,
     n_mult: np.ndarray | None = None,
@@ -520,9 +520,9 @@ def solve_elastic(
         Modular ratio ``Es / Ec`` for this load.
     displace_concrete:
         Subtract the concrete displaced by bars in the compression zone
-        (the ``(n - 1)`` treatment). Default ``False`` -- the fully cracked
-        transformed section uses ``n*A`` for every bar and counts the gross
-        concrete compression block, which is what Sector reproduces.
+        (the ``(n_i - 1)*A_i`` treatment), enabled by default. Bars outside
+        that zone contribute ``n_i*A_i``. Physical steel stress remains
+        ``n_i*eps``. Set False to reproduce legacy gross-concrete results.
     n_mult, prestress_stress:
         Per-bar modular-ratio multiplier and locked-in prestress stress (see
         :func:`solve_elastic_combined`).
@@ -577,6 +577,7 @@ def solve_elastic_uncracked(
     My: float,
     n: float,
     *,
+    displace_concrete: bool = True,
     n_mult: np.ndarray | None = None,
     prestress_stress: np.ndarray | None = None,
 ) -> ElasticResult:
@@ -588,9 +589,9 @@ def solve_elastic_uncracked(
     ``max_concrete_tension`` is the peak concrete tensile stress that the
     serviceability cracking check compares against ``f_ctm``.
 
-    The bars enter the uncracked transformed section at ``n*A`` (consistent with
-    the cracked solver); the ``(n - 1)`` displaced-concrete refinement is not
-    applied, a sub-percent effect on the cracking load.
+    By default, each bar contributes ``(n_i - 1)*A_i`` in addition to the gross
+    concrete, deducting the concrete it occupies in both tension and compression.
+    Set ``displace_concrete=False`` for the legacy ``n_i*A_i`` area model.
     """
     section.require_valid_analysis_inputs()
     P = finite_action(P, "axial force P")
@@ -607,7 +608,7 @@ def solve_elastic_uncracked(
     target = np.array([-P, -Mx, -My], dtype=float)
     target = target - _prestress_resultant(prestress_stress, bx, by, ba)
     _, J = _resultants_and_jacobian(
-        rings, bx, by, ba, np.zeros(3), n, displace_concrete=False, cracked=False,
+        rings, bx, by, ba, np.zeros(3), n, displace_concrete=displace_concrete, cracked=False,
         n_mult=n_mult,
     )
     try:
@@ -637,7 +638,8 @@ class SectionProperties:
     centroid.
 
     Lengths are in the section's own units (m for a kN/m/m section), so the area
-    is in m^2 and the second moments in m^4. Reinforcement is included at ``n*A``.
+    is in m^2 and the second moments in m^4. Reinforcement weights include the
+    selected displaced-concrete treatment.
     ``Ix`` is the second moment about the x-axis (it resists ``Mx``, the bending
     whose stress varies with y); ``Iy`` is about the y-axis.
     """
@@ -658,6 +660,7 @@ def transformed_properties(
     kx: float | None = None,
     ky: float | None = None,
     cracked: bool = False,
+    displace_concrete: bool = True,
     n_mult: np.ndarray | None = None,
 ) -> SectionProperties:
     """Transformed-section properties for the uncracked or cracked state.
@@ -665,9 +668,10 @@ def transformed_properties(
     Uncracked (``cracked=False``): the whole concrete section is active. Cracked:
     the active concrete is the compression zone of the strain plane
     ``(eps0, kx, ky)`` -- the same half-plane the solver integrates -- so the
-    properties are those of the cracked transformed section. Reinforcement enters
-    at ``n*A`` in both cases, or ``n*n_mult*A`` per bar when ``n_mult`` is given
-    (e.g. ``Ep/Es`` for prestressing tendons folded into the bar set).
+    properties are those of the cracked transformed section. Each bar contributes
+    ``(n_i - 1)*A_i`` where concrete is active and ``n_i*A_i`` elsewhere, with
+    ``n_i = n*n_mult`` when per-bar multipliers are given. Set
+    ``displace_concrete=False`` for the legacy gross-concrete area model.
     """
     section.require_valid_analysis_inputs()
     rings = section.integration_rings()
@@ -684,6 +688,9 @@ def transformed_properties(
         g = float(n) * ba
         if n_mult is not None:
             g = g * np.asarray(n_mult, dtype=float)
+        if displace_concrete:
+            active = (eps0 + kx * bx + ky * by < 0.0) if cracked else 1.0
+            g = g - active * ba
         A += float(g.sum())
         Sx += float((g * bx).sum())
         Sy += float((g * by).sum())
@@ -754,7 +761,7 @@ def solve_elastic_combined(
     My_short: float,
     ns: float,
     *,
-    displace_concrete: bool = False,
+    displace_concrete: bool = True,
     max_iter: int = 100,
     tol: float = _DEFAULT_TOL,
     n_mult: np.ndarray | None = None,
@@ -775,7 +782,8 @@ def solve_elastic_combined(
     4. Combine: ``total = s2 + RST1``.
 
     Pass the short-term parts as zero (and ``ns`` equal to ``nl``) to recover a
-    pure long-term analysis.
+    pure long-term analysis. Displaced concrete is deducted in both solves by
+    default; ``displace_concrete=False`` retains the legacy area model.
 
     ``n_mult`` is a per-bar modular-ratio multiplier (1 for mild reinforcement,
     ``Ep/Es`` for tendons). ``prestress_stress`` is the locked-in tendon prestress
