@@ -12385,6 +12385,7 @@ def detailing_view(inp, results, *, global_results=None):
                 tendon_elements=inp.get("tendon_elements") or [],
                 highlight_ids=highlight_ids,
                 spacing_pair=(spacing or {}).get("governing"),
+                slab_density=inp.get("slab_density"),
                 tension_zone=(
                     (minimum.get("checks") or [None])[0]
                     if minimum and minimum.get("checks") else None

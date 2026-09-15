@@ -840,8 +840,7 @@ def manual_blocks() -> list:
          "tables. You can edit the geometry directly in the tables.")
     h2("The Quick Section builder")
     md("A full-width builder (opened from the *Section* panel) generates a "
-       "parametric shape with a live preview, then *Apply* writes its points into "
-       "the tables (or *Back* leaves them untouched). Reinforcement can be given by "
+       "parametric shape with a live preview. Reinforcement can be given by "
        "a bar count or by a spacing, in one or several layers, and tendons as a "
        "ring or in layers where that placement is unambiguous. The bottom and top "
        "faces take their own cover and bar diameter (entered directly in mm), a "
@@ -881,7 +880,7 @@ def manual_blocks() -> list:
        "automatic face reinforcement is not defined for those non-uniform or "
        "split faces. Add their bars and tendons directly in the point tables. "
        "The T-section, I-section and annulus provide bounded automatic placement, "
-       "and the builder blocks Apply if a dimension, layer or ring would create "
+       "and the builder rejects dimensions, layers or rings that would create "
        "invalid geometry or put a generated point outside concrete.")
     h2("Validity checks")
     md("Geometry is validated before calculation. Every outer or hole ring "

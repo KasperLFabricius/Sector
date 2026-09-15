@@ -1950,6 +1950,7 @@ def detailing_geometry_figure(
     tendons,
     *,
     bar_elements=None,
+    slab_density=None,
     tendon_elements=None,
     highlight_ids=None,
     spacing_pair=None,
@@ -1963,6 +1964,14 @@ def detailing_geometry_figure(
     diameters; selected minimum-reinforcement bars receive an open highlight.
     """
     bar_elements = list(bar_elements or [])
+    if spacing_pair and (slab_density or {}).get("status") == "VERIFIED":
+        bar_elements = list(slab_density["physical_elements"])
+        bars = [
+            (float(item["x_mm"]) / 1000.0,
+             float(item["y_mm"]) / 1000.0,
+             math.pi * float(item["diameter_mm"]) ** 2 / 4.0)
+            for item in bar_elements
+        ]
     tendon_elements = list(tendon_elements or [])
     bar_ids = [str(item.get("id") or index + 1)
                for index, item in enumerate(bar_elements)]
