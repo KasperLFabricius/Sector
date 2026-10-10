@@ -85,8 +85,11 @@ def discard_retired_qs_fragment(at):
     # Input stages now use a selectbox. Locate that current mount before removing
     # its retired builder siblings; never edit session state or live input nodes.
     input_host = _tree_parent_of_key(main, "_input_tab")
+    needs_full_rerun = input_host is None
     if input_host is None:
-        return at
+        # Apply can finish its fragment before AppTest remounts the Inputs page.
+        # Remove stale widget references before completing that full rerun.
+        input_host = main
     retired_markers = {"qs_apply", "qs_back", "shape"}
     for index, child in list(input_host.children.items()):
         if (
@@ -94,6 +97,8 @@ def discard_retired_qs_fragment(at):
             and _tree_contains_key(child, retired_markers)
         ):
             del input_host.children[index]
+    if needs_full_rerun:
+        at.run()
     return at
 
 

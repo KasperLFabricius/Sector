@@ -20,3 +20,16 @@ offline HTML illustrations, release metadata and portable distribution.
 Run independent example checks first, then manual and publication tests, then
 affected application/packaging checks. Preserve existing numerical and release
 checks. Record commands and results in the final release evidence.
+
+## Validation environment corrections
+
+Two test-harness failures were reproduced on the unchanged 0.96.4 base.
+The Quick Section adapter now removes retired widget references and completes
+the pending full rerun when the input-stage selector has not yet remounted.
+Checks cover live controls, session-state preservation and native report routes.
+
+The native handle-isolation test uses the underlying Python interpreter for its
+standard-library worker. This avoids measuring the Windows virtual-environment
+redirector's child-process lifetime. The private-handle assertions, expected
+protocol output and 1.5-second limit remain in place. Both corrections affect
+tests only.
