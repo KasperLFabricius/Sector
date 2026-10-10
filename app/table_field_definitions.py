@@ -303,13 +303,13 @@ def validation_rule(definition: FieldDefinition) -> str:
     if definition.key == "description":
         return "Optional project text."
     if definition.key == "material_id":
-        return "Required ID that must resolve to the matching material catalogue."
+        return "Required ID of a material in the matching material catalog."
     if definition.key == "area_mm2":
         return "Required finite area greater than zero."
     if definition.key == "calculate_crack_width":
-        return "Boolean request; off means crack width is not requested."
+        return "On requests the calculation. Off leaves it unrequested."
     if definition.unit != "-" or definition.math_symbol != "-":
-        return "Finite unambiguous decimal; the field-specific sign rule applies."
+        return "Enter a finite decimal value. Use the sign convention in this table."
     return "Value must meet the input requirements stated in this table."
 
 
@@ -384,7 +384,7 @@ def _reinforcement_fields(kind: str) -> tuple[FieldDefinition, ...]:
         *_XY_FIELDS,
         _field(
             "size mode", "Size input", "Choose whether area or diameter controls the size.",
-            "-", "-", "Specifies whether area or diameter defines the element size.",
+            "-", "-", 'Selects area or diameter as the element-size input.',
             "Not applicable.", BlankPolicy.DEFAULT, "User selection", "Area",
         ),
         _field(
@@ -449,7 +449,7 @@ _CASE_ID_FIELDS = (
 _PLASTIC_FIELDS = (
     *_CASE_ID_FIELDS,
     _action("n_ed_kn", "Axial force", "N_{Ed}", "kN",
-            "Design axial force.", "Tension is positive; compression is negative."),
+            "Design axial force.", 'Tension is positive. Compression is negative.'),
     _action("mx_ed_knm", "Moment about x", "M_{x,Ed}", "kN m",
             "Design moment about the x axis.", "Uses the declared section-axis sign."),
     _action("my_ed_knm", "Moment about y", "M_{y,Ed}", "kN m",
@@ -463,13 +463,13 @@ _PLASTIC_FIELDS = (
     _field(
         "vx_face", "Vx face", "Face used for the Vx shear check; Auto derives it from My.",
         "-", "-", "Selects the physical face assessed for shear along x.",
-        "Negative is left; positive is right.", BlankPolicy.DEFAULT,
+        'Negative is left. Positive is right.', BlankPolicy.DEFAULT,
         "User selection", "auto",
     ),
     _field(
         "vy_face", "Vy face", "Face used for the Vy shear check; Auto derives it from Mx.",
         "-", "-", "Selects the physical face assessed for shear along y.",
-        "Negative is bottom; positive is top.", BlankPolicy.DEFAULT,
+        'Negative is bottom. Positive is top.', BlankPolicy.DEFAULT,
         "User selection", "auto",
     ),
     _action("t_ed_knm", "Torsion", "T_{Ed}", "kN m",
@@ -477,7 +477,7 @@ _PLASTIC_FIELDS = (
     _field(
         "check_minimum_reinforcement", "Minimum reinforcement",
         "Enable the minimum-reinforcement check for this case.", "-", "-",
-        "Requests the modelled-direction minimum-reinforcement assessment.",
+        'Requests the modeled-direction minimum-reinforcement assessment.',
         "Not applicable.", BlankPolicy.DEFAULT, "User selection", False,
     ),
 )
@@ -485,17 +485,17 @@ _PLASTIC_FIELDS = (
 _ELASTIC_FIELDS = (
     *_CASE_ID_FIELDS,
     _action("n_long_ed_kn", "Sustained axial force", "N_{Ed,long}", "kN",
-            "Sustained axial-force part.", "Tension is positive; compression is negative."),
+            "Sustained axial-force part.", 'Tension is positive. Compression is negative.'),
     _action("mx_long_ed_knm", "Sustained moment about x", "M_{x,Ed,long}", "kN m",
             "Sustained moment part about x.", "Uses the declared section-axis sign."),
     _action("my_long_ed_knm", "Sustained moment about y", "M_{y,Ed,long}", "kN m",
             "Sustained moment part about y.", "Uses the declared section-axis sign."),
     _action("n_short_ed_kn", "Instantaneous axial force", "N_{Ed,short}", "kN",
-            "Instantaneous axial-force part.", "Tension is positive; compression is negative."),
+            "Additional instantaneous axial force added to the sustained action.", 'Tension is positive. Compression is negative.'),
     _action("mx_short_ed_knm", "Instantaneous moment about x", "M_{x,Ed,short}", "kN m",
-            "Instantaneous moment part about x.", "Uses the declared section-axis sign."),
+            "Additional instantaneous moment about x added to the sustained action.", "Uses the declared section-axis sign."),
     _action("my_short_ed_knm", "Instantaneous moment about y", "M_{y,Ed,short}", "kN m",
-            "Instantaneous moment part about y.", "Uses the declared section-axis sign."),
+            "Additional instantaneous moment about y added to the sustained action.", "Uses the declared section-axis sign."),
     _field(
         "calculate_crack_width", "Calculate crack width",
         "Run the selected crack-width calculation for this case.", "-", "-",
@@ -526,14 +526,14 @@ _FATIGUE_FIELDS = (
         "Cycles must be greater than zero.", BlankPolicy.REQUIRED,
     ),
     _action("n_long_ed_kn", "Basic axial force", "N_{Ed,long}", "kN",
-            "Sustained or basic axial force.", "Tension is positive; compression is negative."),
+            "Sustained or basic axial force.", 'Tension is positive. Compression is negative.'),
     _action("mx_long_ed_knm", "Basic moment about x", "M_{x,Ed,long}", "kN m",
             "Sustained or basic moment about x.", "Uses the declared section-axis sign."),
     _action("my_long_ed_knm", "Basic moment about y", "M_{y,Ed,long}", "kN m",
             "Sustained or basic moment about y.", "Uses the declared section-axis sign."),
     _action("n_short_ed_kn", "Cyclic axial increment", "\\Delta N_{Ed}", "kN",
             "Cyclic axial-force increment added to the basic state.",
-            "Tension is positive; compression is negative."),
+            'Tension is positive. Compression is negative.'),
     _action("mx_short_ed_knm", "Cyclic moment increment about x", "\\Delta M_{x,Ed}", "kN m",
             "Cyclic moment increment about x.", "Uses the declared section-axis sign."),
     _action("my_short_ed_knm", "Cyclic moment increment about y", "\\Delta M_{y,Ed}", "kN m",

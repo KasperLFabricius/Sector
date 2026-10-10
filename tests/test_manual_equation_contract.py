@@ -19,150 +19,42 @@ import manual_equation_location as location  # noqa: E402
 import manual_equation_source as source  # noqa: E402
 
 
-EXPECTED_CONTRACT_SEAL = (
-    "3a2d9df2c74904faef0788150734f3a68c448349ee862ec0e17c18554a9ff34b"
-)
+EXPECTED_CONTRACT_SEAL = '240830b38d2d9ad83f5096ac1ea7bfd3aadf14ad93bd9d9dfa7a29b4024a6c22'
 
 EXPECTED_ROWS = (
-    ("C3-1", 6, (r"\sigma_c",), ("MPa",), "stress law", ()),
-    (
-        "C3-2", 7, (r"\sigma_s", r"f_{yd}", r"\varepsilon_{yd}"),
-        ("MPa", "MPa", "1"), "stress and strain law", (),
-    ),
-    (
-        "C3-3", 11, (r"\varepsilon_{p,j}", r"\sigma_p", r"f_{pd}"),
-        ("1", "MPa", "MPa"), "strain and stress law", (),
-    ),
-    (
-        "C4-1", 11, (r"\kappa",), ("1/mm",), "curvature selection",
-        (
-            "manual.material.concrete-law",
-            "manual.material.steel-law",
-            "manual.material.prestress-law",
-        ),
-    ),
-    ("C5-1", 6, (r"A_{s,min}",), ("mm^2",), "area check", ()),
-    ("C5-2", 3, (r"M_{R,nom}",), ("N mm",), "moment check", ()),
-    (
-        "C5-3", 5, (r"\sum_i A_{s,i}f_{yk,i}",), ("N",),
-        "force check", (),
-    ),
-    ("C5-4", 3, (r"c_{clear}",), ("mm",), "length check", ()),
-    (
-        "C5-5", 8, (r"\rho_w", r"\rho_{w,min}"), ("1", "1"),
-        "dimensionless ratio check", (),
-    ),
-    (
-        "C5-6", 3, (r"s_l", r"s_t"), ("mm", "mm"),
-        "length checks", (),
-    ),
-    (
-        "C5-7", 5, (r"\rho_{w,T}",), ("1",),
-        "dimensionless ratio check",
-        ("manual.detailing.links.minimum-ratio",),
-    ),
-    (
-        "C7-1", 10, (r"w_k", r"\varepsilon_{sm}-\varepsilon_{cm}"),
-        ("mm", "1"), "crack-width relation", ("manual.crack.2005.spacing",),
-    ),
-    (
-        "C7-2", 10, (r"s_{r,max}",), ("mm",), "length relation", (),
-    ),
-    (
-        "C7-5", 7, (r"\rho_{s,min}",), ("1",),
-        "dimensionless reinforcement-ratio relation", (),
-    ),
-    (
-        "C7-3", 10, (r"w_k", r"\frac{k_1}{r}"), ("mm", "1"),
-        "crack-width relation", ("manual.crack.2023.spacing",),
-    ),
-    (
-        "C7-4", 9, (r"s_{r,m,cal}",), ("mm",), "length relation", (),
-    ),
-    (
-        "C8-1", 6, (r"\Delta\sigma_{Ed,i}",), ("MPa",),
-        "stress-range relation", (),
-    ),
-    (
-        "C8-2", 3, (r"\Delta\sigma_{Rd}",), ("MPa",),
-        "stress relation", (),
-    ),
-    (
-        "C8-3", 6, (r"N_{R,i}",), ("cycles",), "cycle-life relation",
-        (
-            "manual.fatigue.stress-range",
-            "manual.fatigue.reinforcement.design-range",
-        ),
-    ),
-    (
-        "C8-4", 4, (r"D",), ("1",), "dimensionless damage check",
-        ("manual.fatigue.reinforcement.life",),
-    ),
-    (
-        "C8-5", 7, (r"f_{cd,fat}",), ("MPa",), "stress relation", (),
-    ),
-    (
-        "C8-6", 7, (r"\eta_{cc}", r"\eta_{cc,fat}", r"f_{cd,fat}"),
-        ("1", "1", "MPa"), "dimensionless factors and stress relation", (),
-    ),
-    (
-        "C8-7", 4, (r"N_R",), ("cycles",), "cycle-life relation",
-        (
-            "manual.fatigue.concrete.strength-2005",
-            "manual.fatigue.concrete.strength-2023",
-        ),
-    ),
-    (
-        "C8-8", 2,
-        (r"E_{max}+0.43\sqrt{1-E_{min}/E_{max}}",), ("1",),
-        "dimensionless fatigue check",
-        (
-            "manual.fatigue.concrete.strength-2005",
-            "manual.fatigue.concrete.strength-2023",
-        ),
-    ),
-    (
-        "C9-1", 9, (r"V_{Rd,c}",), ("N",), "force relation", (),
-    ),
-    (
-        "C9-2", 6, (r"V_{Rd,c}",), ("N",), "force relation", (),
-    ),
-    (
-        "C9-3", 6, (r"a_{cs}", r"k_{vp}"), ("mm", "1"),
-        "length and dimensionless factor", (),
-    ),
-    (
-        "C9-4", 11, (r"V_{Rd,s}", r"V_{Rd,max}"), ("N", "N"),
-        "force relations", (),
-    ),
-    (
-        "C9-5", 8, (r"\tau_{Rd,sy}", r"\sigma_{cd}"), ("MPa", "MPa"),
-        "stress relations", ("manual.detailing.links.minimum-ratio",),
-    ),
-    (
-        "C10-1", 11, (r"T_{Rd,s}", r"T_{Rd,max}"), ("N mm", "N mm"),
-        "moment relations", (),
-    ),
-    (
-        "C10-2", 4,
-        (r"T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}",), ("1",),
-        "dimensionless interaction check",
-        ("manual.shear.links-2005", "manual.torsion.resistance"),
-    ),
-    (
-        "C11-1", 4,
-        (r"T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}",), ("1",),
-        "dimensionless interaction check",
-        ("manual.shear.links-2005", "manual.torsion.resistance"),
-    ),
-    (
-        "C11-2", 2, (r"\sum(S_{Ed}/S_{Rd})",), ("1",),
-        "dimensionless interaction check",
-        (
-            "manual.shear.links-2005",
-            "manual.torsion.resistance",
-        ),
-    ),
+    ('C3-1', 6, ('\\sigma_c',), ('MPa',), 'stress law', ()),
+    ('C3-2', 7, ('\\sigma_s', 'f_{yd}', '\\varepsilon_{yd}'), ('MPa', 'MPa', '1'), 'stress and strain law', ()),
+    ('C3-3', 11, ('\\varepsilon_{p,j}', '\\sigma_p', 'f_{pd}'), ('1', 'MPa', 'MPa'), 'strain and stress law', ()),
+    ('C5-1', 11, ('\\kappa',), ('1/mm',), 'curvature selection', ('manual.material.concrete-law', 'manual.material.steel-law', 'manual.material.prestress-law')),
+    ('C6-1', 10, ('w_k', '\\varepsilon_{sm}-\\varepsilon_{cm}'), ('mm', '1'), 'crack-width relation', ('manual.crack.2005.spacing',)),
+    ('C6-2', 10, ('s_{r,max}',), ('mm',), 'length relation', ()),
+    ('C6-3', 7, ('\\rho_{s,min}',), ('1',), 'dimensionless reinforcement-ratio relation', ()),
+    ('C6-4', 10, ('w_k', '\\frac{k_1}{r}'), ('mm', '1'), 'crack-width relation', ('manual.crack.2023.spacing',)),
+    ('C6-5', 9, ('s_{r,m,cal}',), ('mm',), 'length relation', ()),
+    ('C7-1', 6, ('\\Delta\\sigma_{Ed,i}',), ('MPa',), 'stress-range relation', ()),
+    ('C7-2', 3, ('\\Delta\\sigma_{Rd}',), ('MPa',), 'stress relation', ()),
+    ('C7-3', 6, ('N_{R,i}',), ('cycles',), 'cycle-life relation', ('manual.fatigue.stress-range', 'manual.fatigue.reinforcement.design-range')),
+    ('C7-4', 4, ('D',), ('1',), 'dimensionless damage check', ('manual.fatigue.reinforcement.life',)),
+    ('C7-5', 7, ('f_{cd,fat}',), ('MPa',), 'stress relation', ()),
+    ('C7-6', 7, ('\\eta_{cc}', '\\eta_{cc,fat}', 'f_{cd,fat}'), ('1', '1', 'MPa'), 'dimensionless factors and stress relation', ()),
+    ('C7-7', 4, ('N_R',), ('cycles',), 'cycle-life relation', ('manual.fatigue.concrete.strength-2005', 'manual.fatigue.concrete.strength-2023')),
+    ('C7-8', 2, ('E_{max}+0.43\\sqrt{1-E_{min}/E_{max}}',), ('1',), 'dimensionless fatigue check', ('manual.fatigue.concrete.strength-2005', 'manual.fatigue.concrete.strength-2023')),
+    ('C8-1', 9, ('V_{Rd,c}',), ('N',), 'force relation', ()),
+    ('C8-2', 6, ('V_{Rd,c}',), ('N',), 'force relation', ()),
+    ('C8-3', 6, ('a_{cs}', 'k_{vp}'), ('mm', '1'), 'length and dimensionless factor', ()),
+    ('C8-4', 11, ('V_{Rd,s}', 'V_{Rd,max}'), ('N', 'N'), 'force relations', ()),
+    ('C8-5', 8, ('\\tau_{Rd,sy}', '\\sigma_{cd}'), ('MPa', 'MPa'), 'stress relations', ('manual.detailing.links.minimum-ratio',)),
+    ('C9-1', 11, ('T_{Rd,s}', 'T_{Rd,max}'), ('N mm', 'N mm'), 'moment relations', ()),
+    ('C9-2', 4, ('T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}',), ('1',), 'dimensionless interaction check', ('manual.shear.links-2005', 'manual.torsion.resistance')),
+    ('C10-1', 4, ('T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}',), ('1',), 'dimensionless interaction check', ('manual.shear.links-2005', 'manual.torsion.resistance')),
+    ('C10-2', 2, ('\\sum(S_{Ed}/S_{Rd})',), ('1',), 'dimensionless interaction check', ('manual.shear.links-2005', 'manual.torsion.resistance')),
+    ('C11-1', 6, ('A_{s,min}',), ('mm^2',), 'area check', ()),
+    ('C11-2', 3, ('M_{R,nom}',), ('N mm',), 'moment check', ()),
+    ('C11-3', 5, ('\\sum_i A_{s,i}f_{yk,i}',), ('N',), 'force check', ()),
+    ('C11-4', 3, ('c_{clear}',), ('mm',), 'length check', ()),
+    ('C11-5', 8, ('\\rho_w', '\\rho_{w,min}'), ('1', '1'), 'dimensionless ratio check', ()),
+    ('C11-6', 3, ('s_l', 's_t'), ('mm', 'mm'), 'length checks', ()),
+    ('C11-7', 5, ('\\rho_{w,T}',), ('1',), 'dimensionless ratio check', ('manual.detailing.links.minimum-ratio',)),
 )
 
 
@@ -230,7 +122,7 @@ def test_tendon_and_action_sign_identities_are_explicit():
     assert tendon[r"\varepsilon_{p,IS,j}"].meaning == (
         "locked-in strain of tendon j"
     )
-    shear = {term.markup: term for term in by_number["C9-3"].symbols}
+    shear = {term.markup: term for term in by_number["C8-3"].symbols}
     assert shear[r"N_{Ed}"].meaning.endswith("tension positive")
     assert shear[r"M_{Ed}"].unit == "N mm"
     assert shear[r"V_{Ed}"].unit == "N"
@@ -240,12 +132,12 @@ def test_forward_reuse_and_duplicate_expression_identities_are_not_collapsed():
     by_number = {
         item.number: item for item in contract.MANUAL_EQUATION_CONTRACTS
     }
-    assert by_number["C7-1"].uses == ("manual.crack.2005.spacing",)
-    assert by_number["C7-3"].uses == ("manual.crack.2023.spacing",)
-    assert by_number["C10-2"] != by_number["C11-1"]
-    assert by_number["C10-2"].results == by_number["C11-1"].results
-    assert by_number["C10-2"].uses == by_number["C11-1"].uses
-    assert by_number["C10-2"].key != by_number["C11-1"].key
+    assert by_number["C6-1"].uses == ("manual.crack.2005.spacing",)
+    assert by_number["C6-4"].uses == ("manual.crack.2023.spacing",)
+    assert by_number["C9-2"] != by_number["C10-1"]
+    assert by_number["C9-2"].results == by_number["C10-1"].results
+    assert by_number["C9-2"].uses == by_number["C10-1"].uses
+    assert by_number["C9-2"].key != by_number["C10-1"].key
 
 
 def test_edition_alternative_dependencies_are_complete_and_ordered():
@@ -256,8 +148,8 @@ def test_edition_alternative_dependencies_are_complete_and_ordered():
         "manual.fatigue.concrete.strength-2005",
         "manual.fatigue.concrete.strength-2023",
     )
-    assert by_number["C8-7"].uses == expected
-    assert by_number["C8-8"].uses == expected
+    assert by_number["C7-7"].uses == expected
+    assert by_number["C7-8"].uses == expected
 
 
 @pytest.mark.parametrize("index", range(33))

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 import tools.manual_render_fixture as manual_fixture
+from tools.manual_generated_html import manual_generated_html_text
 from sector import __version__
 from tools.manual_current_program_statements import (
     CURRENT_REPORT_METADATA_WORDING,
@@ -64,7 +65,8 @@ def test_generated_html_fixture_passes_current_only_identity_checks():
     html = manual_fixture.build_fixture_html()
     text = manual_fixture.validate_html_content(html)
 
-    assert CURRENT_REPORT_METADATA_WORDING in text
+    visible = " ".join(manual_generated_html_text(text).split())
+    assert CURRENT_REPORT_METADATA_WORDING in visible
     assert "former shared crack-width" not in text
 
 

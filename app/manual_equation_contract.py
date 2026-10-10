@@ -103,7 +103,7 @@ MANUAL_EQUATION_CONTRACTS = (
         1, "manual.material.concrete-law", "C3-1",
         _terms(
             (r"\sigma_c", "concrete design stress", "MPa"),
-            (r"f_{cd}", "design concrete compressive strength", "MPa"),
+            (r"f_{cd}", 'design compressive strength of concrete', "MPa"),
             (r"\varepsilon_c", "concrete strain", "1"),
             (r"\varepsilon_{c2}", "strain at peak concrete stress", "1"),
             (r"\varepsilon_{cu2}", "ultimate concrete strain", "1"),
@@ -154,7 +154,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "strain and stress law",
     ),
     _contract(
-        4, "manual.plastic.governing-curvature", "C4-1",
+        4, "manual.plastic.governing-curvature", "C5-1",
         _terms(
             (r"\kappa", "governing section curvature", "1/mm"),
             (r"\varepsilon_{cu2}", "ultimate concrete strain", "1"),
@@ -177,99 +177,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        5, "manual.detailing.minimum-2005", "C5-1",
-        _terms(
-            (r"A_{s,min}", "required minimum reinforcement area", "mm^2"),
-            (r"A_{s,prov}", "provided reinforcement area", "mm^2"),
-            (r"f_{ctm}", "mean concrete tensile strength", "MPa"),
-            (r"f_{yk}", "characteristic reinforcing-steel yield strength", "MPa"),
-            (r"b_t", "mean breadth of the tension half-plane", "mm"),
-            (r"d", "effective depth", "mm"),
-        ),
-        _terms((r"A_{s,min}", "required minimum reinforcement area", "mm^2")),
-        "area check",
-    ),
-    _contract(
-        6, "manual.detailing.minimum-2023-bending", "C5-2",
-        _terms(
-            (r"M_{R,nom}", "nominal bending resistance", "N mm"),
-            (r"M_{cr}", "cracking moment", "N mm"),
-            (r"N_{Ed}", "design axial force", "N"),
-        ),
-        _terms((r"M_{R,nom}", "nominal bending resistance", "N mm")),
-        "moment check",
-    ),
-    _contract(
-        7, "manual.detailing.minimum-2023-axial", "C5-3",
-        _terms(
-            (r"A_{s,i}", "area of reinforcing bar i", "mm^2"),
-            (r"f_{yk,i}", "characteristic yield strength of bar i", "MPa"),
-            (r"A_c", "gross concrete area", "mm^2"),
-            (r"f_{ctm}", "mean concrete tensile strength", "MPa"),
-            (r"i", "reinforcing-bar index", "1"),
-        ),
-        _terms(
-            (r"\sum_i A_{s,i}f_{yk,i}",
-             "provided characteristic tensile resistance", "N"),
-        ),
-        "force check",
-    ),
-    _contract(
-        8, "manual.detailing.clear-spacing", "C5-4",
-        _terms(
-            (r"c_{clear}", "clear distance between included elements", "mm"),
-            (r"\phi_{max}", "larger included reinforcement diameter", "mm"),
-            (r"D_{upper}", "upper aggregate size", "mm"),
-        ),
-        _terms((r"c_{clear}", "clear distance between included elements", "mm")),
-        "length check",
-    ),
-    _contract(
-        9, "manual.detailing.links.minimum-ratio", "C5-5",
-        _terms(
-            (r"\rho_w", "provided shear-link reinforcement ratio", "1"),
-            (r"\rho_{w,min}", "minimum shear-link reinforcement ratio", "1"),
-            (r"A_{sw}", "shear-link area within one spacing", "mm^2"),
-            (r"s", "longitudinal link spacing", "mm"),
-            (r"b_w", "effective web breadth", "mm"),
-            (r"c", "edition-specific minimum-ratio coefficient", "1"),
-            (r"f_{ck}", "characteristic concrete compressive strength", "MPa"),
-            (r"f_{ywk}", "characteristic link yield strength", "MPa"),
-        ),
-        _terms(
-            (r"\rho_w", "provided shear-link reinforcement ratio", "1"),
-            (r"\rho_{w,min}", "minimum shear-link reinforcement ratio", "1"),
-        ),
-        "dimensionless ratio check",
-    ),
-    _contract(
-        10, "manual.detailing.links.spacing", "C5-6",
-        _terms(
-            (r"s_l", "longitudinal link spacing", "mm"),
-            (r"s_t", "maximum transverse distance between link legs", "mm"),
-            (r"d", "effective depth", "mm"),
-        ),
-        _terms(
-            (r"s_l", "longitudinal link spacing", "mm"),
-            (r"s_t", "maximum transverse distance between link legs", "mm"),
-        ),
-        "length checks",
-    ),
-    _contract(
-        11, "manual.detailing.torsion.minimum-ratio", "C5-7",
-        _terms(
-            (r"\rho_{w,T}", "provided torsion-link wall ratio", "1"),
-            (r"A_{leg}", "area of one closed-link leg", "mm^2"),
-            (r"s", "longitudinal closed-link spacing", "mm"),
-            (r"t_{ef}", "effective torsion-wall thickness", "mm"),
-            (r"\rho_{w,min}", "minimum link reinforcement ratio", "1"),
-        ),
-        _terms((r"\rho_{w,T}", "provided torsion-link wall ratio", "1")),
-        "dimensionless ratio check",
-        ("manual.detailing.links.minimum-ratio",),
-    ),
-    _contract(
-        12, "manual.crack.2005.width", "C7-1",
+        5, "manual.crack.2005.width", "C6-1",
         _terms(
             (r"w_k", "characteristic crack width", "mm"),
             (r"s_{r,max}", "maximum crack spacing", "mm"),
@@ -277,7 +185,7 @@ MANUAL_EQUATION_CONTRACTS = (
             (r"\varepsilon_{cm}", "mean concrete strain between cracks", "1"),
             (r"\sigma_s", "reinforcement stress", "MPa"),
             (r"k_t", "load-duration factor", "1"),
-            (r"f_{ct,eff}", "effective concrete tensile strength", "MPa"),
+            (r"f_{ct,eff}", 'effective tensile strength of concrete', "MPa"),
             (r"\rho_{p,eff}", "effective reinforcement ratio", "1"),
             (r"\alpha_e", "reinforcement-to-concrete modulus ratio", "1"),
             (r"E_s", "reinforcing-steel modulus", "MPa"),
@@ -291,7 +199,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ("manual.crack.2005.spacing",),
     ),
     _contract(
-        13, "manual.crack.2005.spacing", "C7-2",
+        6, "manual.crack.2005.spacing", "C6-2",
         _terms(
             (r"s_{r,max}", "maximum crack spacing", "mm"),
             (r"k_1", "bond-property coefficient", "1"),
@@ -308,9 +216,9 @@ MANUAL_EQUATION_CONTRACTS = (
         "length relation",
     ),
     _contract(
-        14, "manual.crack.dk-na-heightened", "C7-5",
+        7, "manual.crack.dk-na-heightened", "C6-3",
         _terms(
-            (r"\rho_{s,min}", "required heightened minimum reinforcement ratio", "1"),
+            (r"\rho_{s,min}", 'minimum reinforcement ratio for heightened crack control', "1"),
             (r"m_s", "reinforcement-surface multiplier", "1"),
             (r"\phi", "bar diameter", "mm"),
             (r"f_{ct,eff}", "user-supplied effective tensile strength", "MPa"),
@@ -319,12 +227,12 @@ MANUAL_EQUATION_CONTRACTS = (
             (r"w_k", "user-supplied permitted crack width", "mm"),
         ),
         _terms(
-            (r"\rho_{s,min}", "required heightened minimum reinforcement ratio", "1"),
+            (r"\rho_{s,min}", 'minimum reinforcement ratio for heightened crack control', "1"),
         ),
         "dimensionless reinforcement-ratio relation",
     ),
     _contract(
-        15, "manual.crack.2023.width", "C7-3",
+        8, "manual.crack.2023.width", "C6-4",
         _terms(
             (r"w_k", "characteristic crack width", "mm"),
             (r"k_w", "characteristic-to-mean crack factor", "1"),
@@ -345,7 +253,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ("manual.crack.2023.spacing",),
     ),
     _contract(
-        16, "manual.crack.2023.spacing", "C7-4",
+        9, "manual.crack.2023.spacing", "C6-5",
         _terms(
             (r"s_{r,m,cal}", "calculated mean crack spacing", "mm"),
             (r"c", "reinforcement cover", "mm"),
@@ -361,13 +269,13 @@ MANUAL_EQUATION_CONTRACTS = (
         "length relation",
     ),
     _contract(
-        17, "manual.fatigue.stress-range", "C8-1",
+        10, "manual.fatigue.stress-range", "C7-1",
         _terms(
             (r"\Delta\sigma_{Ed,i}", "design stress range in bin i", "MPa"),
             (r"\sigma(S)", "stress reconstructed for action state S", "MPa"),
             (r"S_l", "sustained or basic action state", "case action"),
             (r"S_s", "cyclic action increment", "case action"),
-            (r"\gamma_{Ff}", "fatigue action partial factor", "1"),
+            (r"\gamma_{Ff}", 'partial factor for fatigue actions', "1"),
             (r"i", "spectrum-bin index", "1"),
         ),
         _terms(
@@ -376,12 +284,12 @@ MANUAL_EQUATION_CONTRACTS = (
         "stress-range relation",
     ),
     _contract(
-        18, "manual.fatigue.reinforcement.design-range", "C8-2",
+        11, "manual.fatigue.reinforcement.design-range", "C7-2",
         _terms(
             (r"\Delta\sigma_{Rd}", "design fatigue-detail stress range", "MPa"),
             (r"\Delta\sigma_{Rsk}",
-             "characteristic fatigue-detail reference range", "MPa"),
-            (r"\gamma_s", "reinforcement fatigue partial factor", "1"),
+             'characteristic reference range for the fatigue detail', "MPa"),
+            (r"\gamma_s", 'partial factor for reinforcement fatigue', "1"),
         ),
         _terms(
             (r"\Delta\sigma_{Rd}", "design fatigue-detail stress range", "MPa"),
@@ -389,16 +297,16 @@ MANUAL_EQUATION_CONTRACTS = (
         "stress relation",
     ),
     _contract(
-        19, "manual.fatigue.reinforcement.life", "C8-3",
+        12, "manual.fatigue.reinforcement.life", "C7-3",
         _terms(
-            (r"N_{R,i}", "resistant cycle count for bin i", "cycles"),
+            (r"N_{R,i}", "calculated fatigue life for bin i", "cycles"),
             (r"N^*", "reference cycle count", "cycles"),
             (r"\Delta\sigma_{Rd}", "design fatigue-detail stress range", "MPa"),
             (r"\Delta\sigma_{Ed,i}", "design stress range in bin i", "MPa"),
             (r"k", "active S-N slope", "1"),
             (r"i", "spectrum-bin index", "1"),
         ),
-        _terms((r"N_{R,i}", "resistant cycle count for bin i", "cycles")),
+        _terms((r"N_{R,i}", "calculated fatigue life for bin i", "cycles")),
         "cycle-life relation",
         (
             "manual.fatigue.stress-range",
@@ -406,11 +314,11 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        20, "manual.fatigue.reinforcement.miner", "C8-4",
+        13, "manual.fatigue.reinforcement.miner", "C7-4",
         _terms(
             (r"D", "Palmgren-Miner damage", "1"),
             (r"n_i", "applied cycle count in bin i", "cycles"),
-            (r"N_{R,i}", "resistant cycle count for bin i", "cycles"),
+            (r"N_{R,i}", "calculated fatigue life for bin i", "cycles"),
             (r"i", "spectrum-bin index", "1"),
         ),
         _terms((r"D", "Palmgren-Miner damage", "1")),
@@ -418,46 +326,46 @@ MANUAL_EQUATION_CONTRACTS = (
         ("manual.fatigue.reinforcement.life",),
     ),
     _contract(
-        21, "manual.fatigue.concrete.strength-2005", "C8-5",
+        14, "manual.fatigue.concrete.strength-2005", "C7-5",
         _terms(
-            (r"f_{cd,fat}", "design concrete fatigue strength", "MPa"),
+            (r"f_{cd,fat}", 'design fatigue strength of concrete', "MPa"),
             (r"k_1", "fatigue-strength coefficient", "1"),
             (r"\beta_{cc}(t_0)", "concrete age factor at first loading", "1"),
             (r"t_0", "concrete age at first fatigue loading", "days"),
             (r"\alpha_{cc}", "concrete strength coefficient", "1"),
-            (r"f_{ck}", "characteristic concrete compressive strength", "MPa"),
-            (r"\gamma_{c,fat}", "concrete fatigue partial factor", "1"),
+            (r"f_{ck}", 'characteristic compressive strength of concrete', "MPa"),
+            (r"\gamma_{c,fat}", 'partial factor for concrete fatigue', "1"),
         ),
-        _terms((r"f_{cd,fat}", "design concrete fatigue strength", "MPa")),
+        _terms((r"f_{cd,fat}", 'design fatigue strength of concrete', "MPa")),
         "stress relation",
     ),
     _contract(
-        22, "manual.fatigue.concrete.strength-2023", "C8-6",
+        15, "manual.fatigue.concrete.strength-2023", "C7-6",
         _terms(
             (r"\eta_{cc}", "concrete strength-effect factor", "1"),
-            (r"\eta_{cc,fat}", "fatigue concrete strength-effect factor", "1"),
-            (r"f_{cd,fat}", "design concrete fatigue strength", "MPa"),
-            (r"f_{ck}", "characteristic concrete compressive strength", "MPa"),
+            (r"\eta_{cc,fat}", 'concrete strength-effect factor for fatigue', "1"),
+            (r"f_{cd,fat}", 'design fatigue strength of concrete', "MPa"),
+            (r"f_{ck}", 'characteristic compressive strength of concrete', "MPa"),
             (r"\beta_{cc}(t_0)", "concrete age factor at first loading", "1"),
             (r"t_0", "concrete age at first fatigue loading", "days"),
-            (r"\gamma_{c,fat}", "concrete fatigue partial factor", "1"),
+            (r"\gamma_{c,fat}", 'partial factor for concrete fatigue', "1"),
         ),
         _terms(
             (r"\eta_{cc}", "concrete strength-effect factor", "1"),
-            (r"\eta_{cc,fat}", "fatigue concrete strength-effect factor", "1"),
-            (r"f_{cd,fat}", "design concrete fatigue strength", "MPa"),
+            (r"\eta_{cc,fat}", 'concrete strength-effect factor for fatigue', "1"),
+            (r"f_{cd,fat}", 'design fatigue strength of concrete', "MPa"),
         ),
         "dimensionless factors and stress relation",
     ),
     _contract(
-        23, "manual.fatigue.concrete.life", "C8-7",
+        16, "manual.fatigue.concrete.life", "C7-7",
         _terms(
-            (r"N_R", "resistant cycle count", "cycles"),
+            (r"N_R", "calculated fatigue life", "cycles"),
             (r"C", "selected concrete S-N coefficient", "1"),
-            (r"E_{max}", "maximum normalized concrete stress", "1"),
+            (r"E_{max}", 'maximum normalized stress in concrete', "1"),
             (r"R", "minimum-to-maximum concrete stress ratio", "1"),
         ),
-        _terms((r"N_R", "resistant cycle count", "cycles")),
+        _terms((r"N_R", "calculated fatigue life", "cycles")),
         "cycle-life relation",
         (
             "manual.fatigue.concrete.strength-2005",
@@ -465,14 +373,14 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        24, "manual.fatigue.concrete.equivalent", "C8-8",
+        17, "manual.fatigue.concrete.equivalent", "C7-8",
         _terms(
-            (r"E_{max}", "maximum normalized equivalent stress", "1"),
-            (r"E_{min}", "minimum normalized equivalent stress", "1"),
+            (r"E_{max}", 'maximum equivalent stress after normalization', "1"),
+            (r"E_{min}", 'minimum equivalent stress after normalization', "1"),
         ),
         _terms(
             (r"E_{max}+0.43\sqrt{1-E_{min}/E_{max}}",
-             "damage-equivalent concrete fatigue criterion", "1"),
+             'damage-equivalent fatigue criterion for concrete', "1"),
         ),
         "dimensionless fatigue check",
         (
@@ -481,13 +389,13 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        25, "manual.shear.no-links.variable", "C9-1",
+        18, "manual.shear.no-links.variable", "C8-1",
         _terms(
             (r"V_{Rd,c}", "design shear resistance without links", "N"),
             (r"C_{Rd,c}", "edition-specific shear coefficient", "1"),
             (r"k", "size-effect factor", "1"),
             (r"\rho_l", "longitudinal reinforcement ratio", "1"),
-            (r"f_{ck}", "characteristic concrete compressive strength", "MPa"),
+            (r"f_{ck}", 'characteristic compressive strength of concrete', "MPa"),
             (r"k_1", "axial-stress coefficient", "1"),
             (r"\sigma_{cp}", "concrete axial stress", "MPa"),
             (r"b_w", "effective web breadth", "mm"),
@@ -497,7 +405,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "force relation",
     ),
     _contract(
-        26, "manual.shear.no-links.minimum", "C9-2",
+        19, "manual.shear.no-links.minimum", "C8-2",
         _terms(
             (r"V_{Rd,c}", "minimum design shear resistance without links", "N"),
             (r"v_{min}", "minimum shear stress", "MPa"),
@@ -512,7 +420,7 @@ MANUAL_EQUATION_CONTRACTS = (
         "force relation",
     ),
     _contract(
-        27, "manual.shear.action-factor-2023", "C9-3",
+        20, "manual.shear.action-factor-2023", "C8-3",
         _terms(
             (r"a_{cs}", "shear-span parameter", "mm"),
             (r"k_{vp}", "axial-action shear factor", "1"),
@@ -528,37 +436,37 @@ MANUAL_EQUATION_CONTRACTS = (
         "length and dimensionless factor",
     ),
     _contract(
-        28, "manual.shear.links-2005", "C9-4",
+        21, "manual.shear.links-2005", "C8-4",
         _terms(
             (r"V_{Rd,s}", "shear-link resistance", "N"),
-            (r"V_{Rd,max}", "maximum concrete-strut shear resistance", "N"),
+            (r"V_{Rd,max}", 'maximum shear resistance of concrete struts', "N"),
             (r"A_{sw}", "shear-link area within one spacing", "mm^2"),
             (r"s", "longitudinal link spacing", "mm"),
             (r"z", "internal lever arm", "mm"),
-            (r"f_{ywd}", "design link yield strength", "MPa"),
+            (r"f_{ywd}", 'design yield strength of links', "MPa"),
             (r"\theta", "concrete-strut angle", "rad"),
             (r"\alpha_{cw}", "compression-chord factor", "1"),
             (r"b_w", "effective web breadth", "mm"),
             (r"\nu_1", "concrete-strut effectiveness factor", "1"),
-            (r"f_{cd}", "design concrete compressive strength", "MPa"),
+            (r"f_{cd}", 'design compressive strength of concrete', "MPa"),
         ),
         _terms(
             (r"V_{Rd,s}", "shear-link resistance", "N"),
-            (r"V_{Rd,max}", "maximum concrete-strut shear resistance", "N"),
+            (r"V_{Rd,max}", 'maximum shear resistance of concrete struts', "N"),
         ),
         "force relations",
     ),
     _contract(
-        29, "manual.shear.links-2023", "C9-5",
+        22, "manual.shear.links-2023", "C8-5",
         _terms(
             (r"\tau_{Rd,sy}", "link-provided design shear stress", "MPa"),
-            (r"\rho_w", "provided shear-link reinforcement ratio", "1"),
-            (r"f_{ywd}", "design link yield strength", "MPa"),
+            (r"\rho_w", 'reinforcement ratio of the supplied shear links', "1"),
+            (r"f_{ywd}", 'design yield strength of links', "MPa"),
             (r"\theta", "concrete-strut angle", "rad"),
             (r"\sigma_{cd}", "concrete-strut compressive stress", "MPa"),
             (r"\tau_{Ed}", "design shear stress", "MPa"),
             (r"\nu", "concrete-strut effectiveness factor", "1"),
-            (r"f_{cd}", "design concrete compressive strength", "MPa"),
+            (r"f_{cd}", 'design compressive strength of concrete', "MPa"),
         ),
         _terms(
             (r"\tau_{Rd,sy}", "link-provided design shear stress", "MPa"),
@@ -568,33 +476,33 @@ MANUAL_EQUATION_CONTRACTS = (
         ("manual.detailing.links.minimum-ratio",),
     ),
     _contract(
-        30, "manual.torsion.resistance", "C10-1",
+        23, "manual.torsion.resistance", "C9-1",
         _terms(
             (r"T_{Rd,s}", "torsion-link resistance", "N mm"),
-            (r"T_{Rd,max}", "maximum concrete-strut torsion resistance", "N mm"),
+            (r"T_{Rd,max}", 'maximum torsion resistance of concrete struts', "N mm"),
             (r"A_{sw}", "closed-link area within one spacing", "mm^2"),
             (r"s", "longitudinal closed-link spacing", "mm"),
-            (r"A_k", "area enclosed by the effective wall centre-line", "mm^2"),
-            (r"f_{ywd}", "design link yield strength", "MPa"),
+            (r"A_k", 'area enclosed by the effective wall centerline', "mm^2"),
+            (r"f_{ywd}", 'design yield strength of links', "MPa"),
             (r"\theta", "concrete-strut angle", "rad"),
             (r"\nu", "concrete-strut effectiveness factor", "1"),
             (r"\alpha_{cw}", "compression-chord factor", "1"),
-            (r"f_{cd}", "design concrete compressive strength", "MPa"),
+            (r"f_{cd}", 'design compressive strength of concrete', "MPa"),
             (r"t_{ef}", "effective torsion-wall thickness", "mm"),
         ),
         _terms(
             (r"T_{Rd,s}", "torsion-link resistance", "N mm"),
-            (r"T_{Rd,max}", "maximum concrete-strut torsion resistance", "N mm"),
+            (r"T_{Rd,max}", 'maximum torsion resistance of concrete struts', "N mm"),
         ),
         "moment relations",
     ),
     _contract(
-        31, "manual.torsion.strut-interaction", "C10-2",
+        24, "manual.torsion.strut-interaction", "C9-2",
         _terms(
             (r"T_{Ed}", "design torsional moment", "N mm"),
-            (r"T_{Rd,max}", "maximum concrete-strut torsion resistance", "N mm"),
+            (r"T_{Rd,max}", 'maximum torsion resistance of concrete struts', "N mm"),
             (r"V_{Ed}", "design shear force", "N"),
-            (r"V_{Rd,max}", "maximum concrete-strut shear resistance", "N"),
+            (r"V_{Rd,max}", 'maximum shear resistance of concrete struts', "N"),
         ),
         _terms(
             (r"T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}",
@@ -607,12 +515,12 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        32, "manual.combined.strut-interaction", "C11-1",
+        25, "manual.combined.strut-interaction", "C10-1",
         _terms(
             (r"T_{Ed}", "design torsional moment", "N mm"),
-            (r"T_{Rd,max}", "maximum concrete-strut torsion resistance", "N mm"),
+            (r"T_{Rd,max}", 'maximum torsion resistance of concrete struts', "N mm"),
             (r"V_{Ed}", "design shear force", "N"),
-            (r"V_{Rd,max}", "maximum concrete-strut shear resistance", "N"),
+            (r"V_{Rd,max}", 'maximum shear resistance of concrete struts', "N"),
         ),
         _terms(
             (r"T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}",
@@ -625,7 +533,7 @@ MANUAL_EQUATION_CONTRACTS = (
         ),
     ),
     _contract(
-        33, "manual.combined.utilisation", "C11-2",
+        26, "manual.combined.utilisation", "C10-2",
         _terms(
             (r"S_{Ed}", "one design sectional action", "matching action"),
             (r"S_{Rd}", "resistance to that action acting alone", "matching action"),
@@ -639,6 +547,98 @@ MANUAL_EQUATION_CONTRACTS = (
             "manual.shear.links-2005",
             "manual.torsion.resistance",
         ),
+    ),
+    _contract(
+        27, "manual.detailing.minimum-2005", "C11-1",
+        _terms(
+            (r"A_{s,min}", 'minimum area of reinforcement necessary', "mm^2"),
+            (r"A_{s,prov}", "provided reinforcement area", "mm^2"),
+            (r"f_{ctm}", 'mean tensile strength of concrete', "MPa"),
+            (r"f_{yk}", 'characteristic yield strength of reinforcing steel', "MPa"),
+            (r"b_t", "mean breadth of the tension half-plane", "mm"),
+            (r"d", "effective depth", "mm"),
+        ),
+        _terms((r"A_{s,min}", 'minimum area of reinforcement necessary', "mm^2")),
+        "area check",
+    ),
+    _contract(
+        28, "manual.detailing.minimum-2023-bending", "C11-2",
+        _terms(
+            (r"M_{R,nom}", "nominal bending resistance", "N mm"),
+            (r"M_{cr}", "cracking moment", "N mm"),
+            (r"N_{Ed}", "design axial force", "N"),
+        ),
+        _terms((r"M_{R,nom}", "nominal bending resistance", "N mm")),
+        "moment check",
+    ),
+    _contract(
+        29, "manual.detailing.minimum-2023-axial", "C11-3",
+        _terms(
+            (r"A_{s,i}", "area of reinforcing bar i", "mm^2"),
+            (r"f_{yk,i}", "characteristic yield strength of bar i", "MPa"),
+            (r"A_c", "gross concrete area", "mm^2"),
+            (r"f_{ctm}", 'mean tensile strength of concrete', "MPa"),
+            (r"i", "reinforcing-bar index", "1"),
+        ),
+        _terms(
+            (r"\sum_i A_{s,i}f_{yk,i}",
+             'characteristic tensile resistance of included reinforcement', "N"),
+        ),
+        "force check",
+    ),
+    _contract(
+        30, "manual.detailing.clear-spacing", "C11-4",
+        _terms(
+            (r"c_{clear}", "clear distance between included elements", "mm"),
+            (r"\phi_{max}", "larger included reinforcement diameter", "mm"),
+            (r"D_{upper}", "upper aggregate size", "mm"),
+        ),
+        _terms((r"c_{clear}", "clear distance between included elements", "mm")),
+        "length check",
+    ),
+    _contract(
+        31, "manual.detailing.links.minimum-ratio", "C11-5",
+        _terms(
+            (r"\rho_w", 'reinforcement ratio of the supplied shear links', "1"),
+            (r"\rho_{w,min}", 'minimum reinforcement ratio for shear links', "1"),
+            (r"A_{sw}", "shear-link area within one spacing", "mm^2"),
+            (r"s", "longitudinal link spacing", "mm"),
+            (r"b_w", "effective web breadth", "mm"),
+            (r"c", "edition-specific minimum-ratio coefficient", "1"),
+            (r"f_{ck}", 'characteristic compressive strength of concrete', "MPa"),
+            (r"f_{ywk}", 'characteristic yield strength of links', "MPa"),
+        ),
+        _terms(
+            (r"\rho_w", 'reinforcement ratio of the supplied shear links', "1"),
+            (r"\rho_{w,min}", 'minimum reinforcement ratio for shear links', "1"),
+        ),
+        "dimensionless ratio check",
+    ),
+    _contract(
+        32, "manual.detailing.links.spacing", "C11-6",
+        _terms(
+            (r"s_l", "longitudinal link spacing", "mm"),
+            (r"s_t", "maximum transverse distance between link legs", "mm"),
+            (r"d", "effective depth", "mm"),
+        ),
+        _terms(
+            (r"s_l", "longitudinal link spacing", "mm"),
+            (r"s_t", "maximum transverse distance between link legs", "mm"),
+        ),
+        "length checks",
+    ),
+    _contract(
+        33, "manual.detailing.torsion.minimum-ratio", "C11-7",
+        _terms(
+            (r"\rho_{w,T}", 'wall ratio of the supplied torsion links', "1"),
+            (r"A_{leg}", "area of one closed-link leg", "mm^2"),
+            (r"s", "longitudinal closed-link spacing", "mm"),
+            (r"t_{ef}", "effective torsion-wall thickness", "mm"),
+            (r"\rho_{w,min}", 'minimum reinforcement ratio for links', "1"),
+        ),
+        _terms((r"\rho_{w,T}", 'wall ratio of the supplied torsion links', "1")),
+        "dimensionless ratio check",
+        ("manual.detailing.links.minimum-ratio",),
     ),
 )
 

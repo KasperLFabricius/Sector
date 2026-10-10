@@ -42,7 +42,7 @@ from tools.publication_preflight import (  # noqa: E402
 )
 from tools.report_render_fixture import validate_outline_destinations  # noqa: E402
 
-_EXPECTED_FIGURE_COUNT = 28
+_EXPECTED_FIGURE_COUNT = 36
 _UNRENDERED_MATH_TOKENS = (
     "sqrt",
     "Cfrac",
@@ -59,15 +59,15 @@ _MANUAL_CROPS = (
         "manual contents navigation",
         1,
         (0.09, 0.18, 0.92, 0.45),
-        "66818c5a0fb281f4f33d7c99e9a46acf7e9756f702a78ccad62766e1d1c999c2",
+        "f5dbabbb3c61547d4960fab7074d1b2309ed56fdf0c30d0641067605c0767d05",
     ),
     RasterCrop(
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # The reviewed 0.96.5 footer has the current version and 89-page count;
+        # The reviewed 0.96.5 footer has the current version and 143-page count;
         # the crop geometry is unchanged.
-        "5a517247c0ac5404dc787f89a43568174bb89bb953ceacdc22195884fc12a76f",
+        "d6b6e894e131cdd1bb4dcda6d4cae7d1a2be5ebe3616effecec547c47d4b56e1",
     ),
 )
 
@@ -356,28 +356,30 @@ def validate_pdf_content(pdf: bytes) -> str:
         "Results overview",
         "Reinforcement detailing",
         "Shear and torsion reinforcement",
-        "Anchorage is assumed",
+        "The resistance assumes full anchorage",
         "Bulk assignments",
-        "one fully expanded governing row for each engineering check type",
+        "one governing row for each engineering check",
         "PDF report",
-        "Standard includes used inputs, complete results, criteria, statuses and",
+        "Standard includes the used inputs, full results, criteria, statuses and concise methods",
+        "It also includes references and limitations",
         "Audit adds the detailed",
         "Editable table",
-        "Plastic/capacity and Elastic action fields",
-        "accept either a dot or comma as the decimal separator",
-        "Blank ordinary action cells are treated as zero",
-        "Optional fields left blank remain absent rather than becoming zero",
+        "Plastic/capacity, Elastic and grouped-fatigue numeric fields",
+        "accept a dot or comma as the decimal separator",
+        "Sector uses zero for blank ordinary action cells",
+        "Optional fields left blank stay empty",
         "Calculations use the entered numeric precision",
         "published project-adoption basis",
         "no Danish National Annex",
-        "confinement enhancement is not included or assessed",
+        "Sector calculates the concrete law without the 2023 confinement enhancement",
         "DS/EN 1992-2:2005/AC:2008",
         "6.106",
         "Project-defined / uncited",
-        "equilibrium torsion, which must be resisted",
+        "Equilibrium torsion must be resisted",
         "open thin-walled or warping-sensitive members",
         "warping-torsion/member assessment",
-        "Part D - Reference",
+        "Part D - Numerical procedures",
+        "Part E - Reference",
     ):
         if expected not in text and expected not in flat_text:
             raise AssertionError(f"expected manual content is missing: {expected}")

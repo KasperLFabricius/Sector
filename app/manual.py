@@ -55,6 +55,9 @@ from sector.section import Section
 from sector.serviceability import analyse_cracking
 
 import viz
+from manual_additional_figures import (
+    fig_directional_shear_faces, fig_slab_spacing_cover, fig_torsion_partition,
+)
 
 # Display scale for the section drawings: the geometry is in metres, drawn in mm.
 _MM = 1000.0
@@ -140,12 +143,38 @@ def example_circular() -> dict:
 # FIGURES -- live section drawings from the worked examples (reuse app viz)
 # ==========================================================================
 
+def _manual_native_plot(figure, height=520):
+    """Keep reused application plots readable at the manual's 170 mm width."""
+    figure.update_layout(
+        width=920, height=height,
+        font=dict(family="Arial", size=18),
+        title_font_size=20,
+        margin=dict(l=85, r=80, t=80, b=105),
+        legend=dict(font_size=17, orientation="h", y=-0.22, x=0.5,
+                    xanchor="center", yanchor="top"),
+    )
+    figure.update_xaxes(tickfont_size=17, title_font_size=18, automargin=True)
+    figure.update_yaxes(tickfont_size=17, title_font_size=18, automargin=True)
+    figure.update_annotations(font_size=17)
+    for trace in figure.data:
+        if hasattr(trace, "textfont"):
+            trace.update(textfont_size=17)
+    return figure
+
+
 def _section_fig(ex: dict, title: str, labels=True):
     # Pass the full (x, y, area) points so the drawing scales markers by relative
     # bar diameter, matching the app's section views.
-    return viz.section_figure(
+    figure = viz.section_figure(
         ex["outer"], ex["holes"], ex["bars"], tendons=ex["tendons"], title=title,
         show_labels=labels, height=460, scale=_MM, unit="mm")
+    _manual_native_plot(figure, height=720)
+    xs = [point[0] * _MM for point in ex["outer"]]
+    ys = [point[1] * _MM for point in ex["outer"]]
+    padding = 0.12 * max(max(xs) - min(xs), max(ys) - min(ys))
+    figure.update_xaxes(range=[min(xs) - padding, max(xs) + padding], constrain="domain")
+    figure.update_yaxes(range=[min(ys) - padding, max(ys) + padding], constrain="domain")
+    return figure
 
 
 def fig_workspace_overview():
@@ -193,15 +222,15 @@ def _section_of(ex: dict) -> Section:
 
 
 def fig_beam_concrete_law():
-    return viz.concrete_curve_figure(example_beam()["concrete"])
+    return _manual_native_plot(viz.concrete_curve_figure(example_beam()["concrete"]))
 
 
 def fig_beam_steel_law():
-    return viz.steel_curve_figure(example_beam()["steel"])
+    return _manual_native_plot(viz.steel_curve_figure(example_beam()["steel"]))
 
 
 def fig_circular_prestress_law():
-    return viz.prestress_curve_figure(example_circular()["prestress"])
+    return _manual_native_plot(viz.prestress_curve_figure(example_circular()["prestress"]))
 
 
 def fig_beam_envelope():
@@ -211,7 +240,13 @@ def fig_beam_envelope():
                         0.0, 360.0, 15.0)
     mx = [p.Mx for p in pts]
     my = [p.My for p in pts]
-    return viz.interaction_figure(mx, my, applied=(ex["Mx"], ex["My"]))
+    figure = viz.interaction_figure(mx, my, applied=(ex["Mx"], ex["My"]))
+    _manual_native_plot(figure, height=610)
+    figure.update_xaxes(title_text="M<sub>y</sub> about the y-axis (kNm)")
+    figure.update_yaxes(title_text="M<sub>x</sub> about the x-axis (kNm)")
+    for annotation in figure.layout.annotations:
+        annotation.text = annotation.text.replace("+Mx", "+M<sub>x</sub>").replace("+My", "+M<sub>y</sub>")
+    return figure
 
 
 # The service moment used for the crack-width derivations (a realistic SLS value,
@@ -234,10 +269,13 @@ def fig_beam_cracked():
     xs, ys = [p[0] for p in ex["outer"]], [p[1] for p in ex["outer"]]
     na = viz.na_line_at(hp[0], hp[1], hp[2], 1.0,
                         bbox=(min(xs), min(ys), max(xs), max(ys)))
-    bar_xy = [(x, y) for x, y, _ in ex["bars"]]
-    return viz.section_figure(ex["outer"], ex["holes"], bar_xy, na_line=na,
+    figure = viz.section_figure(ex["outer"], ex["holes"], ex["bars"], na_line=na,
                               zones=zones, title="Cracked section (Stage II)",
                               show_labels=False, height=460, scale=_MM, unit="mm")
+    _manual_native_plot(figure, height=720)
+    figure.update_xaxes(range=[-225, 225], constrain="domain")
+    figure.update_yaxes(range=[-375, 375], constrain="domain")
+    return figure
 
 
 def example_fatigue_reinforcement() -> tuple[dict, dict, float]:
@@ -280,20 +318,31 @@ def example_fatigue_reinforcement() -> tuple[dict, dict, float]:
 
 def fig_fatigue_sn():
     result, properties, gamma_s = example_fatigue_reinforcement()
-    return viz.fatigue_sn_figure(
+    figure = viz.fatigue_sn_figure(
         result,
         properties,
         gamma_s,
         title="Reinforcement fatigue: S-N assessment",
     )
+    figure.update_yaxes(tickmode="array", tickvals=[70, 100, 200, 500],
+                        ticktext=["70", "100", "200", "500"], minorloglabels="none")
+    return _manual_native_plot(figure, height=610)
 
 
 def fig_fatigue_damage():
     result, _properties, _gamma_s = example_fatigue_reinforcement()
-    return viz.fatigue_damage_figure(
+    figure = viz.fatigue_damage_figure(
         result,
         title="Reinforcement fatigue: Miner damage",
     )
+    for trace in figure.data:
+        if trace.type == "bar":
+            trace.update(text=[f"{value:.4f}" for value in trace.y], textposition="outside")
+        elif trace.type == "scatter" and "lines" in (trace.mode or ""):
+            # The first cumulative point equals the first bar; label it once.
+            trace.update(mode="lines+markers+text", text=[""]+[f"{value:.4f}" for value in trace.y[1:]],
+                         textposition="top center")
+    return _manual_native_plot(figure, height=610)
 
 
 def _schematic():
@@ -317,9 +366,17 @@ def _curved_arrow(fig, cx, cy, r, a0, a1, color):
     fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines",
                              line=dict(color=color, width=2.5), hoverinfo="skip"))
     # Arrowhead: a short straight arrow tangent to the arc at its end point.
-    fig.add_annotation(x=xs[-1], y=ys[-1], ax=xs[-4], ay=ys[-4], axref="x", ayref="y",
-                       showarrow=True, arrowhead=2, arrowsize=1.4, arrowwidth=2.5,
-                       arrowcolor=color, text="")
+    # Use a filled triangle so raster export retains a visible arrowhead.
+    dx, dy = xs[-1] - xs[-4], ys[-1] - ys[-4]
+    length = math.hypot(dx, dy)
+    ux, uy = dx / length, dy / length
+    head_length, half_width = 0.18, 0.075
+    bx, by = xs[-1] - head_length * ux, ys[-1] - head_length * uy
+    fig.add_trace(go.Scatter(
+        x=[xs[-1], bx - half_width * uy, bx + half_width * uy, xs[-1]],
+        y=[ys[-1], by + half_width * ux, by - half_width * ux, ys[-1]],
+        mode="lines", fill="toself", fillcolor=color,
+        line=dict(color=color, width=1), hoverinfo="skip"))
 
 
 def fig_sign_convention():
@@ -346,9 +403,11 @@ def fig_sign_convention():
     fig.add_trace(go.Scatter(x=[0.0], y=[0.0], mode="markers",
                              marker=dict(size=6, color=viz.BAR_TENSION),
                              hoverinfo="skip"))
-    # Lower-right of the centroid, clear of the (lower-left) neutral-axis line.
-    fig.add_annotation(x=0.22, y=-0.32, text="N (+ tension, out of page)",
-                       showarrow=False, xanchor="left", font=dict(size=11, color=ink))
+    # Put the axial-force label below the moment arc, with a leader to its symbol.
+    fig.add_annotation(x=0, y=0, ax=1.2, ay=-0.85, axref="x", ayref="y",
+                       text="N: tension (+)<br>out of page", showarrow=True,
+                       arrowhead=0, arrowwidth=1, arrowcolor=ink,
+                       xanchor="left", font=dict(size=11, color=ink))
     # Moments as curved arrows about their axes (right-hand rule, positive sense):
     # Mx about x on the right, My about y on the top.
     _curved_arrow(fig, 2.15, 0.0, 0.55, math.radians(55), math.radians(-55),
@@ -383,6 +442,7 @@ def fig_sign_convention():
                        text="neutral axis (angle &#966;<sub>NA</sub> from +y)",
                        showarrow=False,
                        xanchor="left", xshift=6, font=dict(size=11, color=viz.NA_LINE))
+    fig.update_annotations(font_size=15)
     return fig
 
 
@@ -443,6 +503,7 @@ def fig_strain_plane():
     fig.add_annotation(x=1.0, y=y_na, xshift=8, xanchor="left", showarrow=False,
                        text="neutral axis (" + eps + " = 0)", font=dict(size=11))
     fig.update_layout(margin=dict(l=20, r=125, t=48, b=48))
+    fig.update_annotations(font_size=15)
     return fig
 
 
@@ -547,20 +608,20 @@ def editable_field_publication_rows(table_key: str) -> list[list[str]]:
         rule = table_fields.input_rule(field).replace("Blank = False", "Blank = off")
         rule = rule.replace("Blank = True", "Blank = on")
         validation = table_fields.validation_rule(field)
-        if validation == "Finite unambiguous decimal; the field-specific sign rule applies.":
+        if validation == "Enter a finite decimal value. Use the sign convention in this table.":
             validation = ""  # The shared numeric requirement appears once above.
         elif field.key == "ID":
-            validation = "Read-only; generated by Sector."
+            validation = 'Read-only. Generated by Sector.'
         elif field.key == "size mode":
             validation = "Area, Diameter or Independent."
         elif field.key == "material ID":
-            validation = "Must resolve to the matching material catalogue."
+            validation = "Required ID of a material in the matching material catalog."
         elif field.key == "fatigue detail ID":
             validation = "Assigned fatigue detail required for reinforcement fatigue."
         elif field.key in {"vx_face", "vy_face"}:
             validation = "auto, negative or positive."
         elif field.key == "check_minimum_reinforcement":
-            validation = "Boolean request."
+            validation = "On requests the check. Off leaves it unrequested."
         if validation.startswith("Required. ") and rule == "Required":
             validation = validation.removeprefix("Required. ")
         rows.append([_manual_field_notation(field), meaning,
@@ -584,17 +645,33 @@ def manual_blocks() -> list:
         for workflow in manual_ia.WORKFLOWS:
             if anchor != manual_ia.destination(workflow.destination_key).anchor:
                 continue
-            blocks.append(("md", f"**{workflow.label}. Before:** {workflow.prerequisite}. "
-                           f"**Route:** {workflow.action} "
-                           f"**Expected:** {workflow.expected_state}. "
-                           "[Status and next action](#manual-status-reference); "
-                           "[troubleshooting](#manual-limitations-troubleshooting)."))
+            steps = "\n".join(
+                f"{index}. {sentence}"
+                for index, sentence in enumerate(
+                    re.split(r"(?<=\.)\s+", workflow.action), 1
+                )
+            )
+            blocks.append(("md", f"**{workflow.label}**\n\n**Before:** {workflow.prerequisite}.\n\n"
+                           f"{steps}\n\n"
+                           f"**Expected:** {workflow.expected_state}.\n\n"
+                           "[Status and next action](#manual-status-reference)\n\n"
+                           "[Troubleshooting](#manual-limitations-troubleshooting)"))
     h1 = lambda t: heading("h1", t)
     h2 = lambda t: heading("h2", t)
     md = lambda t: blocks.append(("md", t))
     call = lambda kind, t: blocks.append(("callout", kind, t))
     fig = lambda fn, cap, alt: blocks.append(("figure", fn, cap, alt))
     table = lambda hdr, rows: blocks.append(("table", hdr, rows))
+    def field_guides(keys):
+        for table_key in keys:
+            h2(table_fields.TABLE_TITLES[table_key] + " fields")
+            definitions = table_fields.table_fields(table_key)
+            dependencies = dict.fromkeys(
+                table_fields.method_dependency(table_key, definition)
+                for definition in definitions)
+            md(" ".join(dependencies))
+            table(["Field / unit", "Meaning / sign", "Default / validation"],
+                  editable_field_publication_rows(table_key))
 
     # =====================================================================
     # PART A - GET STARTED
@@ -602,77 +679,173 @@ def manual_blocks() -> list:
     part("Part A - Get started")
 
     h1("Introduction & purpose")
-    md("**Sector** is a cross-section analysis tool for reinforced-concrete and "
-       "prestressed sections. You give it an arbitrary polygonal concrete outline "
-       "(with any number of voids), the mild-steel bars and prestressing tendons, "
-       "and the material laws. It returns plastic capacity, cracked-section elastic "
-       "response, grouped fatigue checks, independent resistance checks and a "
-       "report.")
-    call("concept", "Sector publishes calculation inputs, methods, intermediate values and "
-         "result-specific statuses. The engineer selects the project methods, "
-         "action sets and coefficients; standards provide the calculation "
-         "equations, references, defaults and warnings.")
-    md("The section and material-law diagrams update as you type; the result "
-       "views recompute when you press *Calculate*.")
-    call("limit", "Sector analyses **one plane cross-section**. It assumes plane "
-         "sections remain plane (a linear strain field) and perfect bond between "
-         "concrete and steel. Shear and torsion are section-level checks; buckling, "
-         "second-order response and other member-level effects are outside scope.")
-    call("standard", "DS/EN 1992-1-1:2023 is a selectable calculation method in "
-         "Sector. Individual material and check methods remain independently "
-         "selectable and are recorded with their numerical outputs. The 2023 shear methods with and without links "
-         "and the refined crack model are available. Torsion and combined M-V-T "
-         "remain on the 2005 family and are identified as such.")
+    md("**Sector** calculates the response and resistance of reinforced and "
+       "prestressed concrete cross-sections. A model contains a concrete outline, "
+       "optional voids, reinforcing bars, tendons, material definitions and named actions. "
+       "The results include stresses, strains, resistance diagrams, selected engineering "
+       "checks and a calculation report.")
+    h2("Who this manual is for")
+    md('This manual serves engineers who define section geometry, reinforcement and design actions. The operating chapters give information about the controls and results. The method chapters give information about the physical models. The numerical procedures give the arithmetic needed for an independent calculation.')
+    md('**Open and export the manual**\n\n1. Open **Inputs > Project**.\n2. Expand **About**.\n3. Select **User manual**.\n4. Select a **Manual part** to read it in the application.\n5. Select **Generate PDF** to prepare the full PDF and HTML manuals.\n6. Select **Download PDF** or **Download accessible HTML**.\n\nThe HTML file opens in a browser for offline reading. The two exports contain all manual parts. **Close** returns to the application. **About** also shows the installed Sector version.')
+    md('Prepare the section dimensions, reinforcement layout, material properties and action combinations before calculation. Also select the project design basis, partial factors, creep coefficient and the applicable acceptance criteria. Sector calculates the section properties and responses from those inputs.')
+    h2("The section model")
+    md('Sector represents concrete by polygons and reinforcement by discrete areas at specified coordinates. Voids remove concrete from the section. Plane sections stay plane, so section strain varies linearly with position. Bonded reinforcement follows that strain field. Tendon strain also includes the entered initial strain.')
+    md('The project supplies the section actions, with the applicable member-level effects. Shear and torsion checks use the entered member assumptions and the selected section method. Examine the applicable assumptions beside each calculation.')
+    h2("Available calculations")
+    table(["Calculation", "Purpose and principal output", "Read next"], [
+        ["Plastic capacity", 'Bending resistance at a specified axial force. Biaxial envelope and demand utilization.',
+         "[Plastic capacity](#manual-method-plastic)"],
+        ["N-M interaction", 'Additional axial-force sweeps. Axial force versus bending resistance about each axis.',
+         "[N-M results](#manual-n-m-interaction)"],
+        ["Elastic response", 'Concrete, bar and tendon stresses. Neutral axis, section properties and duration states.',
+         "[Elastic analysis](#manual-method-elastic)"],
+        ["Cracking and crack width", 'Cracking threshold and requested crack widths. Comparison with entered duration limits.',
+         "[Crack calculations](#manual-method-cracking)"],
+        ["Grouped fatigue", 'Element and concrete stress ranges, fatigue life and damage in each named spectrum.',
+         "[Fatigue](#manual-method-fatigue)"],
+        ["Directional shear", "Resistance in each active shear direction, with the applicable concrete or link route.",
+         "[Shear](#manual-method-shear)"],
+        ["Torsion", "Effective tube, strut and stirrup resistances, longitudinal demand and assessment status.",
+         "[Torsion](#manual-method-torsion)"],
+        ["Combined actions", "Concurrent bending, shear and torsion checks with their governing components.",
+         "[Combined actions](#manual-method-combined)"],
+        ["Reinforcement detailing", "Minimum reinforcement, clear spacing, and shear/torsion link ratio and spacing.",
+         "[Detailing](#manual-method-detailing)"],
+        ["Calculation records", "Named cases, saved project inputs and Brief, Standard or Audit reports.",
+         "[Report workspace](#manual-report-workspace)"],
+    ])
+    h2("Standards and method selection")
+    md('Sector offers three design bases: **EN 1992-1-1:2005**, **DS/EN 1992-1-1:2005 + DK NA:2024**, and **DS/EN 1992-1-1:2023**. The table shows their implemented availability. The detailed method references identify the clauses used by each calculation.')
+    table(["Capability", "2005 base", "2005 + DK NA:2024", "2023"], [
+        ["Concrete, bar and tendon presets", "Available", "Available", "Available"],
+        ["Ordinary crack width", "Available", "Fine and coarse systems", "Refined model"],
+        ["Heightened crack-control minimum", "-", "Available", "-"],
+        ["Fatigue design basis", "Available", "Available", "Available"],
+        ["Reinforcement detailing", "Available", "Available", "Available"],
+        ["Shear with and without links", "Available", "Available", "Available"],
+        ["Torsion and combined M-V-T", "Available", "Available", "-"],
+    ])
+    md('Select material presets and check methods independently. Generic material curves supply editable project-defined starting values. Sector uses the selected values for the calculation. The report identifies their method and source. When combined M-V-T is enabled, its selected edition also controls the related shear and torsion editions.')
+    md('For concrete fatigue, also select the calculation method: explicit Palmgren-Miner spectrum, user-defined Miner S-N relation, or damage-equivalent stress amplitude. Their required actions, cycle data and coefficients are different. The fatigue chapter gives the procedure for each method.')
+    call("standard", 'Documented project adoption is necessary for the 2023 basis. Sector applies the published 2023 method without a Danish National Annex. Make sure that the applicability conditions and effective factors are correct for each selected check.')
+    h2("From inputs to a calculation record")
+    md('Section and material previews update during editing. **Calculate** produces the analysis results. Calculate again after a calculation-input change. Examine the named results and their statuses, then save the project and generate the report.')
 
     h1("Start here")
-    md("Choose the shortest reading path for the task. Every destination below is "
-       "the same named destination in the PDF outline and the accessible HTML "
-       "manual.")
+    md('Select the shortest reading path for the task. Each link has the same destination name in the PDF outline and HTML manual.')
     table(
         ["Reading path", "Use it when", "Destination"],
         [
             [
                 "Quick calculation",
-                "You want to define one section, calculate and review a result.",
+                'You want to define one section, calculate and examine a result.',
                 "[Open Quick start](#manual-quick-calculation)",
             ],
             [
                 "Input reference",
-                "You need one field, default, validation rule or warning.",
+                'You want one field, default, validation rule or warning.',
                 "[Open Input reference](#manual-input-reference)",
             ],
             [
                 "Method reference",
-                "You need an equation, assumption, calculation alternative or limitation.",
+                'You want an equation, assumption, calculation alternative or scope limit.',
                 "[Open Method reference](#manual-method-reference)",
+            ],
+            [
+                "Numerical procedures",
+                "You want to reproduce solver arithmetic and intermediate results.",
+                "[Open Numerical procedures](#manual-numerical-procedures)",
+            ],
+            [
+                "Portable startup",
+                'You want to start or update the Windows application.',
+                "[Open Portable startup](#manual-portable-startup)",
+            ],
+            [
+                "Troubleshooting",
+                'You want the cause of a warning and the corrective step.',
+                "[Open Troubleshooting](#manual-limitations-troubleshooting)",
             ],
         ],
     )
 
+    h1("Start the portable application")
+    md('The Windows release contains the full application in a portable ZIP. Microsoft Edge, or a different supported Chromium-family browser, supplies the image-export dependency for report figures.')
+    md('1. Download the **0.96.5 Windows portable ZIP** from the repository release.\n2. Use **Extract All** to extract the full archive to a short local path, such as `C:\\Sector`.\n3. Keep the `_internal` folder beside `Sector.exe`.\n4. Open `Sector.exe`.\n5. Wait for the Sector interface to open in the default browser.')
+    md("Sector runs on the local computer. Keep its console window open during use. "
+       "To stop Sector, close that console window or press **Ctrl+C** in it.")
+    md('Before an update, download the current project file. Keep the issued report. Extract the new release into a different folder. Open the saved project in the new version. Examine its inputs. Calculate again.')
+    md("The portable package is unsigned. If Windows or company policy blocks it, use the organization's approved software process. The package README contains the release-specific startup information.")
+
     h1("Quick start")
-    md("1. **Define the section.** Open the *Section* panel and either edit the "
-       "point tables (concrete corners, voids, bars and tendons, all in mm) or "
-       "press *Quick Section builder* to generate a parametric shape.\n"
-       "2. **Set the materials.** In *Material parameters* define the concrete "
-       "and one or more mild-steel or prestress materials, then assign their IDs "
-       "to the reinforcement rows.\n"
-       "3. **Choose the analyses.** In *Analysis settings* pick Plastic, "
-       "Elastic or Both, enable Fatigue if required, and set the selected "
-       "methods and factors.\n"
-       "4. **Enter the cases.** Add uniquely named rows to the Plastic/capacity, "
-       "Elastic and grouped-fatigue tables. Optionally request crack width on "
-       "each Elastic row; stresses are always reported.\n"
-       "5. **Calculate.** Open *Analysis*, review *Results Overview*, then select "
-       "a case in each detailed result view.\n"
-       "6. **Export.** Generate the PDF report or download the project file.")
-    fig(fig_workspace_overview, 'Workspace overview (schematic): prepare inputs, calculate and review named results, then publish.',
-        'Three linked panels show Inputs with its stage selector, Analysis with Calculate and result details, and Report with document details, project/action references, profile selection and PDF generation.')
+    md('This tutorial calculates a 300 by 600 mm reinforced concrete beam. It gives one plastic capacity case and one elastic stress case. The selected values define a teaching example. The method chapters use the same geometry for independent calculations.')
+    md('Before this exercise, save the current project if you must keep it. Replace its geometry and action rows with the tutorial data. Set optional fatigue, N-M, crack-control, shear, torsion, combined and detailing checks to off for this first calculation.')
+    fig(fig_workspace_overview, 'Workspace overview (schematic): prepare inputs, calculate and examine named results, then publish.',
+        'Three linked panels show the workspaces. Inputs has a stage selector. Analysis has Calculate and result details. Report has document details, references, profile selection and PDF generation.')
+    h2("1. Select the calculation modes")
+    md('1. Open **Inputs > Analysis settings**.\n2. Under **Bending analysis**, select **Both**.\n3. Set the plastic start angle to 0 degrees and the end angle to 360 degrees.\n4. Set the maximum angle increment to 15 degrees.\n5. Enable **Check utilisation against applied moment**.')
+    md('Use the plastic and elastic calculations for this first exercise. The task procedures in Part B add crack width, fatigue, shear, torsion and detailing with their required inputs.')
+    h2("2. Define the materials")
+    md('Open **Inputs > Material parameters**. Enter these concrete values and define one reinforcing-steel material. If you use **Auto-calc all derived values**, then enter the teaching values in the table.')
+    table(["Material input", "Value entered in Sector", "Use"], [
+        ["Concrete preset", "Curve 2 (parabola-rectangle)", "Compression stress-strain law"],
+        ["$f_{ck}$", "40 MPa", "Characteristic concrete strength"],
+        ["$\\gamma_c$ / $\\alpha_{cc}$", "1.45 / 1.00", "Design concrete strength factors"],
+        ["$\\varepsilon_{c2}$ / $\\varepsilon_{cu2}$", "2.0 / 3.5 \u2030", "Peak and ultimate compression strains"],
+        ["Parabola exponent", "2", "Rising concrete branch"],
+        ["$E_c$", "33.333333333 GPa", 'Teaching modulus. $33333.333333$ MPa in the calculation'],
+        ["Reinforcing-steel preset", "DS/EN 1992-1-1:2005 + DK NA:2024", "Starting values for the bar law"],
+        ["$f_{ytk}$ / $f_{yck}$ / $f_{utk}$", "550 / 550 / 550 MPa", "Tensile yield, compression yield and ultimate strengths"],
+        ["$\\gamma_y$ / $\\gamma_u$ / $\\gamma_E$", "1.20 / 1.20 / 1.00", "Final effective material factors"],
+        ["$E_s$", "200 GPa", 'Steel modulus. $200000$ MPa in the calculation'],
+        ["$\\varepsilon_{ut}$", "50 \u2030", 'Ultimate bar strain. 0.05 in the calculation'],
+        ["$k$ / $\\varepsilon_{0t}$ / $\\varepsilon_{0c}$", "1 / 0 / 0", "First-yield ratio and plastic strain offsets"],
+        ["Active in compression (plastic)", "On", "Bars also contribute compression resistance"],
+    ])
+    md("Keep the reinforcing material ID for the next step. With zero creep, "
+       "these moduli give the modular ratio $n=E_s/E_c=6$. The plastic calculation "
+       "uses the design stress-strain laws and their strain limits.")
+    md('After you enter $f_{ck}=40$ MPa, set $f_{ctm}$ with its **Auto** button. Sector uses this value for the cracking threshold and reports a result for that threshold. Then make sure that $E_c$ keeps the teaching value in the table.')
+    h2("3. Enter the section and bars")
+    md('Open **Inputs > Section**. Replace the outer concrete points with the four coordinates in the table. Keep the void and tendon tables empty for this example.')
+    table(["Corner", "$x$ (mm)", "$y$ (mm)"], [
+        ["1", "-150", "-300"], ["2", "-150", "300"],
+        ["3", "150", "300"], ["4", "150", "-300"],
+    ])
+    md('Enter five reinforcing bars. Select **Diameter** as their size input. Assign the material ID from step 2 to each bar.')
+    table(["Bar", "$x$ (mm)", "$y$ (mm)", "Diameter (mm)"], [
+        ["1", "-100", "-250", "25"], ["2", "0", "-250", "25"],
+        ["3", "100", "-250", "25"], ["4", "-100", "250", "16"],
+        ["5", "100", "250", "16"],
+    ])
+    md('Examine the preview. The origin is at the rectangle center. Three bars are near the bottom and two near the top. Before calculation, correct the cause of each geometry or material-assignment warning.')
+    h2("4. Enter two named actions")
+    md('Open **Inputs > Loads**. Under **Global Elastic parameter**, set the creep coefficient to 0. Enter these rows. Use zero for the remaining action components.')
+    table(["Table and case name", "Entered actions", "Requested output"], [
+        ["Plastic/capacity: Beam capacity", '$N=0$ kN. $M_x=300$ kNm. $M_y=0$ kNm', "Bending capacity and utilization"],
+        ["Elastic: Beam elastic", 'Sustained components: 0. Additional $M_x=150$ kNm', 'Elastic stresses. Crack width off for this exercise'],
+    ])
+    md("The additional moment is the short-term increment. With zero sustained "
+       "action, the total moment is 150 kNm. Positive axial force means tension. "
+       "Positive $M_x$ produces tension near the bottom of this section.")
+    h2("5. Calculate and check the results")
+    md('1. Open **Analysis** and press **Calculate**.\n2. Examine **Results Overview** for calculation warnings.\n3. Open **Plastic Results** and select **Beam capacity**.\n4. Select the 90-degree **Neutral-axis state**.\n5. Open **Elastic Results** and select **Beam elastic**.\n6. Compare the results with the values in the table.')
+    table(["Result", "Expected value", "Comparison tolerance"], [
+        ["Plastic compression depth at 90 degrees", "83.7991 mm", "0.01 mm"],
+        ["Plastic $M_x$ resistance at 90 degrees", "345.9766 kNm", "0.01 kNm"],
+        ["Plastic applied utilization", "Approximately 0.867", "0.001"],
+        ["Elastic compression depth from the top face", "149.2505 mm", "0.01 mm"],
+        ["Elastic bottom-bar stress", "+203.6223 MPa", "0.01 MPa"],
+        ["Elastic top-bar stress", "-50.4296 MPa", "0.01 MPa"],
+        ["Peak concrete compression magnitude", "12.6391 MPa", "0.01 MPa"],
+    ])
+    md('The tolerances allow for displayed rounding and the entered modulus precision. If a value differs, examine geometry, material factors, modulus units, action duration and selected case in that sequence.')
+    h2("6. Save and report the calculation")
+    md('1. Open **Inputs > Project**.\n2. Expand **Save / Load**.\n3. Select **Download project**.\n4. Keep that file with a descriptive calculation name.\n5. Open **Report**.\n6. Enter the project, section and revision details.\n7. Select **Standard**.\n8. Generate the report.\n9. Download the PDF.\n10. Open **Inputs > Project**.\n11. Expand **Save / Load**.\n12. Under **Load project**, select the saved project file.\n13. Examine the restored inputs.\n14. Open **Analysis**.\n15. Select **Calculate**.\n16. Compare the results again.')
+    md('The project file keeps the inputs. The PDF records the issued calculation. Keep the two files and the Sector version with the calculation record.')
 
     h1("Task workflows")
-    md("Choose a task below. Its destination includes prerequisites, the action "
-       "route and expected state. After editing calculation inputs or loading a "
-       "project, open **Analysis** and press **Calculate** before using results. "
-       "Changes only to Report details reuse current results.")
+    md('Select a task from the table. Its destination includes prerequisites, the steps and expected state.\n\nAfter you edit calculation inputs or load a project, open **Analysis**. Press **Calculate** before you use the results. If only Report details change, the report uses the current results.')
     table(
         ["Task", "Outcome"],
         [[f"[{workflow.label}](#{manual_ia.destination(workflow.destination_key).anchor})",
@@ -680,68 +853,42 @@ def manual_blocks() -> list:
     )
 
     h1("The worked examples")
-    md("The material, bending and elastic examples use the two sections below. "
-       "Shear and torsion examples use the variants described with their "
-       "calculations; changed inputs and supplied scalar assumptions are stated there.")
+    md('The material, bending and elastic examples use the two sections in this chapter. Shear and torsion examples use the variants described with their calculations. Changed inputs and supplied scalar assumptions are stated there.')
     h2("Rectangular beam (reinforcing steel)")
-    md("A 300 x 600 mm rectangular section in C40/50 concrete with B550 "
-       "reinforcement: three 25 mm bars near the bottom face and two 16 mm bars "
-       "near the top. It is the simplest section that still exercises the plastic "
-       "capacity, the cracked-elastic stresses and a crack width.")
+    md('A 300 by 600 mm rectangular section uses C40/50 concrete and B550 reinforcement. Three 25 mm bars are near the bottom face. Two 16 mm bars are near the top. This example shows plastic capacity, cracked-elastic stresses and crack width.')
     fig(fig_beam_section, "Rectangular beam: 3 x 25 mm bottom, 2 x 16 mm top.",
-        "A 300 by 600 mm concrete rectangle with three bottom bars and two top bars "
-        "arranged symmetrically about the vertical centreline.")
+        'A 300 by 600 mm concrete rectangle with three bottom bars and two top bars arranged symmetrically about the vertical centerline.')
     h2("Circular hollow section (mild + prestress)")
-    md("An 800 mm diameter circular section with a 400 mm central void, a ring of "
-       "twelve 20 mm mild bars and a ring of eight prestressing tendons, in C40/50 "
-       "concrete. It adds the void handling, the ring (biaxial) reinforcement "
-       "layout and the prestress law on top of the beam.")
+    md('An 800 mm diameter circular section has a 400 mm central void and C40/50 concrete. It has a ring of twelve 20 mm mild bars and a ring of eight prestressing tendons. This example adds voids, biaxial ring reinforcement and the prestress law to the beam example.')
     fig(fig_circular_section, "Circular hollow section: a central void, a mild-bar "
         "ring and a tendon ring.",
-        "An annular concrete section with concentric outer and void boundaries; mild "
-        "reinforcement and prestressing tendons form two circular rings.")
+        'An annular concrete section with concentric outer and void boundaries. Mild reinforcement and prestressing tendons form two circular rings.')
     table(["Named variant / calculation", "Section and materials", "Actions / changed assumptions"], [
-        ["[Beam](#manual-method-plastic); [elastic and cracking](#manual-method-cracking)",
-         "300 x 600 mm, C40/50, B550; 3 x 25 mm bottom and 2 x 16 mm top bars.",
-         "Plastic example: N = 0. Elastic/crack examples: Mx = 150 kNm."],
+        ['[Beam](#manual-method-plastic). [elastic and cracking](#manual-method-cracking)',
+         '300 x 600 mm, C40/50, B550. 3 x 25 mm bottom and 2 x 16 mm top bars.',
+         "Plastic example: N = 0. Elastic/crack examples: $M_x$ = 150 kNm."],
         ["[Circular hollow](#manual-method-materials)",
-         "800/400 mm annulus, C40/50; 12 x 20 mm bars and 8 tendons.",
-         "Tendon-law example: initial strain 5.0 \u2030; proof strength 1600 MPa, factor 1.15."],
+         '800/400 mm annulus, C40/50. 12 x 20 mm bars and 8 tendons.',
+         'Tendon-law example: initial strain 5.0 \u2030. Proof strength 1600 MPa, factor 1.15.'],
         ["[Shear without links](#manual-method-shear)",
-         "300 x 600 mm rectangle; C35 with DK NA:2024.",
-         "N = 0; supplied Asl = 1473 mm2, d = 550 mm, bw = 300 mm."],
+         '300 x 600 mm rectangle. C35 with DK NA:2024.',
+         'N = 0. Supplied $A_{sl}$ = 1473 $\\text{mm}^{2}$, d = 550 mm, $b_w$ = 300 mm.'],
         ["[Shear with links](#manual-method-shear)",
-         "Same C35 shear section; two-leg 10 mm links at 150 mm, fywk = 500 MPa.",
-         "Calculated z = 509.151 mm; cot(theta) limited to 2.5."],
+         'Same C35 shear section. Two-leg 10 mm links at 150 mm, $f_{ywk}$ = 500 MPa.',
+         'Calculated $z=509.151$ mm. Maximum $\\cot\\theta=2.5$.'],
         ["[Torsion rectangle](#manual-method-torsion)",
-         "300 x 600 mm, C35, DK NA:2024; bar centres 50 mm from each wall.",
-         "Closed 10 mm stirrup at 150 mm; gamma_ct = 1.70. Resistance example."],
+         '300 x 600 mm, C35, DK NA:2024. Bar centers 50 mm from each wall.',
+         'Closed 10 mm stirrup at 150 mm. $\\gamma_{ct}$ = 1.70. Resistance example.'],
         ["[2023 chord arithmetic](#manual-method-shear)",
-         "Supplied scalar assumptions; no new section geometry is defined.",
-         "MEd = 90 kNm, MRd = 100 kNm, NVd = 250 kN and z = 0.5 m."],
+         'Supplied scalar assumptions. No new section geometry is defined.',
+         "$M_{Ed}$ = 90 kNm, $M_{Rd}$ = 100 kNm, $N_{Vd}$ = 250 kN and z = 0.5 m."],
     ])
 
     h1("Common use cases")
-    md("Check ultimate capacity, review biaxial columns, calculate service crack "
-       "widths, verify grouped fatigue, or compare reinforcement layouts and "
-       "concrete grades. The outputs below remain tied to the named actions.")
+    md('Calculate ultimate capacity, examine biaxial columns, calculate service crack widths, calculate grouped fatigue, or compare reinforcement layouts and concrete grades. The outputs in this chapter stay related to the named actions.')
 
-    h2("What Sector computes - at a glance")
-    md("- **Plastic bending capacity.** Full biaxial $M_x$-$M_y$ interaction "
-       "at the given axial force using nonlinear material laws, and applied-load utilisation.\n"
-       "- **Elastic response.** Cracked-section concrete and reinforcement stresses "
-       "from long- and short-term actions, with creep through the modular ratio; "
-       "cracking threshold and transformed section properties.\n"
-       "- **Crack width.** Requested long- and short-term widths. A 0 mm limit "
-       "leaves that duration's calculated width; a positive limit adds the matching "
-       "specified-limit comparison and source.\n"
-       "- **Grouped fatigue.** Reinforcement S-N/Miner and concrete compression "
-       "checks for each bar, tendon, concrete fibre and bin in independent named spectra.\n"
-       "- **Longitudinal detailing.** Edition-specific minimum reinforcement "
-       "per capacity case and section-wide clear spacing.\n"
-       "- **Multi-case reporting.** Select individual Plastic/capacity, Elastic and "
-       "fatigue results or review their summary. PDF profiles provide results and "
-       "references, with detailed calculations in Audit; project files save the inputs.")
+    h2('What Sector calculates')
+    md("- **Plastic bending capacity.** Full biaxial $M_x$-$M_y$ interaction at the given axial force with nonlinear material laws, and applied-load utilization.\n- **Elastic response.** Cracked-section concrete and reinforcement stresses from long- and short-term actions, with creep through the modular ratio. Cracking threshold and transformed section properties.\n- **Crack width.** Requested long- and short-term widths. A 0 mm limit leaves that duration's calculated width. A positive limit adds the matching specified-limit comparison and source.\n- **Grouped fatigue.** Reinforcement S-N/Miner and concrete compression checks for each bar, tendon, concrete fiber and bin in independent named spectra.\n- **Longitudinal detailing.** Edition-specific minimum reinforcement per capacity case and section-wide clear spacing.\n- **Multi-case reporting.** Select individual Plastic/capacity, Elastic and fatigue results or examine their summary. PDF profiles give results and references, with detailed calculations in Audit. Project files save the inputs.")
 
 
     # =====================================================================
@@ -750,9 +897,7 @@ def manual_blocks() -> list:
     part("Part B - Features & options")
 
     h1("Input reference")
-    md("The reference follows the same five stages as the application. Select a "
-       "stage below, then use the shared field definitions and troubleshooting "
-       "entries in this part.")
+    md('The reference follows the same five stages as the application. Select a stage from the table, then use the shared field definitions and troubleshooting entries in this part.')
     table(
         ["Application stage", "Manual destination"],
         [
@@ -762,233 +907,125 @@ def manual_blocks() -> list:
     )
 
     h1("The workspace")
-    md("The **Inputs** page stages *Analysis settings*, *Section*, *Material "
-       "parameters*, *Loads* and *Project* in the **Input stage** selector. The "
-       "*Section* stage places the section drawing beside its point tables, and each "
-       "material panel places the selected stress-strain law beside its parameters. "
-       "These previews update live. The **Analysis** workspace contains calculated "
-       "results selected with the **View** dropdown. The **Report** workspace, "
-       "immediately to its right, owns document details, profile selection, "
-       "generation and PDF download.")
+    md('The **Inputs** page stages *Analysis settings*, *Section*, *Material parameters*, *Loads* and *Project* in the **Input stage** selector. The *Section* stage places the section drawing beside its point tables, and each material panel places the selected stress-strain law beside its parameters. Each preview updates when an input changes. \n\nThe **Analysis** workspace contains calculated results selected with the **View** dropdown. \n\nThe **Report** workspace, immediately to its right, owns document details, profile selection, generation and PDF download.')
     table(["View", "Shows"],
-          [["Results Overview", "Most unfavourable result for each engineering check, with the governing action or direction"],
-           ["Plastic Results", "Selected case: M-M envelope and utilisation"],
+          [["Results Overview", 'Most unfavorable result for each engineering check, with the governing action or direction'],
+           ["Plastic Results", 'Selected case: M-M envelope and utilization'],
            ["N-M Interaction", "Selected Plastic case: axial-moment boundaries"],
            ["Elastic Results", "Selected case: stresses, cracking and crack width"],
-           ["Fatigue Results", "All spectra; selected spectrum, element, fibre and bin results"],
-           ["Detailing", "Selected case: modelled-direction minimum reinforcement and link detailing; section-wide spacing"],
-           ["Shear", "Selected Plastic case: Vx/Vy summary and directional details"],
-           ["Torsion", "Selected Plastic case: torsion resistance and utilisation"],
+           ["Fatigue Results", 'All spectra. Selected spectrum, element, fiber and bin results'],
+           ["Detailing", 'Selected case: modeled-direction minimum reinforcement and link detailing. Section-wide spacing'],
+           ["Shear", 'Selected Plastic case: $V_x$/$V_y$ summary and directional details'],
+           ["Torsion", 'Selected Plastic case: torsion resistance and utilization'],
            ["M-V-T Combined", "Selected Plastic case: combined interactions"]])
     h2("Report workspace")
-    md("Enter project number, project name, section, revision, author, optional "
-       "Checker and Approver names, and comments "
-       "in this workspace, then select **Brief**, **Standard** or **Audit**. "
-       "Checker and Approver appear only when supplied and describe document roles. "
-       "Generating reuses Analysis results when they match the current inputs; "
-       "otherwise Sector recalculates them for the report. A project-detail or input edit marks an existing "
-       "PDF out of date and blocks its download until it is regenerated.")
-    md("Under **Project and action references**, select Project assumptions or an "
-       "exact named case/spectrum, then enter the document or record identifier and "
-       "section/page locator. These user-supplied references are separate from "
-       "calculation-method citations. Missing locations remain explicit in the PDF; "
-       "an unmatched reference remains saved after a case rename. Select it and "
-       "clear both fields to remove it. Project references do not automatically "
-       "apply to every action.")
-    call("tip", "Report details and publication controls are grouped separately "
-         "from the Project input stage. Save/load and autosave remain under "
-         "**Inputs > Project**; publication remains under **Report**.")
-    call("tip", "*Auto-calc all derived values* (in Material parameters) "
-         "recomputes every auto quantity from the current grade at once: the concrete "
-         "strain limits, $f_{ctm}$ and $E_c$. The modular ratios follow from $E_c$, "
-         "$E_s$, $E_p$ and creep automatically.")
+    md('Enter the project number, project name, section, revision, author, optional Checker and Approver names, and comments. Select **Brief**, **Standard** or **Audit**. Sector shows Checker and Approver only when you supply them. These fields identify document roles. \n\nSector uses Analysis results for the report if they match the current inputs. If they are different, Sector recalculates the results. \n\nAfter a project-detail or input edit, Sector marks the existing PDF out of date. Regenerate the PDF before download.')
+    md('Under **Project and action references**, select Project assumptions or an exact named case/spectrum, then enter the document or record identifier and section/page locator. \n\nThe PDF identifies user-supplied references and calculation-method citations in different groups. Missing locations stay explicit in the PDF. \n\nAn unmatched reference stays saved after a case rename. Select it and clear the two fields to remove it. Project references do not automatically apply to each action.')
+    call("tip", 'Report details and publication controls are in **Report**. Save/load and autosave are in **Inputs > Project > Save / Load**.')
+    call("tip", '*Auto-calc all derived values* is in Material parameters. It calculates these quantities from the current grade:\n\n- Concrete strain limits.\n- $f_{ctm}$.\n- $E_c$.\n\nSector calculates the modular ratios from $E_c$, $E_s$, $E_p$ and creep.')
 
     h1("Project")
     h2("Project files and autosave")
-    md("A downloaded project file stores the section, materials, settings, named "
-       "load cases and saving information. Loading a project restores its inputs and clears "
-       "earlier results. Review the restored inputs, then press *Calculate* before "
-       "using or reporting results.")
-    md("Local autosave is enabled by default at a five-minute interval. A due save "
-       "runs on the next interaction and is restored on the next launch. Keep the "
-       "issued project file with the calculation record; autosave is recovery, not "
-       "an issued deliverable.")
+    md('**Loaded-project messages.** **Saved-file input record: matches** means that the file agrees with its stored input record. **Inputs match the recorded calculation** means that those inputs also agree with the recorded calculation inputs. The two messages check different records. If the records are different, examine the loaded inputs and calculate again.')
+    md('Sector shows the recorded saving version and calculation time when these are available. If Sector rejects a new file, it keeps the current project unchanged. Select a different compatible project file with no damage. If invalid current inputs disable the project download, correct the displayed input issue before you save.')
+    md('Open **Inputs > Project**. Expand **Save / Load**. To save the inputs, select **Download project**. To restore inputs, select a saved file under **Load project**.\n\nA downloaded project file stores the section, materials, settings, named load cases and saving information. When you load a project, Sector restores its inputs and clears earlier results.\n\nExamine the restored inputs. Before you use or report the results, open **Analysis**. Select **Calculate**.')
+    md('Open **Inputs > Project**. Expand **Save / Load**. Use **Autosave** for local recovery.\n\nThe default interval is five minutes. Set **Autosave interval (min)** from 1 to 120 minutes. A due save runs on the next interaction if the inputs are different from the last saved inputs. The panel shows the last save time.')
+    md('Sector restores the recovery file on the next launch. An explicitly loaded project takes precedence. Examine the restored inputs. Open **Analysis**. Select **Calculate**. Save the project file used for each issued report.')
+    md('The Windows executable usually stores recovery data in **%LOCALAPPDATA%/Sector/autosave.json**. A source installation uses **%USERPROFILE%/.sector/autosave.json**. An installation can specify a different recovery folder. If automatic recovery fails, load a saved project file with no damage through **Inputs > Project**.')
     h1("Defining the section")
-    md("A section is a set of explicit points in millimetres -- the concrete "
-       "corners, any voids, the bars and the tendons. Sector calculates from "
-       "these point tables; applying Quick Section updates them.")
+    md('A section is a set of points in millimeters: concrete corners, voids, bars and tendons. Sector calculates from these point tables. Quick Section updates these tables when you apply its geometry.')
     h2("The point tables")
-    md("Four editable tables hold the concrete corners, the voids, the bars "
-       "and the tendons. Coordinates and diameters are in millimetres; areas are "
-       "in square millimetres. Each reinforcement element has a fixed ID used by "
-       "the figures, results and report. IDs remain unchanged when other rows are "
-       "deleted.")
+    md("**Add or delete a row.** Select **+ Add row** to append an input row. "
+       "Use a row's **Delete row** control to remove it. Sector assigns the reinforcement IDs. "
+       "The IDs of the remaining reinforcement elements stay unchanged.")
+    md("**Paste point data**\n\n1. Copy a rectangular block of data without its column headings or ID column.\n2. Before compact reinforcement-area paste, set each target row's size basis to **Area**.\n3. Select the first target row in the point table.\n4. Paste the block.\n5. Examine the changed rows and section preview.\n\nUse the editable columns in their displayed order. For bars and tendons, the compact form is $x$, $y$ and area. For concrete and void corners, enter the $x$ and $y$ columns. A full-column reinforcement paste includes the required size basis.\n\nThe paste starts at the selected row. It replaces the supplied fields in existing rows and appends additional rows when necessary. Other editable fields stay unchanged.\n\nDerived area or diameter follows the selected size basis. In **Diameter** mode, Sector calculates area from diameter and replaces a pasted area. An incompatible column count gives a warning and leaves the table unchanged.")
+    md('Four editable tables hold the concrete corners, the voids, the bars and the tendons. Coordinates and diameters are in millimeters. Areas are in square millimeters. Each reinforcement element has a fixed ID used by the figures, results and report. IDs stay unchanged when other rows are deleted.')
     table(["Size basis", "Entered", "Calculated"],
           [["Area", "Area", "Equivalent circular diameter"],
            ["Diameter", "Diameter", "Area of one circular element"],
            ["Independent", "Area and diameter", "Neither"]])
-    md("Area controls section stiffness and resistance; diameter controls detailing "
-       "and crack-spacing geometry. *Independent* is therefore appropriate when "
-       "one point represents a non-circular or grouped steel area. Material and "
-       "fatigue-detail IDs are assignments carried with the element. Use **Bulk "
-       "assignments** above a reinforcement table to update all or selected IDs. "
-       "A fatigue "
-       "detail is required on every bar and tendon when reinforcement fatigue is "
-       "enabled; otherwise it is optional. Half-typed rows are ignored until "
-       "complete.")
+    md('Area controls section stiffness and resistance. Diameter controls detailing and crack-spacing geometry. Use *Independent* when one point represents a non-circular or grouped steel area.\n\nMaterial and fatigue-detail IDs stay assigned to the element. Use **Bulk assignments** above a reinforcement table to update all or selected IDs.\n\nWhen reinforcement fatigue is enabled, assign a fatigue detail to each bar and tendon. With reinforcement fatigue disabled, this assignment is optional. Sector uses a row only when it contains all necessary values.')
+    md('**Add a void**\n\n1. Under **Concrete voids**, select **+ Add void**.\n2. Enter three or more corners in boundary sequence after the blank separator row.\n3. Examine the void in the section preview.\n\nYou can add up to ten voids. **Remove void** deletes the last void in the table.')
+    md('**Clear the section**\n\n1. Select **Clear section...**.\n2. Select **Confirm clear** to remove all concrete, void, bar and tendon points.\n\n**Cancel** keeps the points. **Undo clear** restores the last cleared tables and their applied builder settings. This recovery stays available until you enter new section points.')
+    md('**Preview labels.** **Label size** scales the corner, bar and tendon number labels from 0.5 to 3.0. **Label spacing** hides labels closer than the selected fraction of the section size. Enter 0 to show each label. These controls change the drawing labels.')
     call("concept", "The builder, presets and loaded projects populate these four point "
          "tables. You can edit the geometry directly in the tables.")
+    md('**Assign a group of elements**\n\n1. Open **Bulk assignments** above the bar or tendon table.\n2. Under **Apply to**, select **All elements** or **Selected elements**.\n3. For selected elements, choose the required **Element IDs**.\n4. Select the **Material** and **Fatigue detail** assignments.\n5. Select **Apply assignments**.\n\n**No change** keeps that assignment. **Clear assignment** removes the fatigue detail from the selected elements. When reinforcement fatigue is enabled, assign a valid fatigue detail to each checked element before calculation.')
     h2("The Quick Section builder")
-    md("A full-width builder (opened from the *Section* panel) generates a "
-       "parametric shape with a live preview. Reinforcement can be given by "
-       "a bar count or by a spacing, in one or several layers, and tendons as a "
-       "ring or in layers where that placement is unambiguous. The bottom and top "
-       "faces take their own cover and bar diameter (entered directly in mm), a "
-       "stacked upper layer can hold a different bar count than the main row, and "
-       "a toggle measures the cover to the bar edge instead of its centre.")
-    md(r"For the **1 m slab strip**, a diameter and spacing define reinforcement "
-       r"area per metre: $A_s = A_{bar}\,1000/s$. Thus T20 at 200 mm gives "
-       r"$5A_{bar}=1570.796\,\mathrm{mm^2/m}$, and the bottom or top cover sets "
-       r"the layer depth. An enabled interleaved diameter is a second complete "
-       r"series at the true half-spacing positions; the builder states each series "
-       r"and the summed $A_s$ per layer and per face. With edge cover, each series "
-       r"uses its own diameter to retain the entered clear cover, so mixed sizes "
-       r"can have different centre lines. With centre cover, the series share the "
-       r"entered centre line and any bar envelope crossing a concrete face is "
-       r"rejected. For finite sections, spacing "
-       r"is instead a maximum gap "
-       r"over the covered face; the builder displays the derived count and actual "
-       r"centre-to-centre spacing.")
-    md("Slab-strip bars are placed symmetrically: at 100 mm centres, a 1 m strip "
-       "contains ten bars per layer with 50 mm edge offsets. Symmetric edge-area "
-       "weights preserve the specified steel area per metre when the spacing "
-       "does not divide the strip width exactly. Clear-spacing and crack-width "
-       "calculations use the nominal spacing and face cover; the strip sides "
-       "are not physical concrete edges.")
+    md('**Apply or leave the builder.** **Apply to point tables** replaces the current concrete, void, bar and tendon tables with the previewed section. Save the current project first if it must stay available. Before you apply the section, examine the preview and dimensions. **Back** leaves the current point tables unchanged.')
+    md("**Slab rows and physical bars.** Generated slab-density rows represent the specified reinforcement area per meter. "
+       "If edits break that relationship, Sector marks the density layout **UNVERIFIED**. "
+       "Reapply the slab layout to restore its density basis.")
+    md('To use a physical bar arrangement, first replace the generated rows with the actual bar coordinates and sizes. Then select **Use current bars as explicit layout** when the control is available. Examine the reinforcement area and spacing before calculation. The explicit layout uses the entered physical bars.')
+    md('Open **Quick Section** from the **Section** panel. Select the shape. Enter its dimensions. The preview updates when an input changes.')
+    md('Select reinforcement by bar count or spacing. Enter the reinforcement for each layer. Enter the cover and bar diameter for each face. Select the cover measurement: bar edge or bar center.')
+    md('Top and bottom faces can use different diameters and covers. A top layer can use a different bar count. Where the shape supports the arrangement, tendons can form a ring or different layers.')
+    md('For the **1 m slab strip**, diameter and spacing define the reinforcement area per meter:\n\n$A_s=A_{bar}\\,1000/s$.\n\nFor 20 mm bars at 200 mm centers:\n\n$5A_{bar}=1570.796\\,\\mathrm{mm^2/m}$.\n\nThe top or bottom cover defines the layer depth.')
+    md('An interleaved diameter adds a full second series at half-spacing positions. The builder shows each series and the total area for each layer and face.')
+    md('With edge cover, each series uses its own diameter to keep the specified clear cover. Mixed sizes can thus have different center lines. With center cover, the two series use the entered center line. Sector rejects a bar envelope that crosses a concrete face.')
+    md('For finite sections, the entered spacing defines the maximum gap over the covered face. The builder shows the calculated count and actual center-to-center spacing.')
+    md('Sector places slab-strip bars symmetrically: at 100 mm centers, a 1 m strip contains ten bars per layer with 50 mm edge offsets. Symmetric edge-area weights keep the specified steel area per meter when the spacing does not divide the strip width exactly. Clear-spacing and crack-width calculations use the nominal spacing and face cover. The strip sides are not physical concrete edges.')
+    fig(fig_slab_spacing_cover, 'Nominal bars in a one-meter strip with an interleaved series. Each series has its own row. The dashed outer lines mark strip cuts. Short dotted lines mark tributary boundaries. Each boundary bar has a 16 mm diameter and half-area weight. The two cover details use the same scale and full physical bar diameters.', 'The 20 mm bar row has five axes at 200 mm spacing. The 16 mm bar row has six axes offset by 100 mm, with a half-area axis at each strip cut. Below, equal-scale details compare 20 mm edge cover with 30 mm center cover for the two bar sizes.')
+    md('The 20 mm bar row contains five full-bar areas: $1570.796\\,\\text{mm}^{2}$. The 16 mm bar row contains four full weights and two half weights: $1005.310\\,\\text{mm}^{2}$.\n\nA half weight changes the analytical area assigned to that axis. The physical diameter stays 16 mm.\n\nWith 20 mm edge cover, the centers of the 20 mm and 16 mm bars are 30 and 28 mm from the face. With 30 mm center cover, their clear covers are 20 and 22 mm.')
     table(["Shape", "Produces"],
-          [["Rectangle", "A solid rectangle b x h"],
+          [["Rectangle", 'A solid rectangle $b\\times h$'],
            ["Slab strip", "A 1 m-wide strip of a given thickness"],
-           ["Trapezoid", "A symmetric trapezoid with horizontal faces"],
-           ["T-section", "A flange over a web, flange at top or bottom"],
-           ["L-section", "A left web with a bottom flange"],
-           ["I-section", "Equal top/bottom flanges around a central web"],
-           ["U-section", "An open-top base with two side webs"],
-           ["Box girder", "A hollow box (one rectangular void)"],
-           ["Circular", "A circular section, optionally with a bar ring"],
-           ["Annulus", "A circular hollow section (one circular void)"]])
-    md("Trapezoid, L-section and U-section apply their concrete geometry only: "
-       "automatic face reinforcement is not defined for those non-uniform or "
-       "split faces. Add their bars and tendons directly in the point tables. "
-       "The T-section, I-section and annulus provide bounded automatic placement, "
-       "and the builder rejects dimensions, layers or rings that would create "
-       "invalid geometry or put a generated point outside concrete.")
+           ["Trapezoid", 'Bottom width, top width and overall height. Centered horizontal faces'],
+           ["T-section", 'Flange width and thickness. Web width and depth outside the flange. Overall depth is $h_f+h_w$. Select the flange at top or bottom.'],
+           ["L-section", 'Overall width and height. Left-web and bottom-flange thicknesses'],
+           ["I-section", 'Equal flange widths and thicknesses. Web width and clear height between flanges. Overall depth is $h_w+2t_f$.'],
+           ["U-section", 'Overall width and height. Common side-web thickness and base thickness'],
+           ["Box girder", 'Outer width and height. Uniform wall thickness defines the rectangular void'],
+           ["Circular", 'Outer diameter. A 48-sided polygon represents the concrete boundary'],
+           ["Annulus", 'Outer and inner diameters. Two 48-sided polygons represent the boundaries']])
+    md("**Tendon placement.** **Tendons** sets the number in a row or circular ring. "
+       "**Area per tendon** specifies one tendon's area. **Tendon cover** locates its center from the concrete face. "
+       "For stacked rows, **Tendon layers** sets the number of rows. **Tendon layer spacing** is the vertical center-to-center distance.")
+    md('Circular and annular sections place tendons on a ring and ignore the layer count. T and I sections use the available width at each layer. Box sections divide placement across the concrete portions beside the void. The preview identifies an arrangement that cannot fit the concrete. Examine it before you apply the section.')
+    md('Trapezoid, L-section and U-section apply their concrete geometry only: automatic face reinforcement is not defined for those non-uniform or split faces. Add their bars and tendons directly in the point tables. The T-section, I-section and annulus give bounded automatic placement. The builder rejects dimensions, layers or rings that create invalid geometry or put a generated point outside concrete.')
     h2("Validity checks")
-    md("Geometry is validated before calculation. Every outer or hole ring "
-       "must contain finite numeric coordinates, at least three distinct points "
-       "and an area above the resolved tolerance. A ring is rejected for a "
-       "repeated or tolerance-coincident vertex, a non-adjacent crossing, touch or "
-       "overlap, or an adjacent edge that reverses along the same line. Forward "
-       "collinear points and one exact final point equal to the first are allowed. "
-       "Clockwise and counter-clockwise winding are both valid; Sector preserves the "
-       "entered order and uses oriented copies only for integration.")
-    md("Every hole must be strictly inside the outer ring. It cannot touch or cross "
-       "the outer boundary, touch/cross/overlap another hole, or contain another "
-       "hole. The concrete net area must remain connected, and every bar and tendon "
-       "must lie in concrete rather than outside it or inside a void. The first "
-       "causal defect is reported with its ring, point or edge location.")
-    call("concept", "The length tolerance is the greatest of **1e-12 m**, "
-         "**1e-9 times the section span** and **8 ULP of the coordinate magnitude**. "
-         "ULP is the spacing between adjacent representable coordinate values. "
-         "Validation preserves the entered coordinates exactly. A geometry "
-         "validation failure is distinct from a valid section whose calculation "
-         "later fails to converge.")
-    call("limit", "A void must leave the concrete in one connected piece. A slot "
-         "that splits the section in two is rejected rather than analysed, because "
-         "the plane-section assumption no longer holds across a break.")
+    md('Sector checks the geometry before calculation. Each outer or void ring must have:\n\n- Finite numerical coordinates.\n- Three or more distinct points.\n- An area larger than the numerical tolerance.\n- Edges that form one simple closed boundary.\n\nSector rejects repeated or tolerance-coincident vertices. It also rejects non-adjacent edge crossings, contacts and overlaps. An adjacent edge must not reverse along the same line.\n\nForward collinear points are permitted. The last point can equal the first point. Clockwise and counter-clockwise sequences are valid. Sector keeps the entered order and uses oriented copies for integration.')
+    md('Each void must be strictly inside the outer ring. It must not touch the outer boundary or a different void. A void must not contain a different void.\n\nThe net concrete area must stay connected. Each bar and tendon must be in concrete. Sector identifies the first geometry error and its ring, point or edge.')
+    call("concept", 'The length tolerance is the greatest of **1e-12 m**, **1e-9 times the section span** and **8 ULP of the coordinate magnitude**. ULP is the spacing between adjacent representable coordinate values. Validation keeps the entered coordinate values unchanged. Geometry validation and calculation convergence have different acceptance criteria. A valid section can have a calculation that fails to converge.')
+    call("limit", 'A void must keep the concrete in one connected piece. Sector rejects a slot that splits the section into two pieces. The plane-section assumption is applicable to one connected section.')
+
+    field_guides(table_fields.TABLE_KEYS[:4])
 
     h1("Materials")
-    md("Concrete has one definition. Reinforcing steel and prestress use catalogues: each "
-       "definition has a unique ID, name and optional description. Add, duplicate "
-       "or delete definitions in the material panel, then assign the ID to each bar "
-       "or tendon in the Section table. An assigned definition cannot be deleted. "
-       "A preset supplies starting values for the selected definition; every value "
-       "can then be adjusted.")
-    call("limit", "Enter the **final effective** material partial factors in the "
-         "material panels. Include every applicable national increase or reduction "
-         "for construction, control and consequence category; Sector applies the "
-         "entered factors directly.")
+    md('**Catalog controls.** Select the required material definition before you edit it. **Add** creates a definition. **Duplicate** copies the selected definition. You can use **Delete** only if a different definition is available. Before deletion, assign a different definition to each affected element and to the member-check reference, where applicable.')
+    md('When you select a different preset, Sector replaces the starting values supplied by that preset. Examine the resulting values and curve before calculation. Fixed tendon curves show only their applicable editable parameters. General tendon curves show the parameters of their full stress-strain law.')
+    md('Concrete has one definition. Reinforcing steel and prestress use catalogs: each definition has a unique ID, name and optional description. Add, duplicate or delete definitions in the material panel. Then assign the ID to each bar or tendon in the Section table. An assigned definition cannot be deleted. A preset supplies starting values for the selected definition. You can change the applicable editable fields.')
+    call("limit", 'Enter the **final effective** material partial factors in the material panels. Include each applicable national increase or reduction for construction, control and consequence category. Sector applies the entered factors directly.')
     h2("Concrete")
-    md("The concrete stress-strain law is chosen by the *Preset*: **Curve 2 "
-       "(parabola-rectangle)**, the EC2 design law used throughout this manual, or "
-       "**Curve 1 (cubic)**, a user-defined cubic curve for normal-strength concrete. "
-       "The inputs are the "
-       "characteristic strength $f_{ck}$, the partial factor $\\gamma_c$, the "
-       "coefficient $\\alpha_{cc}$, the strain limits $\\varepsilon_{c2}$ and "
-       "$\\varepsilon_{cu2}$ with the exponent $n$, the elastic modulus $E_c$ and "
-       "the mean tensile strength $f_{ctm}$. The strain limits, $E_c$ and $f_{ctm}$ "
-       "have *Auto* buttons that derive them from $f_{ck}$ and the edition.")
-    call("standard", "For DS/EN 1992-1-1:2023, Sector derives the read-only effective "
-         "coefficient $\\eta_{cc}k_{tc}$ and exposes $k_{tc}$ separately. The "
-         "default is **0.85** (general / other cases). Selecting **1.00** explicitly "
-         "assumes the reference-age and at-least-three-month delayed design-loading "
-         "conditions stated in 5.1.6(1); that assumption is repeated in the PDF.")
+    md('Select the concrete stress-strain **Preset**. **Curve 2 (parabola-rectangle)** supplies the EC2 design law used in the worked examples. **Curve 1 (cubic)** supplies a project-defined curve for normal-strength concrete.\n\nEnter characteristic strength $f_{ck}$, partial factor $\\gamma_c$ and coefficient $\\alpha_{cc}$. Enter strain limits $\\varepsilon_{c2}$ and $\\varepsilon_{cu2}$, with exponent $n$. Also enter elastic modulus $E_c$ and mean tensile strength $f_{ctm}$.\n\nThe strain limits, $E_c$ and $f_{ctm}$ have **Auto** buttons. These buttons calculate values from the current $f_{ck}$ and selected edition.')
+    call("standard", 'For DS/EN 1992-1-1:2023, Sector calculates the effective coefficient $\\eta_{cc}k_{tc}$. This coefficient is read-only. Sector also shows $k_{tc}$.\n\nThe default is **0.85** (general / other cases). Select **1.00** only if the conditions in 5.1.6(1) apply. These conditions include the reference age and a delay of three or more months before design loading. The PDF records this assumption.')
     fig(fig_beam_concrete_law, "The concrete-law preview for the rectangular "
         "example (C40/50).",
-        "A compression stress-strain curve that rises parabolically from zero to the "
-        "design strength and then remains horizontal to the ultimate strain.")
+        'A compression stress-strain curve that increases parabolically from zero to the design strength and then stays horizontal to the ultimate strain.')
     h2("Reinforcing steel")
-    md("Each reinforcing-steel definition uses the general **Curve 3** law, with every "
-       "parameter visible and live. The generic **Curve 1**, **Curve 2** and "
-       "**Curve 3** selections are user-defined/project-defined starting-value "
-       "presets and are explicitly uncited. An edition-named selection is labelled "
-       "a **Eurocode design stress-strain diagram** and keeps that edition's source. "
-       "The preset supplies traceable starting values; edited numerical values are "
-       "the actual calculation inputs. The selected definition's plot is shown beside its "
-       "inputs. These include yield and ultimate strengths, ultimate strain, the "
-       "partial factors, yield offsets, first-yield ratio and modulus $E_s$. The "
-       "**Active in compression (plastic)** toggle decides whether the bars carry "
-       "compression in the **plastic** law: with it off the steel is "
-       "tension-only there. The elastic analysis uses linear elastic steel and "
-       "always treats the bars in both directions, regardless of this toggle.")
+    md('Each reinforcing-steel definition uses the general **Curve 3** law. All parameters stay editable. The generic **Curve 1**, **Curve 2** and **Curve 3** selections supply project-defined starting values.')
+    md('An edition-named selection supplies a **Eurocode design stress-strain diagram** and records its source. Sector uses the numerical values shown in the input fields. The plot beside the fields shows the selected definition.')
+    md('Enter the yield strength, ultimate strength, ultimate strain and partial factors. Enter the yield offsets, first-yield ratio and modulus $E_s$. Part D defines each parameter in the implemented material law.')
+    md('**Active in compression (plastic)** controls compression resistance in the plastic calculation. When this option is off, the plastic steel law carries tension only. The elastic calculation uses linear elastic steel in tension and compression.')
     fig(fig_beam_steel_law, "The B550 mild-steel law for the rectangular example.",
         "A symmetric reinforcing-steel stress-strain curve with linear tension and "
         "compression branches to yield followed by the selected post-yield response.")
-    call("standard", "Edition-named concrete and steel presets carry their selected "
-         "Eurocode source (including 3.1.7 / 3.2.7 for the 2005 family). Generic "
-         "named curves and custom/imported laws remain project-defined and uncited.")
+    call("standard", 'Edition-named concrete and steel presets have their selected Eurocode source (3.1.7 / 3.2.7 for the 2005 family). Generic named curves and custom/imported laws stay project-defined and uncited.')
     h2("Prestressing steel")
-    md("Each prestress definition adds the tendon law and, crucially, the initial strain "
-       "$\\varepsilon_{p,IS}$ locked into the tendons. The inputs mirror the mild "
-       "steel plus that initial strain. Tendons are analysed at their **total** "
-       "strain -- the initial strain plus the section strain at their location.")
-    call("concept", "Plastic capacity, cracked-elastic stiffness and stress, and "
-         "crack calculations use the material assigned to each element. Shared "
-         "member checks for shear and torsion use the explicitly selected mild-"
-         "steel reference material; its ID is shown with those settings and results.")
+    md('Each prestress definition contains a tendon law and an initial strain **IS**. Sector adds the initial strain to the section strain at the tendon. The material law uses this total strain. The preview marks the initial-strain point on the tendon curve.')
+    call("concept", 'Plastic capacity, cracked-elastic stiffness and stress, and crack calculations use the material assigned to each element.\n\nShared member checks for shear and torsion use the selected mild-steel reference material. Sector shows its ID with those settings and results.')
     fig(fig_circular_prestress_law, "The tendon law for the circular example.",
-        "A prestressing-steel stress-strain curve with an initial elastic branch and "
-        "a nonlinear approach to design strength and ultimate strain.")
+        'A prestressing-steel stress-strain curve with an initial elastic branch and a nonlinear branch to design strength and ultimate strain.')
 
     h1("Analysis & result settings")
     h2("Analysis mode")
-    md("*Analysis* selects **Plastic** (nonlinear M-M capacity), **Elastic** "
-       "(cracked-section stresses), or **Both**. Record the project limit-state "
-       "classification in each action-set name, source or note.")
+    md('**Bending analysis** selects **Plastic** (nonlinear M-M capacity), **Elastic** (cracked-section stresses), or **Both**. Record the project limit-state classification in each action-set name, source or note.')
     h2("The plastic sweep")
-    md("The envelope is traced by rotating the neutral axis from $V_{min}$ to "
-       "$V_{max}$ in steps of $V_{inc}$ (degrees). Each angle gives one point on "
-       "the $M_x$-$M_y$ envelope at the design axial force. *Check utilisation* "
-       "compares the applied moment to the envelope; turning it off reports the "
-       "capacity only.")
-    fig(fig_beam_envelope, "The rectangular example's biaxial envelope with the "
-        "applied load; the sweep from 0 to 360 degrees closes the curve.",
-        "A closed Mx-My capacity boundary around the origin with one applied-load "
-        "point; successive boundary vertices correspond to rotated neutral-axis "
-        "solutions.")
+    md('Sector traces the envelope while it rotates the neutral axis from $V_{min}$ to $V_{max}$. The entered $V_{inc}$ is the maximum increment in degrees. Sector uses equal steps that include the two limits. Thus, the actual increment can be smaller. Each angle gives one point on the $M_x$-$M_y$ envelope at the design axial force. \n\n**Check utilisation against applied moment** compares the applied moment with the envelope. If you disable this option, Sector reports the capacity only.')
+    fig(fig_beam_envelope, "The rectangular example's biaxial envelope with the applied load. The sweep from 0 to 360 degrees closes the curve.",
+        'A closed $M_x$-$M_y$ capacity boundary around the origin with one applied-load point. Each boundary vertex is the result for one neutral-axis orientation.')
     h2("Reinforcement detailing")
-    md("Select **Beam** or **Slab**. **Section cut direction** fixes the "
-       "member-relative reinforcement direction represented by the section model. "
-       "Detailing checks use the bars in that modelled cut.")
+    md('Select **Beam** or **Slab**. **Section cut direction** fixes the member-relative reinforcement direction represented by the section model. Detailing checks use the bars in that modeled cut.')
     table(["Section cut", "Modelled reinforcement direction"],
           [["Transverse cut", "Longitudinal"],
            ["Longitudinal cut", "Transverse"]])
@@ -997,35 +1034,12 @@ def manual_blocks() -> list:
     md("The optional **Project direction alias** records local terminology, for "
        "example *span direction*. It is published after the standard Longitudinal "
        "or Transverse label and changes presentation only.")
-    md("Enable **Check minimum reinforcement in modelled direction** and select the check on each "
-       "required Plastic/capacity row. The selected detailing edition and the "
-       "global $f_{ctm}$ apply to those rows. A secondary-direction slab minimum is "
-       "reported as not assessed because its 20% criterion depends on primary "
-       "reinforcement outside the modelled cut. Enable **Clear spacing** for one "
-       "section-wide pairwise check and enter $D_{upper}$; tendons are excluded "
-       "unless explicitly included, in which case their entered diameter must be "
-       "the detailing envelope or duct diameter.")
-    md("Enable **Check shear/torsion link detailing** to check each "
-       "non-zero shear/torsion case. The shared stirrup diameter, longitudinal "
-       "spacing and yield strength are used. Enter the maximum transverse distance "
-       "between effective legs for each shear direction, or leave it at zero for "
-       "a gross-web upper-bound screen. The screen can establish a passing spacing "
-       "check, but an "
-       "actual spacing is required when the bound exceeds the limit. For the 2023 "
-       "edition, select the "
-       "reinforcement ductility class and explicitly choose whether its favourable "
-       "minimum-ratio reduction is used. Under the 2005 method, an ordinary beam "
-       "with non-zero shear requires minimum links; slab omissions follow the "
-       "verified no-link resistance. The 2023 method follows the verified need for "
-       "links; for a beam with $d>500$ mm and no calculated link requirement, "
-       "Sector reports the structural-system condition in 8.2.1(2) as not assessed. "
-       "A missing requirement fails without changing the input.")
+    md('Enable **Check minimum reinforcement in modelled direction**. Select the check on each required Plastic/capacity row. Sector uses the selected detailing edition and global $f_{ctm}$ for those rows.\n\nThe secondary-direction slab minimum depends on primary reinforcement outside the modeled cut. Sector thus reports its 20% criterion as **NOT ASSESSED**.\n\nEnable **Check reinforcement clear spacing**. Enter $D_{upper}$. Sector checks the included element pairs across the section. To include tendons, select the tendon option. Enter the detailing-envelope diameter or duct diameter for each included tendon.')
+    md('Enable **Check shear/torsion link detailing**. Sector checks each case with nonzero shear or torsion. It uses the shared stirrup diameter, longitudinal spacing and yield strength.\n\nFor each shear direction, enter the maximum transverse distance between effective legs. A value of zero selects the gross-web upper-bound check. If this upper bound satisfies the spacing limit, the spacing check passes. If the upper bound is larger than the limit, enter the actual maximum distance between legs.\n\nFor the 2023 edition, select the reinforcement ductility class. Select the minimum-ratio reduction only when it applies. The 2023 method uses the calculated link requirement. For a beam with $d>500$ mm and no calculated link requirement, the structural-system condition in 8.2.1(2) stays **NOT ASSESSED**.\n\nUnder the 2005 method, minimum links are necessary for an ordinary beam with nonzero shear. For a slab, omission of links depends on the verified resistance without links. Sector compares the provided links with each applicable requirement. An insufficient provided value gives **FAIL**.')
     table(["Member", "Vertical shear-link spacing limits"],
-          [["Beam", "$s_l \\leq 0.75d$; $s_t \\leq \\min(0.75d,600\\,\\text{mm})$"],
-           ["Slab", "$s_l \\leq 0.75d$; $s_t \\leq 1.5d$"]])
-    md("$s_t$ is measured in the section plane between adjacent parallel link "
-       "legs: along $y$ for $V_x$ and along $x$ for $V_y$. The longitudinal "
-       "spacing is $s_l$; the closed-stirrup height remains unchanged.")
+          [["Beam", '$s_l \\leq 0.75d$. $s_t \\leq \\min(0.75d,600\\,\\text{mm})$'],
+           ["Slab", '$s_l \\leq 0.75d$. $s_t \\leq 1.5d$']])
+    md('Measure $s_t$ in the section plane between adjacent parallel link legs:\n\n- Along $y$ for $V_x$.\n- Along $x$ for $V_y$.\n\nThe longitudinal spacing is $s_l$. Keep the closed-stirrup height unchanged.')
     call("standard", "EN 1992-1-1:2005 9.2.3(4)'s 350 mm value applies to "
          "longitudinal torsion bars around the link perimeter, not to spacing "
          "between closed links.")
@@ -1034,506 +1048,196 @@ def manual_blocks() -> list:
             "$A_{s,prov} \\geq A_{s,min}$ in the resultant bending-tension zone (9.1N)"],
            ["DS/EN 1992-1-1:2023",
             "Nominal section resistance at characteristic bar yield compared with the cracking action (12.1/12.2)"]])
-    call("limit", "Prestressing tendons are not credited in the minimum-"
-         "reinforcement check. The DK NA side-face reinforcement rule for high "
-         "beam webs, lap length and bundle verification remain separate detailing "
-         "reviews. Ordinary bars are assumed anchored to develop the entered "
-         "$f_{yk}$; reduce it where the force cannot be developed.")
+    call("limit", 'The minimum-reinforcement check uses ordinary bars. Complete the DK NA side-face reinforcement check for high beam webs and the lap-length and bundle checks independently.\n\nThe minimum-reinforcement calculation assumes that ordinary bars have sufficient anchorage for the entered $f_{yk}$. Where the anchorage cannot resist that force, reduce $f_{yk}$.')
     h2("Crack width")
-    md("Tick **Crack width** on each Elastic table row that requires the numerical output. "
-       "If any row is ticked, the global crack settings apply to every ticked row. "
-       "The diameter override $\\phi$ (0 = each element's table diameter; Area "
-       "mode derives it from area), the "
-       "mild-steel bond coefficient $k_1$ (0.8 ribbed, 1.6 plain), the code edition "
-       "and -- for the DK NA -- the member type are the inputs.")
-    table(["Crack-width code", "What it changes"],
+    md('**Bonded-tendon ratio** $\\xi$ is the tendon-to-ribbed-reinforcement bond-strength ratio for the 2023 mixed-reinforcement crack calculation. Enter the applicable value when the section combines ordinary reinforcement and bonded tendons. Zero leaves the ratio unspecified. First-generation crack methods save this value for use with the 2023 basis. Fatigue uses its own bond ratio, assigned through each tendon fatigue detail.')
+    md("For each applicable Elastic table row, select **Crack width**. The global crack settings apply to each selected row.\n\nEnter the diameter override $\\phi$, or use 0 to select each element's table diameter. **Area** mode calculates diameter from area. Enter the ordinary-steel bond coefficient $k_1$: 0.8 for ribbed reinforcement or 1.6 for plain reinforcement. Select the code edition. For DK NA, also select the member type.")
+    table(['Crack-width design basis', "What it changes"],
           [["EN 1992-1-1:2005", "The base EC2 model (7.3.4): $s_{r,max}$ from 7.11 / 7.14"],
-           ["DS/EN 1992-1-1 + DK NA", "Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only; reports **both** the fine and the coarse crack system (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)"],
+           ["DS/EN 1992-1-1 + DK NA", 'Cover-dependent $k_3$ and the $(h-x)/3$ term for slabs / prestressed only. Reports the fine and coarse crack systems (the coarse: centroid-matched effective area, fig 7.100 NA, $w_k$ halved)'],
            ["DS/EN 1992-1-1:2023", "The refined model (9.2.3): $w_k = k_w\\,(k_1/r)\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm})$"]])
     call(
         "standard",
-        "Sector reports the DK NA fine and coarse crack systems "
-        "side by side, each for the long-term and short-term load (four crack "
-        "widths) for each crack-width-enabled Elastic row. Analysis settings "
-        "provide independent long-term and short-term user limits. Zero means "
-        "that duration is "
-        "calculated without a limit comparison; when a positive value is "
-        "entered, Sector reports the duration-matched comparison. Select the limits "
-        "and action classifications required by the project basis. Part C derives "
-        "every model in full with the critical worked crack width.",
+        'For each Elastic row with crack width enabled, Sector reports four DK NA crack widths:\n\n- Fine system, long-term actions.\n- Fine system, short-term actions.\n- Coarse system, long-term actions.\n- Coarse system, short-term actions.\n\nAnalysis settings have a user limit for each duration. A zero limit gives the calculated width without a limit comparison. A positive limit gives a comparison for that duration.\n\nSelect the limits and action classifications specified by the project basis. Part C gives the methods and worked examples.',
     )
-    md("For the first-generation Danish basis only, **DK heightened crack-control "
-       "minimum** is a separate section-level opt-in. The user must declare its "
-       "applicability and supply the separate Formula 7.100 NA permitted width, "
-       "reinforcement surface, effective tensile strength and separate fine/coarse "
-       "effective tension areas. "
-       "Sector calculates both systems together. It derives bar diameter, reinforcement "
-       "modulus and provided area from one ordinary crack-width Elastic case: the "
-       "sole eligible case is selected automatically; otherwise the user selects it "
-       "explicitly.")
+    md('For the first-generation Danish basis, **DK heightened crack-control minimum** is an optional check.\n\nDeclare its applicability. Supply these inputs for Formula (7.100 NA):\n\n- Permitted width.\n- Reinforcement surface.\n- Effective tensile strength.\n- Effective tension area for the fine system.\n- Effective tension area for the coarse system.\n\nSector calculates the two systems together. It gets bar diameter, reinforcement modulus and provided area from one ordinary crack-width Elastic case.\n\nIf only one case is eligible, Sector selects it automatically. If more than one case is eligible, select the case.')
     h2("Grouped fatigue")
-    md("Enable **Fatigue analysis**, select the fatigue edition, then enable "
-       "**Reinforcement** and/or **Concrete**. Enter the final project factors "
-       "$\\gamma_{Ff}$, $\\gamma_s$ and $\\gamma_{c,fat}$, including applicable "
-       "control-, construction- and consequence-class effects.")
-    md("For concrete, select **Explicit Palmgren-Miner spectrum** or "
-       "**Damage-equivalent stress amplitude**. The explicit method uses every "
-       "entered cycle count. For the equivalent method, each row's long/total "
-       "action pair must already represent an equivalent amplitude for $10^6$ "
-       "cycles; its Cycles value is ignored for concrete.")
+    md('1. Enable **Fatigue analysis**.\n2. Select the fatigue edition.\n3. Enable **Reinforcement**, **Concrete**, or the two options.\n4. Enter the effective project factors $\\gamma_{Ff}$, $\\gamma_s$ and $\\gamma_{c,fat}$.\n\nInclude the applicable control-, construction- and consequence-class effects in these factors.')
+    md('Under **Concrete fatigue method**, select one of these methods:')
+    md('- **Explicit Palmgren-Miner spectrum** uses the cycle count in each spectrum bin.\n- **Damage-equivalent stress amplitude** uses an action pair that represents an equivalent amplitude for $10^6$ cycles. Sector ignores the entered cycle count for this concrete check.\n- **User-defined Miner S-N relation** uses the entered cycles and coefficient $C$ in the project-defined concrete fatigue-life relation.')
+    md('For the user-defined relation, record the coefficient and governing source with the project inputs. Sector identifies this relation as project-defined in the calculation record. Part C gives the fatigue-life equations and acceptance criteria.')
     table(["Input", "Use"],
           [["$\\gamma_{Ff}$", "Factors the cyclic action increment before the elastic solve"],
            ["$\\gamma_s$", "Reduces the reinforcement S-N resistance and yield/proof limit"],
            ["$\\gamma_{c,fat}$", "Reduces the concrete fatigue strength"],
            ["$\\beta_{cc}(t_0)$, $t_0$", "Concrete strength at the start of cyclic loading"],
-           ["$k_1$, $C$", "2005 concrete-strength coefficient; C applies only to the explicit concrete-life method"]])
-    md("The **Fatigue details** material tab holds named resistance definitions. "
-       "Assign one detail ID to every checked bar or tendon. Standard presets "
-       "lock $N^{*}$, the two S-N slopes, the characteristic reference range and its "
-       "source; Custom / imported makes them editable. Diameter-dependent and "
-       "bent-bar reductions are applied where the selected preset requires them. "
-       "For a section combining mild reinforcement and bonded tendons, each tendon "
-       "also needs the bond ratio $\\xi$ and equivalent tendon diameter.")
-    md("The **Spectrum basis** records the selected grouped-spectrum method and "
-       "optional action-set notes. Every action and cycle count is used as entered; "
-       "the project spectrum defines traffic coverage and route assumptions.")
+           ["$k_1$, $C$", '2005 concrete-strength coefficient. C applies to the explicit and user-defined concrete fatigue-life methods']])
+    md("The **Fatigue details** material tab holds named resistance definitions. Assign one detail ID to each checked bar or tendon. Standard presets lock $N^{*}$, the two S-N slopes, the characteristic reference range and its source. Custom / imported makes them editable. Sector applies the diameter-dependent and bent-bar reductions specified by the selected preset. If the section has mild reinforcement and bonded tendons, enter the bond ratio $\\xi$ for each tendon. Also enter each tendon's equivalent diameter.")
+    md('**Create or change a fatigue detail**\n\n1. Open **Inputs > Material parameters > Fatigue details**.\n2. Select **Add mild** for reinforcing steel or **Add tendon** for prestressing steel.\n3. Enter the detail name.\n4. Select its preset.\n5. Examine the displayed parameters and source.\n6. Under **Inputs > Section**, assign the detail ID to the applicable reinforcement elements.\n\n**Duplicate** copies the selected detail to a new definition. **Assigned elements** shows its current use. **Delete** is available when the detail is unassigned and a different detail is available.')
+    md('The **Spectrum basis** records the selected grouped-spectrum method and optional action-set notes. Sector uses each action and cycle count as entered. The project spectrum supplies the traffic coverage and route assumptions.')
+    md("**Resistance preset** includes straight bars, bent bars, welded bars or fabrics, steel couplers, pretensioning and bonded tendon details. "
+       "Tendon families distinguish plastic ducts, curved tendons in steel ducts, and coupler or anchorage details. "
+       "Select the family and edition that apply to the physical detail.")
+    md('Select **Custom / imported** to edit the resistance definition. Set **Element type** to mild reinforcement or prestressing tendon. Enter the reference cycles, characteristic stress range and the two S-N exponents. **Reference-range model** selects a fixed range or the applicable 2023 diameter-dependent range.')
+    md("For a bent-bar detail, enter the mandrel diameter used by its reduction. For mixed ordinary and prestressing reinforcement, enter the tendon's **Bond ratio** and **Equivalent tendon diameter**. A zero bond ratio leaves the required property unspecified. Examine the resulting input warning before assessment.")
+    md("**Resistance source** records the standard, clause or project source for the fatigue detail. "
+       "The **Description** field identifies its physical arrangement. "
+       "Action references belong to the spectrum or action record under **Report > Project and action references**.")
+    md('The concrete fatigue age $t_0$ records the start of cyclic loading. Also enter the related strength-development factor $\\beta_{cc}(t_0)$. The 2023 strength expression does not use the 2005 coefficient $k_1$. The damage-equivalent route does not use the fatigue-life coefficient $C$.')
     table(["Fatigue edition", "Implemented resistance basis"],
           [["DS/EN 1992-1-1:2005",
-            "Steel 6.8.4 and Tables 6.3N/6.4N; concrete 6.72 equivalent method or corrected DS/EN 1992-2 6.106 Miner method"],
+            'Steel 6.8.4 and Tables 6.3N/6.4N. Concrete 6.72 equivalent method or corrected DS/EN 1992-2 6.106 Miner method'],
            ["DS/EN 1992-1-1:2005 + DK NA:2024",
-            "Same calculation models, with the complete Danish project factors entered explicitly"],
+            'Same calculation models, with the full Danish project factors entered explicitly'],
            ["DS/EN 1992-1-1:2023",
-            "Reinforcement Annex E.5 and Tables E.1/E.2; concrete E.2 equivalent method or E.7-E.8 Miner method"]])
-    call("limit", "Each named spectrum is assessed independently. Enter traffic "
-         "cycles, dynamic allowance and lane/track concurrence in the project "
-         "spectrum. The implemented fatigue scope covers normal force and bending.")
-    h2("Shear (Vx,Ed and Vy,Ed)")
-    md("With **Check shear capacity** on, Sector computes the design shear "
-       "resistance $V_{Rd,c}$ of a member **not** requiring shear reinforcement "
-       "(EN 1992-1-1 6.2.2) in each active direction. Signed $V_{x,Ed}$ and "
-       "$V_{y,Ed}$ are entered per Plastic/capacity row; zero disables only that "
-       "component.")
-    table(["Component", "Geometry and associated bending"],
-          [["$V_{x,Ed}$", "Along x; depth in x; left/right faces; paired with $M_{y,Ed}$"],
-           ["$V_{y,Ed}$", "Along y; depth in y; bottom/top faces; paired with $M_{x,Ed}$"]])
-    md("Face selection is **Auto** by default. Sector transfers the associated "
-       "moment to the concrete centroid and includes the locked-in tendon moment; "
-       "a positive adjusted moment selects the negative-coordinate face and a "
-       "negative adjusted moment selects the positive face. "
-       "If that moment is zero, both faces are checked and the governing result is "
-       "reported separately for shear, V+T and combined checks, including the "
-       "governing face and strut angle where applicable. The row can override either "
-       "face. The associated bending moment selects the tension face independently "
-       "of the shear sign. Web-width overrides and effective link-leg counts are "
-       "directional; method, aggregate and stirrup properties are shared.")
-    call("limit", "When both shear components are nonzero, Sector reports two "
-         "independent directional checks. With torsion, each V+T direction is "
-         "calculated separately. Simultaneous Vx+Vy or Vx+Vy+T interaction requires "
-         "a separate member check.")
-    md("Where torsion is active, the report also shows the directional Formula "
-       "(6.31) low-action screen for Vx+T and Vy+T. The screen states only "
-       "whether designed shear-and-torsion reinforcement beyond the required "
-       "minimum is needed; it does not verify the minimum ratio, spacing, "
-       "arrangement or anchorage. The separate calculated overall link "
-       "minimum-ratio and spacing state is reported as PASS, FAIL, NOT RUN or "
-       "NOT ASSESSED; "
-       "arrangement and anchorage remain separate engineering checks. The "
-       "low-action condition is "
-       "calculated only for approximately solid rectangular sections "
-       "using the first-generation $V_{Rd,c}$ route. Hollow, circular, "
-       "triangular, flanged or compound sections do not receive a Formula "
-       "(6.31) condition result; use their complete shear-and-torsion checks. "
-       "For the 2023 shear method, Formula (6.31) is unavailable. Assess "
-       "shear using the 2023 check; assess torsion and interaction using "
-       "their selected methods. The "
-       "resistance checks remain separate. When N_Ed or M_Ed acts under the "
-       "Danish National Annex, use the DK NA 6.3.2(6) combined N-M-V-T check; "
-       "Formula (6.31) is not used as the combined verdict.")
+            'Reinforcement Annex E.5 and Tables E.1/E.2. Concrete E.2 equivalent method or E.7-E.8 Miner method']])
+    call("limit", 'Sector calculates each named spectrum independently. Enter traffic cycles, dynamic allowance and lane/track concurrence in the project spectrum. The implemented fatigue scope covers normal force and bending.')
+    h2("Shear capacity settings")
+    md('With **Check shear capacity** on, Sector calculates the design shear resistance $V_{Rd,c}$ of a member **not** requiring shear reinforcement (EN 1992-1-1 6.2.2) in each active direction. Enter signed $V_{x,Ed}$ and $V_{y,Ed}$ in each Plastic/capacity row. Zero disables only that component.')
+    table(["Component", 'Geometry and related bending'],
+          [["$V_{x,Ed}$", 'Along x. Depth in x. Left/right faces. Paired with $M_{y,Ed}$'],
+           ["$V_{y,Ed}$", 'Along y. Depth in y. Bottom/top faces. Paired with $M_{x,Ed}$']])
+    md('Face selection is **Auto** by default. Sector transfers the related moment to the concrete centroid and includes the locked tendon moment.\n\n- A positive adjusted moment selects the negative-coordinate face.\n- A negative adjusted moment selects the positive-coordinate face.\n- At zero adjusted moment, Sector evaluates the two faces.\n\nSector selects the governing face independently for shear, V+T and combined checks. The result identifies the face and applicable strut angle. You can override the face in the action row. The bending moment selects the tension face independently of the shear sign.\n\nWeb-width overrides and effective link-leg counts apply independently to each direction. Method, aggregate and stirrup properties apply to the two directions.')
+    fig(fig_directional_shear_faces, 'Directional shear geometry for a 300 by 600 mm rectangle with positive adjusted bending moments. Filled circles identify the selected longitudinal bars. The vertical shear uses the bottom bars and a 550 mm effective depth. The horizontal shear uses the left bars and a 250 mm effective depth.', 'Two equal-scale section views pair vertical shear with bending about the x axis and horizontal shear with bending about the y axis. The first view measures effective depth from the top compression edge to the bottom bar centers. The second measures it from the right compression edge to the left bar centers. The selected web widths are 300 and 600 mm.')
+    call("limit", 'When the two shear components are nonzero, Sector calculates one check for each direction. With torsion, Sector calculates one $V+T$ check for each direction.\n\nFor simultaneous $V_x+V_y$ or $V_x+V_y+T$ interaction, do a member check independently of these directional checks.')
+    md('Where torsion is active, the report shows the directional Formula (6.31) condition for $V_x+T$ and $V_y+T$. This condition identifies the cases where designed shear-and-torsion reinforcement beyond the required minimum is necessary. \n\nEach link minimum-ratio and spacing check has its own result. Their states are **PASS**, **FAIL**, **NOT RUN** or **NOT ASSESSED**. Do engineering checks of the arrangement and anchorage independently of the section calculation.\n\nSector calculates Formula (6.31) only for approximately solid rectangular sections with the first-generation $V_{Rd,c}$ method. For hollow, circular, triangular, flanged or compound sections, use the full shear-and-torsion checks.\n\nFor the 2023 shear method, assess shear with the 2023 check. Assess torsion and interaction with their selected methods. Formula (6.31) is unavailable for that combination.\n\nWhen $N_{Ed}$ or $M_{Ed}$ acts under the Danish National Annex, use the DK NA 6.3.2(6) combined N-M-V-T check. Its verdict includes the applicable concurrent actions.')
     table(["Shear method", "What it sets"],
           [["EN 1992-1-1:2005", "$C_{Rd,c} = 0.18/\\gamma_c$, $k_1 = 0.15$, "
             "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$"],
-           ["DS/EN 1992-1-1:2005 + DK NA:2024", "As 2005 but the raised "
-            "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$"],
-           ["DS/EN 1992-1-1:2023", "The strain-based $\\tau_{Rd,c}$ (8.2.2) with the "
-            "aggregate size $d_{dg}$ and the user-selected $\\gamma_V$ "
-            "(default 1.40). This remains the nominal route while "
-            "$|V_{Ed}| \\leq V_{Rd,c}$, including when links are entered; above "
-            "that boundary the compression-field method (8.2.3) applies"]])
-    md("Select the **shear section form** separately from the polygon. Automatic "
-       "treatment is limited to a solid rectangle. A non-rectangular constant-width "
-       "web needs an entered governing $b_w$. For the 2023 links method, a "
-       "variable-width web also needs the reinforcement inclination $\\delta$ in "
-       "each active direction; a circular section needs the hoop diameter $D_h$ "
-       "and the lever arm $z$ from the fitted section. Sector does not apply these "
-       "2023 section-form rules to a first-generation shear method. That combination "
-       "is reported as NOT ASSESSED and requires a separately applicable member "
-       "calculation.")
-    md("The duct allowances used in the calculation are: 2023 grouted steel, "
-       "$k_{duct}=0.5$; 2023 grouted plastic with confirmed thin wall, "
-       "$k_{duct}=0.8$; and 2023 thick-wall plastic, ungrouted or soft-filled "
-       "ducts, $k_{duct}=1.2$. These 2023 allowances apply when "
-       "$\\sum\\phi_{duct}>b_w/8$. For the 2005 links method, grouted steel "
-       "uses $k_{duct}=0.5$ when the largest $\\phi_{duct}>b_w/8$; plastic, "
-       "ungrouted or unbonded ducts use $k_{duct}=1.2$. No web-width reduction "
-       "is applied when no ducts are selected.")
-    md("Where the applicable duct threshold is exceeded, the compression-field "
-       "width is $b_{w,nom}=b_w-k_{duct}\\sum\\phi_{duct}$. The 2023 no-links "
-       "check considers this allowance only for ungrouted or soft-filled ducts; "
-       "the 2005 no-links check is unchanged. If the selected branch needs a web, "
-       "hoop, fitted-section, inclination or duct dimension that is not established, "
-       "Sector publishes NOT ASSESSED rather than using a rectangular result.")
-    call("standard", "DS/EN 1992-1-1:2023, 4.3.3 and Table 4.3 (NDP), "
-          "define $\\gamma_V$ for shear resistance without shear reinforcement. "
-          "The input starts at 1.40; select the positive value required by the "
-          "project basis. Clause 8.2.2 uses that value. The **2023 method** uses "
-          "$\\tau_{Rd,c} = (0.66/\\gamma_V)(100\\rho_l f_{ck} d_{dg}/d)^{1/3} \\geq "
-          "\\tau_{Rd,c,min}$ (8.27), with $d_{dg} = 16 + D_{lower}$ ($\\leq 40$ mm, "
-          "8.2.1(4)) and the flexural design yield $f_{yd}$. When axial force is "
-          "present, Sector replaces $d$ with $k_{vp}d$ in Formula (8.27), with "
-          "$k_{vp}=\\max[1+N_{Ed}/|V_{Ed}|\\,d/(3a_{cs}),0.1]$ and "
-          "$a_{cs}=\\max(|M_{Ed}/V_{Ed}|,d)$ (8.30-8.31), including locked-in "
-          "prestress effects. Tendons are assumed parallel to the member axis "
-          "($\\cos\\beta=1$), because a cross-section model has no longitudinal "
-          "tendon inclination. When links are entered, the same selected "
-          "$\\gamma_V$ remains active wherever the 8.2.2 concrete route applies; "
-          "the compression-field method in 8.2.3 applies above that boundary. "
-          "Torsion and the combined lock stay on the 2005 family.")
-    call("limit", "$A_{sl}$ is the tension-face bars, **assumed fully anchored** "
-          "($\\geq l_{bd} + d$). Confirm anchorage in the member design and enter "
-          "an appropriately reduced $f_{yk}$ / $f_{ywk}$ where the force cannot "
-          "be developed.")
+           ["DS/EN 1992-1-1:2005 + DK NA:2024", "2005 method with the raised $v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$"],
+           ["DS/EN 1992-1-1:2023", 'The strain-based $\\tau_{Rd,c}$ method (8.2.2) uses $d_{dg}$ and the selected $\\gamma_V$ (default 1.40). It applies while $|V_{Ed}|\\leq V_{Rd,c}$, with or without links. For greater demand, the compression-field method (8.2.3) applies.']])
+    md('Select the **shear section form** independently of the polygon. Automatic geometry applies to a solid rectangle. For a non-rectangular constant-width web, enter the governing $b_w$.\n\nFor the 2023 links method, reinforcement inclination is necessary for a variable-width web: $\\delta$ in each active direction. For a circular section, supply hoop diameter $D_h$ and the lever arm $z$ from the fitted section. These section-form rules apply to the 2023 method. With a first-generation method, Sector reports **NOT ASSESSED** and an applicable member calculation is necessary.')
+    md('**Duct allowance for the 2023 method**\n\nThe allowance applies when $\\sum\\phi_{duct}>b_w/8$:\n\n- Grouted steel ducts: $k_{duct}=0.5$.\n- Grouted plastic ducts with a confirmed thin wall: $k_{duct}=0.8$.\n- Thick-wall plastic, ungrouted or soft-filled ducts: $k_{duct}=1.2$.\n\n**Duct allowance for the 2005 links method**\n\n- For grouted steel, use $k_{duct}=0.5$ when the largest $\\phi_{duct}>b_w/8$.\n- For plastic, ungrouted or unbonded ducts, use $k_{duct}=1.2$.\n\nIf no ducts are selected, Sector keeps the full web width.')
+    md('When the duct size is greater than the applicable threshold, use this compression-field width:\n\n$b_{w,nom}=b_w-k_{duct}\\sum\\phi_{duct}$.\n\nThe 2023 no-links check applies this allowance only to ungrouted or soft-filled ducts. The 2005 no-links check stays unchanged.\n\nFor the selected branch, Sector must have each applicable web, hoop, fitted-section, inclination and duct dimension. A missing dimension gives **NOT ASSESSED**.')
+    call("standard", '**2023 shear factor**\n\nDS/EN 1992-1-1:2023, 4.3.3 and Table 4.3 (NDP), specify $\\gamma_V$ for shear resistance without shear reinforcement. The input starts at 1.40. Select the positive value specified by the project basis. Clause 8.2.2 uses that value.\n\n**Resistance without shear reinforcement**\n\nFormula (8.27) gives:\n\n$\\tau_{Rd,c} = (0.66/\\gamma_V)(100\\rho_l f_{ck} d_{dg}/d)^{1/3} \\geq \\tau_{Rd,c,min}$.\n\nThe aggregate term is $d_{dg} = 16 + D_{lower}$, with a maximum of 40 mm under 8.2.1(4). The method uses the flexural design yield strength $f_{yd}$.\n\n**Axial-force adjustment**\n\nWhen axial force is nonzero, Sector replaces $d$ with $k_{vp}d$ in Formula (8.27). Formulas (8.30)-(8.31) give:\n\n$k_{vp}=\\max[1+N_{Ed}/|V_{Ed}|\\,d/(3a_{cs}),0.1]$.\n\n$a_{cs}=\\max(|M_{Ed}/V_{Ed}|,d)$.\n\nThe actions include locked-in prestress. The section model assumes that tendons are parallel to the member axis, so $\\cos\\beta=1$.\n\n**Selection of the resistance method**\n\nWhen links are entered, Sector uses the selected $\\gamma_V$ wherever the 8.2.2 concrete route applies. For a demand larger than that resistance, Sector uses the compression-field method in 8.2.3. Torsion and the combined lock stay on the 2005 family.')
+    call("limit", '$A_{sl}$ is the tension-face bars, **assumed fully anchored** ($\\geq l_{bd} + d$). Make sure that the member design satisfies the anchorage conditions. Where anchorage cannot resist the force, reduce $f_{yk}$ / $f_{ywk}$ to the strength that the anchorage can resist.')
     call(
         "limit",
-        "The complete entered compression-strut interval must lie within every "
-        "active method's permitted range: $1.0\\leq\\cot\\theta\\leq2.5$ for "
-        "the 2005 family and 2023 class B/C, with the 2023 upper limit reduced to "
-        "2.0 for class A and further by axial tension under 8.2.3(4). Exact "
-        "boundaries are admissible. Outside the applicable range, linked shear, "
-        "torsion and dependent interactions are NOT ASSESSED; an applicable "
-        "concrete-only $V_{Rd,c}$ route remains independent.",
+        "The full compression-strut interval must be inside each active method's permitted range. The 2005 family and 2023 class B/C use $1.0\\leq\\cot\\theta\\leq2.5$. The 2023 upper limit decreases to 2.0 for class A. Axial tension can also decrease it under 8.2.3(4).\n\nExact boundaries are permitted. An interval outside the applicable range gives **NOT ASSESSED** for linked shear, torsion and dependent interactions. An applicable concrete-only $V_{Rd,c}$ route stays independent.",
     )
-    md("With **Shared links / closed torsion stirrups present** on, Sector keeps "
-       "$V_{Rd,c}$ as the nominal resistance while $|V_{Ed}| \\leq V_{Rd,c}$. "
-       "Only above that boundary does the designed-link resistance "
-       "$V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$ (6.2.3 or 8.2.3) become the "
-       "nominal route. Minimum reinforcement, spacing and other link-detailing "
-       "requirements remain separate checks. The link inputs are the effective "
-       "legs for each direction, the bar diameter and the "
-       "spacing $s$ (so $A_{sw} = n_{legs}\\,\\pi\\phi^2/4$), the link yield "
-       "$f_{ywk}$, and one compression-strut range $\\cot\\theta_{min}$ / "
-       "$\\cot\\theta_{max}$ entered under **Links / stirrups**. A stand-alone "
-       "capacity check maximises $V_{Rd}$ within that range. When live member "
-       "actions are combined, Sector selects one angle within the same range to "
-       "minimise the governing utilisation.")
-    call("standard", "EN 1992-1-1 6.7N (and the DK NA:2024 6.7a NA for class B/C "
-         "steel) allow $1 \\leq \\cot\\theta \\leq 2.5$; the DK NA takes the strut "
-         "factor $\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$ (5.103 NA) rather "
-         "than the recommended $\\nu = 0.6(1 - f_{ck}/250)$. Bounds outside the "
-         "code range are allowed for exploration, but Sector withholds the code "
-         "verdict for the links and every dependent interaction check.")
-    call("standard", "For DS/EN 1992-1-1:2023, "
-         "$\\tau_{Rd,sy}=\\rho_w f_{ywd}\\cot\\theta$ (8.42) and "
-         "$\\sigma_{cd}=\\tau_{Ed}(\\cot\\theta+\\tan\\theta)\\leq\\nu f_{cd}$ "
-         "(8.44), with $\\nu=0.5$. The upper angle limit is 2.5 for class B/C, "
-         "reduced by 20% for class A and reduced further by axial tension per "
-         "8.2.3(4). The section check caps the upper limit at 2.5 because the "
-         "$x<0.25d$ member condition for extension towards 3.0 requires a member "
-         "assessment.")
-    h2("Torsion (TRd, thin-walled tube)")
-    md("Enable **Check torsion capacity** to use the section 6.3 thin-walled "
-       "closed-tube model. With current closed links, Sector reports "
-       "$T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd,c}$, $T_{Ed}/T_{Rd}$ and the required "
-       "longitudinal steel $\\sum A_{sl}$. The utilisation is the transverse/strut "
-       "resistance component, not by itself an overall torsion verdict.")
-    md("**Applicability and member scope.** Classify every Plastic case "
-       "separately. For each non-zero $T_{Ed}$, select whether the action is "
-       "equilibrium torsion, deliberately retained residual compatibility "
-       "torsion, or compatibility torsion requiring a member/system assessment. "
-       "Also confirm whether the section is closed or solid with warping torsion "
-       "not governing. The choices remain attached to the named case when rows "
-       "are reordered; a new or renamed case starts as Not established. Missing "
-       "evidence, compatibility torsion requiring member assessment, and open "
-       "thin-walled or warping-sensitive members are **NOT ASSESSED** before the "
-       "sectional torsion calculation.")
-    call("limit", "Compatibility torsion may normally be omitted at ULS only when "
-         "the applicable statically indeterminate system, stability independence "
-         "and minimum-reinforcement conditions are established. Sector does not "
-         "establish redistribution, restraints or member response. The residual "
-         "route checks only the $T_{Ed}$ deliberately retained as a design action. "
-         "Open thin-walled members may require warping-torsion/member analysis "
-         "outside Sector.")
-    md("**Actions and tube geometry.** Enter signed $T_{Ed}$ in each "
-       "Plastic/capacity row; zero skips torsion for that row. Sector derives "
-       "$A$, $u$, $t_{ef}$, $A_k$ and $u_k$ from the outline and the modelled "
-       "longitudinal reinforcement. For each tube wall, $t_{ef}$ must be at least "
-       "twice the distance from the concrete edge to the assigned bar centre and, "
-       "for a hollow section, no greater than the real wall. A positive single-tube "
-       "override must satisfy every wall interval. For supported subdivision, set "
-       "the global effective-wall-thickness override to 0 mm for automatic "
-       "wall thickness; complete bar-to-wall evidence is required for every sub-tube.")
-    md("**Material and strut inputs.** Enter one compression-strut range under "
-       "**Links / stirrups** for both shear and torsion. The direct positive "
-       "$\\gamma_{ct}$ gives $f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}$; starting values "
-       "are 1.50 for EN and 1.70 for DK/NA, and the report records the selected "
-       "value.")
-    md("**Shared stirrup.** Shear uses the entered effective legs. Torsion uses "
-       "one leg of the same closed, anchored loop for $A_{sw}/s$. The enabled "
-       "shared-link selection establishes link presence.")
-    call("concept", "When current closed links are absent, the result states "
-         "$T_{Rd,max}$ as the concrete-strut cap, $T_{Rd,c}$ as cracking "
-         "resistance and $\\sum A_{sl}$ as reinforcement demand. The "
-         "transverse/strut resistance and its utilisation require current links.")
-    call("limit", "For non-zero torsion, the overall result also requires enough "
-         "longitudinal reinforcement beyond bending demand, distributed around "
-         "every side of every torsion tube and anchored along the member. Sector "
-         "compares Formula (6.28) with the total design tensile resistance of the "
-         "modelled passive bars. A shortfall is **FAIL**. An apparently sufficient "
-         "total remains **NOT ASSESSED** because the section-plane calculation does "
-         "not establish bending reserve, perimeter/sub-tube allocation or member "
-         "anchorage.")
-    call("standard", "$T_{Rd,max}$ uses the code torsion strut factor: recommended "
-         "$\\nu = 0.6(1 - f_{ck}/250)$, or the DK NA:2024 pure-torsion "
-         "$\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA). The favourable "
-         "$\\nu_t=\\nu_v$ detailing option is applied only when current closed "
-         "links are present. The selection records the detailing condition but does "
-         "not verify the modelled longitudinal bars or member anchorage. When the "
-         "shared links are current, the combined "
-         "concrete-crushing check "
-         "$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\leq 1$ (6.29) is added.")
-    call("limit", "A T, L, I or flanged outline requires **Subdivide into "
-         "sub-tubes** under 6.3.1(3). Enter each positioned rectangle by centre "
-         "x/y and b/h; together they must cover the concrete net area without "
-         "overlap, boundary crossing or entry into a void. Multi-cell sections "
-         "require a separate applicable tube model; defining rectangles does not "
-         "establish that model in Sector.")
+    md('With **Shared links / closed torsion stirrups present** on, Sector keeps $V_{Rd,c}$ as nominal resistance while $|V_{Ed}|\\leq V_{Rd,c}$. Above that boundary, the designed-link resistance $V_{Rd}=\\min(V_{Rd,s},V_{Rd,max})$ becomes the nominal route, under 6.2.3 or 8.2.3. Minimum reinforcement and link spacing each have their own check.\n\nUnder **Links / stirrups**, enter the effective legs for each direction and the bar diameter. Enter longitudinal spacing $s$ and link yield strength $f_{ywk}$. The link area is $A_{sw}=n_{legs}\\pi\\phi^2/4$. Enter the common bounds $\\cot\\theta_{min}$ and $\\cot\\theta_{max}$.\n\nA capacity-only check selects the greatest resistance in that range. For loaded member checks, Sector selects one angle that gives the lowest governing utilization.')
+    call("standard", '**Permitted strut angle**\n\nEN 1992-1-1, Formula (6.7N), gives:\n\n$1 \\leq \\cot\\theta \\leq 2.5$.\n\nDK NA:2024, Formula (6.7a NA), gives the same range for class B/C steel.\n\n**Concrete-strut factor**\n\nThe DK NA factor is:\n\n$\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$.\n\nThis is Formula (5.103 NA). The recommended Eurocode factor is:\n\n$\\nu = 0.6(1 - f_{ck}/250)$.\n\n**Results outside the permitted range**\n\nYou can enter bounds outside the code range for exploration. For these bounds, Sector withholds the code verdict for links and each dependent interaction check.')
+    call("standard", '**2023 link resistance**\n\nDS/EN 1992-1-1:2023, Formula (8.42), gives:\n\n$\\tau_{Rd,sy}=\\rho_w f_{ywd}\\cot\\theta$.\n\nFormula (8.44) limits the concrete compression stress:\n\n$\\sigma_{cd}=\\tau_{Ed}(\\cot\\theta+\\tan\\theta)\\leq\\nu f_{cd}$.\n\nThe concrete factor is $\\nu=0.5$.\n\n**Angle bounds**\n\nThe maximum cotangent is 2.5 for class B/C without axial tension. Class A and axial tension decrease that maximum under 8.2.3(4). Part C gives the calculation sequence and the lower bound.\n\nThe section check uses a maximum of 2.5. Before you use 3.0, do a member assessment of the condition $x<0.25d$.')
+    h2("Torsion capacity settings")
+    md("**Reference reinforcing material** selects the steel law used for the shared shear and torsion member checks. It supplies the steel partial factor and longitudinal design yield strength. Each bar's assigned material supplies its bending resistance and elastic stress.")
+    md('**Sub-tube inputs**\n\n1. For a supported compound section, select **Subdivide into sub-tubes (T / compound section)**.\n2. Select two to four sub-rectangles.\n3. Enter the center coordinates $x_i$, $y_i$ of each rectangle in the section axes.\n4. Enter its width $b_i$ along $x$ and height $h_i$ along $y$, in millimeters.\n5. Examine the full partition before calculation.\n\nRectangle 1 is the web paired with shear.')
+    fig(fig_torsion_partition, 'Positioned rectangles for a full T-section partition. The web and flange meet at $y=100$ mm. Their interiors have no overlap, and their areas sum to $200000\\,\\text{mm}^{2}$. Crosses mark the rectangle centers. Rectangle 1 is the web paired with shear.', 'The T-section has a 200 by 400 mm web and a 600 by 200 mm flange. The web center is (0, -100) mm. The flange center is (0, 200) mm. An adjacent table gives the four inputs for each rectangle.')
+    md('This example establishes the geometric partition. The wall checks then use the actual reinforcement arrangement to calculate each effective tube.')
+    md('Enable **Check torsion capacity** to use the thin-walled closed-tube model in section 6.3.\n\nWith current closed links, Sector reports:\n\n- Stirrup resistance $T_{Rd,s}$.\n- Concrete-strut resistance $T_{Rd,max}$.\n- Cracking torque $T_{Rd,c}$.\n- Transverse/strut utilization $T_{Ed}/T_{Rd}$.\n- Required longitudinal steel $\\sum A_{sl}$.\n\nThe utilization describes the transverse/strut resistance component. The overall torsion status also includes the longitudinal assessment.')
+    md('**Applicability and member scope**\n\nFor each nonzero $T_{Ed}$, select one torsion classification:\n\n- Equilibrium torsion.\n- Deliberately retained residual compatibility torsion.\n- Compatibility torsion that makes a member/system assessment necessary.\n\nMake sure that the section is closed or solid. Make sure that warping torsion does not govern.\n\nThe classification stays attached to the named case when rows are reordered. A new or renamed case starts as Not established.\n\nSector gives **NOT ASSESSED** before the sectional torsion calculation for these conditions:\n\n- Missing evidence.\n- Compatibility torsion that makes a member assessment necessary.\n- Open thin-walled or warping-sensitive members.')
+    call("limit", 'You can set compatibility torsion to zero at ULS only if the statically indeterminate system satisfies the applicable conditions. These conditions include stability independence and minimum reinforcement.\n\nDo checks of redistribution, restraints and member response independently of Sector. The residual method uses only the $T_{Ed}$ that you keep as a design action.\n\nA warping-torsion/member analysis can be necessary for open thin-walled members.')
+    md('**Actions and tube geometry**\n\nEnter signed $T_{Ed}$ in each Plastic/capacity row. A value of zero skips torsion for that row.\n\nSector calculates $A$, $u$, $t_{ef}$, $A_k$ and $u_k$ from the outline and the modeled longitudinal reinforcement.\n\n**Wall-thickness limits**\n\nFor each tube wall, the minimum $t_{ef}$ is two times the distance from the concrete edge to the assigned bar center. For a hollow section, $t_{ef}$ must also be no greater than the actual wall thickness. A positive single-tube override must satisfy each wall interval.\n\nFor supported subdivision, set the global effective-wall-thickness override to 0 mm for automatic wall thickness. Supply full bar-to-wall evidence for each sub-tube.')
+    md('**Material and strut inputs**\n\nEnter one compression-strut range under **Links / stirrups** for shear and torsion. Enter a positive $\\gamma_{ct}$.\n\nThe tensile design strength is:\n\n$f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}$.\n\nThe starting factors are:\n\n- EN: $\\gamma_{ct}=1.50$.\n- DK/NA: $\\gamma_{ct}=1.70$.\n\nThe report records the selected value.')
+    md('**Shared stirrup.** Shear uses the entered effective legs. Torsion uses one leg of the same closed, anchored loop for $A_{sw}/s$. The enabled shared-link selection records the presence of links.')
+    call("concept", 'When the section has no current closed links, the result states $T_{Rd,max}$ as the concrete-strut cap, $T_{Rd,c}$ as cracking resistance and $\\sum A_{sl}$ as reinforcement demand. Current links are necessary for the transverse/strut resistance and its utilization.')
+    call("limit", 'For nonzero torsion, sufficient longitudinal reinforcement in addition to the bending reinforcement is necessary. Distribute it around each side of each torsion tube. Anchor it along the member. Sector compares Formula (6.28) with the total design tensile resistance of the modeled passive bars. A shortfall is **FAIL**. An apparently sufficient total stays **NOT ASSESSED** because the section-plane calculation does not assess bending reserve, perimeter/sub-tube allocation or member anchorage.')
+    md('**Torsion strut factor.** The recommended method uses:\n\n$\\nu=0.6(1-f_{ck}/250)$.\n\nThe DK NA:2024 default uses Formula (5.104 NA):\n\n$\\nu_t=0.7(0.7-f_{ck}/200)$.')
+    md('**Closed-link detailing option.** With the DK NA method, $\\nu_t=\\nu_v$ selects $\\nu_v=\\max(0.7-f_{ck}/200,0.45)$. Here $f_{ck}$ is in MPa. Use this option only with current shared links and closed peripheral stirrups. Distribute longitudinal steel uniformly on the two wall faces.')
+    md('Select **$\\nu_t=\\nu_v$ (closed stirrups + distributed long. steel)** only when the detailing condition is satisfied. The selection increases $T_{Rd,max}$ through the strut factor. The recommended EN method keeps its usual factor.')
+    md('The option records a detailing declaration. Do checks of the bar arrangement and member anchorage independently of this declaration. The longitudinal torsion assessment and its status requirements apply.')
+    md('With current shared links, Sector also calculates $T_{Ed}/T_{Rd,max}+V_{Ed}/V_{Rd,max}\\leq1$, from Formula (6.29).')
+    call("limit", 'For a T, L, I or flanged outline, select **Subdivide into sub-tubes** under 6.3.1(3).\n\nEnter these dimensions for each positioned rectangle:\n\n- Center x/y.\n- Width b and height h.\n\nTogether, the rectangles must cover the concrete net area. They must have no overlap, boundary crossing or entry into a void.\n\nFor a multi-cell section, use a different applicable tube model. The entered rectangles alone are insufficient for that model.')
     call(
         "concept",
-        "Entered strut bounds remain visible calculation inputs. If the complete "
-        "interval is outside the selected method's permitted range, Sector "
-        "withholds the angle-dependent resistance, utilisation and interaction "
-        "verdicts as NOT ASSESSED until the limits are corrected.",
+        "The calculation shows the entered strut bounds. If the full interval is outside the selected method's permitted range, Sector reports the angle-dependent results as NOT ASSESSED. This status applies to resistance, utilization and interaction verdicts. Correct the limits before calculation.",
     )
     h2("Combined M-V-T interaction")
-    md("With **Check combined M-V-T** on, Sector ties the bending (plastic $M$), "
-       "shear ($V$) and torsion ($T$) checks together under **one shared code "
-       "edition** (the per-check method selectors are then locked to it). It reports "
-       "the supported concrete-crushing, closed-stirrup and longitudinal-"
-       "reinforcement checks for the Base-EN edition. Selecting the Danish edition "
-       "additionally applies the DK NA $\\sum(S_{Ed}/S_{Rd}) \\leq 1$ rule "
-       "(6.3.2(6)). The summary separates the "
-       "three physical component checks: concrete compression strut, shared closed "
-       "stirrup and governing longitudinal reinforcement. All three checks (Plastic, "
-       "Shear, Torsion) must be enabled, and the row must have nonzero $V_{Ed}$ and "
-       "$T_{Ed}$; otherwise the combined check is not applicable to that row.")
-    call("standard", "DK NA 6.3.2(6): $\\sum(S_{Ed}/S_{Rd}) \\leq 1$ includes "
-         "$N$, $M$, $V$ and $T$, with every $S_{Rd}$ determined for that action "
-         "acting alone. If the longitudinal reinforcement used for shear, in "
-         "addition to what bending requires, has been verified separately, select "
-         "**separate M/V route as a design assumption**. Sector then calculates "
-         "$N+M+T$ and $N+V+T$ independently and uses the governing value, but marks "
-         "a value within the numerical limit **CONDITIONAL** because reinforcement "
-         "area, distribution and anchorage are not verified by the section "
-         "calculation. A governing value above the limit is **FAIL** even under "
-         "that favourable assumption.")
-    call("limit", "Scope: cross-section resistance. Complete the applicable Annex F "
-         "member and detailing assessment separately.")
+    md('Enable **Check combined M-V-T** to assess concurrent bending, shear and torsion under one shared code edition. Sector locks the component method selectors to that edition. The Base-EN method assesses concrete crushing, the closed stirrup and longitudinal reinforcement. The Danish method also applies $\\sum(S_{Ed}/S_{Rd})\\leq1$ under DK NA 6.3.2(6).\n\nEnable Plastic, Shear and Torsion. Enter nonzero $V_{Ed}$ and $T_{Ed}$ in the same capacity row. These conditions make the combined check applicable to that row. The summary gives a status for each physical component.')
+    call("standard", '**Danish interaction criterion**\n\nDK NA 6.3.2(6) applies this criterion to $N$, $M$, $V$ and $T$:\n\n$\\sum(S_{Ed}/S_{Rd}) \\leq 1$.\n\nEach $S_{Rd}$ is the resistance to that action acting alone.\n\n**Separate M/V route**\n\nFirst check the additional longitudinal reinforcement for shear, beyond the bending requirement, independently of the section calculation. If this reinforcement satisfies the applicable conditions, select **separate M/V route as a design assumption**.\n\nSector calculates $N+M+T$ and $N+V+T$ independently and uses the larger value. A value no greater than the numerical limit is **CONDITIONAL**. The section calculation does not assess the additional reinforcement area, distribution or anchorage.\n\nA value larger than the limit is **FAIL**, also under that favorable assumption.')
+    call("limit", 'Scope: cross-section resistance. Complete the applicable Annex F member and detailing assessment independently.')
     h2("Modular ratios and creep")
-    md("The cracked-elastic analysis uses a short-term modular ratio $n_s = E/E_c$ "
-       "and a long-term $n_l = E/E_{c,eff}$, the latter carrying creep through the "
-       "effective modulus $E_{c,eff} = E_c/(1+\\varphi)$. These ratios are **not "
-       "entered** -- they are derived from the elastic moduli and the creep "
-       "coefficient $\\varphi$. The appropriate $E_s$ or $E_p$ is used for each "
-       "bar or tendon, so different material definitions may have different ratios. "
-       "The ratios of every material used in the section are reported.")
+    md('The cracked-elastic analysis calculates the modular ratios from the assigned moduli.\n\n**Short-term ratio**\n\n$n_s=E/E_c$.\n\n**Effective concrete modulus**\n\n$E_{c,eff}=E_c/(1+\\varphi)$.\n\n**Sustained ratio**\n\n$n_l=E/E_{c,eff}$.\n\nEnter the global creep coefficient $\\varphi$ under **Inputs > Loads**.\n\nSector uses the assigned $E_s$ or $E_p$ for each bar or tendon. Different material definitions can thus have different ratios. The results report the ratios for each material in the section.')
 
     h1("Loads")
-    md("Loads are entered in three editable tables. Every active row has one name, "
-       "and names are unique across the Plastic/capacity, Elastic and fatigue-bin "
-       "rows. Use the optional description for the project classification, "
-       "combination or source. Add, delete, paste and reorder rows directly in the "
-       "tables.")
+    md('Enter loads in the three editable tables. Each active row has one name, and names are unique across the Plastic/capacity, Elastic and fatigue-bin rows. Use the optional description for the project classification, combination or source. Add, delete or paste rows directly in the tables.')
     table(["Table", "Per-row fields", "Row-specific rule"],
           [["Plastic / capacity", "$N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$, $V_{x,Ed}$, $V_{y,Ed}$, $T_{Ed}$",
-            "Zero shear/torsion skips that component; minimum reinforcement is selected per row"],
+            'Zero shear/torsion skips that component. Minimum reinforcement is selected per row'],
            ["Elastic", "Long- and short-term $N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$",
-            "Stresses are always output; optionally calculate crack width"],
-           ["Grouped fatigue", "Spectrum, bin name, cycles; long- and short-term $N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$",
-            "Repeated Spectrum labels form one Miner sum; each spectrum is independent"]])
+            'Stresses are always output. Optionally calculate crack width'],
+           ["Grouped fatigue", 'Spectrum, bin name, cycles. Long- and short-term $N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$',
+            'Repeated Spectrum labels form one Miner sum. Each spectrum is independent']])
     h2("Editable table field definitions")
-    md("Unless stated otherwise, values are user inputs. Numeric cells require "
-       "finite, unambiguous decimals and follow the sign convention shown. "
-       "Each table's calculation scope appears once above its field reference.")
-    for table_key in table_fields.TABLE_KEYS:
-        title = table_fields.TABLE_TITLES[table_key]
-        definitions = table_fields.table_fields(table_key)
-        dependencies = list(dict.fromkeys(
-            table_fields.method_dependency(table_key, definition)
-            for definition in definitions
-        ))
-        md("**" + title + ".** " + " ".join(dependencies))
-        table(
-            ["Field / unit", "Meaning / sign", "Default / validation"],
-            editable_field_publication_rows(table_key),
-        )
-    md("The seven editable-table definitions above are the same definitions used "
-       "by the input screens. Open the guide immediately above a table for each "
-       "field's meaning, unit, sign convention, source and blank behaviour. The "
-       "Plastic/capacity and Elastic action fields, and grouped-fatigue numeric "
-       "fields, accept either a dot or comma as the decimal separator; ambiguous "
-       "grouped or mixed separators are rejected. Blank ordinary action cells are "
-       "treated as zero. Optional fields left blank remain absent rather "
-       "than becoming zero, while required name, ID and cycle fields must be "
-       "entered. Calculations use the entered numeric precision; display "
-       "rounding does not change the calculation value.")
-    md("The Elastic long-term and short-term components are solved together. The "
-       "single global creep coefficient $\\varphi$ applies to all Elastic rows. "
-       "Concrete, reinforcement and tendon stresses are outputs for every row. "
-       "Crack width includes the sustained and total long-plus-short response for "
-       "each selected row and uses the duration-specific user criteria entered in "
-       "Analysis settings.")
-    md("The creep-coefficient input help follows the selected concrete preset. "
-       "The first-generation source is 3.1.4 and Annex B.1. The Danish preset "
-       "also identifies DK NA:2024 3.1.4(1)-(2), including the conditional "
-       "$\\varphi=3$ simplification. The 2023 source is 5.1.5, Table 5.2 and "
-       "Annex B.5; project adoption is required and no Danish National Annex is "
-       "applied. A named curve without an edition is project-defined and uncited. "
-       "The entered coefficient remains the calculation value; the engineer "
-       "confirms applicability of any cited simplification.")
-    md("A fatigue bin uses the long-term fields for the sustained/basic state and "
-       "the short-term fields for the cyclic increment. The Elastic analysis "
-       "calculates both states; their stress difference is the range. Reuse one "
-       "**Spectrum** label for all bins that belong to the same Miner sum. Spectrum "
-       "labels that differ only by letter case are rejected.")
-    call("tip", "Use case names from the project combination register. They "
-         "appear unchanged in the result selector, summary and PDF.")
+    md("Values are user inputs unless the field definition gives a different source. Enter finite, unambiguous decimals in numeric cells. Follow the displayed sign convention. Each table's calculation scope is above its field reference.")
+    field_guides(table_fields.TABLE_KEYS[4:])
+    md("The editable-table definitions in this chapter and **Defining the section** are the definitions used by the input screens. Open the guide immediately above a table for each field's meaning, unit, sign convention, source and blank behavior.\n\n**Decimal separators**\n\nThe Plastic/capacity, Elastic and grouped-fatigue numeric fields accept a dot or comma as the decimal separator. Sector rejects ambiguous grouped or mixed separators.\n\n**Blank cells**\n\nSector uses zero for blank ordinary action cells. Optional fields left blank stay empty. Enter the required names, IDs and cycle values.\n\nCalculations use the entered numeric precision. Display rounding does not change the calculation value.")
+    md('Sector solves the Elastic sustained and additional instantaneous actions together. The global creep coefficient $\\varphi$ applies to all Elastic rows. Each row produces concrete, reinforcing-steel and tendon stresses.\n\nFor each selected row, the crack-width calculation includes the sustained and total response. The total response combines sustained and additional actions. The calculation uses the duration-specific criteria entered in **Analysis settings**.')
+    md('The creep-coefficient input help follows the selected concrete preset:\n\n- First generation: 3.1.4 and Annex B.1.\n- Danish preset: also DK NA:2024 3.1.4(1)-(2), with the conditional $\\varphi=3$ simplification.\n- 2023: 5.1.5, Table 5.2 and Annex B.5.\n\nBefore you use the 2023 basis, record its adoption in the project basis. Sector applies no Danish National Annex to this basis. A named curve without an edition is project-defined and uncited.\n\nSector uses the entered creep coefficient in the calculation. The engineer must make sure that each cited simplification is applicable.')
+    md('A fatigue bin uses the long-term fields for the sustained/basic state and the short-term fields for the cyclic increment. The Elastic analysis calculates the two states. Their stress difference is the range. Use the same **Spectrum** label for all bins that belong to the same Miner sum. Sector rejects spectrum labels that differ only by letter case.')
+    call("tip", 'Use case names from the project combination register. Sector uses the same names in the result selector, summary and PDF.')
 
     h1("Reading the results")
+    md('Open the required result view. Select its **Case**. When an input issue offers **Go to**, select it to open the related input stage. A setting can be disabled because of its parent calculation, selected edition or preset. Read its input help before you change the related selection.')
     h2("Result status reference")
-    md("Read each status within its named case, criterion and method scope. A "
-       "passing resistance component does not override a failed or unavailable "
-       "overall check. The overview provides no combined compliance verdict.")
+    md('Read each status in the context of its named case, criterion and method scope. A passing resistance component does not override a failed or unavailable overall check. The overview gives no combined compliance verdict.')
     table(["Status", "Meaning", "Next action"], [
-        ["CALCULATED", "The requested output is available; this alone is no limit assessment.",
+        ["CALCULATED", 'The requested output is available. This alone is no limit assessment.',
          "Read its value, units and method limitations."],
         ["CALCULATED - NO LIMIT COMPARISON", "A crack width is available and its matching criterion is 0 mm.",
-         "Retain the width alone, or enter a positive project criterion for that duration."],
+         'Keep the width alone, or enter a positive project criterion for that duration.'],
         ["PASS / WITHIN USER-SPECIFIED LIMIT", "The named check meets its stated criterion.",
-         "Confirm the criterion and review separate overall checks."],
+         'Make sure that the criterion is applicable. Examine the overall checks.'],
         ["FAIL / EXCEEDS USER-SPECIFIED LIMIT", "The named criterion is exceeded.",
          "Open the result detail and address the governing demand or resistance."],
         ["CONDITIONAL", "The result depends on a stated condition outside automatic verification.",
-         "Confirm and document that condition before relying on the result."],
+         'Before you use the result, make sure that the condition is satisfied. Record the condition.'],
         ["NOT ASSESSED", "A requested assessment lacks valid evidence or lies outside supported scope.",
-         "Read the reason; correct the input or use an appropriate separate assessment."],
+         'Read the cause. Correct the input or use an applicable assessment.'],
         ["NOT REQUESTED", "The check is disabled for this case or setting.",
-         "Enable it only if required for the task, then Calculate."],
-        ["NOT RUN", "The requested operation has not been executed in the stated context.",
-         "Review prerequisites and run Calculate."],
+         'If the task includes this check, enable it. Then select Calculate.'],
+        ["NOT RUN", "Sector did not run this check in the stated context.",
+         'Examine prerequisites and run Calculate.'],
         ["NOT CALCULATED", "No valid calculated value is available.",
-         "Read the calculation reason and resolve the identified input or convergence issue."],
+         'Read the calculation message. Correct the identified input or convergence issue.'],
         ["NOT APPLICABLE", "The named check does not apply in the stated scope.",
-         "Confirm the scope and retain its explanation."],
+         'Make sure that the scope is correct. Keep the related message.'],
         ["INVALID", "Inputs or calculated evidence fail validation.",
-         "Correct the identified issue before relying on the affected result."],
+         'Before you use the affected result, correct the identified issue.'],
         ["STALE", "Inputs changed after the displayed calculation or report was generated.",
-         "Calculate after engineering edits; regenerate the report after document-only edits."],
+         'Calculate after engineering edits. Regenerate the report after document-only edits.'],
     ])
     h2("Results overview")
-    md("The overview shows one fully expanded governing row for each engineering check "
-       "type, with its selected action set, direction or scope, result, criterion "
-       "and status. A calculated result takes precedence over an inactive state; "
-       "equal states use the largest valid utilisation and exact ties keep the "
-       "first listed case. For checks with separate directions, the most "
-       "unfavourable direction governs and remains in the check label. **Not run**, **Not "
-       "calculated**, **Not applicable** and **Not requested** are listed separately "
-       "as scope and calculation state, not as conclusions. Headline counts describe "
-       "the visible rows; each row keeps its own status.")
-    md("In analysis figures, hover text reports the plotted capacity or material "
-       "response represented by the selected point. Section-result markers show "
-       "stress and strain; coordinates and reinforcement area remain in section "
-       "input previews and the complete result tables.")
+    md("Select a result under **Result details**. Select **Open selected result** to open its view.")
+    md('The overview shows one governing row for each engineering check. Each row identifies its action set, direction or scope, result, criterion and status. A calculated result takes precedence over an inactive state. For equal states, the largest valid utilization governs. An exact tie keeps the first listed case.\n\nFor a check with different directions, the most unfavorable direction governs. Its label identifies that direction. **Not run**, **Not calculated**, **Not applicable** and **Not requested** identify the calculation scope and state. Headline counts summarize the rows on the screen. Each row keeps its own status.')
+    md('In analysis figures, hover text reports the plotted capacity or material response represented by the selected point. Section-result markers show stress and strain. Coordinates and reinforcement area stay in section input previews and the full result tables.\n\n**Plot controls**\n\nThe plot toolbar gives these controls:\n\n- **Download plot as a PNG:** save the plot shown as an image.\n- **Zoom:** select a region to make it larger.\n- **Pan:** move the region shown.\n- **Zoom in** and **Zoom out:** change the scale.\n- **Autoscale:** change the axis ranges to include all plotted data.\n- **Reset axes:** use the initial axis ranges.\n- **Fullscreen:** show the plot on the full screen.\n\nSelect the required control in the plot toolbar. For Zoom or Pan, drag within the plot.')
     h2("Plastic results")
-    md("Select a Plastic/capacity case at the top of the view. The "
-       "$M_x$-$M_y$ envelope is drawn with the applied load marked; the "
-       "**Neutral-axis state** selector steps through the swept angles and reports "
-       "the strains, the compression resultant and lever arm, and the neutral-axis "
-       "intercepts at each. The full per-angle table sits below.")
+    md("Open **Selected neutral-axis state - calculation details** for the selected sweep point. "
+       "Its concrete-corner rows show compatible strain and design stress. Reinforcement rows also show the force from stress multiplied by entered area. "
+       "Use the point and element IDs to compare these values with the section drawing.")
+    md('Select a Plastic/capacity case at the top of the view. The $M_x$-$M_y$ envelope shows the applied action point. Use **Neutral-axis state** to select a swept angle. The selected state gives strains, compression resultant, lever arm and neutral-axis intercepts. The full per-angle table follows.')
     h2("N-M Interaction results")
-    md("Select the same named Plastic/capacity case to review axial force against "
-       "the moment-resistance boundaries. The view is another presentation of the "
-       "calculated capacity sweep and its selected applied action.")
+    md("Enable **N-M interaction diagrams** under **Analysis settings**. Run a "
+       "Plastic or Both analysis, then open **N-M Interaction** for the selected "
+       "capacity case. Sector performs additional calculations that vary axial force "
+       "between the attainable tension and compression limits.")
+    md('The $N$-$M_x$ diagram joins the 90-degree and 270-degree neutral-axis branches. The $N$-$M_y$ diagram joins the 0-degree and 180-degree branches. Each branch uses 32 axial-force intervals and includes the two endpoints. The applied point identifies the selected action.')
+    md("For an asymmetric section, a fixed neutral-axis orientation can also "
+       "produce an orthogonal moment. Read each diagram as the stated fixed-orientation "
+       "trace. Use the full fixed-$N$ biaxial envelope to assess the concurrent "
+       "applied moment pair. A nonconverged boundary is identified as diagnostic output.")
     h2("Elastic results")
-    md("Select an Elastic case at the top of the view. The cracked-section "
-       "stresses are reported per bar for the long-term, "
-       "short-term and total states, with the peak concrete compression and the "
-       "neutral-axis position. The cracking threshold and section properties are "
-       "always reported. Crack width is calculated only for actions where it is requested. "
-       "Independent long-term and short-term crack-width limits are applied "
-       "only for a crack-width-enabled case and only to their matching durations. "
-       "A 0 mm limit leaves the "
-       "calculated width without comparison; a positive limit produces "
-       "**WITHIN USER-SPECIFIED LIMIT** or **EXCEEDS USER-SPECIFIED LIMIT** and "
-       "its source. The status compares the calculated width with that entered "
-       "project criterion.")
-    md("Stress percentages are 100 times the absolute stress divided by the "
-       "positive characteristic strength: concrete $f_{ck}$, reinforcing steel "
-       "$f_{yk}$ and prestressing steel $f_{pk}$ and $f_{p0.1k}$. Actual stress "
-       "values retain their signs. A missing or invalid strength is unavailable; "
-       "these comparisons do not assess compliance.")
+    md('Open **Concrete corner stress/strain details** to examine the entered outer-ring and void vertices. Compatible tensile strain can occur where concrete stress is zero. Read the displayed peak concrete result together with these point values.')
+    md('**Transformed section properties** compares the uncracked section with the calculated cracked section at the sustained modular ratios. The uncracked properties include the full concrete region. The cracked properties use the calculated compression region. The two sets of properties include the transformed reinforcement contribution.')
+    md("Open **All crack-width candidates** to compare the governing and other evaluated crack locations. "
+       "Open **Reinforcement source details** for the bars and areas used by the heightened-control check. "
+       "That check follows its selected reference case.")
+    md('Select an Elastic case at the top of the view.\n\n**Stress results**\n\nSector reports the cracked-section stress in each bar for the long-term, short-term and total states. It also reports peak concrete compression, the neutral-axis position, the cracking threshold and section properties.\n\n**Crack-width results**\n\nSector calculates crack width for actions with this option enabled. It compares a calculated width with the positive user limit for the matching duration. Long-term and short-term limits are independent.\n\n- A 0 mm limit gives the calculated width without a limit comparison.\n- A positive limit gives **WITHIN USER-SPECIFIED LIMIT** or **EXCEEDS USER-SPECIFIED LIMIT**, with its source.\n\nThe status compares the calculated width with the entered project criterion.')
+    md('Stress percentages are 100 times the absolute stress divided by the positive characteristic strength. The references are $f_{ck}$ for concrete, $f_{yk}$ for reinforcing steel, and $f_{pk}$ and $f_{p0.1k}$ for prestressing steel. Actual stress values keep their signs.\n\nIf the reference strength is missing or invalid, Sector does not show the percentage. These percentages are strength ratios. Use the applicable engineering checks to assess compliance.')
     h2("Fatigue results")
-    md("The **Fatigue Results** view first lists every spectrum and its governing "
-       "utilisation. Select a spectrum to see the section utilisation map, then "
-       "open **Reinforcement**, **Concrete**, **Spectrum bins** or **Basis**. "
-       "Element and fibre selectors expose the governing and all non-governing "
-       "results. Reinforcement rows state whether the simplified stress-range "
-       "screen passes, requires the detailed check, or is not applicable. The "
-       "tables show stresses, ranges, S-N life, per-bin damage, "
-       "yield/proof checks, concrete stress ratios, calculation convergence, resistance "
-       "sources and the bounded concrete-search result.")
+    md('The **Fatigue Results** view first lists each spectrum and its governing utilization.\n\nSelect a spectrum to see the section utilization map. Open **Reinforcement**, **Concrete**, **Spectrum bins** or **Basis**.\n\nElement and fiber selectors show the governing and all non-governing results. Reinforcement rows show one simplified stress-range screen state:\n\n- The screen passes.\n- The detailed check is necessary.\n- The screen is not applicable.\n\nThe tables show stresses, ranges, S-N life, per-bin damage, yield/proof checks and concrete stress ratios. They also show calculation convergence, resistance sources and the bounded concrete-search result.')
     h2("Detailing results")
-    md("The **Detailing** view gives a concise status for modelled-direction minimum "
-       "reinforcement, shear/torsion link detailing and "
-       "clear spacing. The section figure highlights the bars included in the "
-       "selected case and dimensions the governing spacing pair. Tables show "
-       "provided and required values, utilisation or margin and element IDs.")
+    md('The **Detailing** view gives a concise status for modeled-direction minimum reinforcement, shear/torsion link detailing and clear spacing. The section figure highlights the bars included in the selected case and dimensions the governing spacing pair. Tables show provided and required values, utilization or margin and element IDs.')
     h2("Shear results")
-    md("The **Shear** view reports the applied $V_{Ed}$, the resistance "
-       "$V_{Rd,c}$ and the utilisation, then the derived quantities ($d$, $b_w$, "
-       "$A_{sl}$, $\\rho_l$, $k$, $\\sigma_{cp}$, $A_c$) and the code coefficients "
-       "used. The web width shows whether it was entered or derived. With links, "
-       "the view separately shows the physical web width, any duct-adjusted "
-       "$b_{w,nom}$, gross and effective $A_{sw}/s$, the section-form factor and "
-       "the fitted circular lever arm where applicable. An incomplete required "
-       "geometry branch shows NOT ASSESSED without a resistance, utilisation or "
-       "PASS/FAIL verdict.")
+    md('When the two shear components are active, use **Directional result** to examine each component. Examine its related bending moment, selected face and reinforcement. The directional summary identifies the governing result.')
+    md('The **Shear** view shows the applied $V_{Ed}$, resistance $V_{Rd,c}$ and utilization.\n\n**Geometry and calculation inputs**\n\nThe view gives $d$, $b_w$, $A_{sl}$, $\\rho_l$, $k$, $\\sigma_{cp}$ and $A_c$, with the code coefficients used. It identifies the web width as entered or calculated.\n\nFor a calculation with links, the view also gives:\n\n- Physical web width and the duct-adjusted $b_{w,nom}$, where applicable.\n- Gross and effective $A_{sw}/s$.\n- The section-form factor.\n- The fitted circular lever arm, where applicable.\n\nIf required geometry is incomplete, Sector reports **NOT ASSESSED**. Resistance, utilization and a PASS/FAIL verdict are then unavailable.')
     h2("Torsion results")
-    md("The **Torsion** view reports $T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd}$, the "
-       "cracking $T_{Rd,c}$ and the transverse/strut utilisation, plus the derived "
-       "tube ($A$, $u$, $A/u$, each wall's $a$ and $2a$, $t_{ef}$, $A_k$, $u_k$), "
-       "required $\\sum A_{sl}$, modelled "
-       "passive-bar upper bound and the separate overall status. When shear links "
-       "are also defined it adds the combined shear+torsion crushing check. A "
-       "resistance-component PASS never overrides an insufficient or unverified "
-       "longitudinal-reinforcement assessment.")
-    md("The view also reports the selected torsion design basis and member scope. "
-       "When either selection requires a separate member assessment, resistance, "
-       "utilisation, governing angle, longitudinal demand and dependent M-V-T "
-       "verdicts are shown as **NOT ASSESSED** / '-'. Independent bending, shear "
-       "and detailing results may remain available.")
+    md("The **Torsion** view separates the tube geometry, transverse resistance and longitudinal reinforcement assessment.\n\n- **Tube geometry:** $A$, $u$, $A/u$, each wall's $a$ and $2a$, $t_{ef}$, $A_k$ and $u_k$.\n- **Resistance:** $T_{Rd,s}$, $T_{Rd,max}$, $T_{Rd}$, cracking torque $T_{Rd,c}$ and transverse/strut utilization.\n- **Longitudinal reinforcement:** required $\\sum A_{sl}$, the modeled passive-bar upper bound and the overall status.\n\nWhen shear links are defined, the view also shows the combined shear-and-torsion crushing check. Insufficient or unverified longitudinal reinforcement governs the overall assessment, even when the resistance component passes.")
+    md("The view gives the selected torsion design basis and member scope. An applicability condition in these selections can make a member assessment necessary.\n\nIn that case, the view gives **NOT ASSESSED** / '-' for:\n\n- Resistance and utilization.\n- Governing angle and longitudinal demand.\n- Dependent M-V-T verdicts.\n\nBending, shear and detailing results can stay available when their calculation conditions are satisfied.")
     h2("M-V-T Combined results")
-    md("The **M-V-T Combined** view shows the $M$, $V$ and $T$ utilisations, the "
-       "DK NA $\\sum(S_{Ed}/S_{Rd})$ sum, the concrete-crushing interaction with a "
-       "$V$-$T$ envelope diagram, and three explicit physical component results: "
-       "concrete compression strut, shared closed stirrup and governing longitudinal "
-       "reinforcement. The detailed blocks show each contribution and the selected "
-       "member strut angle. A torsion longitudinal FAIL governs the combined result; "
-       "an unverified longitudinal torsion requirement makes the combined result "
-       "NOT ASSESSED while retaining the numerical component evidence.")
+    md('Use **Directional combined result** to select the $V_x$ or $V_y$ combination with torsion. Each selection uses the concurrent actions from the same capacity case. When the two directions are active, examine each direction.')
+    md('The **M-V-T Combined** view gives the $M$, $V$ and $T$ utilizations and the applicable DK NA $\\sum(S_{Ed}/S_{Rd})$ sum. It also shows the concrete-crushing interaction and a $V$-$T$ envelope.\n\nThree component results identify the concrete compression strut, shared closed stirrup and governing longitudinal reinforcement. Each detail block shows its contributions and the selected member strut angle. A longitudinal torsion failure governs the combined result. An unverified longitudinal requirement gives **NOT ASSESSED**, with the calculated component values available for you to examine.')
     h2("PDF report")
-    md("Choose **Brief**, **Standard** or **Audit** in the Report workspace. Standard "
-       "is the default. The profile changes presentation depth only: "
-       "engineering values, rounding policy, statuses, warnings and sources are "
-       "identical, and figures remain a separate choice.")
+    md('Choose **Brief**, **Standard** or **Audit** in the Report workspace. Standard is the default. The profile changes presentation depth only: engineering values, rounding policy, statuses, warnings and sources are the same. Each profile includes its applicable figures.')
     table(
         ["Profile", "Purpose", "Not included"],
         [
@@ -1545,17 +1249,7 @@ def manual_blocks() -> list:
             for policy in report_profiles.REPORT_PROFILES.values()
         ],
     )
-    md("Brief leads with project and section identity, requested-check outcomes, "
-       "governing results and essential limitations. The complete effective geometry, "
-       "assigned-material, reinforcement, tendon, action and active-setting inputs "
-       "follow the results. It omits "
-       "non-governing results and worked derivations. When figures are requested, Brief keeps "
-       "only the selected governing Plastic and Elastic result plots when available. "
-       "Standard includes used inputs, complete results, criteria, statuses and "
-       "concise methods, references and limitations. Audit adds the detailed "
-       "calculation sequences, numerical substitutions, worked examples and method "
-       "theory. Calculation values and statuses are identical "
-       "in all three profiles.")
+    md('**Brief** starts with project and section identity, requested-check outcomes, governing results and essential limitations. The full effective inputs follow the results. These inputs include geometry, assigned materials, reinforcement, tendons, actions and active settings. Brief does not include non-governing results and worked derivations. Brief includes the available governing Plastic and Elastic plots.\n\n**Standard** includes the used inputs, full results, criteria, statuses and concise methods. It also includes references and limitations.\n\n**Audit** adds the detailed calculation sequences, numerical substitutions, worked examples and method theory. Calculation values, rounding, statuses and warnings are the same in all three profiles.')
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY
@@ -1575,53 +1269,19 @@ def manual_blocks() -> list:
     )
 
     h1("Conventions and sign convention")
-    md("Coordinates are entered and reported in millimetres about the section "
-       "origin (the numerical core stores metres). The axial force "
-       "$N$ is positive in **tension** (compression negative, kN), so its sign agrees "
-       "with the stresses and strains -- a crushing concrete strain reads negative; "
-       "the moments $M_x$ and $M_y$ act "
-       "about the $x$ and $y$ axes (kNm). At sweep angle $\\varphi_{NA}$, a point "
-       "has the **depth coordinate** "
-       "$s=x\\cos\\varphi_{NA}+y\\sin\\varphi_{NA}$. The neutral axis is "
-       "$s=s_{na}$, where $s_{na}=s_{max}-c$; larger $s$ is the compression side. "
-       "The neutral-axis line is oriented at $\\varphi_{NA}$ counter-clockwise "
-       "from the positive $y$ axis.")
+    md('Enter coordinates in millimeters about the section origin. Sector reports coordinates in millimeters and calculates with meters.\n\n**Reported signs and units**\n\nAxial force $N$ is positive in tension and negative in compression. Its unit is kN. Stress and strain use the same sign convention. Concrete compression strain is negative.\n\nMoments $M_x$ and $M_y$ are about the $x$ and $y$ axes. Their unit is kNm.\n\n**Local depth coordinate**\n\nAt sweep angle $\\varphi_{NA}$, calculate:\n\n$s=x\\cos\\varphi_{NA}+y\\sin\\varphi_{NA}$.\n\nThe neutral axis has $s=s_{na}$, where:\n\n$s_{na}=s_{max}-c$.\n\nLarger values of $s$ are on the compression side. The neutral-axis line is at $\\varphi_{NA}$ counter-clockwise from the positive $y$ axis.')
     fig(fig_sign_convention, "Axes and the positive senses of the axial force, the "
         "moments and the neutral-axis angle.",
-        "Section axes show positive x to the right and y upward, with arrows for "
-        "positive axial force and moments and the neutral-axis angle measured from "
-        "positive y.")
+        'The x-axis points right, and the y-axis points up. Arrows show positive axial force and moments. The neutral-axis angle is measured from positive y.')
     call("concept", "The reported axial force $N$, the stresses and the strains are "
          "all **tension-positive**. The plastic calculation uses a "
-         "**compression-positive** (the compression zone has strain $> 0$); the sign "
-         "is converted at the boundary, so you only enter and read tension-positive "
-         "values. The concrete strain limits $\\varepsilon_{c2}$ / $\\varepsilon_{cu2}$ "
-         "are still entered as positive compression magnitudes (as in EC2).")
+         "**compression-positive sign convention**. Sector converts its results to the "
+         "reported tension-positive convention. Enter the concrete strain limits "
+         "$\\varepsilon_{c2}$ and $\\varepsilon_{cu2}$ as positive compression magnitudes.")
 
     h1("Material laws")
     h2("Concrete (parabola-rectangle)")
-    md(("The design concrete law (Curve 2) rises as a power curve to the peak and "
-       "then holds it to the ultimate strain:\n\n"
-       "$$\\sigma_c = f_{cd}\\left[1-\\left(1-\\tfrac{\\varepsilon_c}"
-       "{\\varepsilon_{c2}}\\right)^{n}\\right] \\quad (0\\le\\varepsilon_c\\le"
-       "\\varepsilon_{c2}), \\qquad \\sigma_c = f_{cd}\\quad(\\varepsilon_{c2}\\le"
-       "\\varepsilon_c\\le\\varepsilon_{cu2}),$$\n\n"
-       "with $f_{cd} = \\alpha_{cc}\\,f_{ck}/\\gamma_c$ for the 2005 family and "
-       "$f_{cd}=\\eta_{cc}k_{tc}f_{ck}/\\gamma_c$ for DS/EN 1992-1-1:2023, and zero "
-       "stress beyond "
-       "$\\varepsilon_{cu2}$ (crushed).\n\n"
-       "For $f_{ck}\\le 50$ MPa the strain limits are $\\varepsilon_{c2}=2.0$ per "
-       "mille, $\\varepsilon_{cu2}=3.5$ per mille and $n=2$.\n\n"
-       "Above C50 they follow Table 3.1: "
-       "$\\varepsilon_{c2}=(2.0+0.085(f_{ck}-50)^{0.53})/1000$, "
-       "$\\varepsilon_{cu2}=(2.6+35((90-f_{ck})/100)^4)/1000$ and "
-       "$n=1.4+23.4((90-f_{ck})/100)^4$. These strength-dependent strains apply to "
-       "the 2005 and DK NA editions.\n\n"
-       "The DS/EN 1992-1-1:2023 edition instead keeps them **constant** "
-       "($\\varepsilon_{c2}=2.0$, $\\varepsilon_{cu2}=3.5$ per mille, $n=2$) for "
-       "every grade. Its $\\eta_{cc}=\\min[(40/f_{ck})^{1/3},1.0]$ and the "
-       "general-case $k_{tc}=0.85$ are applied separately; $k_{tc}=1.00$ is an "
-       "explicit applicability choice under 5.1.6(1).").replace(
+    md(('**Concrete stress-strain law**\n\nThe design concrete law (Curve 2) increases along a power curve to the peak. Its stress then stays constant to the ultimate strain:\n\n$$\\sigma_c = f_{cd}\\left[1-\\left(1-\\tfrac{\\varepsilon_c}{\\varepsilon_{c2}}\\right)^{n}\\right] \\quad (0\\le\\varepsilon_c\\le\\varepsilon_{c2}), \\qquad \\sigma_c = f_{cd}\\quad(\\varepsilon_{c2}\\le\\varepsilon_c\\le\\varepsilon_{cu2}),$$\n\nThe stress is zero after $\\varepsilon_{cu2}$, which represents crushed concrete.\n\n**Design strength**\n\n- For the 2005 family: $f_{cd} = \\alpha_{cc}\\,f_{ck}/\\gamma_c$.\n- For DS/EN 1992-1-1:2023: $f_{cd}=\\eta_{cc}k_{tc}f_{ck}/\\gamma_c$.\n\n**2005 and Danish strain parameters**\n\nFor $f_{ck}\\le 50$ MPa, use:\n\n- $\\varepsilon_{c2}=2.0$ per mille.\n- $\\varepsilon_{cu2}=3.5$ per mille.\n- $n=2$.\n\nFor $f_{ck}>50$ MPa, Table 3.1 gives these expressions. Use $f_{ck}$ in MPa. The calculated strains are dimensionless:\n\n$\\varepsilon_{c2}=(2.0+0.085(f_{ck}-50)^{0.53})/1000$.\n\n$\\varepsilon_{cu2}=(2.6+35((90-f_{ck})/100)^4)/1000$.\n\n$n=1.4+23.4((90-f_{ck})/100)^4$.\n\nThese strength-dependent strain parameters apply to the 2005 and DK NA editions.\n\n**2023 strain parameters and strength factors**\n\nDS/EN 1992-1-1:2023 uses $\\varepsilon_{c2}=2.0$ per mille, $\\varepsilon_{cu2}=3.5$ per mille and $n=2$ for each grade.\n\nThe strength factor is:\n\n$\\eta_{cc}=\\min[(40/f_{ck})^{1/3},1.0]$.\n\nThe general-case factor is $k_{tc}=0.85$. Sector applies the two strength factors to the design strength. Select $k_{tc}=1.00$ only under the applicability conditions in 5.1.6(1).').replace(
            "per mille", _PERMILLE
        ))
     md(("**Worked (beam, C40/50):** $f_{cd}=1.0\\times 40/1.45 = 27.6$ MPa, with "
@@ -1633,372 +1293,79 @@ def manual_blocks() -> list:
         "Concrete compression stress increases on a curved branch to its design "
         "plateau, which continues until the marked crushing strain.")
     h2("Reinforcing steel")
-    md(("The mild-steel editor uses one general Curve 3 law. It is linear to a "
-       "first yield, can pass through a second yield defined by the plastic offsets, "
-       "and then reaches the entered ultimate point. Setting $k=1$ and both offsets "
-       "to zero collapses the two yields into one; setting the factored ultimate "
-       "stress equal to the factored yield gives a flat post-yield branch. On the "
-       "initial elastic branch:\n\n"
-       "$$\\sigma_s = E_{s,d}\\,\\varepsilon_s\\ \\ (|\\varepsilon_s|\\le"
-       "\\varepsilon_{yd}), \\qquad f_{yd}=f_{yk}/\\gamma_s, \\qquad "
-       "\\varepsilon_{yd}=f_{yd}/E_{s,d}.$$\n\n"
-       "For the general law, $E_{s,d}=E_s/\\gamma_E$. The edition-named Curve 3 "
-       "design presets set $\\gamma_E=1$, so the B550 DK preset used by both "
-       "examples yields at $\\varepsilon_{yd}=f_{yd}/E_s="
-       "(550/1.20)/200000\\approx2.29$ per mille.\n\n"
-       "The generic **Curve 2 (elastic-perfectly-plastic)** selection is a "
-       "user-defined/project-defined and uncited preset. It also uses the general "
-       "Curve 3 law with $k=1$, zero offsets and a flat branch; its "
-       "starting value is $\\gamma_E=1$. Edited values remain associated with the "
-       "selected preset label.").replace(
+    md(('**General mild-steel law**\n\nThe mild-steel editor uses one general Curve 3 law. It is linear to the first yield point. The plastic offsets can give a second yield point. The last branch reaches the entered ultimate point.\n\n**Elastic branch**\n\n$$\\sigma_s = E_{s,d}\\,\\varepsilon_s\\ \\ (|\\varepsilon_s|\\le\\varepsilon_{yd}), \\qquad f_{yd}=f_{yk}/\\gamma_s, \\qquad \\varepsilon_{yd}=f_{yd}/E_{s,d}.$$\n\nFor the general law, the design modulus is:\n\n$E_{s,d}=E_s/\\gamma_E$.\n\n**Flat post-yield branch**\n\nSet $k=1$ and the two offsets to zero to combine the two yield points. Set the factored ultimate stress equal to the factored yield stress for a flat post-yield branch.\n\n**B550 worked examples**\n\nThe edition-named Curve 3 design presets set $\\gamma_E=1$. The two worked examples use the B550 DK preset. Its yield strain is:\n\n$\\varepsilon_{yd}=f_{yd}/E_s=(550/1.20)/200000\\approx2.29$ per mille.\n\n**Generic preset**\n\nThe **Curve 2 (elastic-perfectly-plastic)** selection is a project-defined preset with no cited edition. It uses the general Curve 3 law with $k=1$, zero offsets and a flat branch. Its starting value is $\\gamma_E=1$. Edited values keep the selected preset label.').replace(
            "per mille", _PERMILLE
        ))
     fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.",
-        "Positive and negative B550 stress branches are linear to the yield points "
-        "and then follow matching post-yield branches toward the strain limits.")
+        'Positive and negative B550 stress branches are linear to the yield points and then follow matching post-yield branches to the strain limits.')
     h2("Prestressing steel")
-    md(("A tendon is evaluated at its **total** strain -- the locked-in initial "
-       "strain $\\varepsilon_{p,IS}$ (from prestressing, after losses, given as an "
-       "input) plus its tension-positive section strain. For tendon $j$ at depth "
-       "$s_{p,j}$ this is:\n\n"
-       "$$\\varepsilon_{p,j}=\\varepsilon_{p,IS,j}"
-       "-\\kappa(s_{p,j}-s_{na}), "
-       "\\qquad \\sigma_p = f(\\varepsilon_p),\\quad f_{pd}=f_{p0.1k}/\\gamma_s.$$\n\n"
-       "**Worked (circular):** $\\varepsilon_{p,IS}=5.0$ per mille and "
-       "$f_{pd}=1600/1.15=1391$ MPa.").replace("per mille", _PERMILLE))
+    md(('Sector evaluates a tendon at its **total** strain. This is the entered locked-in initial strain $\\varepsilon_{p,IS}$ after prestress losses, plus the tension-positive section strain. For tendon $j$ at depth $s_{p,j}$ this is:\n\n$$\\varepsilon_{p,j}=\\varepsilon_{p,IS,j}-\\kappa(s_{p,j}-s_{na}), \\qquad \\sigma_p = f(\\varepsilon_p),\\quad f_{pd}=f_{p0.1k}/\\gamma_s.$$\n\n**Worked (circular):** $\\varepsilon_{p,IS}=5.0$ per mille and $f_{pd}=1600/1.15=1391$ MPa.').replace("per mille", _PERMILLE))
     fig(fig_circular_prestress_law, "The tendon law of the circular example.",
-        "The tendon curve starts with an elastic slope, bends toward the proof-strength "
-        "region and terminates at the defined ultimate strain.")
-    call("standard", "The beam and circular examples select the edition-named "
-         "DS/EN 1992-1-1:2005 + DK NA:2024 Curve 3 design preset for mild steel. "
-         "Edition-named concrete, mild-steel and tendon presets keep their own "
-         "sources; generic named curves remain project-defined / uncited.")
-
-    h1("Plastic capacity analysis")
-    h2("The strain plane at capacity")
-    md("Plane sections remain plane, so the strain is linear across the depth: "
-       "$\\varepsilon_{sec}(s) = \\kappa\\,(s - s_{na})$, where $\\kappa$ is the "
-       "curvature and $s_{na}$ the neutral-axis coordinate. At capacity, the first "
-       "material strain limit governs. Concrete can reach its crushing strain, "
-       "or a bar or tendon can reach its assigned limit first. "
-       "The compression depth is $c = s_{max}-s_{na}$.")
-    fig(fig_strain_plane, "The capacity strain plane (reported tension-positive "
-        "convention): one straight line -- zero at the neutral axis, compression "
-        "(negative) above it and tension (positive) below, the top fibre at the "
-        "crushing strain in this concrete-governed example. The calculation formula above is compression-positive; "
-        "the reported strains negate it.",
-        "A straight strain line crosses zero at the neutral axis; negative compression "
-        "lies above it, positive tension below it, and the top fibre reaches ultimate "
-        "concrete compression.")
-    h2("The governing curvature")
-    md("The curvature is scaled until the **first** element reaches its assigned "
-       "material limit, so "
-       "none is driven past its limit:\n\n"
-       "$$\\kappa = \\min\\!\\left(\\frac{\\varepsilon_{cu2}}{c},\\; "
-       "\\min_i\\frac{\\varepsilon_{u,i}}{s_{na}-s_{b,i}}\\;"
-       "\\text{tension-side bars},\\; "
-       "\\min_i\\frac{\\varepsilon_{u,i}}{s_{b,i}-s_{na}}\\;"
-       "\\text{compression-side active bars},\\; "
-       "\\min_j\\frac{\\varepsilon_{pu,j}-\\varepsilon_{p,IS,j}}"
-       "{s_{na}-s_{p,j}}\\;\\text{tension-side tendons}\\right).$$\n\n"
-       "The terms are concrete crushing, tensile mild-bar rupture, compressive "
-       "mild-bar rupture (only for a bar active in compression), and tensile tendon "
-       "rupture measured from that tendon's locked-in strain. A candidate is used "
-       "only when its denominator and remaining tendon strain margin are positive. "
-       "Every bar and tendon is evaluated with its own assigned law; the smallest "
-       "candidate governs.")
-    call("concept", "$s_{p,j}$ is tendon $j$'s projection on the local strain "
-         "gradient. If all tendons share the same limit and initial strain, "
-         "$s_{p,min}=\\min_j s_{p,j}$ is a useful shorthand for the most tensile "
-         "location. Each tendon is checked using its own position, initial strain "
-         "and material limit.")
-    call("tip", "The reported mild-steel strain is split into its two governing "
-         "extremes: the most **tensile** bar strain $\\varepsilon_{s,t}$ and, when "
-         "the bars are active in compression, the most **compressed** bar strain "
-         "$\\varepsilon_{s,c}$ (tension-positive, so it reads negative). With the "
-         "bars tension-only, the compression side carries no stress and only "
-         "$\\varepsilon_s$ is shown.")
-    h2("Force resultants and equilibrium")
-    md("The concrete compression force is the integral of $\\sigma_c$ over the "
-       "compression zone. Sector divides the rising stress region into 80 equal-depth bands. "
-       "Each band uses its midpoint stress and exact polygon area and first moments, calculated by Green's theorem. "
-       "The constant-stress plateau is integrated separately. Each bar and tendon adds "
-       "$\\sigma(\\varepsilon)\\,A$. The compression depth $c$ is solved so the "
-       "axial force balances, $\\sum F = -N$ for compression-positive internal forces and tension-positive input N; the first moments of the resultants "
-       "about the origin are the capacity moments $M_x$, $M_y$.")
-    h2("The interaction envelope")
-    md(("Rotating the neutral-axis angle $\\varphi_{NA}$ and solving at each gives "
-       "one point on "
-       "the $M_x$-$M_y$ envelope; sweeping $0$ to $360$ degrees closes the biaxial "
-       "diagram. **Worked (beam, $N=0$, $\\varphi_{NA}=90^\\circ$):** the concrete "
-       "reaches its "
-       "crushing strain ($3.5$ per mille) while the most tensile bars are well past "
-       "yield ($19.5$ per mille, against the $2.29$ per mille yield), so this "
-       "concrete-governed state with yielded tension reinforcement gives $M_{x} = 346$ kNm. The applied $M_x=300$ "
-       "kNm is then a utilisation of $300/346 = 0.87$.").replace(
-           "per mille", _PERMILLE
-       ))
-    fig(fig_beam_envelope, "The beam envelope with its applied load; each vertex is "
-        "one solved neutral-axis angle.",
-        "A closed biaxial moment-resistance curve is plotted with the design moment "
-        "point, showing its position inside the boundary and the discrete angular "
-        "sweep points.")
-
-    h1("Reinforcement detailing")
-    md("Each detailing checkbox identifies the clauses used by the selected "
-       "Detailing edition. Selecting an edition applies the rules described below. "
-       "Use the 2023 edition only where it is adopted by the project; the current "
-       "2023 option has no Danish National Annex.")
-    h2("EN 1992-1-1:2005 and DK NA:2024")
-    md("Sector transfers the moments to the gross-concrete centroid and derives "
-       "the uncracked gross-concrete strain plane for the complete $M_x$-$M_y$ "
-       "action. Its tensile half-plane is checked using:\n\n"
-       "$$A_{s,min}=\\max\\!\\left(0.26\\frac{f_{ctm}}{f_{yk}},\\,0.0013\\right)"
-       "b_t d, \\qquad A_{s,prov}\\ge A_{s,min}. $$\n\n"
-       "$b_t$ is the exact mean width of that resultant tension half, and $d$ "
-       "is measured normal to its neutral line from the opposite extreme concrete "
-       "fibre to the centroid of the bars in tension. If several assigned materials occur, "
-       "the lowest $f_{yk}$ is used. Reference: 9.2.1.1(1), Formula (9.1N).")
-    call("limit", "The DK NA:2024 side-face reinforcement requirement for high "
-         "beam webs is separate from Formula (9.1N) and is not included.")
-    h2("DS/EN 1992-1-1:2023")
-    md("For bending with axial force, Sector derives the uncracked cracking action "
-       "in the applied moment direction and checks:\n\n"
-       "$$M_{R,nom}(N_{Ed})\\ge M_{cr}(N_{Ed}).$$\n\n"
-       "The nominal resistance uses the entered design concrete law and limits "
-       "each mild bar to its characteristic $f_{yk}$. The initial closed 15-degree "
-       "nominal-resistance envelope is refined around the governing direction with "
-       "target intervals of 1, 0.1 and, where needed, 0.01 degrees. At each stage, "
-       "the recomputed governing direction is followed until its actual adjacent "
-       "interval is no larger than the target. From the 0.1-degree stage, the "
-       "retained utilisation interval is "
-       "$u_f \\pm \\max(2|u_f-u_c|,10^{-6})$, where $u_f$ and $u_c$ are successive "
-       "fine and coarse results whose target intervals were achieved. A verdict is "
-       "accepted only when successive stages agree and the whole interval lies on "
-       "one side of the acceptance boundary "
-       "$u=1+10^{-9}$; a case still crossing that boundary after the 0.01-degree "
-       "stage, or whose governing interval cannot be refined consistently, is "
-       "reported **Not assessed**. Pure tension uses:\n\n"
-       "$$\\sum A_{s,i}f_{yk,i}\\ge A_c f_{ctm}.$$\n\n"
-       "Reference: 12.2(2), Formulae (12.1) and (12.2). The bending check is "
-       "reported not applicable when compressive $N_{Ed}$ is not below "
-       "$0.5A_cf_{cd}$.")
-    h2("Clear spacing")
-    md("For each included pair of longitudinal elements, Sector computes the "
-       "edge-to-edge distance from the entered coordinates and circular detailing "
-       "diameters and checks:\n\n"
-       "$$c_{clear}\\ge\\max(\\phi_{max},\\,D_{upper}+5\\,\\text{mm},\\,20\\,\\text{mm}).$$\n\n"
-       "This is 8.2(2) for the 2005 family and 11.2(2) for 2023. The smallest "
-       "margin governs, and a geometric shortfall is reported as **Fail**. Lap "
-       "length, bond, bundle equivalence and longitudinal arrangement remain "
-       "separate detailing checks.")
-    h2("Shear and torsion reinforcement")
-    md("For vertical shear links, Sector checks the entered legs in each active "
-       "direction using:\n\n"
-       "$$\\rho_w=\\frac{A_{sw}}{s\\,b_w}\\ge\\rho_{w,min},\\qquad"
-       "\\rho_{w,min}=c\\frac{\\sqrt{f_{ck}}}{f_{ywk}}.$$\n\n"
-       "$c=0.063$ for DS/EN 1992-1-1:2005 DK NA:2024 and $c=0.08$ "
-       "for EN 1992-1-1:2005 and DS/EN 1992-1-1:2023. In the 2023 method, "
-       "the optional class-B or class-C reduction is applied only when selected "
-       "explicitly. References: 2005 9.2.2(5), Formulae (9.4)-(9.5); "
-       "2023 12.2(4), Formula (12.4).")
-    md("The longitudinal and transverse shear-link spacings are checked against:\n\n"
-       "$$s_l\\le0.75d,\\qquad s_t\\le\\min(0.75d,600\\,\\text{mm}).$$\n\n"
-       "If the maximum transverse distance between legs is entered as zero, "
-       "Sector uses the gross web breadth $b_w$ as an upper-bound screen. A bound "
-       "within the limit proves **Pass**; a bound above it is **Not assessed**, not "
-       "**Fail**, until the actual maximum spacing is entered. With fewer than two "
-       "effective legs, the user must enter the distance. The distance is measured "
-       "in the section plane: along $y$ between $V_x$-parallel legs and along $x$ "
-       "between $V_y$-parallel legs. It is separate from the longitudinal stirrup "
-       "spacing and does not require reducing the closed-stirrup height.")
-    md("For a closed torsion link, one leg is checked in each effective tube wall:\n\n"
-       "$$\\rho_{w,T}=\\frac{A_{leg}}{s\\,t_{ef}}\\ge\\rho_{w,min}.$$\n\n"
-       "The maximum longitudinal spacing is the lesser of $u_k/8$ and the "
-       "rotation-invariant minimum physical section dimension. Each sub-tube is "
-       "checked separately; an active shear direction has its own $0.75d$ check.")
-    call("limit", "Sector models all entered shear reinforcement as vertical "
-         "stirrups and all entered torsion reinforcement as closed stirrups. "
-         "Anchorage is assumed; reduce $f_{ywk}$ when full anchorage is not "
-         "available. Cover, bends, mandrel diameter, anchorage length, lap length, "
-         "bundle equivalence, congestion and construction access are not verified.")
-    call("standard", "DS/EN 1992-1-1:2023 8.2.1(2) requires minimum shear "
-         "reinforcement for statically determinate linear members with "
-         "$d>500$ mm. Because this condition depends on the member system, the "
-         "section result flags it for project review.")
-    call("standard", "BN1-59-5 and the Danish Road Directorate bridge basis add "
-         "project- and existing-structure applicability requirements, including "
-         "special treatment of inadequately anchored historic links. Record and "
-         "apply owner-specific requirements in the project basis.")
+        'The tendon curve starts with an elastic slope, curves in the direction of the proof-strength region and ends at the defined ultimate strain.')
+    call("standard", 'The beam and circular examples select the edition-named DS/EN 1992-1-1:2005 + DK NA:2024 Curve 3 design preset for mild steel. Edition-named concrete, mild-steel and tendon presets keep their own sources. Generic named curves stay project-defined / uncited.')
 
     h1("Cracked-section elastic analysis")
-    md("The Elastic analysis takes the section as already cracked: concrete "
-       "carries compression only (zero stress where $\\varepsilon\\ge 0$) and the "
-       "steel is linear in both directions. The analysis works with a reference "
-       "concrete modulus and an element-specific modular ratio $n_i=E_i/E_c$: each "
-       "bar or tendon contributes a transformed area $(n_i-1)A_i$ in the "
-       "concrete compression zone and $n_i A_i$ in the cracked tension zone. "
-       "This deducts the concrete occupied by reinforcement from the gross "
-       "concrete integral. Steel stresses still use the full material modulus. "
-       "The Stage I cracking check and uncracked section properties use $(n_i-1)A_i$ "
-       "for all reinforcement, since concrete is active in both directions. "
-       "The solver normalises $E_c$ to 1 and solves a "
-       "reference-stress plane $(\\sigma_0,g_x,g_y)$.\n\nThe "
-       "physical concrete strain is $\\varepsilon_c=\\sigma_{ref}/E_c$. Report "
-       "labels identify the physical quantity represented by each result field. "
-       "\n\nNewton iteration determines the "
-       "reference-stress plane so the transformed-section resultants balance "
-       "the applied axial force and moments, updating the compression zone until it settles.")
-    md("Creep enters through the modular ratio: the long-term state uses "
-       "$n_l = E_s/E_{c,eff}$ with $E_{c,eff}=E_c/(1+\\varphi)$, and the "
-       "short-term state uses $n_s = E_s/E_c$. The reported total combines the two, "
-       "so both load duration and creep are captured. Prestressing tendons carry "
-       "the corresponding material's modular ratio $n_p = E_p/E_c$ (creep-reduced "
-       "the same way). None of these ratios is entered -- each is derived from the "
-       "assigned material modulus, $E_c$ and the creep coefficient $\\varphi$.")
+    md('The cracked-section model gives concrete compression resistance only. Concrete stress is zero where $\\varepsilon\\geq0$. Steel stays linear in tension and compression.\n\nEach element has modular ratio $n_i=E_i/E_c$. A bar or tendon contributes transformed area $(n_i-1)A_i$ in the concrete compression zone. In the cracked tension zone, it contributes $n_iA_i$. The subtraction removes the concrete displaced by reinforcement. Reinforcement stresses use the full material modulus.\n\nStage I cracking and uncracked properties use $(n_i-1)A_i$ for all reinforcement. Concrete is then active in tension and compression. The equilibrium equations normalize $E_c$ to 1 and solve the reference-stress plane $(\\sigma_0,g_x,g_y)$. The physical concrete strain is $\\varepsilon_c=\\sigma_{ref}/E_c$.\n\nNewton iteration adjusts the plane until section resultants balance the applied axial force and moments. Each iteration updates the concrete compression region. Part D gives the matrix, correction, stopping rule and worked iterations.')
+    md('Creep changes the modular ratio through the effective concrete modulus:\n\n$E_{c,eff}=E_c/(1+\\varphi)$.\n\nFor reinforcing steel, use:\n\n- Long-term actions: $n_l = E_s/E_{c,eff}$.\n- Short-term actions: $n_s = E_s/E_c$.\n\nThe reported total combines the duration states and includes creep effects.\n\nFor a tendon, use its assigned modulus $E_p$. Its short-term ratio is $n_p=E_p/E_c$. For sustained actions, Sector uses the effective concrete modulus in that ratio.\n\nThe ratios follow from the assigned material modulus, $E_c$ and the creep coefficient $\\varphi$.')
     fig(fig_beam_cracked, "The beam's cracked (Stage II) state under the service "
         "moment: the compression zone (shaded) above the neutral axis.",
         "A rectangular section has a shaded concrete compression zone above a "
         "horizontal neutral axis, with reinforcement points included in the Stage II "
         "section.")
 
+    h1("Plastic capacity analysis")
+    h2("The strain plane at capacity")
+    md('Plane sections stay plane, so the strain is linear across the depth:\n\n$\\varepsilon_{sec}(s) = \\kappa\\,(s - s_{na})$.\n\nHere, $\\kappa$ is the curvature and $s_{na}$ is the neutral-axis coordinate. The compression depth is:\n\n$c = s_{max}-s_{na}$.\n\nAt capacity, the first material strain limit governs. Concrete can reach its crushing strain, or a bar or tendon can reach its assigned limit first.')
+    fig(fig_strain_plane, 'The capacity strain plane uses the reported tension-positive convention. The straight line is zero at the neutral axis, with compression above and tension below it. In this concrete-governed example, the top fiber reaches the crushing strain. The calculation formula above is compression-positive. The reported strains negate it.',
+        'A straight strain line crosses zero at the neutral axis. Negative compression lies above it, and positive tension lies below it. The top fiber reaches ultimate concrete compression.')
+    h2("The governing curvature")
+    md("Sector increases the curvature until the **first** element reaches its assigned material limit. The selected curvature satisfies each element's material strain limit:\n\n$$\\kappa = \\min\\!\\left(\\frac{\\varepsilon_{cu2}}{c},\\; \\min_i\\frac{\\varepsilon_{u,i}}{s_{na}-s_{b,i}}\\;\\text{tension-side bars},\\; \\min_i\\frac{\\varepsilon_{u,i}}{s_{b,i}-s_{na}}\\;\\text{compression-side active bars},\\; \\min_j\\frac{\\varepsilon_{pu,j}-\\varepsilon_{p,IS,j}}{s_{na}-s_{p,j}}\\;\\text{tension-side tendons}\\right).$$\n\nThe terms represent four limits:\n\n- Concrete crushing.\n- Tensile mild-bar rupture.\n- Compressive mild-bar rupture, for a bar active in compression.\n- Tensile tendon rupture, measured from that tendon's locked-in strain.\n\nSector uses a candidate only when its denominator and remaining tendon strain margin are positive. Sector evaluates each bar and tendon with its own assigned law. The smallest candidate controls the curvature.")
+    call("concept", "$s_{p,j}$ is tendon $j$'s projection on the local strain gradient. If all tendons share the same limit and initial strain, $s_{p,min}=\\min_j s_{p,j}$ is a useful shorthand for the most tensile location. Sector evaluates each tendon at its own position, initial strain and material limit.")
+    call("tip", 'The results identify the greatest tensile bar strain $\\varepsilon_{s,t}$. When plastic compression is active, they also identify the most compressed bar strain $\\varepsilon_{s,c}$. The sign is positive in tension and negative in compression. For tension-only bars, the results show $\\varepsilon_s$ and the compressed bars have zero stress.')
+    h2("Force resultants and equilibrium")
+    md("The concrete compression force is the integral of $\\sigma_c$ over the compression region. Sector divides the rising stress region into 80 bands of equal depth. Each band uses its midpoint stress and exact polygon area and first moments. Green's theorem supplies those geometric integrals.\n\nSector integrates the constant-stress plateau in a different operation. Each bar and tendon adds $\\sigma(\\varepsilon)A$. The depth search adjusts compression depth $c$ until $\\sum F=-N$. Internal axial force is positive in compression. Entered $N$ is positive in tension.\n\nThe first moments of the force resultants about the origin give capacity moments $M_x$ and $M_y$.")
+    h2("The interaction envelope")
+    md(('Each neutral-axis angle $\\varphi_{NA}$ gives one solved point on the $M_x$-$M_y$ envelope. A sweep from $0$ to $360$ degrees closes the diagram.\n\n**Worked beam:** use $N=0$ and $\\varphi_{NA}=90^\\circ$. The concrete reaches its crushing strain of 3.5 per mille. The most tensile bar strain is 19.5 per mille, larger than its yield strain of 2.29 per mille. This state gives $M_x=346$ kNm. An applied $M_x=300$ kNm gives utilization $300/346=0.87$.').replace(
+           "per mille", _PERMILLE
+       ))
+    fig(fig_beam_envelope, 'The beam envelope with its applied load. Each vertex is one solved neutral-axis angle.',
+        'A closed biaxial moment-resistance curve contains the design moment point. Discrete points identify the angular sweep.')
+
     h1("Serviceability: cracking and crack width")
     h2("The cracking threshold")
-    md("The uncracked (Stage I) peak concrete tensile stress $\\sigma_{ct,I}$ "
-       "scales with the load, so the load factor to first cracking is "
-       "$\\lambda_{cr}=f_{ctm}/\\sigma_{ct,I}$; $\\lambda_{cr}\\ge 1$ means the "
-       "section has not cracked. **Worked (beam, $M_x=150$ kNm):** "
-       "$\\lambda_{cr}=0.48<1$, so the section is cracked and the Stage II stresses "
-       "govern ($\\sigma_s=204$ MPa at the bottom bars).")
-    md("With tendons, locked-in prestress is permanent and is not scaled. If any "
-       "prestress-only fibre is above $f_{ctm}$, Sector assigns "
-       "$\\lambda_{cr}=0$ directly and the section is classified cracked. "
-       "Otherwise, at each fibre with a tensile external increment Sector solves "
-       "$\\sigma_{pre,i}+\\lambda_{cr}\\sigma_{ext,i}=f_{ctm}$, scaling only the "
-       "external $N/M$, and takes the first cracking factor. "
-       "$\\lambda_{cr}<1$ is cracked and $\\lambda_{cr}\\ge 1$ is uncracked.")
-    call("concept", "Cracking is **irreversible** and is triggered by the largest "
-         "load the section ever sees, so Sector decides cracked/uncracked from the "
-         "**governing** of the sustained (long-term) and the peak (total = long + "
-         "short) action -- not the sustained part alone. A section that only cracks "
-         "under a large short-term load is therefore still treated as cracked "
-         "(with both user-defined action parts reported); one only cracked by the "
-         "sustained load stays cracked even if a counteracting short-term action "
-         "relieves the total. The peak check uses the same combined-creep "
-         "superposition (long at $n_l$ + short at $n_s$) as the reported stresses.")
-    call("standard", "The selected cracking method evaluates the user-entered "
-         "sustained and peak actions. Sector reports the resulting crack widths "
-         "for both actions; the entered duration limits determine any comparisons.")
+    md('The uncracked (Stage I) peak concrete tensile stress $\\sigma_{ct,I}$ scales with the load. The load factor to first cracking is:\n\n$\\lambda_{cr}=f_{ctm}/\\sigma_{ct,I}$.\n\nA value $\\lambda_{cr}\\ge 1$ means that the section is uncracked.\n\n**Worked beam at $M_x=150$ kNm**\n\nThe factor is $\\lambda_{cr}=0.48<1$, so the section is cracked. Use the Stage II stresses. The bottom-bar stress is $\\sigma_s=204$ MPa.')
+    md('Locked-in tendon prestress is permanent. Sector keeps it fixed while the external action changes.\n\nIf a prestress-only fiber stress is larger than $f_{ctm}$, Sector assigns $\\lambda_{cr}=0$ and classifies the section as cracked.\n\nIf no fiber stress is larger than that limit, examine each fiber with a tensile external increment. Sector solves:\n\n$\\sigma_{pre,i}+\\lambda_{cr}\\sigma_{ext,i}=f_{ctm}$.\n\nOnly the external $N/M$ scales. Sector uses the first cracking factor:\n\n- $\\lambda_{cr}<1$: cracked.\n- $\\lambda_{cr}\\ge 1$: uncracked.')
+    call("concept", 'Sector classifies cracking from the two entered action states: sustained and total. The total state combines sustained and additional actions. If a state causes cracking, Sector treats the section as cracked for the two reported action parts.\n\nA large additional action can thus cause the cracked classification. A counteracting additional action can relieve the total demand while the sustained state governs cracking. The total-state check uses the same creep superposition as the reported stresses: sustained at $n_l$ and additional at $n_s$.')
+    call("standard", 'The selected cracking method uses the entered sustained and peak actions. Sector reports the crack widths for the two actions. A positive duration limit gives a comparison with the width for that duration.')
     h2("Crack width - EN 1992-1-1:2005")
-    md("$$w_k = s_{r,max}\\,(\\varepsilon_{sm}-\\varepsilon_{cm}),\\qquad "
-       "\\varepsilon_{sm}-\\varepsilon_{cm} = \\max\\!\\left(\\frac{\\sigma_s - "
-       "k_t\\,\\tfrac{f_{ct,eff}}{\\rho_{p,eff}}(1+\\alpha_e\\rho_{p,eff})}{E_s},\\; "
-       "0.6\\,\\frac{\\sigma_s}{E_s}\\right),$$\n\n"
-       "with $\\alpha_e=E_s/E_{cm}$ (7.8, 7.9). The maximum crack spacing is\n\n"
-       "$$s_{r,max} = k_3\\,c + k_1 k_2 k_4\\,\\frac{\\phi}{\\rho_{p,eff}}\\ (7.11), "
-       "\\qquad s_{r,max}=1.3\\,(h-x)\\ (7.14)$$\n\n"
-       "where 7.11 applies for bars at close centres (spacing "
-       "$\\le 5(c+\\phi/2)$) and 7.14 otherwise. The effective ratio "
-       "$\\rho_{p,eff}=A_{s,eff}/A_{c,eff}$ uses the effective height "
-       "$h_{c,ef}=\\min(2.5(h-d),(h-x)/3,h/2)$. Recommended coefficients: $k_1=0.8$ "
-       "(ribbed) or $1.6$ (plain), $k_2=0.5$, $k_3=3.4$, $k_4=0.425$.")
-    md(("**Worked (beam, $M_x=150$ kNm):** $\\sigma_s=204$ MPa, "
-        "$\\rho_{p,eff}=0.0393$, $\\varepsilon_{sm}-\\varepsilon_{cm}=0.797$ per "
-        "mille, $s_{r,max}=236$ mm, hence $w_k=0.188$ mm.").replace(
+    md('$$w_k = s_{r,max}\\,(\\varepsilon_{sm}-\\varepsilon_{cm}),\\qquad \\varepsilon_{sm}-\\varepsilon_{cm} = \\max\\!\\left(\\frac{\\sigma_s - k_t\\,\\tfrac{f_{ct,eff}}{\\rho_{p,eff}}(1+\\alpha_e\\rho_{p,eff})}{E_s},\\; 0.6\\,\\frac{\\sigma_s}{E_s}\\right),$$\n\nwith $\\alpha_e=E_s/E_{cm}$ (7.8, 7.9). The maximum crack spacing is\n\n$$s_{r,max} = k_3\\,c + k_1 k_2 k_4\\,\\frac{\\phi}{\\rho_{p,eff}}\\ (7.11), \\qquad s_{r,max}=1.3\\,(h-x)\\ (7.14)$$\n\n**Spacing condition**\n\nFormula (7.11) applies when bar spacing is no greater than $5(c+\\phi/2)$. Formula (7.14) applies for larger spacing.\n\n**Effective reinforcement ratio**\n\n$\\rho_{p,eff}=A_{s,eff}/A_{c,eff}$.\n\nThe effective concrete area uses this height:\n\n$h_{c,ef}=\\min(2.5(h-d),(h-x)/3,h/2)$.\n\n**Recommended coefficients**\n\n- $k_1=0.8$ for ribbed bars or $k_1=1.6$ for plain bars.\n- $k_2=0.5$.\n- $k_3=3.4$.\n- $k_4=0.425$.')
+    md(('**Worked (beam, $M_x=150$ kNm):** $\\sigma_s=204$ MPa, $\\rho_{p,eff}=0.0393$, $\\varepsilon_{sm}-\\varepsilon_{cm}=0.797$ per mille, $s_{r,max}=236$ mm, which gives $w_k=0.188$ mm.').replace(
             "per mille", _PERMILLE
         ))
     h2("DK NA fine crack system")
-    md("The DK National Annex makes the cover term cover-dependent, "
-       "$k_3=3.4\\,(25/c)^{2/3}$, which lowers $s_{r,max}$ for covers above 25 mm, "
-       "and limits the $(h-x)/3$ term in $h_{c,ef}$ to slabs and prestressed "
-       "members (it is dropped for an ordinary beam). **Worked:** $s_{r,max}=206$ "
-       "mm, $w_k=0.164$ mm.")
+    md('The DK NA uses the cover-dependent coefficient $k_3=3.4(25/c)^{2/3}$. This reduces $s_{r,max}$ for cover above 25 mm. The $(h-x)/3$ term in $h_{c,ef}$ applies to slabs and prestressed members. For ordinary beams, the formula has no such term.\n\n**Worked result:** $s_{r,max}=206$ mm and $w_k=0.164$ mm.')
     h2("DK NA coarse crack system")
-    md("The coarse system (7.3.4(1)) redefines the effective tension area as the "
-       "band at the tension face whose area-centroid matches the tension "
-       "reinforcement's centroid (figure 7.100 NA; for a rectangle the $2(h-d)$ "
-       "band), and **halves** the crack width. **Worked:** the band is $0.100$ m "
-       "high and $w_k=0.077$ mm.")
-    call("tip", "The single *DS/EN 1992-1-1 + DK NA* option reports the fine and the "
-         "coarse system side by side, each for the long-term and the short-term "
-         "load -- four crack widths in one calculation.")
+    md("The coarse system in 7.3.4(1) uses a band at the tension face as its effective tension area. The band's area centroid must coincide with the tension reinforcement centroid, as shown in Figure 7.100 NA. For a rectangle, the band height is $2(h-d)$. The coarse method halves the calculated crack width.\n\n**Worked result:** the band is 0.100 m high and $w_k=0.077$ mm.")
+    call("tip", 'The **DS/EN 1992-1-1 + DK NA** option reports fine and coarse crack systems together. Each system has long-term and short-term results. The calculation thus gives four crack widths.')
     h2("DK NA heightened crack-control minimum")
-    md("Enable **DK heightened crack-control minimum** to calculate the "
-       "reinforcement ratio required by DS/EN 1992-1-1 DK NA:2024 Formula 7.100 NA. "
-       "The required reinforcement ratio is\n\n"
-       "$$\\rho_{s,min}=m_s\\sqrt{\\frac{\\phi f_{ct,eff}}"
-       "{4E_{sk}kw_k}}$$\n\n"
-       "where $k=1$ for the fine crack system and $k=2$ for the coarse system; "
-       "$m_s=1$ for ribbed reinforcement and $m_s=\\sqrt{2}$ for smooth "
-       "reinforcement. Sector uses the separate Formula 7.100 NA permitted-width "
-       "input and calculates the fine and coarse systems together, each with its own user-supplied "
-       "$A_{c,eff}$. Bar diameter uses the ordinary crack override when positive, "
-       "otherwise the largest contributing mild bar; $E_{sk}$ is the conservative "
-       "minimum among contributing mild materials and $A_{s,prov}$ is their total "
-       "area. The report identifies the reference case, ordinary crack-width method, element "
-       "and material sources and publishes both comparisons plus the governing "
-       "system. Missing or indeterminate source values block the calculation. "
-       "Applicability, restraint, watertightness and the permitted "
-       "$w_k$ remain user declarations. The option is unavailable for the 2023 "
-       "basis.")
+    md('Enable **DK heightened crack-control minimum** to calculate the reinforcement ratio from DS/EN 1992-1-1 DK NA:2024 Formula 7.100 NA.\n\n$$\\rho_{s,min}=m_s\\sqrt{\\frac{\\phi f_{ct,eff}}{4E_{sk}kw_k}}$$\n\nUse $k=1$ for the fine system and $k=2$ for the coarse system. Use $m_s=1$ for ribbed reinforcement and $m_s=\\sqrt{2}$ for smooth reinforcement.\n\nSector uses the permitted width for Formula 7.100 NA. It calculates the two systems with the effective area entered for each system $A_{c,eff}$. A positive ordinary crack-diameter override supplies the bar diameter. If the override is zero, Sector uses the largest contributing mild-bar diameter.\n\n$E_{sk}$ is the lowest modulus of the contributing mild-steel materials. $A_{s,prov}$ is their total area. The report identifies the reference case, ordinary crack method, elements and material sources. It gives the two comparisons and the governing system.\n\nMissing or indeterminate source values prevent calculation. The user supplies the applicability, restraint, watertightness and permitted width $w_k$. The option applies to the first-generation Danish basis.')
     h2("DS/EN 1992-1-1:2023 refined model")
-    md("The 2023 edition uses a refined model (9.2.3):\n\n"
-       "$$w_k = k_w\\,\\frac{k_1}{r}\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-"
-       "\\varepsilon_{cm}),\\qquad k_w=1.7,\\qquad \\frac{k_1}{r}=\\frac{h-x}"
-       "{(h-x)-a_{y,i}},$$\n\n"
-       "with a per-bar curvature factor $k_1/r$ (9.9). The mean crack spacing is\n\n"
-       "$$s_{r,m,cal} = 1.5\\,c + \\frac{k_{fl}\\,k_b}{7.2}\\,\\frac{\\phi}"
-       "{\\rho_{p,eff}} \\le \\frac{1.3}{k_w}(h-x)\\ (9.15),$$\n\n"
-       "with the flexural coefficient $k_{fl}$ (9.16/9.17), the bond factor "
-       "$k_b=0.9$ (ribbed) or $1.2$ (plain) (9.18), and $h_{c,eff}$ from figure "
-       "9.3 (built from the near-face layer and extended over the tension layers). "
-       "The mean strain (9.11) keeps the same numerator but its lower bound is "
-       "$(1-k_t)\\sigma_s/E_s$. **Worked:** $s_{r,m,cal}=134$ mm, $w_k=0.186$ mm.")
-    md("The three code options give four method/system results on the same beam and "
-       "service moment ($M_x=150$ kNm), because DK/NA evaluates distinct fine and "
-       "coarse reinforcement systems. The spacing column uses $s_{r,max}$ for "
-       "2005/DK NA and $s_{r,m,cal}$ for 2023:")
+    md('The 2023 edition uses the refined model in 9.2.3:\n\n$$w_k = k_w\\,\\frac{k_1}{r}\\,s_{r,m,cal}\\,(\\varepsilon_{sm}-\\varepsilon_{cm}),\\qquad k_w=1.7,\\qquad \\frac{k_1}{r}=\\frac{h-x}{(h-x)-a_{y,i}},$$\n\nThe factor $k_1/r$ applies to each bar under Formula (9.9).\n\n**Mean crack spacing**\n\n$$s_{r,m,cal} = 1.5\\,c + \\frac{k_{fl}\\,k_b}{7.2}\\,\\frac{\\phi}{\\rho_{p,eff}} \\le \\frac{1.3}{k_w}(h-x)\\ (9.15),$$\n\nUse these parameters:\n\n- Flexural coefficient $k_{fl}$ from Formulas (9.16)-(9.17).\n- Bond factor $k_b=0.9$ for ribbed reinforcement or $k_b=1.2$ for plain reinforcement, from Formula (9.18).\n- Effective height $h_{c,eff}$ from Figure 9.3.\n\nThe height starts from the reinforcement layer nearest the face and extends across the tension layers.\n\n**Mean strain**\n\nFormula (9.11) keeps the same numerator. Its lower bound is:\n\n$(1-k_t)\\sigma_s/E_s$.\n\n**Worked result**\n\n- $s_{r,m,cal}=134$ mm.\n- $w_k=0.186$ mm.')
+    md('The three code options give four method/system results for the same beam and service moment ($M_x=150$ kNm). DK NA calculates results for its fine and coarse reinforcement systems. The spacing column uses $s_{r,max}$ for 2005/DK NA and $s_{r,m,cal}$ for 2023:')
     table(["Crack-width edition", "Crack spacing (mm)", "$h_{c,ef}$ (m)", "$w_k$ (mm)"],
           [["EN 1992-1-1:2005", "236", "0.125", "0.188"],
            ["DS/EN + DK NA (fine)", "206", "0.125", "0.164"],
            ["DS/EN + DK NA (coarse)", "184", "0.100", "0.077"],
            ["DS/EN 1992-1-1:2023", "134", "0.175", "0.186"]])
-    call("standard", "The *Crack-width code* offers three options -- EN 1992-1-1:"
-         "2005, DS/EN 1992-1-1 + DK NA and DS/EN 1992-1-1:2023. The DK NA option "
-         "reports the fine and the coarse system together (all four columns above), "
-         "each for the long-term and short-term load. Ordinary methods show one "
-         "globally governing crack-width result in Standard and Audit; Audit includes "
-         "the worked calculation. DK/NA retains the fine-system and coarse-system "
-         "results, with their governing worked examples in Audit. "
-         "Brief includes the complete effective inputs and the governing "
-         "crack-width rows, but no worked example or non-governing case register. "
-         "If user criteria are present, Standard and Audit show one comparison for "
-         "the largest calculated ordinary width, selected by width rather than "
-         "ratio. The separate DK option retains its section-level Formula 7.100 NA "
-         "assessment, with its numerical worked example in Audit.")
+    call("standard", 'The **Crack-width design basis** options are EN 1992-1-1:2005, DS/EN 1992-1-1 + DK NA, and DS/EN 1992-1-1:2023. The Danish option gives fine and coarse systems for long-term and short-term actions.\n\nStandard and Audit show the globally governing ordinary crack width. Audit also gives its worked calculation. For DK NA, the reports keep the governing fine and coarse results. Audit gives their worked examples.\n\nBrief gives full effective inputs and governing crack-width rows. Standard and Audit add the detailed results applicable to their profiles. When the user enters positive criteria, they compare the largest calculated ordinary width with its matching limit. That selection uses width, rather than the ratio to the limit.\n\nThe Danish heightened-control option gives its Formula 7.100 NA section assessment. Audit includes its numerical example.')
 
     h1("Grouped fatigue")
     h2("Elastic stress ranges")
-    md("Each spectrum bin contains a sustained/basic action $S_l$, a cyclic "
-       "increment $S_s$ and a cycle count $n_i$. The cracked Elastic analysis is "
-       "run twice and the action factor is applied to the increment:\n\n"
-       "$$\\Delta\\sigma_{Ed,i}=\\left|\\sigma(S_l+\\gamma_{Ff}S_s)"
-       "-\\sigma(S_l)\\right|.$$\n\n"
-       "Long-term actions use $n_l$ and the increment uses $n_s$. Prestress and "
-       "element-specific elastic moduli follow the assigned material definitions. "
-       "The unfactored total state is reported beside the design state for review.")
-    call("concept", "$\\gamma_{Ff}$ is applied once, at action level. The resulting "
-         "design stress range enters the S-N or concrete-life check; it is not "
-         "applied again to the resistance curve.")
+    md('Each spectrum bin contains a sustained/basic action $S_l$, a cyclic increment $S_s$ and a cycle count $n_i$. Sector runs the cracked Elastic analysis two times and applies the action factor to the increment:\n\n$$\\Delta\\sigma_{Ed,i}=\\left|\\sigma(S_l+\\gamma_{Ff}S_s)-\\sigma(S_l)\\right|.$$\n\nLong-term actions use $n_l$ and the increment uses $n_s$. Prestress and element-specific elastic moduli follow the assigned material definitions. Sector reports the unfactored total state beside the design state.')
+    call("concept", 'Sector applies $\\gamma_{Ff}$ to the action. The resulting design stress range goes into the S-N or concrete-life check. Do not apply $\\gamma_{Ff}$ to the resistance curve.')
 
     h2("Simplified reinforcement stress-range screen")
-    md("Sector first evaluates the supported Eurocode shortcut for each assigned "
-       "named reinforcement or prestressing detail. The shortcut is used only "
-       "when every spectrum bin has converged and has a tensile endpoint. "
-       "A stress range exactly equal to the stated limit passes. A lower range "
-       "passes; a higher range does not fail the member, but makes the detailed "
-       "S-N/Miner check necessary. Custom, imported or otherwise unsupported "
-       "details also continue to the detailed check.")
+    md('Sector first evaluates the supported simplified stress-range check for each assigned named reinforcement or prestressing detail. Sector uses the shortcut only when each spectrum bin converges and has a tensile endpoint. A stress range equal to the stated limit passes. A lower range passes. A higher range does not fail the member, but makes the detailed S-N/Miner check necessary. Custom, imported or unsupported details also continue to the detailed check.')
     table(
         ["Fatigue basis and named detail", "Simplified limit"],
         [
@@ -2021,21 +1388,11 @@ def manual_blocks() -> list:
             ["2023 - curved tendon in steel duct", "55 MPa design range"],
         ],
     )
-    md("For a 2023 bent-bar preset, the selected mandrel-to-diameter reduction "
-       "also reduces the tabulated straight-bar limit. The 2023 shortcut is "
-       "limited to a total of $10^8$ cycles. The 2005-family screen "
-       "uses the characteristic fatigue range; the 2023 screen uses the design "
-       "range including the action-level $\\gamma_{Ff}$ factor. Sector always "
-       "reports the detailed S-N/Miner result, and the "
-       "yield/proof-stress check remains independent of the shortcut.")
-    md("References: DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, "
-       "6.8.6(1)-(2), with DS/EN 1992-1-1 DK NA:2024; and "
-       "DS/EN 1992-1-1:2023, 10.4(1) for the selectable 2023 method.")
+    md('For a 2023 bent-bar preset, the selected mandrel-to-diameter reduction also reduces the tabulated straight-bar limit. The 2023 shortcut is limited to a total of $10^8$ cycles. The 2005-family screen uses the characteristic fatigue range. The 2023 screen uses the design range with the action-level $\\gamma_{Ff}$ factor. Sector always reports the detailed S-N/Miner result, and the yield/proof-stress check stays independent of the shortcut.')
+    md('References: DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 6.8.6(1)-(2), with DS/EN 1992-1-1 DK NA:2024. DS/EN 1992-1-1:2023, 10.4(1) for the selectable 2023 method.')
     call(
         "concept",
-        "A passing simplified screen means that a more detailed stress-range "
-        "assessment is not required for that element. The report still includes "
-        "the detailed calculation and independent strength checks.",
+        'A passing simplified screen means that a more detailed stress-range assessment is not required for that element. The report includes the detailed calculation and independent strength checks.',
     )
 
     h2("Reinforcement S-N and Miner check")
@@ -2048,35 +1405,14 @@ def manual_blocks() -> list:
        "{\\Delta\\sigma_{Ed,i}}\\right)^{k},$$\n\n"
        "with $k=k_1$ above the knee and $k=k_2$ below it. Zero range gives infinite "
        "life. Diameter and bent-bar adjustments follow the selected detail preset.")
-    md("Damage is accumulated within one named spectrum:\n\n"
-       "$$D=\\sum_i\\frac{n_i}{N_{R,i}}\\leq1.0.$$\n\n"
-       "The long-term and design-total stresses are also checked against the "
-       "element's tension or compression yield/proof strength divided by "
-       "$\\gamma_s$. If the simplified screen passes, its stress-range utilisation "
-       "replaces Miner damage for the governing range criterion; otherwise Miner "
-       "damage applies. Yield/proof utilisation remains independent in both cases.")
-    fig(fig_fatigue_sn, "Two-slope characteristic and design S-N curves. Each "
-        "labelled marker is one applied spectrum bin; logarithmic axes show the "
-        "wide cycle and stress ranges without visual distortion.",
-        "A log-log stress-range versus cycles plot shows characteristic and design "
-        "S-N curves with a knee and labelled spectrum-bin points on the relevant "
-        "branches.")
-    fig(fig_fatigue_damage, "Per-bin and cumulative Miner damage for the same "
-        "element. The cumulative line and $D=1.00$ limit make the governing "
-        "contribution and remaining margin visible. The y-axis changes to a "
-        "logarithmic scale for low-damage spectra so small contributions remain "
-        "readable.",
-        "Damage bars identify each spectrum bin, a cumulative Miner-damage line rises "
-        "across the bins, and a horizontal D equals 1 limit shows the remaining "
-        "margin.")
+    md("Sector adds damage in one named spectrum:\n\n$$D=\\sum_i\\frac{n_i}{N_{R,i}}\\leq1.0.$$\n\nSector also checks the long-term and design-total stresses against the element's tension or compression yield/proof strength divided by $\\gamma_s$. If the simplified screen passes, its stress-range utilization replaces Miner damage for the governing range criterion. If the screen does not pass, Miner damage applies. Yield/proof utilization stays independent in the two cases.")
+    fig(fig_fatigue_sn, 'Two-slope characteristic and design S-N curves. Each labeled marker is one applied spectrum bin. The two axes use logarithmic scales.',
+        'A log-log stress-range versus cycles plot shows characteristic and design S-N curves with a knee. The applied spectrum-bin points are below the design resistance curve.')
+    fig(fig_fatigue_damage, 'Per-bin and cumulative Miner damage for the same element. The cumulative line and $D=1.00$ limit show the governing contribution and remaining margin. The y-axis changes to a logarithmic scale for low-damage spectra so small contributions stay readable.',
+        'Damage bars identify each spectrum bin, a cumulative Miner-damage line increases across the bins, and a horizontal D equals 1 limit shows the remaining margin.')
 
     h2("Mixed mild reinforcement and bonded tendons")
-    md("When both occur in one section, Sector applies the edition-specific bond "
-       "model. The 2005 method applies the 6.8.2(2) bond correction $\\eta$ to the "
-       "mild-reinforcement range and leaves the tendon range unadjusted. The 2023 "
-       "method resolves the section using the equivalent tendon area from 10.3(2). "
-       "The tendon detail therefore requires $\\xi$ and an equivalent diameter. "
-       "The applied method and adjustment are reported for every bin.")
+    md('When mild reinforcement and bonded tendons occur in one section, Sector applies the edition-specific bond model. The 2005 method applies the 6.8.2(2) bond correction $\\eta$ to the mild-reinforcement range and leaves the tendon range unadjusted. The 2023 method solves the section again with the equivalent tendon area from 10.3(2). The tendon detail thus requires $\\xi$ and an equivalent diameter. Sector reports the applied method and adjustment for each bin.')
 
     h2("Concrete compression fatigue")
     md("The fatigue strength is edition-specific. For the 2005 family Sector uses "
@@ -2088,326 +1424,87 @@ def manual_blocks() -> list:
        "\\quad\\eta_{cc,fat}=\\min(0.85\\eta_{cc},0.8),\\quad "
        "f_{cd,fat}=\\beta_{cc}(t_0)\\frac{f_{ck}}{\\gamma_{c,fat}}"
        "\\eta_{cc,fat}.$$")
-    md("At one fixed concrete fibre, let $\\sigma_{max}$ and $\\sigma_{min}$ be the "
-       "larger and smaller design compression magnitudes for a bin, "
-       "$E_{max}=\\sigma_{max}/f_{cd,fat}$ and "
-       "$R=\\sigma_{min}/\\sigma_{max}$. The implemented life relation is\n\n"
-       "$$\\log_{10}N_R=C\\frac{1-E_{max}}{\\sqrt{1-R}}.$$\n\n"
-       "Miner damage is summed at that same fibre; results from different locations "
-       "remain separate. Direct stress utilisation "
-       "$E_{max}\\leq1.0$ is checked in parallel.")
-    md("Alternatively, the damage-equivalent method checks each user-supplied "
-       "equivalent action pair using\n\n"
-       "$$E_{max}+0.43\\sqrt{1-\\frac{E_{min}}{E_{max}}}\\leq1.$$\n\n"
-       "This is Formula (6.72) for the 2005 family and Formula (E.2) for 2023. "
-       "Each pair represents $10^6$ cycles and is used as entered. When several "
-       "equivalent rows are supplied, the largest criterion governs.")
-    md("Sector checks the section vertices and runs an adaptive branch-and-bound "
-       "search over the concrete area. The result includes the largest evaluated "
-       "criterion, a conservative upper bound, the absolute and relative gap, sample "
-       "and box counts, and convergence. The upper bound governs "
-       "the calculation conclusion, so an unresolved potentially critical region "
-       "cannot pass.")
+    md('Use the same concrete fiber for the two states of a bin:\n\n- $\\sigma_{max}$ is the larger design compression magnitude.\n- $\\sigma_{min}$ is the smaller design compression magnitude.\n\nCalculate the normalized maximum and stress ratio:\n\n- $E_{max}=\\sigma_{max}/f_{cd,fat}$.\n- $R=\\sigma_{min}/\\sigma_{max}$.\n\nThe implemented life relation is:\n\n$$\\log_{10}N_R=C\\frac{1-E_{max}}{\\sqrt{1-R}}.$$\n\nSector sums Miner damage at that same fiber. Each location has its own result. Sector also checks direct stress utilization $E_{max}\\leq1.0$.')
+    md('The damage-equivalent method checks each user-supplied equivalent action pair with\n\n$$E_{max}+0.43\\sqrt{1-\\frac{E_{min}}{E_{max}}}\\leq1.$$\n\nThis is Formula (6.72) for the 2005 family and Formula (E.2) for 2023. Each pair represents $10^6$ cycles. Sector uses the pair as entered. For more than one equivalent row, the largest criterion governs.')
+    md('Sector checks the section vertices and runs an adaptive branch-and-bound search over the concrete area. The result includes the largest evaluated criterion, a conservative upper bound, the absolute and relative gap, sample and box counts, and convergence. The upper bound governs the calculation status, so an unresolved potentially critical region cannot pass.')
 
     h2("Edition and scope summary")
     table(["Edition", "Reinforcement", "Concrete", "Mixed bond"],
           [["DS/EN 1992-1-1:2005",
-            "6.8.6 shortcut; 6.8.4 and Tables 6.3N/6.4N detailed check",
+            '6.8.6 shortcut. 6.8.4 and Tables 6.3N/6.4N detailed check',
             "6.72 equivalent or corrected DS/EN 1992-2:2005/AC:2008 6.106 Miner",
             "6.8.2(2) eta correction"],
            ["DS/EN 1992-1-1:2005 + DK NA:2024",
-            "6.8.6 shortcut unchanged; detailed method with Danish project factors",
-            "Same selectable methods; explicit Danish project factors",
+            '6.8.6 shortcut unchanged. Detailed method with Danish project factors',
+            'Same selectable methods. Explicit Danish project factors',
             "6.8.2(2) eta correction"],
            ["DS/EN 1992-1-1:2023",
-            "10.4 shortcut; Annex E.5 and Tables E.1/E.2 detailed check",
+            '10.4 shortcut. Annex E.5 and Tables E.1/E.2 detailed check',
             "E.2 equivalent or E.7-E.8 Miner",
             "10.3(2) equivalent tendon area"]])
-    call("limit", "Each spectrum forms an independent Miner sum and result. "
-         "The Elastic fatigue model covers normal force and biaxial bending; "
-         "shear- and torsion-induced fatigue require a separate assessment.")
+    call("limit", 'Each spectrum forms an independent Miner sum and result. The Elastic fatigue model covers normal force and biaxial bending. Assess shear- and torsion-induced fatigue with a method that covers these actions.')
 
-    h1("Shear resistance without shear reinforcement")
-    md("The design shear resistance of a member not requiring shear reinforcement "
-       "(EN 1992-1-1 6.2.2(1)) is\n\n"
-       "$$V_{Rd,c} = \\Big[C_{Rd,c}\\,k\\,(100\\,\\rho_l\\,f_{ck})^{1/3} + "
-       "k_1\\,\\sigma_{cp}\\Big]\\,b_w\\,d \\quad(6.2\\text{a}),$$\n\n"
-       "with a lower bound\n\n"
-       "$$V_{Rd,c} = (v_{min} + k_1\\,\\sigma_{cp})\\,b_w\\,d \\quad(6.2\\text{b}),$$\n\n"
-       "where $k = 1 + \\sqrt{200/d} \\le 2$ ($d$ in mm), "
-       "$\\rho_l = A_{sl}/(b_w\\,d) \\le 0.02$ is the tension-reinforcement ratio, "
-       "and $\\sigma_{cp} = N_{Ed}/A_c < 0.2\\,f_{cd}$ is the axial stress "
-       "(compression positive). The edition supplies $C_{Rd,c} = 0.18/\\gamma_c$, "
-       "$k_1 = 0.15$ and $v_{min}$: the recommended "
-       "$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$, or the DK NA:2024 "
-       "$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$.")
-    md("Sector derives the geometry separately for each active shear direction: "
-       "the effective depth $d$ is the distance from the extreme "
-       "compression fibre (opposite the tension face) to the centroid of the "
-       "tension bars; $b_w$, when not entered, is the smallest solid width sampled "
-       "over the middle 80% of the depth (the web of a rectangular / T / box "
-       "section -- a curved outline should have $b_w$ entered by hand). $\\sigma_{cp}$ "
-       "uses the Plastic action-set force $N$; since Sector's $N$ is "
-       "tension-positive it is negated to the code's compression-positive "
-       "convention, exactly as the axial-force flip elsewhere. Automatic face "
-       "selection follows the associated moment; at zero moment both faces are "
-       "evaluated.")
-    md("For DS/EN 1992-1-1:2023, the action-dependent factor is\n\n"
-       "$$a_{cs}=\\max\\!\\left(\\left|M_{Ed}/V_{Ed}\\right|,d\\right),\\qquad "
-       "k_{vp}=\\max\\!\\left(1+\\frac{N_{Ed}}{|V_{Ed}|}\\frac{d}{3a_{cs}},0.1\\right),$$\n\n"
-       "and $d$ in Formula (8.27) is replaced by $k_{vp}d$. The 2023 convention "
-       "takes $N_{Ed}$ positive in tension, so axial tension raises $k_{vp}$ and "
-       "reduces the basic shear-stress resistance; compression has the opposite "
-       "effect. The minimum stress from Formula (8.20) and the lever arm "
-       "$z=0.9d$ use the nominal $d$.")
-    call("limit", "$A_{sl}$ is the longitudinal tension reinforcement, **assumed "
-          "fully anchored** ($\\geq l_{bd} + d$) beyond the section. This anchorage "
-          "requires member-level confirmation. Enter an appropriately reduced "
-          "$f_{yk}$ / $f_{ywk}$ where the force cannot be developed; bonded tendons are not "
-          "counted toward $\\rho_l$ automatically.")
-    md("**Worked** (300 x 600 mm rectangle, C35, DK NA:2024, "
-       "$A_{sl} = 1473$ mm$^2$, $d = 550$ mm, $b_w = 300$ mm, $N = 0$): "
-       "$k = 1.603$, $\\rho_l = 0.00893$, $C_{Rd,c} = 0.124$, the basic term "
-       "$0.627$ MPa exceeds $v_{min} = 0.535$ MPa, so "
-       "$V_{Rd,c} = 0.627 \\cdot 300 \\cdot 550 = 103.4$ kN.")
+    h1("Shear resistance")
+    md('The design shear resistance of a member not requiring shear reinforcement (EN 1992-1-1 6.2.2(1)) is\n\n$$V_{Rd,c} = \\Big[C_{Rd,c}\\,k\\,(100\\,\\rho_l\\,f_{ck})^{1/3} + k_1\\,\\sigma_{cp}\\Big]\\,b_w\\,d \\quad(6.2\\text{a}),$$\n\nwith a lower bound\n\n$$V_{Rd,c} = (v_{min} + k_1\\,\\sigma_{cp})\\,b_w\\,d \\quad(6.2\\text{b}),$$\n\n**Size factor**\n\n$k = 1 + \\sqrt{200/d} \\le 2$.\n\nUse $d$ in millimeters.\n\n**Tension-reinforcement ratio**\n\n$\\rho_l = A_{sl}/(b_w\\,d) \\le 0.02$.\n\n**Axial stress**\n\n$\\sigma_{cp} = N_{Ed}/A_c < 0.2\\,f_{cd}$.\n\nCompression is positive in this expression.\n\n**Edition coefficients**\n\n- $C_{Rd,c} = 0.18/\\gamma_c$.\n- $k_1 = 0.15$.\n\nThe recommended minimum stress is:\n\n$v_{min} = 0.035\\,k^{1.5}\\sqrt{f_{ck}}$.\n\nDK NA:2024 uses:\n\n$v_{min} = (0.051/\\gamma_c)\\,k^{1.5}\\sqrt{f_{ck}}$.')
+    md('Sector calculates geometry for each active shear direction. The effective depth $d$ extends from the extreme compression fiber to the centroid of the tension bars. The compression fiber lies opposite the selected tension face.\n\nAn entered $b_w$ supplies the governing web width. If no positive override is entered, Sector samples solid widths over the middle 80% of the depth and uses the smallest value. Enter a governing web width for a curved outline. Make sure that the section-form requirements are satisfied under **Shear capacity settings**.\n\nFor $\\sigma_{cp}$, Sector reverses the entered tension-positive axial force to get compression-positive force. Automatic face selection follows the related moment. At zero related moment, Sector evaluates the two faces.')
+    md('For DS/EN 1992-1-1:2023, the action-dependent factor is\n\n$$a_{cs}=\\max\\!\\left(\\left|M_{Ed}/V_{Ed}\\right|,d\\right),\\qquad k_{vp}=\\max\\!\\left(1+\\frac{N_{Ed}}{|V_{Ed}|}\\frac{d}{3a_{cs}},0.1\\right),$$\n\nand $d$ in Formula (8.27) is replaced by $k_{vp}d$. The 2023 convention takes $N_{Ed}$ positive in tension, so axial tension raises $k_{vp}$ and reduces the basic shear-stress resistance. Compression has the opposite effect. The minimum stress from Formula (8.20) and the lever arm $z=0.9d$ use the nominal $d$.')
+    call("limit", '$A_{sl}$ is the longitudinal tension reinforcement, **assumed fully anchored** ($\\geq l_{bd} + d$) beyond the section. Make sure that the member design satisfies the anchorage conditions. Where anchorage cannot resist the force, reduce $f_{yk}$ / $f_{ywk}$ to the strength that the anchorage can resist. Sector does not automatically include bonded tendons in $\\rho_l$.')
+    md('**Worked example: concrete shear resistance**\n\nUse these inputs:\n\n- Rectangle: 300 x 600 mm.\n- Concrete: C35.\n- Method: DK NA:2024.\n- $A_{sl}=1473$ $\\text{mm}^2$.\n- $d=550$ mm.\n- $b_w=300$ mm.\n- $N=0$.\n\nThe calculated parameters, rounded for display, are:\n\n- $k=1.603$.\n- $\\rho_l=0.00893$.\n- $C_{Rd,c}=0.124$.\n- Basic shear stress: $0.627$ MPa.\n- $v_{min}=0.535$ MPa.\n\nThe basic shear stress is greater than $v_{min}$. Use the basic stress with full precision. Multiply it by $b_wd$, then divide by 1000 to get kN:\n\n$V_{Rd,c}\\approx103.4$ kN.')
 
     h2("Members with shear reinforcement (links)")
-    md("A member with designed links is a truss: the links are the "
-       "tension ties and the concrete web the inclined compression struts at an "
-       "angle $\\theta$ to the axis. For the 2005 family, the resistance is\n\n"
-       "$$V_{Rd,s} = \\frac{A_{sw}}{s}\\,z\\,f_{ywd}\\,\\cot\\theta \\quad(6.8), "
-       "\\qquad V_{Rd,max} = \\frac{\\alpha_{cw}\\,b_w\\,z\\,\\nu_1\\,f_{cd}}"
-       "{\\cot\\theta + \\tan\\theta} \\quad(6.9),$$\n\n"
-       "and $V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$. Here $z$ is the internal lever "
-       "arm, $\\nu_1$ the strut effectiveness factor, and $\\alpha_{cw}$ the "
-       "compression-chord factor (1 for a non-prestressed section, rising with an "
-       "axial compression per 6.11N). The shear also adds a longitudinal tension "
-       "$\\Delta F_{td} = 0.5\\,V_{Ed}\\,\\cot\\theta$ (6.18) that the bottom steel "
-       "must carry on top of the bending force.")
-    md("For DS/EN 1992-1-1:2023,\n\n"
-       "$$\\tau_{Rd,sy}=\\rho_w f_{ywd}\\cot\\theta \\quad(8.42),\\qquad "
-       "\\sigma_{cd}=\\tau_{Ed}(\\cot\\theta+\\tan\\theta)"
-       "\\leq\\nu f_{cd}\\quad(8.44),$$\n\n"
-       "where $\\rho_w=A_{sw}/(b_ws)$ and $\\nu=0.5$. Sector reports both stresses "
-       "and the equivalent $V_{Rd,s}$ / $V_{Rd,max}$ resistances. The longitudinal "
-       "addition is $N_{Vd}=|V_{Ed}|\\cot\\theta$ (8.50), applied without the "
-       "support/load-specific relief in (8.53). It is applied to both flexural "
-       "chords: $F_{td}=M_{Ed}/z+N_{Vd}+N_{Ed}/2$ (8.51) and "
-       "$F_{cd}=M_{Ed}/z-N_{Vd}+N_{Ed}/2$ (8.52). "
-       "Positive $F_{cd}$ is compression; if Formula (8.52) becomes negative, "
-       "the flexural compression chord is instead in tension. Sector checks both "
-       "physical faces with their correct bending signs against face-specific "
-       "bending capacities conditional on the acting axial force and orthogonal "
-       "moment. Because the axial action is already included in those capacities, "
-       "it is not added a second time to the equivalent-moment comparison.")
-    call("standard", "For 2023 variable-width sections, Sector uses the entered "
-         "governing $b_w$ and multiplies $A_{sw}$ by $\\cos\\delta$ (8.2.3(9)). "
-         "For a circular section it multiplies $A_{sw}$ by $b_w/D_h$ and uses "
-         "the entered fitted-section lever arm $z$. Thus $b_w/D_h=400/600=2/3$: "
-         "the link contribution is two thirds of the unadjusted value, whose ratio "
-         "to the corrected contribution is 1.5. Clause 8.2.3(10) applies the "
-         "selected duct allowance to the compression-field width. The 2005-family "
-         "links check applies its duct allowance to $V_{Rd,max}$ under 6.2.3(6).")
-    md("**2023 chord arithmetic example (supplied scalar assumptions):** $M_{Ed}=90$ kNm, $M_{Rd}=100$ kNm, "
-       "$N_{Vd}=250$ kN and $z=0.5$ m give "
-       "$M_{Ed,total}=90+250\\cdot0.5=215$ kNm and utilisation "
-       "$215/100=2.15$: **FAIL**. The opposite chord is assessed separately with "
-       "Formula (8.52); unavailable face-specific resistance leaves the complete "
-       "longitudinal chord assessment not assessed, never passed.")
-    call("concept", "For reinforced-shear checks, Sector calculates the internal "
-         "lever arm $z$ at the exact face-aligned Plastic state and action-set axial "
-         "force. The compression and tension resultants each include the sign-split "
-         "contributions from concrete, mild steel and tendons. Their separation is "
-         "$z$, with Cartesian components $z_x$ and $z_y$; x-axis bending uses "
-         "$|z_y|$ and y-axis bending uses $|z_x|$. If the required Plastic state is "
-         "unavailable, the links resistance is not assessed.")
-    md("$V_{Rd,s}$ rises with $\\cot\\theta$ (a flatter strut engages more links) "
-       "while $V_{Rd,max}$ falls with it, so $V_{Rd} = \\min$ is largest where the "
-       "two are equal, at $\\cot^2\\theta = b/a - 1$ with $a = (A_{sw}/s)\\,f_{ywd}$ "
-       "and $b = \\alpha_{cw}\\,b_w\\,\\nu_1\\,f_{cd}$ ($z$ cancels). Sector "
-       "**auto-optimises** $\\theta$: it takes that crossing, clamped to the "
-       "$\\cot\\theta$ bounds -- outside the crossing one limit governs throughout, "
-       "so the best allowed angle is the nearer bound.")
-    call("standard", "The recommended strut factor is $\\nu_1 = \\nu = "
-         "0.6\\,(1 - f_{ck}/250)$ (6.6N); the DK NA:2024 uses its plasticity "
-         "pure-shear factor $\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$ (5.103 "
-         "NA), applied to the truss struts by 5.101 NA. Both editions bound "
-         "$1 \\leq \\cot\\theta \\leq 2.5$ (6.7N / 6.7a NA).")
-    call("standard", "For 2023 class B/C links, the directly verifiable range is "
-         "$1\\leq\\cot\\theta\\leq2.5$; axial tension reduces the upper limit to "
-         "$\\max(2.5-0.1N_{Ed}/|V_{Ed}|,1)$ and class A reduces it by 20%. "
-         "The section check uses 2.5 as its upper bound; extension to 3.0 "
-         "requires separate confirmation of the compression-chord depth.")
-    call("standard", "Sector applies a conservative applicability boundary when "
-         "net axial compression is positive. The cross-section calculation does "
-         "not select the force assigned to the web or establish the action-state "
-         "compression-chord depth needed to determine the simplified 2023 route "
-         "under 8.2.3(11). The reinforced-shear result is therefore NOT ASSESSED; "
-         "complete a separately applicable member assessment, including Annex G "
-         "where required.")
-    md("**Worked** (same section, C35, DK NA:2024, 2-leg $\\phi$10 links at "
-       "$s = 150$ mm, $f_{ywk} = 500$; calculated $z = 509.151$ mm): "
-       "$f_{ywd} = 417$ MPa, $\\nu_1 = 0.525$, $A_{sw}/s = 1.047$ mm$^2$/mm. The "
-       "crossing $\\cot\\theta = 2.78$ exceeds the limit, so $\\cot\\theta = 2.5$ "
-       "and the links govern: $V_{Rd,s} = 555.4$ kN $< V_{Rd,max} = 667.5$ kN, "
-       "giving $V_{Rd} = 555.4$ kN.")
+    md('A member with designed links uses a truss model. The links are tension ties. The concrete web forms compression struts at angle $\\theta$ to the member axis.\n\n**2005-family resistances**\n\n$$V_{Rd,s} = \\frac{A_{sw}}{s}\\,z\\,f_{ywd}\\,\\cot\\theta \\quad(6.8), \\qquad V_{Rd,max} = \\frac{\\alpha_{cw}\\,b_w\\,z\\,\\nu_1\\,f_{cd}}{\\cot\\theta + \\tan\\theta} \\quad(6.9),$$\n\nThe governing resistance is:\n\n$V_{Rd} = \\min(V_{Rd,s}, V_{Rd,max})$.\n\nHere, $z$ is the internal lever arm. The strut effectiveness factor is $\\nu_1$.\n\n**Compression-chord factor**\n\nThe factor $\\alpha_{cw}$ is 1 for a non-prestressed section. It increases with axial compression as specified in Formula (6.11N).\n\n**Longitudinal tension**\n\nShear adds this force under Formula (6.18):\n\n$\\Delta F_{td} = 0.5\\,V_{Ed}\\,\\cot\\theta$.\n\nThe reinforcement at the selected tension chord must resist this force and the bending force.')
+    md('For DS/EN 1992-1-1:2023,\n\n$$\\tau_{Rd,sy}=\\rho_w f_{ywd}\\cot\\theta \\quad(8.42),\\qquad \\sigma_{cd}=\\tau_{Ed}(\\cot\\theta+\\tan\\theta)\\leq\\nu f_{cd}\\quad(8.44),$$\n\nThe reinforcement ratio and concrete effectiveness factor are:\n\n- $\\rho_w=A_{sw}/(b_ws)$.\n- $\\nu=0.5$.\n\nSector reports the two stresses and the equivalent resistances $V_{Rd,s}$ and $V_{Rd,max}$.\n\n**Longitudinal force from shear**\n\nSector calculates the longitudinal force with Formula (8.50):\n\n$N_{Vd}=|V_{Ed}|\\cot\\theta$.\n\nSector uses this force without the support/load-specific relief in Formula (8.53). The force acts on the two flexural chords.\n\n**Force in the flexural tension chord**\n\nIn the two chord-force formulas, $M_{Ed}$ is the moment magnitude. Sector uses the physical face to assign the bending sign in the resistance comparison.\n\nFormula (8.51) gives:\n\n$F_{td}=M_{Ed}/z+N_{Vd}+N_{Ed}/2$.\n\n**Force in the flexural compression chord**\n\nFormula (8.52) gives:\n\n$F_{cd}=M_{Ed}/z-N_{Vd}+N_{Ed}/2$.\n\nPositive $F_{cd}$ is compression. Negative $F_{cd}$ is tension in this chord.\n\n**Comparison with bending resistance**\n\nSector checks the two physical faces with the correct bending sign for each face. Each face has its own bending resistance for the acting axial force and the moment about the other axis.\n\nThose resistances include the axial action. The equivalent-moment comparison does not add that action a second time.')
+    call("standard", '**2023 variable-width section**\n\nSector uses the entered governing width $b_w$. It multiplies $A_{sw}$ by $\\cos\\delta$ under 8.2.3(9).\n\n**2023 circular section**\n\nSector multiplies $A_{sw}$ by $b_w/D_h$. It uses the entered fitted-section lever arm $z$.\n\nFor example:\n\n$b_w/D_h=400/600=2/3$.\n\nThe corrected link contribution is two thirds of the unadjusted contribution. The unadjusted contribution is 1.5 times the corrected contribution.\n\n**Duct allowance**\n\nFor 2023, Clause 8.2.3(10) applies the selected duct allowance to the compression-field width. For the 2005 family, Clause 6.2.3(6) applies it to $V_{Rd,max}$.')
+    md('**2023 chord arithmetic example**\n\nUse these scalar assumptions:\n\n- $M_{Ed}=90$ kNm.\n- $M_{Rd}=100$ kNm.\n- $N_{Vd}=250$ kN.\n- $z=0.5$ m.\n\nThe equivalent total moment is:\n\n$M_{Ed,total}=90+250\\cdot0.5=215$ kNm.\n\nThe utilization is $215/100=2.15$, which gives **FAIL**.\n\nAssess the opposite chord independently with Formula (8.52). If its face-specific resistance is unavailable, the full longitudinal-chord assessment is **NOT ASSESSED**.')
+    call("concept", 'For reinforced-shear checks, Sector calculates the internal lever arm $z$ at the exact face-aligned Plastic state and action-set axial force.\n\nThe compression and tension resultants include the sign-split contributions from concrete, mild steel and tendons. Their separation is $z$, with Cartesian components $z_x$ and $z_y$:\n\n- For x-axis bending, use $|z_y|$.\n- For y-axis bending, use $|z_x|$.\n\nIf the required Plastic state is unavailable, the links resistance is **NOT ASSESSED**.')
+    md('The stirrup resistance $V_{Rd,s}$ increases with $\\cot\\theta$. The crushing resistance $V_{Rd,max}$ has its maximum at $\\cot\\theta=1$ and decreases for larger values.\n\n**Calculate the angle candidate**\n\nUse these two coefficients:\n\n- $a = (A_{sw}/s)\\,f_{ywd}$.\n- $b = \\alpha_{cw}\\,b_w\\,\\nu_1\\,f_{cd}$.\n\nThe lever arm $z$ cancels. For $a>0$, calculate:\n\n$r=\\sqrt{\\max(b/a-1,0)}$.\n\nThen include the crushing-branch peak:\n\n$c_0=\\max(r,1)$.\n\n**Apply the entered bounds**\n\n$\\cot\\theta=\\min(\\max(c_0,\\cot\\theta_{min}),\\cot\\theta_{max})$.\n\nThis procedure also gives a result when $b/a<1$. If transverse reinforcement is zero, Sector selects the upper bound.')
+    call("standard", '**Recommended Eurocode factor**\n\nFormula (6.6N) gives:\n\n$\\nu_1 = \\nu = 0.6\\,(1 - f_{ck}/250)$.\n\n**Danish factor**\n\nDK NA:2024 uses the plasticity factor for pure shear:\n\n$\\nu_1 = \\nu_v = 0.7 - f_{ck}/200 \\geq 0.45$.\n\nThis is Formula (5.103 NA). Formula (5.101 NA) applies it to the truss struts.\n\n**Angle bounds**\n\nThe two editions give:\n\n$1 \\leq \\cot\\theta \\leq 2.5$.\n\nThe references are Formula (6.7N) and Formula (6.7a NA).')
+    call("standard", '**2023 angle limits**\n\nSector uses a lower cotangent bound of 1.0. To calculate the upper bound, use this sequence:\n\n1. Start with $c_{max}=2.5$.\n2. For positive axial tension and nonzero shear, use $c_{max}=\\max(2.5-0.1N_{Ed}/|V_{Ed}|,1)$.\n3. For class A, multiply $c_{max}$ by 0.8.\n4. Use $\\max(c_{max},1)$ as the upper bound.\n\nHere, $N_{Ed}$ is positive in tension. Class B/C without axial tension thus gives $1\\leq\\cot\\theta\\leq2.5$.\n\nSector uses 2.5 as the maximum upper bound. Before you use 3.0, do a member assessment of the compression-chord depth.')
+    call("standard", 'For net axial compression, Sector reports the reinforced-shear result as **NOT ASSESSED**.\n\nThe simplified 2023 route under 8.2.3(11) uses the force assigned to the web and the compression-chord depth for the action state. A member assessment must supply these quantities.\n\nComplete that assessment with Annex G where applicable.')
+    md('**Worked shear example**\n\nUse the same section with C35 concrete, DK NA:2024 and these links:\n\n- Two legs of diameter 10 mm.\n- Spacing $s = 150$ mm.\n- Yield strength $f_{ywk} = 500$ MPa.\n\nThe calculated lever arm is $z = 509.151$ mm. The calculation values are:\n\n- $f_{ywd} = 417$ MPa.\n- $\\nu_1 = 0.525$.\n- $A_{sw}/s = 1.047$ mm$^2$/mm.\n\nThe crossing $\\cot\\theta = 2.78$ is larger than the upper limit. Sector thus selects $\\cot\\theta = 2.5$.\n\nThe branch resistances are $V_{Rd,s} = 555.4$ kN and $V_{Rd,max} = 667.5$ kN. The smaller value gives $V_{Rd} = 555.4$ kN, controlled by the links.')
 
     h1("Torsion (thin-walled tube)")
-    md("EN 1992-1-1 6.3.1 distinguishes equilibrium torsion, which must be "
-       "resisted, from compatibility torsion, which may be omitted at ULS only "
-       "under the stated system and minimum-reinforcement conditions. Sector "
-       "does not establish those member/system conditions. It checks compatibility "
-       "torsion only when a residual $T_{Ed}$ is deliberately retained as the "
-       "design action. Under 6.3.3, open thin-walled or warping-sensitive members "
-       "may require a separate warping-torsion/member assessment; the sectional "
-       "tube result is therefore withheld unless the closed/solid member scope is "
-       "established.")
-    md("A section resisting torsion is idealised as a thin-walled closed tube "
-       "(6.3.2(1)): the torque is carried by a constant shear flow round the walls. "
-       "The effective thickness may start from $A/u$ ($A$ the area within the "
-       "outer perimeter including any hollow, $u$ that perimeter), but each wall "
-       "also requires $t_{ef,i}\\geq2a_i$, where $a_i$ is the distance from the "
-       "concrete edge to the assigned longitudinal-reinforcement centre. A hollow "
-       "wall supplies the corresponding upper limit. The centre-line is the outline offset "
-       "inward by $t_{ef}/2$; $A_k$ is the area it encloses and $u_k$ its "
-       "perimeter. The resistances (at the strut angle $\\theta$) are\n\n"
-       "$$T_{Rd,s} = \\frac{A_{sw}}{s}\\,2A_k\\,f_{ywd}\\,\\cot\\theta, \\qquad "
-       "T_{Rd,max} = 2\\,\\nu\\,\\alpha_{cw}\\,f_{cd}\\,A_k\\,t_{ef}\\,"
-       "\\sin\\theta\\cos\\theta \\quad(6.30),$$\n\n"
-       "The transverse $T_{Rd,s}$ expression follows the torsional wall shear "
-       "flow (6.27) and transverse equilibrium (6.8). "
-       "With $T_{Rd} = \\min(T_{Rd,s}, T_{Rd,max})$, the torsion also needs "
-       "longitudinal steel $\\sum A_{sl} = T_{Ed}\\,u_k\\,\\cot\\theta/(2A_k\\,"
-       "f_{yd})$ (6.28), **in addition** to the bending reinforcement on the "
-       "tension side, and the cracking torque is $T_{Rd,c} = 2A_k\\,t_{ef}\\,"
-       "f_{ctd}$ ($\\tau = f_{ctd}$), where "
-       "$f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}=0.7f_{ctm}/\\gamma_{ct}$. "
-       "The selected method supplies the editable starting value "
-       "$\\gamma_{ct}=1.50$ (EN) or 1.70 (DK/NA).")
-    md("Within the permitted method range, $T_{Rd,s}$ rises with $\\cot\\theta$ "
-       "and $T_{Rd,max}$ peaks "
-       "at 45 degrees, so $T_{Rd} = \\min$ is largest at the crossover, which "
-       "Sector auto-optimises within the $\\cot\\theta$ bounds. When shear and "
-       "torsion act together the concrete struts carry both, limited by\n\n"
-       "$$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\le 1 \\quad(6.29),$$\n\n"
-       "checked at a common strut angle (the least-conservative shared angle, "
-       "near 45 degrees, where both crushing resistances peak).")
-    call("standard", "The strut factor $\\nu$ is the code torsion effectiveness "
-         "factor: recommended $\\nu = 0.6(1 - f_{ck}/250)$ (via 6.2.2(6)), or the "
-         "DK NA:2024 pure-torsion $\\nu_t = 0.7\\,(0.7 - f_{ck}/200)$ (5.104 NA) -- "
-         "a further 0.7 on the pure-shear expression for the circulatory shear "
-         "flow. Note $\\nu_t$ has NO lower bound: the 0.45 floor of 5.103 NA "
-         "belongs to $\\nu_v$ only, so above C50 $\\nu_t$ keeps falling. Only solid and "
-         "single-cell (box) sections are idealised automatically. A re-entrant "
-         "compound outline (T, L, I or flanged) requires supported component "
-         "rectangles under **Subdivide into sub-tubes** (6.3.1(3)). Their union "
-         "must cover the concrete net area without overlap, boundary crossing "
-         "or entry into a void. Multi-cell torsion (two or more voids) requires "
-         "a separate applicable model; entering rectangles does not establish "
-         "that model in Sector. A positive "
-         "global $t_{ef}$ override is not transferred to those component tubes and "
-          "therefore blocks a subdivided calculation; 0 selects the wall-specific "
-          "automatic thickness for each sub-tube. Missing, ambiguous or conflicting "
-          "bar-to-wall evidence gives NOT ASSESSED before any resistance or "
-          "interaction is calculated. A manual override does not replace that "
-         "location evidence. If the entered $\\cot\\theta$ interval lies outside "
-         "the selected method's permitted range, the angle-dependent torsion "
-         "resistance, utilisation, longitudinal demand and dependent interaction "
-         "verdicts are NOT ASSESSED. The requested and permitted limits remain "
-         "visible for correction; $T_{Rd,c}$ may remain as angle-independent "
-         "cracking context.")
-    md("**Torsion example** (300 x 600 mm rectangle with bar centres "
-       "50 mm from every wall, C35, DK NA:2024, closed $\\phi$10 "
-       "stirrup at $s = 150$ mm): $A = 0.18$ m$^2$, $u = 1.8$ m, "
-       "$A/u = 100$ mm and $2a = 100$ mm, so $t_{ef} = 100$ mm, "
-       "$A_k = 0.1$ m$^2$, $u_k = 1.4$ m, $\\nu_t = 0.368$. At the optimum "
-       "$\\cot\\theta = 1.75$ the stirrups and struts meet at "
-       "$T_{Rd} \\approx 76.4$ kN$\\cdot$m, with "
-       "$\\gamma_{ct}=1.70$ and $T_{Rd,c} = 26.435$ kN$\\cdot$m.")
+    md('EN 1992-1-1, 6.3.1, gives two torsion conditions:\n\n- Equilibrium torsion must be resisted.\n- You can omit compatibility torsion at ULS only under the stated system and minimum-reinforcement conditions.\n\nDo the member/system checks independently of Sector. Sector calculates compatibility torsion only when a residual $T_{Ed}$ stays in the design actions.\n\nUnder 6.3.3, a warping-torsion/member assessment can be necessary for open thin-walled or warping-sensitive members. Sector gives the sectional tube result only for an applicable closed/solid member scope.')
+    md('Sector models a section under torsion as a thin-walled closed tube under 6.3.2(1). Constant shear flow around the walls resists the torque.\n\n**Effective wall thickness**\n\n$A$ is the area inside the outer perimeter, with the hollow area included. The perimeter is $u$. The effective thickness starts from $A/u$.\n\nEach wall must satisfy:\n\n$t_{ef,i}\\geq2a_i$.\n\nHere, $a_i$ is the distance from the concrete edge to the assigned longitudinal-bar center. A hollow wall supplies the upper thickness limit.\n\n**Tube centerline**\n\nThe centerline is inside the outline, at distance $t_{ef}/2$. Its enclosed area is $A_k$. Its perimeter is $u_k$.\n\n**Transverse and strut resistances**\n\nThe resistances use the strut angle $\\theta$:\n\n$$T_{Rd,s} = \\frac{A_{sw}}{s}\\,2A_k\\,f_{ywd}\\,\\cot\\theta, \\qquad T_{Rd,max} = 2\\,\\nu\\,\\alpha_{cw}\\,f_{cd}\\,A_k\\,t_{ef}\\,\\sin\\theta\\cos\\theta \\quad(6.30),$$\n\nThe $T_{Rd,s}$ expression follows the wall shear flow in Formula (6.27) and transverse equilibrium in Formula (6.8). The governing transverse resistance is:\n\n$T_{Rd}=\\min(T_{Rd,s},T_{Rd,max})$.\n\n**Longitudinal reinforcement**\n\nFormula (6.28) gives:\n\n$\\sum A_{sl}=T_{Ed}u_k\\cot\\theta/(2A_kf_{yd})$.\n\nOn the tension side, this reinforcement supplements the bending reinforcement.\n\n**Cracking torque**\n\n$T_{Rd,c}=2A_kt_{ef}f_{ctd}$.\n\nThe tensile design strength is:\n\n$f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}=0.7f_{ctm}/\\gamma_{ct}$.\n\nThe editable starting factor $\\gamma_{ct}$ is 1.50 for EN and 1.70 for DK/NA.')
+    md('For an isolated capacity calculation, $T_{Rd,s}$ increases with $\\cot\\theta$ in the permitted range. $T_{Rd,max}$ reaches its maximum at 45 degrees. Sector compares the stirrup and strut branches. It selects their crossover when applicable, the 45-degree strut peak when it governs, or a permitted bound.\n\nWhen shear and torsion act together, Sector checks the shared concrete struts:\n\n$$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\le 1 \\quad(6.29),$$\n\nFor loaded cases, Sector selects one member strut angle for all active angle-dependent checks. These checks include concrete crushing, shared stirrups and longitudinal chord demand. Sector selects the angle with the lowest governing utilization across these checks. The combined-method chapter gives this selection procedure.')
+    md('**Strut factor**\n\nThe selected method supplies the torsion effectiveness factor $\\nu$. Use $f_{ck}$ in MPa.\n\n- Recommended EN value, 6.2.2(6): $0.6(1-f_{ck}/250)$.\n- DK NA:2024, Formula (5.104 NA): $\\nu_t=0.7(0.7-f_{ck}/200)$.\n\nThe 0.45 lower bound in Formula (5.103 NA) applies to $\\nu_v$. It does not apply to $\\nu_t$.')
+    md('**Automatic tube geometry.** Sector automatically idealizes solid and single-cell sections. For a re-entrant T, L, I or flanged outline, use supported component rectangles under **Subdivide into sub-tubes** (6.3.1(3)). The rectangles must cover the net concrete area. Their interiors must not overlap, cross the section boundary or enter a void. For sections with two or more cells, use a different applicable torsion model.')
+    md('**Subdivided-section thickness.** Enter 0 mm for the global effective-thickness override. Sector then calculates the thickness for each tube wall. A positive global override prevents the subdivided calculation.')
+    md('**Reinforcement locations.** Each tube needs sufficient evidence to assign longitudinal reinforcement to its walls. Missing, ambiguous or conflicting assignments give **NOT ASSESSED** before calculation of resistance or interaction. A thickness override does not supply this location evidence.')
+    md("**Permitted strut angles.** If the entered $\\cot\\theta$ interval exceeds the selected method's permitted range, the angle-dependent checks give **NOT ASSESSED**. These checks include torsion resistance, utilization, longitudinal demand and dependent interaction. Sector shows the requested and permitted limits. The angle-independent cracking torque can stay available.")
+    md('**Torsion example**\n\n- Section: 300 x 600 mm rectangle, C35, DK NA:2024.\n- Bar centers: 50 mm from each wall.\n- Closed stirrups: $\\phi10$ at $s=150$ mm.\n\n**Section and tube geometry**\n\n- Section area: $A=0.18\\,\\mathrm{m^2}$.\n- Section perimeter: $u=1.8$ m.\n- Each thickness criterion, $A/u$ and $2a$, equals 100 mm.\n- Effective thickness: $t_{ef}=100$ mm.\n- Tube area: $A_k=0.1\\,\\mathrm{m^2}$.\n- Tube perimeter: $u_k=1.4$ m.\n- Strut factor: $\\nu_t=0.368$.\n\n**Resistance**\n\nThe stirrup and strut branches meet at:\n\n- $\\cot\\theta=1.75$.\n- $T_{Rd}\\approx76.4$ kNm.\n\nWith $\\gamma_{ct}=1.70$, the cracking torque is:\n\n$T_{Rd,c}=26.435$ kNm.')
 
     h1("Combined M-V-T interaction")
-    md("Bending, shear and torsion act together, so their checks are tied together "
-       "under one code edition (6.3.2). For both supported first-generation editions, "
-       "the concrete web "
-       "struts carry both shear and torsion, limited by\n\n"
-       "$$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\le 1 \\quad(6.29),$$\n\n"
-       "checked at a common strut angle, together with the supported closed-stirrup "
-       "and longitudinal-chord equilibrium checks. Base EN reports those physical "
-       "checks separately and does not publish an additional aggregate interaction "
-       "verdict. The DK NA:2024 selection (6.3.2(6)) adds a general rule over the "
-       "acting sectional forces,\n\n"
-       "$$\\sum (S_{Ed}/S_{Rd}) \\le 1,$$\n\n"
-       "each $S_{Rd}$ being the resistance to that force acting alone. Sector "
-       "therefore determines a separate axial resistance for the entered tension "
-       "or compression sign, a zero-axial-force plastic $M$-$M$ resistance in the "
-       "entered biaxial moment direction, and shear and torsion resistances with "
-       "the other external sectional actions set to zero. Prestress remains part "
-       "of the section state.")
-    call("standard", "DK NA 6.3.2(6): if the longitudinal reinforcement provided for "
-         "shear (beyond bending) is present, $M$ and $V$ are **not** summed at the "
-         "same time -- two independent checks are made and the governing of "
-         "$N+M+T$ and $N+V+T$ is taken. Torsion also needs its longitudinal steel "
-         "$\\sum A_{sl}$ round the perimeter and the shear its $\\Delta F_{td}$ on "
-         "the tension chord, both beyond the bending reinforcement.")
-    call("limit", "Selecting the separate $M$/$V$ route records a design assumption; "
-         "Sector does not verify the additional reinforcement area, distribution "
-         "or anchorage. A DK NA sum within the numerical limit is therefore "
-         "**CONDITIONAL**. A sum above the limit is **FAIL** even under that "
-         "favourable assumption, because the ordinary simultaneous sum cannot be "
-         "smaller. Verify the assumption separately before relying on a conditional "
-         "result.")
-    call("limit", "The combined result is an internal cross-section resistance "
-         "check. It does not replace a separate member and detailing assessment "
-         "under Annex F where that assessment applies.")
-    md("The **longitudinal tension chord** collects all three demands: the bending "
-       "tension, the shear shift $\\Delta F_{td}\\,z$ (6.18, capped per 6.2.3(7)) "
-       "and half the distributed torsion force $F_{td,T}\\,z/2$ (6.28), as "
-       "equivalent moments on the lever arm $z$, checked against the chord's "
-       "bending capacity $M_{Rd}$. Under biaxial bending that capacity is "
-       "**conditional**: $M_{Rd}$ is the point on the plastic $M$-$M$ envelope "
-       "that also carries the coexisting off-axis moment (found by solving the "
-       "neutral-axis angle whose companion moment matches it), since the pure-axis "
-       "capacity overstates what the chord can lean on while the other axis is "
-       "loaded. The torsion force is tensile round the whole tube, so it tensions "
-       "**every** chord face -- both faces of the shear axis (the compression face "
-       "carrying the torsion share without the shear shift) **and** both faces of "
-       "the **off-axis** chord (its bending tension plus the torsion share, "
-       "conditional on the shear-axis moment). All four are checked and the "
-       "governing face of each axis reported: on a section with asymmetric steel a "
-       "face the bending does not tension can still govern under the torsion share "
-       "alone. On a compound (subdivided) section the torsion steel is per "
-       "sub-tube, so the off-axis share is not evaluated there and a note says so.")
-    md("The **shared closed stirrup** carries both actions, so their transverse "
-       "demands add. When $V_{Ed} \\leq V_{Rd,c}$ the concrete alone carries the "
-       "shear (6.2.1), so the shear takes **no** stirrup and the whole stirrup "
-       "serves torsion; only when $V_{Ed} > V_{Rd,c}$ do the shear and torsion "
-       "stirrup demands add. The added stirrup demand (least at a flat strut) and "
-       "the crushing (least at 45 degrees) must both hold at **one** strut angle, so "
-       "Sector reports the check at the single angle that balances the two.")
-    call("standard", "That one angle is chosen to **minimise the governing "
-         "utilisation** across every check that depends on it: as the strut "
-         "flattens the stirrup demands ease while the crushing checks (6.9, 6.30) "
-         "and the longitudinal-chord tension grow, so the optimum tracks the load "
-         "instead of sitting at a band edge. That common angle governs the physical "
-         "shared-strut, stirrup and longitudinal-chord checks. It does **not** "
-         "condition the DK NA action-alone denominators, which are determined "
-         "separately. The user enters one admissible "
-         "$\\cot\\theta$ range for the physical member under **Links / stirrups**. "
-         "A capacity-only run with no live shear or torsion uses the resistance-"
-         "optimising angle within that same range.")
+    md('Bending, shear and torsion act together, so their checks are tied together under one code edition (6.3.2). For the two supported first-generation editions, the concrete web struts carry shear and torsion, limited by\n\n$$T_{Ed}/T_{Rd,max} + V_{Ed}/V_{Rd,max} \\le 1 \\quad(6.29),$$\n\nchecked at a common strut angle, together with the supported closed-stirrup and longitudinal-chord equilibrium checks. Base EN reports each physical check and does not publish an additional aggregate interaction verdict. The DK NA:2024 selection (6.3.2(6)) adds a general rule over the acting sectional forces,\n\n$$\\sum (S_{Ed}/S_{Rd}) \\le 1,$$\n\neach $S_{Rd}$ being the resistance to that force acting alone. Sector calculates four resistances:\n\n- Axial resistance for the entered tension or compression sign.\n- Plastic $M$-$M$ resistance at zero axial force, in the entered biaxial moment direction.\n- Shear resistance with the other external sectional actions set to zero.\n- Torsion resistance with the other external sectional actions set to zero.\n\nPrestress stays part of each section state.')
+    call("standard", 'Under DK NA 6.3.2(6), use the separate M/V route only after you independently check additional shear reinforcement beyond the bending requirement. Sector then compares $N+M+T$ and $N+V+T$ independently. The larger value controls the result.\n\nFor torsion, add longitudinal steel $\\sum A_{sl}$ around the perimeter. For shear, add reinforcement for $\\Delta F_{td}$ on the tension chord. These reinforcement quantities supplement the bending reinforcement.')
+    call("limit", 'When you select the separate $M$/$V$ route, Sector records a design assumption. Sector does not check the additional reinforcement area, distribution or anchorage. A DK NA sum no greater than the numerical limit is thus **CONDITIONAL**. A sum larger than the limit is **FAIL** even under that favorable assumption, because the ordinary simultaneous sum cannot be smaller. Make sure that the assumption is valid before you use a conditional result.')
+    call("limit", 'The combined result is an internal cross-section resistance check. It does not replace a member and detailing assessment under Annex F where that assessment applies.')
+    md('**Chord faces**\n\nSector compares each **longitudinal tension chord** demand with its bending resistance. Each force contribution becomes an equivalent moment on the lever arm $z$:\n\n- **Bending:** the applied bending demand for that chord.\n- **Shear shift:** $\\Delta F_{td}z$, from 6.18, with the cap in 6.2.3(7).\n- **Torsion:** $F_{td,T}z/2$, from 6.28.\n\nUnder biaxial bending, the available chord resistance depends on the moment about the other axis. Sector finds the neutral-axis angle that gives the same companion moment. The related point on the plastic envelope supplies $M_{Rd}$.\n\nTorsion adds tension at each chord face. Sector evaluates the two faces of each axis. The compression face of the shear axis receives the torsion share without the shear shift. Each other-axis chord includes its bending demand and torsion share. Its resistance depends on the coexisting shear-axis moment.\n\nSector reports the governing face for each axis: the face with the highest applicable utilization. With asymmetric reinforcement, torsion alone can make a face govern even when bending compresses that face. For a subdivided section, the torsion reinforcement belongs to individual tubes. Sector does not evaluate the other-axis share for that arrangement and reports this limit.')
+    md('**Shared stirrups**\n\nThe **shared closed stirrup** carries the applicable shear and torsion demands. When $|V_{Ed}|\\leq V_{Rd,c}$, concrete supplies the nominal shear resistance under 6.2.1. The full stirrup area is then available for torsion. Above that boundary, Sector adds the shear and torsion stirrup demands.\n\n**Common strut angle**\n\nThe stirrup and concrete-crushing checks must satisfy their criteria at one strut angle. Stirrup demand is smallest for a flat strut. Crushing utilization is smallest at 45 degrees. Sector reports the common angle that gives the lowest governing utilization.')
+    call("standard", 'Sector selects one angle to **minimize the governing utilization** across the dependent physical checks. When the strut becomes flatter, stirrup demand decreases. Concrete-crushing utilization and longitudinal-chord tension increase. The selected angle balances these effects in the permitted range.\n\nThis common angle governs the shared strut, stirrup and longitudinal chords. Sector calculates each DK NA denominator for its action acting alone. Enter the permitted $\\cot\\theta$ range under **Links / stirrups**. A capacity-only calculation with zero shear and torsion selects the angle that maximizes resistance in that range.')
+
+    h1("Reinforcement detailing")
+    md('Each detailing checkbox identifies the clauses used by the selected Detailing edition. Selecting an edition applies the rules in this chapter. Use the 2023 edition only where it is adopted by the project. The current 2023 option has no Danish National Annex.\n\nThe modeled-direction minimum check uses ordinary reinforcing bars only.')
+    h2("EN 1992-1-1:2005 and DK NA:2024")
+    md('Sector transfers the moments to the gross-concrete centroid and calculates the uncracked gross-concrete strain plane for the full $M_x$-$M_y$ action. Sector evaluates its tensile half-plane with:\n\n$$A_{s,min}=\\max\\!\\left(0.26\\frac{f_{ctm}}{f_{yk}},\\,0.0013\\right)b_t d, \\qquad A_{s,prov}\\ge A_{s,min}. $$\n\n$b_t$ is the exact mean width of the resultant tension half. Measure $d$ normal to its neutral line. The endpoints are the opposite extreme concrete fiber and the centroid of the tension bars. If more than one material is assigned, Sector uses the lowest $f_{yk}$. Reference: 9.2.1.1(1), Formula (9.1N).')
+    call("limit", 'The DK NA:2024 side-face reinforcement requirement for high beam webs is outside Formula (9.1N) and is not included.')
+    h2("DS/EN 1992-1-1:2023")
+    md('For bending with axial force, Sector calculates the uncracked cracking action in the applied moment direction. It checks:\n\n$$M_{R,nom}(N_{Ed})\\ge M_{cr}(N_{Ed}).$$\n\nThe nominal resistance uses the entered design concrete law. Sector limits each reinforcing bar to its characteristic $f_{yk}$.\n\n1. Calculate a closed nominal-resistance envelope at 15-degree intervals.\n2. Find the governing moment direction.\n3. Refine around that direction with target intervals of 1, 0.1 and, when required, 0.01 degrees.\n4. At each stage, calculate the governing direction again.\n5. Continue that stage until its actual adjacent interval is no larger than the target.\n\n**Utilization interval**\n\nFrom the 0.1-degree stage, calculate:\n\n$u_f\\pm\\max(2|u_f-u_c|,10^{-6})$.\n\nHere, $u_f$ is the fine result and $u_c$ is the coarse result from the last stage. Each result satisfies its target interval. The acceptance boundary is:\n\n$u=1+10^{-9}$.\n\nAccept a verdict only when successive stages agree and the full interval is on one side of the boundary. If the interval crosses the boundary after the 0.01-degree stage, report **NOT ASSESSED**. Report **NOT ASSESSED** if the governing interval cannot be refined consistently.\n\nFor pure tension, the criterion is:\n\n$$\\sum A_{s,i}f_{yk,i}\\ge A_c f_{ctm}.$$\n\nReference: 12.2(2), Formulas (12.1) and (12.2). The bending check is not applicable when the compression magnitude is $0.5A_cf_{cd}$ or more.')
+    h2("Clear spacing")
+    md('For each included pair of longitudinal elements, Sector calculates the edge-to-edge distance from the entered coordinates and circular detailing diameters and checks:\n\n$$c_{clear}\\ge\\max(\\phi_{max},\\,D_{upper}+5\\,\\text{mm},\\,20\\,\\text{mm}).$$\n\nThis is 8.2(2) for the 2005 family and 11.2(2) for 2023. The smallest margin governs. Sector reports a geometric shortfall as **Fail**. Lap length, bond, bundle equivalence and longitudinal arrangement each have their own detailing check.')
+    h2("Shear and torsion reinforcement")
+    md('For vertical shear links, Sector checks the entered legs in each active direction with:\n\n$$\\rho_w=\\frac{A_{sw}}{s\\,b_w}\\ge\\rho_{w,min},\\qquad\\rho_{w,min}=c\\frac{\\sqrt{f_{ck}}}{f_{ywk}}.$$\n\n$c=0.063$ for DS/EN 1992-1-1:2005 DK NA:2024 and $c=0.08$ for EN 1992-1-1:2005 and DS/EN 1992-1-1:2023. In the 2023 method, Sector applies the optional class-B or class-C reduction only when you select it. References: 2005 9.2.2(5), Formulae (9.4)-(9.5). 2023 12.2(4), Formula (12.4).')
+    md('Sector compares the longitudinal and transverse shear-link spacings with:\n\n$$s_l\\le0.75d,\\qquad s_t\\le\\min(0.75d,600\\,\\text{mm}).$$\n\n**Transverse distance set to zero**\n\nSector uses the gross web breadth $b_w$ as an upper bound for the transverse distance between legs:\n\n- A bound no greater than the limit gives **Pass**.\n- A bound larger than the limit gives **Not assessed** until you enter the actual maximum spacing.\n\nIf there are fewer than two effective legs, enter the distance.\n\n**Measurement direction**\n\nMeasure the distance in the section plane:\n\n- Along $y$ between $V_x$-parallel legs.\n- Along $x$ between $V_y$-parallel legs.\n\nThe longitudinal stirrup spacing has its own input. Keep the closed-stirrup height unchanged when you enter the transverse distance.')
+    md('For a closed torsion link, Sector evaluates one leg in each effective tube wall:\n\n$$\\rho_{w,T}=\\frac{A_{leg}}{s\\,t_{ef}}\\ge\\rho_{w,min}.$$\n\nThe maximum longitudinal spacing is the lesser of $u_k/8$ and the rotation-invariant minimum physical section dimension. Sector evaluates each sub-tube. Each active shear direction has its own $0.75d$ check.')
+    call("limit", 'Sector models the entered shear reinforcement as vertical stirrups. It models the entered torsion reinforcement as closed stirrups.\n\nThe resistance assumes full anchorage. Where full anchorage is unavailable, reduce $f_{ywk}$.\n\nComplete a check for each of these details:\n\n- Cover, bends and mandrel diameter.\n- Anchorage length and lap length.\n- Bundle equivalence.\n- Congestion and construction access.')
+    call("standard", 'Under DS/EN 1992-1-1:2023 8.2.1(2), minimum shear reinforcement is necessary for statically determinate linear members with $d>500$ mm. Because this condition depends on the member system, the section result flags it for project review.')
+    call("standard", 'BN1-59-5 and the Danish Road Directorate bridge basis add project- and existing-structure applicability requirements, with special treatment of inadequately anchored historic links. Record and apply owner-specific requirements in the project basis.')
 
     h1("Equilibrium check")
-    md("Every numerical solve carries a convergence flag. The plastic solve balances the "
-       "axial force **at each swept angle** to a tight residual, "
-       "$|\\sum F - N|\\le 10^{-6}\\max(1,|N|)$; an angle whose axial force cannot "
-       "be balanced -- the axial demand exceeds what the section can carry there -- "
-       "is marked not converged. Such a point is still drawn on the envelope (so an "
-       "infeasible or partial sweep is visible rather than hidden), and the "
-       "run records whether every point converged. Each Elastic state iterates the "
-       "compression zone until the transformed resultants match the applied "
-       "$(N,M_x,M_y)$. A fatigue spectrum converges only when its characteristic "
-       "and action-factored Elastic state in every bin converge; a non-converged "
-       "state cannot pass.")
+    md('Each numerical solve records its convergence state.\n\n**Plastic equilibrium**\n\nAt each plastic orientation, compression-positive internal forces must balance the tension-positive entered action:\n\n$\\sum F=-N$.\n\nThe acceptance condition is:\n\n$|\\sum F+N|\\le 10^{-6}\\max(1,|N|)$.\n\nUse forces in kN.')
+    md('If the axial target is unreachable, the point keeps a nonconverged status. The envelope displays that diagnostic point and records the convergence state of all its points. Examine the axial action, section, materials and reported residual before you interpret the boundary.')
+    md('**Elastic equilibrium**\n\nFor the elastic reference plane, tension-positive internal resultants use this target:\n\n$(N,-M_x,-M_y)$.\n\nThe resultant components are:\n\n- First: the stress integral over the section.\n- Second: the integral of stress multiplied by $y$.\n- Third: the integral of stress multiplied by $x$.\n\nSubtract the locked-prestress resultants from that target before the solve. Iteration updates the compressed region until the resultant residual meets the stated tolerance.')
+    md('Each characteristic and action-factored elastic state in each bin must converge for a valid fatigue spectrum. A nonconverged state prevents a passing fatigue result.')
 
     # =====================================================================
     # PART D - REFERENCE
@@ -2415,13 +1512,8 @@ def manual_blocks() -> list:
     part("Part D - Reference")
 
     h1("Standards")
-    md("Sector follows the Eurocode 2 family. Material, crack-width, detailing and "
-       "member-check editions are selected explicitly and recorded in the results "
-       "and report; Part C states the implemented differences.")
-    call("limit", "DS/EN 1992-1-1:2023 is available as a **published "
-         "project-adoption basis**. The engineer must document project adoption; "
-         "Sector applies no Danish National Annex to this basis. The 2023 "
-         "confinement enhancement is not included or assessed.")
+    md('Sector implements these Eurocode 2 methods. Select the material, crack-width, detailing and member-check editions explicitly. Sector records the selections in the results and report. Part C gives the implemented differences.')
+    call("limit", 'DS/EN 1992-1-1:2023 is available as a **published project-adoption basis**. The engineer must document project adoption. Sector applies this basis without a Danish National Annex. Sector calculates the concrete law without the 2023 confinement enhancement.')
     table(["Topic", "Reference"],
           [["Concrete law (first generation)",
             "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 3.1.7, "
@@ -2458,9 +1550,9 @@ def manual_blocks() -> list:
            ["Crack width (DK NA)", "DS/EN 1992-1-1 DK NA 7.3.4"],
            ["Crack width (2023)", "DS/EN 1992-1-1:2023 9.2.3"],
            ["Reinforcement fatigue (2005)", "DS/EN 1992-1-1:2005+A1:2014 6.8.2, 6.8.4 and Tables 6.3N/6.4N"],
-           ["Concrete fatigue (2005)", "DS/EN 1992-1-1:2005 6.8.7 / Formula (6.72); DS/EN 1992-2:2005/AC:2008, corrected 6.106"],
+           ["Concrete fatigue (2005)", 'DS/EN 1992-1-1:2005 6.8.7 / Formula (6.72). DS/EN 1992-2:2005/AC:2008, corrected 6.106'],
            ["Reinforcement fatigue (2023)", "DS/EN 1992-1-1:2023 Annex E.5 and Tables E.1/E.2"],
-           ["Concrete fatigue (2023)", "DS/EN 1992-1-1:2023 E.4.3 / Formula (E.2); E.5.3 / Formulae (E.7)-(E.8)"],
+           ["Concrete fatigue (2023)", 'DS/EN 1992-1-1:2023 E.4.3 / Formula (E.2). E.5.3 / Formulae (E.7)-(E.8)'],
            ["Minimum reinforcement (first generation)",
             _manual_input_source(
                 design_standards.DesignBasisKey.FIRST_GEN_BASE,
@@ -2507,45 +1599,17 @@ def manual_blocks() -> list:
                 design_standards.InputGuidanceKey.DETAILING_CLEAR_SPACING,
             )],
            ["Shear without shear reinforcement", "DS/EN 1992-1-1 6.2.2 + DK NA 6.2.2(1)"],
-           ["Shear, strain-based (2023)", "DS/EN 1992-1-1:2023 4.3.3 and Table 4.3 (NDP) ($\\gamma_V$); 8.2.2 ($\\tau_{Rd,c}$, $d_{dg}$)"],
+           ["Shear, strain-based (2023)", 'DS/EN 1992-1-1:2023 4.3.3 and Table 4.3 (NDP) ($\\gamma_V$). 8.2.2 ($\\tau_{Rd,c}$, $d_{dg}$)'],
            ["Shear with links (variable strut)", "DS/EN 1992-1-1 6.2.3 + DK NA 6.2.3(2)-(3)"],
            ["Torsion (thin-walled tube)", "DS/EN 1992-1-1 6.3 + DK NA 5.6.1(3)P / 6.3.2(6)"],
            ["Combined M-V-T (Base EN)", "EN 1992-1-1 6.3.2(2), (4) and (6.29)"],
            ["Combined M-V-T (Danish edition)", "DS/EN 1992-1-1 6.3.2 + DK NA 6.3.2(6)"]])
 
     h1("Limitations & troubleshooting")
-    md("Use this indexed chapter for explicit model boundaries and for the "
-       "symptom/cause/correction path shown by the application. A zero long-term "
-       "or short-term ordinary crack criterion is an intentional no-comparison "
-       "state; a zero enabled heightened criterion is invalid and must be "
-       "corrected.")
+    md('Use this indexed chapter for explicit model boundaries and for the symptom/cause/correction path shown by the application. A zero long-term or short-term ordinary crack criterion is an intentional no-comparison state. A zero enabled heightened criterion is invalid and must be corrected.')
     h2("Key assumptions & limitations")
-    md("- **One plane section.** Plane sections remain plane; the strain field is "
-       "linear across the section.\n"
-       "- **Perfect bond.** Reinforcement strain equals the concrete strain at the "
-       "same point (before cracking) and follows the strain plane after.\n"
-       "- **Concrete stress.** Cracked-elastic and plastic section equilibrium use compression-only concrete. "
-       "Concrete tensile strength enters the cracking threshold, crack-width rules and applicable resistance checks.\n"
-       "- **Ultimate is strain-controlled.** The section fails when the first "
-       "material reaches its strain limit (concrete crushing or steel/tendon "
-       "rupture); no material is driven past its limit.\n"
-       "- **Section calculations.** Sector includes section bending, "
-       "elastic/crack response, grouped normal-force/bending fatigue, shear, "
-       "torsion and combined M-V-T checks where the selected method is supported.\n"
-       "- **Member-level review.** Buckling, second-order response, deflection, "
-       "connections and global load paths remain member or system calculations.\n"
-       "- **Fatigue spectrum basis.** Named spectra are independent and use the "
-       "entered cycle/action assumptions. The fatigue calculation covers "
-       "normal force and bending.\n"
-       "- **Detailing scope.** The modelled-direction minimum check uses ordinary "
-       "reinforcement. DK NA high-web side-face reinforcement, anchorage, lap "
-       "length, bundle equivalence, cover and congestion remain separate reviews. "
-       "Beam torsion-link provisions apply to beam models.")
-    call("limit", "The ordinary crack-width models are one-directional: the effective "
-         "tension area and the crack spacing are defined for a single bending "
-         "direction, so the crack width is reported for the governing bar along the "
-         "combined N+Mx+My cracked-state strain gradient. No separate crack-system "
-         "interaction layer is applied.")
+    md('- **One plane section.** Plane sections stay plane. The strain field is linear across the section.\n- **Perfect bond.** Reinforcement strain equals the concrete strain at the same point (before cracking) and follows the strain plane after.\n- **Concrete stress.** Cracked-elastic and plastic section equilibrium use compression-only concrete. Concrete tensile strength enters the cracking threshold, crack-width rules and applicable resistance checks.\n- **Ultimate is strain-controlled.** The section fails when the first material reaches its strain limit (concrete crushing or steel/tendon rupture). No material is driven past its limit.\n- **Section calculations.** Sector includes section bending, elastic/crack response, grouped normal-force/bending fatigue, shear, torsion and combined M-V-T checks where the selected method is supported.\n- **Member-level review.** Buckling, second-order response, deflection, connections and global load paths stay member or system calculations.\n- **Fatigue spectrum basis.** Named spectra are independent and use the entered cycle/action assumptions. The fatigue calculation covers normal force and bending.\n- **Detailing scope.** The modeled-direction minimum check uses ordinary reinforcement. DK NA high-web side-face reinforcement, anchorage, lap length, bundle equivalence, cover and congestion each make an engineering review necessary. Beam torsion-link provisions apply to beam models.')
+    call("limit", "The ordinary crack-width models define effective tension area and crack spacing along one bending direction. Sector uses the strain gradient of the combined $N$, $M_x$ and $M_y$ cracked state. It reports the governing bar's crack width along that direction. Use a different method to assess interacting crack systems.")
     h2("Troubleshooting index")
     table(
         ["Symptom", "Likely cause", "Correction"],
@@ -2557,34 +1621,34 @@ def manual_blocks() -> list:
 
     h1("Glossary")
     table(["Symbol / term", "Meaning"],
-          [["$N$ or $P$", "Axial force; tension positive; kN"],
-           ["$M_x$, $M_y$", "Bending moments about the x and y axes; kNm"],
-           ["$\\varphi_{NA}$", "Neutral-axis sweep angle from +y; degrees"],
-           ["$s$", "Local depth projection $x\\cos\\varphi_{NA}+y\\sin\\varphi_{NA}$; larger $s$ is the compression side"],
+          [["$N$", 'Entered and reported axial force. Tension positive (kN)'],
+           ["$P$", 'Compression-positive axial target in the numerical procedures. $P=-N$ (kN)'],
+           ["$M_x$, $M_y$", 'Bending moments about the x and y axes (kNm)'],
+           ["$\\varphi_{NA}$", 'Neutral-axis sweep angle from +y (degrees)'],
+           ["$s$", 'Local depth projection $x\\cos\\varphi_{NA}+y\\sin\\varphi_{NA}$. Larger $s$ is the compression side'],
            ["$s_{na}$", "Neutral-axis depth coordinate, $s_{max}-c$"],
            ["$s_{p,j}$", "Projected depth coordinate of tendon $j$"],
-           ["$\\kappa$", "Compression-positive internal section curvature; 1/m"],
-           ["$V_{Ed}$", "Applied design shear action; kN"],
-           ["$\\Delta\\sigma_{Ed}$", "Action-factored fatigue stress range; MPa"],
-           ["$\\Delta\\sigma_{Rsk}$", "Characteristic S-N reference range; MPa"],
+           ["$\\kappa$", 'Compression-positive internal section curvature (1/m)'],
+           ["$V_{Ed}$", 'Applied design shear action (kN)'],
+           ["$\\Delta\\sigma_{Ed}$", 'Action-factored fatigue stress range (MPa)'],
+           ["$\\Delta\\sigma_{Rsk}$", 'Characteristic S-N reference range (MPa)'],
            ["$N^{*}$", "Reference cycle count at the S-N curve knee"],
            ["$k_1$, $k_2$", "S-N slopes above and below the knee"],
-           ["$D$", "Palmgren-Miner cumulative damage; limit 1.0"],
+           ["$D$", 'Palmgren-Miner cumulative damage. Limit 1.0'],
            ["$\\gamma_{Ff}$", "Partial factor on the cyclic fatigue action increment"],
-           ["$f_{cd,fat}$", "Design concrete compressive fatigue strength; MPa"],
-           ["$A_{sl}$", "Selected tension-side longitudinal reinforcement; mm2"],
-           ["$A_{s,min}$", "Required minimum reinforcement in the modelled direction; mm2"],
-           ["$b_t$", "Mean width of the bending tension zone; mm"],
-           ["$D_{upper}$", "Upper aggregate size used in the clear-spacing rule; mm"],
-           ["$A_{sw}/s$", "Shear-link area per spacing; mm2/mm"],
-           ["$F_c$", "Concrete compression resultant; kN"],
-           ["$F_{comp}$", "Total compression resultant from concrete and any "
-            "reinforcement acting in compression; kN"],
-           ["$z$, $z_x$, $z_y$", "Internal resultant lever arm and its Cartesian components; mm"],
-           ["TOTAL", "Elastic stress from long- and short-term actions; MPa"],
-           ["LONG", "Elastic stress from the long-term action alone; MPa"],
-           ["DIF", "TOTAL minus LONG; MPa"],
-           ["RST1", "Instantaneous response after neutralising long-term concrete stress; MPa"],
+           ["$f_{cd,fat}$", 'Design concrete compressive fatigue strength (MPa)'],
+           ["$A_{sl}$", 'Selected tension-side longitudinal reinforcement ($\\text{mm}^{2}$)'],
+           ["$A_{s,min}$", 'Required minimum reinforcement in the modeled direction ($\\text{mm}^{2}$)'],
+           ["$b_t$", 'Mean width of the bending tension zone (mm)'],
+           ["$D_{upper}$", 'Upper aggregate size used in the clear-spacing rule (mm)'],
+           ["$A_{sw}/s$", 'Shear-link area per spacing ($\\text{mm}^{2}$/mm)'],
+           ["$F_c$", 'Concrete compression resultant (kN)'],
+           ["$F_{comp}$", 'Total compression resultant from concrete and reinforcement in compression (kN)'],
+           ["$z$, $z_x$, $z_y$", 'Internal resultant lever arm and its Cartesian components (mm)'],
+           ["TOTAL", 'Elastic stress from long- and short-term actions (MPa)'],
+           ["LONG", 'Elastic stress from the long-term action alone (MPa)'],
+           ["DIF", 'TOTAL minus LONG (MPa)'],
+           ["RST1", 'Instantaneous response to total actions after subtraction of locked prestress and retained reinforcement resultants (MPa)'],
            ["$f_{ck}$, $f_{cd}$", "Characteristic / design concrete strength"],
            ["$f_{yk}$, $f_{yd}$", "Characteristic / design steel strength"],
            ["$\\varepsilon_{cu2}$", "Ultimate concrete compressive strain"],
@@ -2596,20 +1660,26 @@ def manual_blocks() -> list:
            ["Stage I / II", "Uncracked / fully cracked elastic state"]])
 
     from manual_walkthroughs import extend_manual
+    from manual_numerics import numerical_blocks
 
-    return extend_manual(blocks)
+    expanded = extend_manual(blocks)
+    reference = expanded.index(("part", "Part D - Reference"))
+    expanded[reference] = ("part", "Part E - Reference")
+    expanded[reference:reference] = numerical_blocks()
+    return expanded
 
 
 _PART_SUMMARIES = {
     "Part A - Get started": "Purpose, quick start, examples and common uses.",
     "Part B - Features & options": "Inputs, settings, load tables and result views.",
     "Part C - Theory & methodology": "Engineering models, equations and worked examples.",
-    "Part D - Reference": "Standards, assumptions, limitations and glossary.",
+    "Part D - Numerical procedures": "Worksheet procedures, iterations and independently reproducible examples.",
+    "Part E - Reference": "Standards, assumptions, limitations and glossary.",
 }
 
 
 def manual_parts() -> dict[str, list]:
-    """Return the manual blocks grouped into their four navigable parts."""
+    """Return the manual blocks grouped into their navigable parts."""
     parts: dict[str, list] = {}
     current = None
     for block in manual_blocks():
@@ -2639,6 +1709,7 @@ def manual_published_item_parts():
 # fractions become an inline ``a/b`` (parenthesised when compound).
 
 _LATEX_CMD = {
+    r"\lceil": "&#8968;", r"\rceil": "&#8969;",
     r"\varepsilon": "&#949;", r"\gamma": "&#947;", r"\sigma": "&#963;",
     r"\varphi": "&#966;", r"\alpha": "&#945;", r"\rho": "&#961;",
     r"\kappa": "&#954;", r"\delta": "&#948;",
@@ -2650,6 +1721,7 @@ _LATEX_CMD = {
     r"\neq": "&#8800;", r"\times": "&#215;", r"\cdot": "&#183;",
     r"\approx": "&#8776;", r"\pm": "&#177;", r"\sum": "&#8721;",
     r"\circ": "&#176;", r"\rightarrow": "&#8594;",
+    r"\int": "&#8747;",
 }
 
 _LATEX_LAYOUT_COMMANDS = (
@@ -2661,6 +1733,10 @@ _LATEX_WORD_OPERATORS = ("min", "max", "ln", "log", "sin", "cos", "tan", "cot")
 
 def _latex_to_rl(s: str) -> str:
     """Convert the LaTeX subset used in the manual to ReportLab inline markup."""
+    # Preserve authored thin/medium spacing, including number-unit separation.
+    s = s.replace(r"\,", "&nbsp;").replace(r"\;", "&nbsp;")
+    # A TeX command can be a single superscript token, e.g. 90^\circ.
+    s = re.sub(r"\^(\\[A-Za-z]+)", r"^{\1}", s)
     for c in sorted(_LATEX_LAYOUT_COMMANDS, key=len, reverse=True):
         s = s.replace(c, "")
     s = s.replace(r"\qquad", "&nbsp;&nbsp;&nbsp;").replace(r"\quad", "&nbsp;&nbsp;")
@@ -2705,7 +1781,7 @@ def _latex_to_rl(s: str) -> str:
     for k in sorted(_LATEX_CMD, key=len, reverse=True):
         s = s.replace(k, _LATEX_CMD[k])
     s = re.sub(r"_([A-Za-z0-9])", r"<sub>\1</sub>", s)
-    s = re.sub(r"\^([A-Za-z0-9])", r"<super>\1</super>", s)
+    s = re.sub(r"\^([A-Za-z0-9*])", r"<super>\1</super>", s)
     operators = "|".join(_LATEX_WORD_OPERATORS)
     # TeX inserts operator spacing automatically. Use non-breaking gaps on both
     # sides so adjacent terms remain visibly separated. Match any operator
@@ -2720,6 +1796,13 @@ def _latex_to_rl(s: str) -> str:
     )
     s = s.removeprefix("&nbsp;")
     converted = s.replace("{", "").replace("}", "").replace("\\", "")
+    # In explicit mathematics, e/E can be a variable next to coefficients.
+    # Shield that symbol from the prose scientific-number normalizer.
+    converted = re.sub(
+        r"(?<=\d)([eE])(?=[+-]?\d)",
+        lambda match: f"&#{ord(match.group(1))};",
+        converted,
+    )
     return normalize_trusted_markup(converted)
 
 
@@ -2727,6 +1810,17 @@ def _inline_md_to_rl(text: str) -> str:
     """Inline Markdown (emphasis, bold and math) -> ReportLab inline markup.
     The literal ``<``/``>``/``&`` are escaped first so the introduced tags stay
     valid, then the supported spans reintroduce real markup."""
+    from publication_notation import shield_literal_markup
+
+    code_fragments = []
+
+    def _stash_code(match):
+        token = f"\ue002{len(code_fragments)}\ue003"
+        literal = shield_literal_markup(match.group(1))
+        code_fragments.append((token, f'<font name="Courier">{literal}</font>'))
+        return token
+
+    text = re.sub(r"`([^`]+)`", _stash_code, str(text))
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     text = re.sub(
         r"\[([^\]]+)\]\(#([A-Za-z0-9_-]+)\)",
@@ -2736,7 +1830,14 @@ def _inline_md_to_rl(text: str) -> str:
     text = re.sub(r"\$([^$]+)\$", lambda m: _latex_to_rl(m.group(1)), text)
     text = re.sub(r"\*\*([^*]+)\*\*", r"<b>\1</b>", text)
     text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<i>\1</i>", text)
-    return normalize_trusted_markup(text)
+    text = normalize_trusted_markup(text)
+    # Compact rises preserve scripts within multiline body and caption leading.
+    text = text.replace("<sub>", '<sub rise="25%">').replace(
+        "<super>", '<super rise="35%">'
+    )
+    for token, fragment in code_fragments:
+        text = text.replace(token, fragment)
+    return text
 
 
 def _manual_equation_anchor(number: str) -> str:
@@ -2790,23 +1891,44 @@ def _render_md_pdf(text, flow, styles, Paragraph):
     """Render a Markdown block (paragraphs, ``- ``/``1.`` lists, standalone
     ``$$display$$`` formulas) to ReportLab flowables."""
     buf = []
+    numbered = []
+    first_flowable = len(flow)
+
+    def flush_numbered():
+        if numbered:
+            # Keep a short sequence together without nesting a layout group.
+            # This lets a preceding heading join the same keep-with-next chain.
+            for paragraph in numbered[:-1]:
+                paragraph.keepWithNext = True
+            flow.extend(numbered)
+            numbered.clear()
 
     def flush():
         if buf:
-            flow.append(Paragraph(_inline_md_to_rl(" ".join(buf).strip()),
-                                  styles["MBody"]))
+            text = " ".join(buf).strip()
+            paragraph = Paragraph(_inline_md_to_rl(text), styles["MBody"])
+            if (re.fullmatch(r"\*\*[^*]+\*\*", text)
+                    or text.startswith("**Before:**")
+                    or text.endswith(":")):
+                paragraph.keepWithNext = True
+            paragraph._manual_link_only = bool(
+                re.fullmatch(r"\[[^\]]+\]\(#[A-Za-z0-9_-]+\)", text)
+            )
+            flow.append(paragraph)
             buf.clear()
 
     for line in text.split("\n"):
         s = line.strip()
         if not s:
             flush()
+            flush_numbered()
             continue
         # A standalone display equation, tolerating trailing sentence punctuation
         # outside the closing ``$$`` so it still renders as centred math.
         m_disp = re.match(r"^\$\$(.+)\$\$([.,;:]?)$", s)
         if m_disp:
             flush()
+            flush_numbered()
             body = _latex_to_rl(m_disp.group(1).strip()) + m_disp.group(2)
             flow.append(Paragraph(body, styles["MMath"]))
             continue
@@ -2814,15 +1936,23 @@ def _render_md_pdf(text, flow, styles, Paragraph):
         mn = re.match(r"^(\d+)\.\s+(.*)", s)
         if mb:
             flush()
+            flush_numbered()
             flow.append(Paragraph("&bull;&nbsp; " + _inline_md_to_rl(mb.group(1)),
                                   styles["MBody"]))
         elif mn:
             flush()
-            flow.append(Paragraph(f"{mn.group(1)}.&nbsp; "
-                                  + _inline_md_to_rl(mn.group(2)), styles["MBody"]))
+            numbered.append(Paragraph(f"{mn.group(1)}.&nbsp; "
+                                      + _inline_md_to_rl(mn.group(2)), styles["MBody"]))
         else:
+            flush_numbered()
             buf.append(s)
     flush()
+    flush_numbered()
+    # Keep consecutive navigation links together at the end of a workflow.
+    for current, following in zip(flow[first_flowable:], flow[first_flowable + 1:]):
+        if (getattr(current, "_manual_link_only", False)
+                and getattr(following, "_manual_link_only", False)):
+            current.keepWithNext = True
 
 
 def _render_manual_equation_pdf(
@@ -2878,7 +2008,11 @@ def _render_manual_equation_pdf(
             styles["MSmall"],
         )
     )
-    flow.append(KeepTogether(metadata))
+    # A flat keep chain also includes a preceding prose heading. Nesting a
+    # KeepTogether here can strand that heading at the preceding page bottom.
+    for item in metadata[:-1]:
+        item.keepWithNext = True
+    flow.extend(metadata)
 
     data = [[Paragraph(f"<b>Symbols - Equation {contract.number}</b>", styles["MSmall"]), "", ""], [
         Paragraph("<b>Symbol</b>", styles["MSmall"]),
@@ -3030,11 +2164,11 @@ def _manual_pdf_styles(
         _add(name, **values)
 
     themed("MTitle", "title")
-    themed("MPart", "part")
-    themed("MH1", "h1")
-    themed("MH2", "h2")
-    themed("MH3", "h3")
-    themed("MBody", "body")
+    themed("MPart", "part", keepWithNext=True)
+    themed("MH1", "h1", keepWithNext=True)
+    themed("MH2", "h2", keepWithNext=True)
+    themed("MH3", "h3", keepWithNext=True)
+    themed("MBody", "body", allowWidows=0, allowOrphans=0)
     themed("MMath", "math", alignment=align_center)
     themed("MSmall", "small")
     themed("MPubRef", "publication_ref")
@@ -3232,8 +2366,8 @@ def build_manual_pdf(buffer, figures=True):
             )
         elif kind == "callout":
             _icon, ttl = _CALLOUT.get(block[1], ("", "Note"))
-            inner = Paragraph(f"<b>{ttl}:</b> " + _inline_md_to_rl(block[2]),
-                              styles["MBody"])
+            inner = []
+            _render_md_pdf(f"**{ttl}:** " + block[2], inner, styles, Paragraph)
             t = Table([[inner]], colWidths=[page_w])
             t.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor(
@@ -3312,6 +2446,17 @@ def build_manual_pdf(buffer, figures=True):
             t = report._PaginatedReportTable(
                 data,
                 colWidths=[page_w / ncol] * ncol,
+                # Both captions share one fixed height. A longer continuation
+                # label can then wrap without covering the repeated header.
+                rowHeights=[
+                    max(
+                        Paragraph(markup, styles["MPubCaption"]).wrap(
+                            page_w - 12, 10000
+                        )[1]
+                        for markup in (caption_markup, continued_caption_markup)
+                    ) + 10,
+                    *([None] * (len(data) - 1)),
+                ],
                 hAlign="LEFT",
                 repeatRows=2,
                 splitByRow=1,
@@ -3384,7 +2529,7 @@ def build_manual_pdf_bytes(figures=True):
 def _html_math_parts(expression: str) -> tuple[str, str]:
     """Return safe rendered math and its clean plain-text accessible name."""
 
-    rendered = _latex_to_rl(str(expression)).replace(
+    rendered = _latex_to_rl(html.escape(str(expression), quote=False)).replace(
         "<super>", "<sup>"
     ).replace("</super>", "</sup>")
     plain = html.unescape(re.sub(r"<[^>]+>", "", rendered)).replace("\xa0", " ")
@@ -3404,6 +2549,12 @@ def _inline_md_to_html(text: str) -> str:
     """Render the manual's bounded inline Markdown subset as safe HTML."""
 
     math_fragments = []
+    code_fragments = []
+
+    def _stash_code(match):
+        token = f"\ue002{len(code_fragments)}\ue003"
+        code_fragments.append((token, f"<code>{html.escape(match.group(1))}</code>"))
+        return token
 
     def _stash_math(match):
         index = len(math_fragments)
@@ -3411,24 +2562,19 @@ def _inline_md_to_html(text: str) -> str:
         math_fragments.append((token, _math_code_html(match.group(1))))
         return token
 
-    source = re.sub(r"\$([^$\n]+)\$", _stash_math, str(text))
+    source = re.sub(r"`([^`]+)`", _stash_code, str(text))
+    source = re.sub(r"\$([^$\n]+)\$", _stash_math, source)
     rendered = html.escape(source, quote=True)
     rendered = re.sub(
         r"\[([^\]]+)\]\(#([A-Za-z0-9_-]+)\)",
         r'<a href="#\2">\1</a>',
         rendered,
     )
-    rendered = re.sub(
-        r"`([^`]+)`",
-        r"<code>\1</code>",
-        rendered,
-    )
-
     rendered = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", rendered)
     rendered = re.sub(
         r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", rendered
     )
-    for token, fragment in math_fragments:
+    for token, fragment in math_fragments + code_fragments:
         rendered = rendered.replace(token, fragment)
     return rendered
 
@@ -3630,10 +2776,8 @@ def build_manual_html_bytes() -> bytes:
         elif kind == "callout":
             _icon, title = _CALLOUT.get(block[1], ("", "Note"))
             body.append(
-                f'<aside class="callout {html.escape(block[1])}"><strong>'
-                + html.escape(title)
-                + ":</strong> "
-                + _inline_md_to_html(block[2])
+                f'<aside class="callout {html.escape(block[1])}">'
+                + _markdown_block_html(f"**{title}:** " + block[2])
                 + "</aside>"
             )
         elif kind == "figure":
@@ -3645,11 +2789,16 @@ def build_manual_html_bytes() -> bytes:
                     "A published manual figure requires a distinct text alternative."
                 )
             caption = _inline_md_to_html(item.caption)
+            alternative_label = re.sub(
+                r"\$([^$\n]+)\$",
+                lambda match: _html_math_parts(match.group(1))[1],
+                alternative,
+            )
             body.append(
                 f'<figure id="{item.anchor}"><img class="manual-figure" '
                 f'src="{figure_data_uri(block[1])}" alt="">'
                 '<div class="figure-alternative" '
-                f'role="img" aria-label="{html.escape(alternative, quote=True)}">'
+                f'role="img" aria-label="{html.escape(alternative_label, quote=True)}">'
                 + _inline_md_to_html(alternative)
                 + "</div><figcaption><strong>"
                 + html.escape(item.label)
@@ -3713,13 +2862,16 @@ a {{ color:#0d4f8b; text-decoration-thickness:.1em; }}
 .skip-link:focus {{ transform:translateY(0); }}
 .document-control,.source,figcaption {{ color:var(--muted); }}
 nav {{ border:1px solid var(--rule); background:var(--surface); padding:1rem 1.25rem; }}
-nav ol {{ padding-left:1.5rem; }} .toc-level-1 {{ margin-left:1rem; }} .toc-level-2 {{ margin-left:2rem; }}
+nav ol {{ list-style:none; padding-left:0; }}
+.toc-level-0 {{ font-weight:bold; margin-top:.8rem; }}
+.toc-level-1 {{ margin-left:1rem; }} .toc-level-2 {{ margin-left:2rem; }}
 table {{ width:100%; border-collapse:collapse; margin:.5rem 0 1.25rem; }}
 th,td {{ border:1px solid #b5bdc6; padding:.45rem; text-align:left; vertical-align:top; }}
 th {{ background:var(--surface); }} .table-scroll {{ overflow-x:auto; }}
 .callout,.equation,figure {{ border:1px solid var(--rule); padding:1rem; margin:1rem 0; break-inside:avoid; }}
 .display-math,.equation-text {{ overflow-wrap:anywhere; padding:.5rem; background:#f7f8fa; }}
-.math,code {{ font-family:"Courier New", monospace; }}
+.math {{ font-family:"Cambria Math","STIX Two Math","Times New Roman",serif; font-size:1.08em; }}
+code {{ font-family:"Courier New", monospace; }}
 .manual-figure {{ width:100%; height:auto; display:block; }}
 .figure-alternative {{ padding:.4rem 0; color:var(--muted); font-size:.9rem; }}
 @media print {{ body {{ max-width:none; padding:1cm; }} a {{ color:inherit; }} }}
@@ -3841,7 +2993,7 @@ def render_manual_streamlit():
         elif kind == "callout":
             icon, title = _CALLOUT.get(block[1], (":information_source:", "Note"))
             with st.container(border=True):
-                st.markdown(f"{icon} **{title}** -- {block[2]}")
+                st.markdown(f"{icon} **{title}**\n\n{block[2]}")
         elif kind == "figure":
             if item is None:
                 raise ValueError("A published manual figure has no identity.")

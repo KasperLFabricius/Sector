@@ -69,6 +69,23 @@ def test_end_user_scope_allows_current_operation_and_product_version():
     )
 
 
+@pytest.mark.parametrize("instruction", (
+    "Keep the `_internal` folder beside `Sector.exe`.",
+    "Open `Sector.exe`.",
+    "Sector.exe stops before the browser opens.",
+    "Keep _internal beside Sector.exe.",
+))
+def test_end_user_scope_allows_reviewed_executable_operating_instructions(instruction):
+    validate_end_user_manual_scope(instruction)
+
+
+def test_operating_instruction_does_not_allow_executable_build_administration():
+    with pytest.raises(AssertionError, match="end-user-scope excluded text"):
+        validate_end_user_manual_scope(
+            "Open Sector.exe. Build Sector.exe from the developer checkout."
+        )
+
+
 @pytest.mark.parametrize("invalid", (None, 95, b"manual", [], {}))
 def test_end_user_scope_rejects_nontext_content(invalid):
     with pytest.raises(AssertionError, match="must be text"):
@@ -107,11 +124,14 @@ def test_compact_workflow_index_links_to_complete_native_markup_guidance():
         assert workflow.label in visible
         guidance = next(block[1] for block in blocks
                         if block[0] == "md"
-                        and block[1].startswith(f"**{workflow.label}. Before:**"))
+                        and block[1].startswith(f"**{workflow.label}**\n\n**Before:**"))
         assert workflow.prerequisite in guidance
-        assert workflow.action in guidance
+        # Procedures now separate the route into numbered steps for readability.
+        assert "1. " in guidance
+        for action in workflow.action.split(". "):
+            assert action.rstrip(".") in guidance
         assert workflow.expected_state in guidance
-        assert "**Route:**" in guidance and "**Expected:**" in guidance
+        assert "**Expected:**" in guidance
         assert "<b>" not in guidance
     assert "<b>" not in visible
 

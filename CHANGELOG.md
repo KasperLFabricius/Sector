@@ -4,12 +4,16 @@
 
 ## 0.96.5 - 2026-10-10
 
-The manual explains elastic and plastic section equilibrium through worked
-calculations, force contribution tables and numerical resolution examples.
-New figures connect section geometry, strain and stress, creep combinations,
-crack geometry, shear, torsion and combined force paths. The accessible HTML
-includes checked offline images. Manual body text and paragraph spacing are
-larger. Production solvers and project schema 27 retain their behavior.
+The revised manual covers first use, application features, engineering methods,
+numerical procedures and reference information. A full tutorial gives the inputs
+and expected results. The introduction identifies all selectable design bases.
+
+Worked calculations explain polygon clipping, elastic equilibrium iterations,
+plastic depth search, concrete stress bands, reinforcement forces, creep and
+prestress. Figures show the calculation steps, section geometry and force paths.
+The PDF uses larger text, shorter paragraphs and mathematical notation. The HTML
+includes offline images, accessible descriptions and linked reading paths.
+Production solvers and project schema 27 retain their behavior.
 
 ## 0.96.4 - 2026-09-14
 

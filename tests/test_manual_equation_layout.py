@@ -146,24 +146,24 @@ def test_manual_structural_fraction_radical_and_script_geometry_is_measured() ->
         published,
         FRAME_WIDTH,
     )
-    geometry_by_number = {}
+    geometry_by_key = {}
     for item, flowable in compiled.values():
         width, height = flowable.wrap(FRAME_WIDTH, 700.0)
         assert width == pytest.approx(FRAME_WIDTH)
         assert 0.0 < height <= 700.0
-        geometry_by_number[item.contract.number] = flowable.geometry
+        geometry_by_key[item.contract.key] = flowable.geometry
 
     curvature_kinds = {
-        node.kind for node in geometry_by_number["C4-1"].nodes
+        node.kind for node in geometry_by_key["manual.plastic.governing-curvature"].nodes
     }
     heightened_kinds = {
-        node.kind for node in geometry_by_number["C7-5"].nodes
+        node.kind for node in geometry_by_key["manual.crack.dk-na-heightened"].nodes
     }
     assert {"fraction", "script", "delimited"} <= curvature_kinds
     assert {"fraction", "script", "radical", "radical-sign"} <= heightened_kinds
-    assert geometry_by_number["C4-1"].rules
-    assert geometry_by_number["C7-5"].rules
-    curvature_rows = geometry_by_number["C4-1"].rows
+    assert geometry_by_key["manual.plastic.governing-curvature"].rules
+    assert geometry_by_key["manual.crack.dk-na-heightened"].rules
+    curvature_rows = geometry_by_key["manual.plastic.governing-curvature"].rows
     assert len(curvature_rows) == 4
     assert tuple(row.continuation for row in curvature_rows) == (
         False,
@@ -172,7 +172,7 @@ def test_manual_structural_fraction_radical_and_script_geometry_is_measured() ->
         True,
     )
     assert not {
-        node.kind for node in geometry_by_number["C4-1"].nodes
+        node.kind for node in geometry_by_key["manual.plastic.governing-curvature"].nodes
     } & {"literal"}
 
 
@@ -268,13 +268,16 @@ def test_complex_manual_pages_are_visible_and_unclipped_in_both_rasters(
     manual_pdf: bytes,
     page_texts: tuple[str, ...],
 ) -> None:
+    contracts = {item.contract.key: item.contract.number
+                 for item in _governed(_published_blocks())}
     selected = [
         next(
             index
             for index, text in enumerate(page_texts)
-            if f"Equation {number} |" in text and SEMANTIC_MARKER in text
+            if f"Equation {contracts[key]} |" in text and SEMANTIC_MARKER in text
         )
-        for number in ("C4-1", "C7-5")
+        for key in ("manual.plastic.governing-curvature",
+                    "manual.crack.dk-na-heightened")
     ]
     document = pypdfium2.PdfDocument(manual_pdf)
     try:

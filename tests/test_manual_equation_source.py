@@ -20,186 +20,42 @@ import manual_equation_source as source  # noqa: E402
 
 
 EXPECTED_ROWS = (
-    (
-        "C3-1", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 3.1.7, Formula (3.17), "
-        "and Table 3.1; DS/EN 1992-1-1:2023 8.1.2(1), Formula (8.4).",
-    ),
-    (
-        "C3-2", "project",
-        "Project-defined / uncited general Curve 3 mild-steel law; "
-        "edition-named presets show their material references separately.",
-    ),
-    (
-        "C3-3", "mixed",
-        "Project-defined / uncited plane-section total-strain composition with "
-        "the selected prestressing-law reference from DS/EN 1992-1-1:2004 + "
-        "A1:2014 + AC:2010 3.3.6 or DS/EN 1992-1-1:2023 5.3.3 when the "
-        "corresponding edition preset is selected.",
-    ),
-    (
-        "C4-1", "project",
-        "Project-defined / uncited first-material-limit capacity search; selected "
-        "material limits keep their stated references.",
-    ),
-    (
-        "C5-1", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 9.2.1.1(1), Formula "
-        "(9.1N), with DS/EN 1992-1-1 DK NA:2024 where selected.",
-    ),
-    (
-        "C5-2", "standard",
-        "DS/EN 1992-1-1:2023 12.2(2)(a), Formula (12.1).",
-    ),
-    (
-        "C5-3", "standard",
-        "DS/EN 1992-1-1:2023 12.2(2)(b), Formula (12.2).",
-    ),
-    (
-        "C5-4", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 8.2(2); "
-        "DS/EN 1992-1-1:2023 11.2(2).",
-    ),
-    (
-        "C5-5", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 9.2.2(5), Formulas "
-        "(9.4) and (9.5N); DS/EN 1992-1-1 DK NA:2024 9.2.2(5), Formula "
-        "(9.5N NA), where selected; DS/EN 1992-1-1:2023 12.2(4), Formula "
-        "(12.4).",
-    ),
-    (
-        "C5-6", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 9.2.2(6),(8), Formulas "
-        "(9.6N) and (9.8N), plus 9.3.2(2),(4)-(5) for the slab provisions; "
-        "DS/EN 1992-1-1:2023 Table 12.1 items 5 and 7, plus Table 12.2 items "
-        "8 and 10 and 12.4.2 for the slab provisions.",
-    ),
-    (
-        "C5-7", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 9.2.3(2), referring to "
-        "9.2.2(5), Formulas (9.4) and (9.5N); DS/EN 1992-1-1 DK NA:2024 "
-        "9.2.2(5), Formula (9.5N NA), where selected; DS/EN 1992-1-1:2023 "
-        "12.2(4), Formula (12.4), and Table 12.1 item 2.",
-    ),
-    (
-        "C7-1", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 7.3.4, Formulas (7.8) "
-        "and (7.9).",
-    ),
-    (
-        "C7-2", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 7.3.4, Formulas "
-        "(7.11) and (7.14).",
-    ),
-    (
-        "C7-5", "standard",
-        "DS/EN 1992-1-1 DK NA:2024 7.3.2(1)P, Formula (7.100 NA).",
-    ),
-    (
-        "C7-3", "standard",
-        "DS/EN 1992-1-1:2023 9.2.3, Formulas (9.8) and (9.9).",
-    ),
-    (
-        "C7-4", "standard",
-        "DS/EN 1992-1-1:2023 9.2.3, Formulas (9.15)-(9.18).",
-    ),
-    (
-        "C8-1", "mixed",
-        "Project-defined / uncited Elastic stress calculation with "
-        "a selected fatigue action factor; DS/EN 1992-1-1:2004 + A1:2014 + "
-        "AC:2010 2.4.2.3 and 6.8.4(1), or DS/EN 1992-1-1:2023 10.2 and "
-        "Annex E, defines how that factor applies for the selected edition.",
-    ),
-    (
-        "C8-2", "mixed",
-        "Project-defined / uncited characteristic range for Custom / imported "
-        "fatigue details; DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.8.4 "
-        "and Tables 6.3N-6.4N, or DS/EN 1992-1-1:2023 Annex E.5 and Tables "
-        "E.1-E.2, for the corresponding edition preset.",
-    ),
-    (
-        "C8-3", "mixed",
-        "Project-defined / uncited S-N relationship for Custom / imported "
-        "fatigue details; DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.8.4 "
-        "and Tables 6.3N-6.4N, or DS/EN 1992-1-1:2023 Annex E.5 and Tables "
-        "E.1-E.2, for the corresponding edition preset.",
-    ),
-    (
-        "C8-4", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.8.4, Palmgren-Miner "
-        "summation; DS/EN 1992-1-1:2023 Annex E.5, Palmgren-Miner summation.",
-    ),
-    (
-        "C8-5", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 3.1.6 and 6.8.7, "
-        "Formula (6.76).",
-    ),
-    (
-        "C8-6", "standard",
-        "DS/EN 1992-1-1:2023 5.1.6(1), Formula (5.3), and 10.5, "
-        "Formula (10.5).",
-    ),
-    (
-        "C8-7", "mixed",
-        "Project-defined / uncited concrete Miner S-N relation when the "
-        "user-defined method is selected; DS/EN 1992-2:2005 + AC:2008 "
-        "corrected 6.106, or DS/EN 1992-1-1:2023 E.5.3, Formulas "
-        "(E.7)-(E.8), for the corresponding standard Miner method.",
-    ),
-    (
-        "C8-8", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.8.7, Formula "
-        "(6.72); DS/EN 1992-1-1:2023 E.4.3, Formula (E.2).",
-    ),
-    (
-        "C9-1", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.2.2(1), Formula "
-        "(6.2a), with DS/EN 1992-1-1 DK NA:2024 where selected.",
-    ),
-    (
-        "C9-2", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.2.2(1), Formula "
-        "(6.2b), with DS/EN 1992-1-1 DK NA:2024 where selected.",
-    ),
-    (
-        "C9-3", "standard",
-        "DS/EN 1992-1-1:2023 8.2.2(3)-(4), Formulas (8.30) and (8.31).",
-    ),
-    (
-        "C9-4", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.2.3(3), Formulas "
-        "(6.8) and (6.9), with DS/EN 1992-1-1 DK NA:2024 6.2.3(2)-(3) "
-        "where selected.",
-    ),
-    (
-        "C9-5", "standard",
-        "DS/EN 1992-1-1:2023 8.2.3(5), Formulas (8.42) and (8.44).",
-    ),
-    (
-        "C10-1", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.3.2(1), Formula "
-        "(6.27), 6.2.3(3), Formula (6.8), and 6.3.2(4), Formula (6.30), "
-        "with DS/EN 1992-1-1 DK NA:2024 where selected.",
-    ),
-    (
-        "C10-2", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.3.2(4), Formula "
-        "(6.29).",
-    ),
-    (
-        "C11-1", "standard",
-        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.3.2(4), Formula "
-        "(6.29).",
-    ),
-    (
-        "C11-2", "standard",
-        "DS/EN 1992-1-1 DK NA:2024 6.3.2(6).",
-    ),
+    ('C3-1', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 3.1.7, Formula (3.17), and Table 3.1; DS/EN 1992-1-1:2023 8.1.2(1), Formula (8.4).'),
+    ('C3-2', 'project', 'Project-defined / uncited general Curve 3 mild-steel law; edition-named presets show their material references separately.'),
+    ('C3-3', 'mixed', 'Project-defined / uncited plane-section total-strain composition with the selected prestressing-law reference from DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 3.3.6 or DS/EN 1992-1-1:2023 5.3.3 when the corresponding edition preset is selected.'),
+    ('C5-1', 'project', 'Project-defined / uncited first-material-limit capacity search; selected material limits keep their stated references.'),
+    ('C6-1', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 7.3.4, Formulas (7.8) and (7.9).'),
+    ('C6-2', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 7.3.4, Formulas (7.11) and (7.14).'),
+    ('C6-3', 'standard', 'DS/EN 1992-1-1 DK NA:2024 7.3.2(1)P, Formula (7.100 NA).'),
+    ('C6-4', 'standard', 'DS/EN 1992-1-1:2023 9.2.3, Formulas (9.8) and (9.9).'),
+    ('C6-5', 'standard', 'DS/EN 1992-1-1:2023 9.2.3, Formulas (9.15)-(9.18).'),
+    ('C7-1', 'mixed', 'Project-defined / uncited Elastic stress calculation with a selected fatigue action factor; DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 2.4.2.3 and 6.8.4(1), or DS/EN 1992-1-1:2023 10.2 and Annex E, defines how that factor applies for the selected edition.'),
+    ('C7-2', 'mixed', 'Project-defined / uncited characteristic range for Custom / imported fatigue details; DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.8.4 and Tables 6.3N-6.4N, or DS/EN 1992-1-1:2023 Annex E.5 and Tables E.1-E.2, for the corresponding edition preset.'),
+    ('C7-3', 'mixed', 'Project-defined / uncited S-N relationship for Custom / imported fatigue details; DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.8.4 and Tables 6.3N-6.4N, or DS/EN 1992-1-1:2023 Annex E.5 and Tables E.1-E.2, for the corresponding edition preset.'),
+    ('C7-4', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.8.4, Palmgren-Miner summation; DS/EN 1992-1-1:2023 Annex E.5, Palmgren-Miner summation.'),
+    ('C7-5', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 3.1.6 and 6.8.7, Formula (6.76).'),
+    ('C7-6', 'standard', 'DS/EN 1992-1-1:2023 5.1.6(1), Formula (5.3), and 10.5, Formula (10.5).'),
+    ('C7-7', 'mixed', 'Project-defined / uncited concrete Miner S-N relation when the user-defined method is selected; DS/EN 1992-2:2005 + AC:2008 corrected 6.106, or DS/EN 1992-1-1:2023 E.5.3, Formulas (E.7)-(E.8), for the corresponding standard Miner method.'),
+    ('C7-8', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.8.7, Formula (6.72); DS/EN 1992-1-1:2023 E.4.3, Formula (E.2).'),
+    ('C8-1', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.2.2(1), Formula (6.2a), with DS/EN 1992-1-1 DK NA:2024 where selected.'),
+    ('C8-2', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.2.2(1), Formula (6.2b), with DS/EN 1992-1-1 DK NA:2024 where selected.'),
+    ('C8-3', 'standard', 'DS/EN 1992-1-1:2023 8.2.2(3)-(4), Formulas (8.30) and (8.31).'),
+    ('C8-4', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.2.3(3), Formulas (6.8) and (6.9), with DS/EN 1992-1-1 DK NA:2024 6.2.3(2)-(3) where selected.'),
+    ('C8-5', 'standard', 'DS/EN 1992-1-1:2023 8.2.3(5), Formulas (8.42) and (8.44).'),
+    ('C9-1', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.3.2(1), Formula (6.27), 6.2.3(3), Formula (6.8), and 6.3.2(4), Formula (6.30), with DS/EN 1992-1-1 DK NA:2024 where selected.'),
+    ('C9-2', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.3.2(4), Formula (6.29).'),
+    ('C10-1', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 6.3.2(4), Formula (6.29).'),
+    ('C10-2', 'standard', 'DS/EN 1992-1-1 DK NA:2024 6.3.2(6).'),
+    ('C11-1', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 9.2.1.1(1), Formula (9.1N), with DS/EN 1992-1-1 DK NA:2024 where selected.'),
+    ('C11-2', 'standard', 'DS/EN 1992-1-1:2023 12.2(2)(a), Formula (12.1).'),
+    ('C11-3', 'standard', 'DS/EN 1992-1-1:2023 12.2(2)(b), Formula (12.2).'),
+    ('C11-4', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 8.2(2); DS/EN 1992-1-1:2023 11.2(2).'),
+    ('C11-5', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 9.2.2(5), Formulas (9.4) and (9.5N); DS/EN 1992-1-1 DK NA:2024 9.2.2(5), Formula (9.5N NA), where selected; DS/EN 1992-1-1:2023 12.2(4), Formula (12.4).'),
+    ('C11-6', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 9.2.2(6),(8), Formulas (9.6N) and (9.8N), plus 9.3.2(2),(4)-(5) for the slab provisions; DS/EN 1992-1-1:2023 Table 12.1 items 5 and 7, plus Table 12.2 items 8 and 10 and 12.4.2 for the slab provisions.'),
+    ('C11-7', 'standard', 'DS/EN 1992-1-1:2004 + A1:2014 + AC:2010 9.2.3(2), referring to 9.2.2(5), Formulas (9.4) and (9.5N); DS/EN 1992-1-1 DK NA:2024 9.2.2(5), Formula (9.5N NA), where selected; DS/EN 1992-1-1:2023 12.2(4), Formula (12.4), and Table 12.1 item 2.'),
 )
 
-EXPECTED_SOURCE_SEAL = (
-    "aeab11addf8fc0d983b5275b5fba943f5963805c58ade050cde5bd0586ceca1d"
-)
+EXPECTED_SOURCE_SEAL = '59fd1f68b63935fb4acf8484e8ed01d3dffaa708b970bda34a1c54969ad9f9f9'
 
 
 def _located():
@@ -243,9 +99,9 @@ def test_source_classification_is_exact_and_project_sources_are_uncited():
     }
     project = tuple(item for item in records if item.source_kind == "project")
     mixed = tuple(item for item in records if item.source_kind == "mixed")
-    assert tuple(item.number for item in project) == ("C3-2", "C4-1")
+    assert tuple(item.number for item in project) == ("C3-2", "C5-1")
     assert tuple(item.number for item in mixed) == (
-        "C3-3", "C8-1", "C8-2", "C8-3", "C8-7",
+        "C3-3", "C7-1", "C7-2", "C7-3", "C7-7",
     )
     for item in project:
         assert item.source_text.startswith("Project-defined / uncited")
@@ -262,9 +118,9 @@ def test_source_classification_is_exact_and_project_sources_are_uncited():
 def test_selectable_custom_fatigue_laws_retain_project_provenance():
     records = {item.number: item for item in source.MANUAL_EQUATION_SOURCES}
     expected = {
-        "C8-2": "Custom / imported",
-        "C8-3": "Custom / imported",
-        "C8-7": "user-defined method",
+        "C7-2": "Custom / imported",
+        "C7-3": "Custom / imported",
+        "C7-7": "user-defined method",
     }
     for number, branch_label in expected.items():
         record = records[number]

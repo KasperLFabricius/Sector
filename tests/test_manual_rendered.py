@@ -21,6 +21,7 @@ from tools.manual_render_fixture import (
     validate_visible_contents_destinations,
 )
 from tools.publication_preflight import preflight_pdf
+from tools.manual_generated_html import manual_generated_html_text
 from tools.report_render_fixture import validate_outline_destinations
 
 
@@ -66,7 +67,8 @@ def test_manual_part_running_headers_change_only_on_part_opening_pages():
         "Part A - Get started",
         "Part B - Features & options",
         "Part C - Theory & methodology",
-        "Part D - Reference",
+        "Part D - Numerical procedures",
+        "Part E - Reference",
     )
     body_pages = {}
     running_headers = []
@@ -98,12 +100,16 @@ def test_manual_part_running_headers_change_only_on_part_opening_pages():
 
 def test_accessible_html_fixture_is_self_contained_and_semantic():
     text = validate_html_content(build_fixture_html())
-    assert "Standard is the default" in text
+    # Evaluate the visible words across semantic emphasis tags.
+    visible = " ".join(manual_generated_html_text(text).split())
+    assert "Standard is the default" in visible
     assert (
-        "Standard includes used inputs, complete results, criteria, statuses and "
-        "concise methods, references and limitations"
-    ) in text
-    assert "Values and statuses match the other report profiles" in text
+        "Standard includes the used inputs, full results, criteria, statuses and "
+        "concise methods. It also includes references and limitations."
+    ) in visible
+    assert (
+        "Calculation values, rounding, statuses and warnings are the same in all three profiles"
+    ) in visible
 
 
 @pytest.mark.real_image_export

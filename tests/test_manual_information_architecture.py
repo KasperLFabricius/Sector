@@ -79,6 +79,9 @@ def test_required_workflow_and_troubleshooting_inventories_are_complete():
         "plastic-capacity",
         "fatigue",
         "detailing",
+        "shear-check",
+        "torsion-check",
+        "combined-check",
         "review-results",
         "save-load",
         "report-profile",
@@ -99,7 +102,7 @@ def test_crack_comparison_guidance_uses_independent_zero_value_contract():
     for token in (
         "long-term or short-term permitted width",
         "0 mm",
-        "positive value for that duration",
+        "positive permitted width for the required duration",
         "without comparison",
     ):
         assert token in guidance
@@ -164,32 +167,44 @@ def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
         "materials-reinforcement": (
             "Inputs > Material parameters",
             "Inputs > Section",
-            "every used ID resolves",
+            "each assigned ID identifies a defined material",
         ),
         "action-tables": ("Inputs > Loads", "row error"),
         "elastic-crack": (
             "Inputs > Analysis settings",
             "Inputs > Loads",
-            "Analysis > Elastic Results",
+            "Open Analysis. Select Calculate. Open Elastic Results.",
         ),
         "plastic-capacity": (
             "Inputs > Analysis settings",
             "Inputs > Loads",
-            "Analysis > Plastic Results",
-            "Analysis > N-M Interaction",
+            "Open Analysis. Select Calculate. Open Plastic Results.",
+            "N-M interaction diagrams",
         ),
         "fatigue": (
             "Inputs > Analysis settings",
             "Inputs > Material parameters",
             "Inputs > Section",
             "Inputs > Loads",
-            "Analysis > Fatigue Results",
+            "Open Analysis. Select Calculate. Open Fatigue Results.",
         ),
         "detailing": (
             "Inputs > Analysis settings",
             "Inputs > Loads",
             "Check minimum reinforcement",
-            "Analysis > Detailing",
+            "Open Analysis. Select Calculate. Open Detailing.",
+        ),
+        "shear-check": (
+            "Inputs > Analysis settings", "Check shear capacity",
+            "Inputs > Loads", "Open Analysis. Select Calculate. Open Shear.",
+        ),
+        "torsion-check": (
+            "Inputs > Analysis settings", "Check torsion capacity",
+            "Inputs > Loads", "Open Analysis. Select Calculate. Open Torsion.",
+        ),
+        "combined-check": (
+            "Inputs > Analysis settings", "Check combined M-V-T",
+            "Inputs > Loads", "Open Analysis. Select Calculate. Open M-V-T Combined.",
         ),
         "review-results": (
             "Analysis > Results Overview",
@@ -197,9 +212,10 @@ def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
         ),
         "save-load": (
             "Inputs > Project",
-            "Analysis > Results Overview",
+            "Open Analysis. Select Calculate.",
+            "Results Overview",
         ),
-        "report-profile": ("Report", "generate", "download"),
+        "report-profile": ("Report", "Generate report", "Download"),
     }
     assert set(required_routes) == {item.key for item in ia.WORKFLOWS}
     for workflow in ia.WORKFLOWS:
@@ -214,19 +230,19 @@ def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
     assert "figure option" not in report_action.lower()
 
     for workflow in ia.WORKFLOWS:
-        if "press Calculate" not in workflow.action:
+        if "Select Calculate." not in workflow.action:
             continue
-        assert "Analysis >" in workflow.action
-        assert workflow.action.index("Analysis >") < workflow.action.index(
-            "press Calculate"
+        assert "Open Analysis" in workflow.action
+        assert workflow.action.index("Open Analysis") < workflow.action.index(
+            "Select Calculate."
         )
 
     for warning in ia.WARNINGS:
-        if "press Calculate" not in warning.correction:
+        if "Select Calculate." not in warning.correction:
             continue
-        assert "Analysis >" in warning.correction
-        assert warning.correction.index("Analysis >") < warning.correction.index(
-            "press Calculate"
+        assert "open Analysis" in warning.correction or "Open Analysis" in warning.correction
+        assert warning.correction.lower().index("open analysis") < warning.correction.index(
+            "Select Calculate."
         )
 
     manual_text = "\n".join(str(block) for block in manual.manual_blocks())
@@ -241,7 +257,7 @@ def test_results_overview_warning_routes_to_the_shared_review_entry():
     assert workflow.warning_key == "results-review"
     warning = ia.warning_reference("results-review")
     assert "Analysis > Results Overview" in warning.correction
-    assert "global compliance verdict" in warning.correction
+    assert "complete requested-check register" in warning.correction
 
     source = (ROOT / "app" / "sector_app.py").read_text("utf-8")
     assert '"results-review"' in source
@@ -349,7 +365,7 @@ def test_manual_reinforcement_ids_are_generated_read_only_text(table_key, label,
 def test_manual_numeric_field_retains_decimal_validation():
     definition = fields.field_definition("bars_base", "x (mm)")
     assert fields.validation_rule(definition) == (
-        "Finite unambiguous decimal; the field-specific sign rule applies."
+        "Enter a finite decimal value. Use the sign convention in this table."
     )
     row = next(row for row in manual.editable_field_reference_rows()
                if row[0] == fields.TABLE_TITLES["bars_base"] and "x coordinate" in row[1])
@@ -359,14 +375,17 @@ def test_manual_numeric_field_retains_decimal_validation():
 def test_task_index_is_compact_with_guidance_at_each_destination():
     blocks = manual.manual_blocks()
     index = next(block for block in blocks if block[0] == "table" and block[1] == ["Task", "Outcome"])
-    assert len(index[2]) == 10
+    assert len(index[2]) == 13
     for workflow in ia.WORKFLOWS:
         destination = ia.destination(workflow.destination_key)
         heading = next(i for i, block in enumerate(blocks) if block[0] in {"h1", "h2"} and block[1] == destination.heading)
         guidance = blocks[heading + 1]
         assert guidance[0] == "md"
         assert workflow.prerequisite in guidance[1]
-        assert workflow.action in guidance[1]
+        # Procedures publish one numbered operation per step.
+        steps = [step.strip() for step in workflow.action.split(". ") if step.strip()]
+        for number, step in enumerate(steps, 1):
+            assert f"{number}. {step}" in guidance[1]
     assert ia.destination("status-reference") not in ia.RESULT_VIEWS
     table = next(block for block in blocks if block[0] == "table" and block[1] == ["Status", "Meaning", "Next action"])
     labels = [row[0] for row in table[2]]

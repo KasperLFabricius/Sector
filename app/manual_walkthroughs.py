@@ -293,6 +293,8 @@ def fig_plastic_bands():
         x=0,
         y=(peak_depth + depth) / 2,
         text="Rising region<br>8 groups of 10 bands",
+        bgcolor="white",
+        borderpad=4,
         showarrow=False,
         row=1,
         col=1,
@@ -353,7 +355,7 @@ def fig_capacity_limits():
             col=col,
         )
     fig.update_yaxes(
-        range=[635, -35], title_text="Illustrative depth (mm)", row=1, col=1
+        range=[635, -35], title_text="Example depth (mm)", row=1, col=1
     )
     return _finish(fig, 460)
 
@@ -370,8 +372,8 @@ def fig_envelope_ray():
     util, _ = radial_util(mx, my, *applied)
     fig = go.Figure(
         go.Scatter(
-            x=mx,
-            y=my,
+            x=my,
+            y=mx,
             mode="lines+markers",
             line_color=BLUE,
             marker={"size": 5, "color": BLUE},
@@ -380,8 +382,8 @@ def fig_envelope_ray():
     )
     fig.add_trace(
         go.Scatter(
-            x=[0, applied[0] / util],
-            y=[0, applied[1] / util],
+            x=[0, applied[1] / util],
+            y=[0, applied[0] / util],
             mode="lines",
             line={"color": RED, "width": 2},
             name="Demand ray",
@@ -389,23 +391,49 @@ def fig_envelope_ray():
     )
     fig.add_trace(
         go.Scatter(
-            x=[applied[0]],
-            y=[applied[1]],
+            x=[applied[1]],
+            y=[applied[0]],
             mode="markers",
             marker={"size": 11, "color": RED},
             name="Applied moment",
         )
     )
     fig.add_annotation(
-        x=applied[0],
-        y=applied[1],
-        text=f"Applied: (180, 30)<br>Utilization {util:.3f}",
+        x=applied[1],
+        y=applied[0],
+        text=f"M<sub>x</sub> = 180 kNm<br>M<sub>y</sub> = 30 kNm<br>Utilization {util:.3f}",
         ax=-65,
         ay=-55,
     )
-    fig.update_xaxes(title_text="Mx (kNm)", zeroline=True, zerolinecolor=GREY)
-    fig.update_yaxes(title_text="My (kNm)", zeroline=True, zerolinecolor=GREY)
+    fig.update_xaxes(title_text="M<sub>y</sub> (kNm)", zeroline=True, zerolinecolor=GREY)
+    fig.update_yaxes(title_text="M<sub>x</sub> (kNm)", zeroline=True, zerolinecolor=GREY,
+                     scaleanchor="x", scaleratio=1)
     return _finish(fig, 450)
+
+
+def fig_nm_interaction():
+    """Actual fixed-orientation axial sweeps of the rectangular example."""
+    from sector.plastic import solve_interaction
+
+    v = beam_example()
+    ex = v["ex"]
+    figure = go.Figure()
+    for angle, dash, face in [(90, "solid", "Orientation V = 90\u00b0"),
+                              (270, "dash", "Orientation V = 270\u00b0")]:
+        points = solve_interaction(v["section"], ex["concrete"], ex["steel"], angle)
+        figure.add_trace(go.Scatter(x=[p.Mx for p in points], y=[-p.axial for p in points],
+            mode="lines+markers", marker=dict(size=4),
+            line=dict(color=BLUE, width=2, dash=dash), name=face))
+    figure.add_trace(go.Scatter(x=[v["plastic"].Mx], y=[0], mode="markers",
+        marker=dict(size=9, color=RED), name="Zero axial force, positive bending"))
+    figure.add_annotation(x=v["plastic"].Mx, y=0,
+        text=f"N = 0 kN<br>M<sub>x</sub> = {v['plastic'].Mx:.1f} kNm", ax=10, ay=-55)
+    figure.update_xaxes(title_text="M<sub>x</sub> (kNm)", zeroline=True, zerolinecolor=GREY)
+    figure.update_yaxes(title_text="N (kN), tension positive", zeroline=True, zerolinecolor=GREY)
+    _finish(figure, 480)
+    figure.update_layout(showlegend=True, legend=dict(orientation="h", y=-.2, x=0),
+                         margin=dict(l=75, r=25, t=40, b=100))
+    return figure
 
 
 def fig_crack_geometry():
@@ -444,7 +472,7 @@ def fig_crack_geometry():
         fig.add_annotation(
             x=0,
             y=600 - height - 30,
-            text=f"h = {height} mm",
+            text=f"h<sub>c,eff</sub> = {height} mm",
             showarrow=False,
             row=1,
             col=col,
@@ -491,7 +519,7 @@ def fig_shear_truss():
     )
     fig.update_xaxes(visible=False, range=[-0.3, 3.4], row=1, col=1)
     fig.update_yaxes(visible=False, range=[-0.5, 1.5], row=1, col=1)
-    fig.update_xaxes(title_text="cot(theta)", row=1, col=2)
+    fig.update_xaxes(title_text="cot(\u03b8)", row=1, col=2)
     fig.update_yaxes(title_text="Resistance (kN)", range=[0, 1100], row=1, col=2)
     return _finish(fig, 440)
 
@@ -516,7 +544,7 @@ def fig_torsion_tube():
         fig.add_annotation(
             x=x, y=y, ax=ax, ay=ay, text="", arrowhead=2, arrowcolor=RED, arrowwidth=2
         )
-    fig.add_annotation(x=125, y=100, text="tef / 2 = 50 mm", ax=135, ay=0)
+    fig.add_annotation(x=125, y=100, text="t<sub>ef</sub> / 2 = 50 mm", ax=135, ay=0)
     fig.add_annotation(x=0, y=250, text="Effective tube centerline", ax=0, ay=-65)
     fig.update_xaxes(title_text="x (mm)", range=[-260, 360], constrain="domain")
     fig.update_yaxes(
@@ -580,8 +608,8 @@ def fig_fatigue_actions():
     _line(fig, time, [100, 150, 100, 150, 100, 150, 100, 150, 100])
     fig.add_annotation(x=4, y=100, text="Sustained/basic: 100 kNm", ax=0, ay=45)
     fig.add_annotation(x=5, y=150, text="Peak: 150 kNm", ax=0, ay=-30)
-    fig.update_xaxes(title_text="Illustrative repeated cycles", showticklabels=False)
-    fig.update_yaxes(title_text="Mx (kNm)", range=[70, 180])
+    fig.update_xaxes(title_text="Repeated cycles", showticklabels=False)
+    fig.update_yaxes(title_text="M<sub>x</sub> (kNm)", range=[70, 180])
     return _finish(fig, 340)
 
 
@@ -605,9 +633,7 @@ def common_blocks():
     return [
         _heading("From section geometry to equilibrium"),
         _md(
-            "A plane cross-section represents the concrete outline, its voids, and the reinforcement at the chosen location. "
-            "The supplied axial force and moments act about the section origin. Plane sections remain plane, so three coefficients define the strain field. "
-            "Perfect bond makes each reinforcement element follow the section strain at its coordinates. A tendon also has its entered initial strain."
+            'A plane cross-section represents the concrete outline, its voids, and the reinforcement at the chosen location. The supplied axial force and moments act about the section origin. Plane sections stay plane, so three coefficients define the strain field. Perfect bond makes each reinforcement element follow the section strain at its coordinates. A tendon also has its entered initial strain.'
         ),
         _md(
             "For each trial strain field, the material laws give stresses. Concrete stresses act over an area. "
@@ -617,28 +643,19 @@ def common_blocks():
         _figure(
             fig_discretization,
             "Three distinct approximations: polygon geometry, plastic stress bands, and capacity orientations. Geometry is schematic.",
-            "An annular polygon with discrete reinforcement, a rectangle divided into illustrative stress bands, and several sampled line orientations distinguish the three numerical choices.",
+            'An annular polygon with discrete reinforcement, a rectangle divided into stress bands, and sampled line orientations distinguish the three numerical choices.',
         ),
         _md(
-            "Concrete is represented by straight polygon edges. The circular builder uses 48 segments. Each bar and tendon is a discrete area at its coordinates. "
-            "The elastic solver integrates the clipped polygon analytically. The plastic solver uses 80 midpoint stress bands in the rising concrete-law region. "
-            "The plastic envelope also samples the chosen orientations. These three resolutions affect different parts of the calculation."
+            'Sector represents concrete with straight polygon edges. The circular builder uses 48 segments. Each bar and tendon is a discrete area at its coordinates.\n\nThe elastic solver integrates the clipped polygon analytically. The plastic solver uses 80 midpoint stress bands in the rising concrete-law region. The plastic envelope also samples the selected orientations.\n\nThese three resolutions change different parts of the calculation.'
         ),
         _md(
-            "Moments use the entered origin. For a shift from origin O to O' = (a, b), the reported moments become "
-            "$M'_x=M_x+bN$ and $M'_y=M_y+aN$ with Sector's tension-positive axial force. "
-            "Keep coordinates and force units consistent. A shift matters whenever the axial force is nonzero."
+            "Moments use the entered origin. For a shift from origin O to O' = (a, b), use:\n\n$M'_x=M_x+bN$.\n\n$M'_y=M_y+aN$.\n\nThese formulas use Sector's tension-positive axial force. Use the same unit system for coordinates and forces. The shift changes the moments when axial force is nonzero."
         ),
         _md(
-            "The local coordinate $s=x\\cos\\varphi_{NA}+y\\sin\\varphi_{NA}$ increases towards the compressed face. "
-            "The sweep angle identifies the strain-gradient normal from +x, equivalently the neutral-axis line from +y. "
-            "The line direction has a 180-degree ambiguity; the compressed side resolves it. "
-            "A positive $M_x$ compresses the upper face of the centered beam. A positive $M_y$ compresses its right face."
+            'The local coordinate $s=x\\cos\\varphi_{NA}+y\\sin\\varphi_{NA}$ increases in the direction of the compressed face. The sweep angle identifies the strain-gradient normal from +x, equivalently the neutral-axis line from +y. The line direction has a 180-degree ambiguity. The compressed side resolves it. A positive $M_x$ compresses the top face of the centered beam. A positive $M_y$ compresses its right face.'
         ),
         _md(
-            "Use mm, N, N mm and MPa together for the worked arithmetic. Convert kN to N by multiplying by 1000. "
-            "Convert kNm to N mm by multiplying by 10^6. A curvature stated in 1/m is 1000 times its value in 1/mm. "
-            "The material laws use dimensionless strain; multiply by 1000 to express strain in \u2030."
+            'Use mm, N, N mm and MPa together for the worked arithmetic. Multiply kN by 1000 to get N. Multiply kNm by $10^{6}$ to get N mm. A curvature stated in 1/m is 1000 times its value in 1/mm. The material laws use dimensionless strain. Multiply by 1000 to express strain in \u2030.'
         ),
     ]
 
@@ -650,10 +667,7 @@ def elastic_blocks():
     return [
         _heading("Reproduce the rectangular elastic example"),
         _md(
-            "Use the existing 300 x 600 mm beam at $N=0$, $M_x=150$ kNm and $M_y=0$. "
-            "Use Es = 200000 MPa and Ec = 33333.333333 MPa with zero creep to obtain modular ratio 6. "
-            "Enter these elastic moduli for this teaching example. The bottom layer has three 25 mm bars at depth 550 mm. "
-            "The top layer has two 16 mm bars at depth 50 mm. Measure the compression depth x downwards from the top face."
+            'Use the existing 300 x 600 mm beam with these actions:\n\n- $N=0$.\n- $M_x=150$ kNm.\n- $M_y=0$.\n\nUse zero creep and these moduli to get modular ratio 6:\n\n- $E_s=200000$ MPa. Enter **200 GPa** in Sector.\n- $E_c=33333.333333$ MPa. Enter **33.333333333 GPa** in Sector.\n\nThe bottom layer has three 25 mm bars at depth 550 mm. The top layer has two 16 mm bars at depth 50 mm. Measure the compression depth x downwards from the top face.'
         ),
         _table(
             ["Input", "Value", "Meaning"],
@@ -661,18 +675,18 @@ def elastic_blocks():
                 ["b / h", "300 / 600 mm", "Section width / height"],
                 ["d / a", "550 / 50 mm", "Bottom / top bar depth from top"],
                 [
-                    "As / As'",
-                    f"{h['bottom_area']:.3f} / {h['top_area']:.3f} mm2",
+                    "$A_s$ / $A'_s$",
+                    f"{h['bottom_area']:.3f} / {h['top_area']:.3f} $\\text{{mm}}^{{2}}$",
                     "Bottom / top reinforcement area",
                 ],
                 ["n", "6", "Steel modulus divided by concrete modulus"],
-                ["Mx", "150,000,000 N mm", "Positive bending about the section origin"],
+                ["$M_x$", "150,000,000 N mm", "Positive bending about the section origin"],
             ],
         ),
         _figure(
             fig_elastic_fields,
-            "Rectangular elastic example: matching geometry, concrete stress and reinforcement stresses. Tension is positive.",
-            "The compression zone ends 149.251 mm below the top. Concrete has a triangular compression stress distribution; top steel is compressed and bottom steel is in tension.",
+            "Rectangular elastic example: geometry, concrete stress and reinforcement stresses share the depth scale. Section width is exaggerated. Tension is positive.",
+            'The compression zone ends 149.251 mm below the top. Concrete has a triangular compression stress distribution. Top steel is in compression, and bottom steel is in tension.',
         ),
         _md(
             "1. **Find the neutral axis.** Zero axial force requires zero signed first moment of the transformed section about that axis. "
@@ -681,7 +695,7 @@ def elastic_blocks():
         ),
         _md(
             "Solve $bx^2/2+(n-1)A'_s(x-a)-nA_s(d-x)=0$. "
-            f"The positive root is **x = {h['x']:.3f} mm**. Confirm that the top bars lie inside the compression zone."
+            f"The positive root is **x = {h['x']:.3f} mm**. Make sure that the top bars are inside the compression zone."
         ),
         _figure(
             fig_elastic_balance,
@@ -689,17 +703,15 @@ def elastic_blocks():
             "The signed transformed first moment changes from negative to positive and crosses zero at compression depth 149.251 mm.",
         ),
         _md(
-            "2. **Calculate the transformed second moment.** Use "
-            "$I_{tr}=bx^3/3+(n-1)A'_s(x-a)^2+nA_s(d-x)^2$. "
-            f"The result is **{h['inertia']:.3f} mm4**."
+            "2. **Calculate the transformed second moment.** Use:\n\n"
+            "$I_{tr}=bx^3/3+(n-1)A'_s(x-a)^2+nA_s(d-x)^2$.\n\n"
+            f"The result is **{h['inertia']:.3f}** $\\text{{mm}}^{{4}}$."
         ),
         _md(
-            "3. **Calculate stresses.** The concrete compression magnitude is $M_x x/I_{tr}$. "
-            "The bottom steel stress is $nM_x(d-x)/I_{tr}$. The top steel stress is $-nM_x(x-a)/I_{tr}$. "
-            "Use the full modular ratio for actual steel stress. The subtraction of displaced concrete affects the section stiffness."
+            '3. **Calculate stresses.** Use these expressions:\n\n- Concrete compression magnitude: $M_x x/I_{tr}$.\n- Bottom steel stress: $nM_x(d-x)/I_{tr}$.\n- Top steel stress: $-nM_x(x-a)/I_{tr}$.\n\nUse the full modular ratio for actual steel stress. The subtraction of displaced concrete affects the section stiffness.'
         ),
         _table(
-            ["Result", "Independent calculation", "Native calculation"],
+            ["Result", "Independent calculation", 'Sector calculation'],
             [
                 [
                     "Compression depth",
@@ -725,39 +737,28 @@ def elastic_blocks():
         ),
         _heading("General axial force and biaxial bending"),
         _md(
-            "The general solver uses a reference-stress plane $q(x,y)=q_0+g_x x+g_y y$. "
-            "Compression has q < 0. Clip the outer polygon and each void to that half-plane. "
-            "Subtract the clipped void contributions. Calculate area A, first moments Sx and Sy, and second moments Sxx, Syy and Sxy. "
-            "Here Sx is the integral of x over area, and Sxx is the integral of x squared over area."
+            'The general solver uses this reference-stress plane:\n\n$q(x,y)=q_0+g_x x+g_y y$.\n\nCompression has $q<0$. Clip the outer polygon and each void to that half-plane. Subtract the clipped void contributions.\n\nCalculate these geometric quantities:\n\n- Area $A$.\n- First moments $S_x$ and $S_y$.\n- Second moments $S_{xx}$, $S_{yy}$ and $S_{xy}$.\n\nHere $S_x$ is the integral of x over area. The second moment $S_{xx}$ is the integral of x squared over area.'
         ),
         _table(
             [
                 "Equilibrium row",
-                "Coefficients of (q0, gx, gy)",
+                "Coefficients of ($q_0$, $g_x$, $g_y$)",
                 "Tension-positive internal target",
             ],
             [
-                ["Axial force", "(A, Sx, Sy)", "N"],
-                ["Moment from y lever arm", "(Sy, Sxy, Syy)", "-Mx"],
-                ["Moment from x lever arm", "(Sx, Sxx, Sxy)", "-My"],
+                ["Axial force", "(A, $S_x$, $S_y$)", "N"],
+                ["Moment from y lever arm", "($S_y$, $S_{xy}$, $S_{yy}$)", "-$M_x$"],
+                ["Moment from x lever arm", "($S_x$, $S_{xx}$, $S_{xy}$)", "-$M_y$"],
             ],
         ),
         _md(
-            "For each reinforcement element, add $w_i[1,x_i,y_i]$ to the axial row, "
-            "$w_i y_i[1,x_i,y_i]$ to the second row, and $w_i x_i[1,x_i,y_i]$ to the third row. "
-            "Use $w_i=(n_i-1)A_i$ in compression and $w_i=n_i A_i$ in the cracked tension region. "
-            "Subtract the constant prestress resultants from the external target before solving."
+            'For each reinforcement element, add these contributions to the matrix:\n\n- Axial row: $w_i[1,x_i,y_i]$.\n- Second row: $w_i y_i[1,x_i,y_i]$.\n- Third row: $w_i x_i[1,x_i,y_i]$.\n\nUse the applicable transformed area:\n\n- Compression region: $w_i=(n_i-1)A_i$.\n- Cracked tension region: $w_i=n_i A_i$.\n\nBefore the solution, subtract the constant prestress resultants from the external target.'
         ),
         _md(
-            "Start with the uncracked solution. Calculate the compressed polygon, its stiffness matrix, and the internal resultants. "
-            "Subtract the target to obtain the residual vector r. Solve $J\\Delta q=-r$, then add the correction to the plane. "
-            "Repeat the clipping and equilibrium calculation. The core allows 100 iterations and uses a relative residual threshold of 10^-9. "
-            "Its residual scale is the largest absolute target component, with a minimum scale of 1 in core units (kN and kNm)."
+            'Start with the uncracked solution. Calculate the compressed polygon, its stiffness matrix, and the internal resultants. Subtract the target to get the residual vector r. Solve $J\\Delta q=-r$. Add the correction to the plane. Do the clipping and equilibrium calculation again.\n\nSector uses a maximum of 100 iterations and a relative residual threshold of $10^{-9}$. Its residual scale is the largest absolute target component, with a minimum scale of 1 in core units (kN and kNm).'
         ),
         _md(
-            "The reference plane has stress units. Divide q by the concrete modulus in consistent units to obtain physical strain. "
-            "For the uncracked state, concrete acts over the whole net polygon and all reinforcement uses $(n_i-1)A_i$. "
-            "That state requires one linear solution. The cracked state updates the compression boundary through iteration."
+            'The reference plane has stress units. Divide q by the concrete modulus in the same unit system to get physical strain. For the uncracked state, concrete acts over the full net polygon and all reinforcement uses $(n_i-1)A_i$. One linear solution gives that state. The cracked state updates the compression boundary through iteration.'
         ),
         _heading("Sustained and additional short-term actions"),
         _md(
@@ -766,27 +767,24 @@ def elastic_blocks():
             "A creep coefficient of 2 gives $n_l=18$ and $n_s=6$."
         ),
         _md(
-            "First solve the sustained action with $n_l$ to obtain passive steel stress s1. "
-            "Retain $s2=s1(1-n_s/n_l)$. Calculate the axial force and moments from s2 in every reinforcement element. "
-            "Subtract these resultants from the combined external target. Solve that target with $n_s$ to obtain RST1. "
-            "Then TOTAL = s2 + RST1 and DIF = TOTAL - LONG."
+            "For this beam with ordinary reinforcement, use the following sequence:\n\n1. Solve the sustained action with $n_l$ to get passive steel stress $s_l$.\n2. Calculate the retained stress in each element:\n\n$s_r=s_l(1-n_s/n_l)$.\n\n3. Calculate the axial force and moments from each element's retained stress.\n4. Add those force and moment contributions.\n5. Subtract the resulting vector from the combined external target.\n6. Solve the adjusted target with $n_s$ to get RST1.\n\nThe bottom-bar stresses then satisfy:\n\n- $\\mathrm{TOTAL}=s_r+\\mathrm{RST1}$.\n- $\\mathrm{DIF}=\\mathrm{TOTAL}-\\mathrm{LONG}$."
         ),
         _figure(
             fig_duration_components,
             "Bottom-bar stress components for the sustained-plus-additional example. TOTAL equals the retained component plus RST1.",
-            "Five bars compare LONG, retained stress, RST1, TOTAL and DIF for the same bottom reinforcement element and one specified action history.",
+            'Five columns compare the stress components LONG, retained stress, RST1, TOTAL and DIF for the same bottom reinforcement element and one specified action history.',
         ),
         _table(
             ["Bottom-bar quantity", "Calculation", "Stress (MPa)"],
             [
                 [
                     "LONG",
-                    "Sustained solve at nl = 18",
+                    'Sustained solve at $n_l=18$',
                     f"{r.bar_stress_long[0] / 1000:.6f}",
                 ],
                 [
                     "Retained",
-                    "LONG x (1 - 6/18)",
+                    '$\\mathrm{LONG}\\,(1-6/18)$',
                     f"{r.bar_stress_reduced_long[0] / 1000:.6f}",
                 ],
                 [
@@ -799,10 +797,7 @@ def elastic_blocks():
             ],
         ),
         _md(
-            "The adjustment preserves the sustained steel response as the concrete modulus changes. "
-            "Locked-in tendon prestress stays outside the retained passive-stress step and is added to the reported tendon stress. "
-            "At zero creep, the retained component is zero. A counteracting additional action can reduce TOTAL below LONG. "
-            "Review both entered states when you interpret the cracking classification."
+            'The adjustment keeps the sustained steel response as the concrete modulus changes. Locked-in tendon prestress stays outside the retained passive-stress step. Sector adds this prestress to the reported tendon stress. \n\nAt zero creep, the retained component is zero. A counteracting additional action can make TOTAL smaller than LONG. Examine the two entered states when you interpret the cracking classification.'
         ),
     ]
 
@@ -830,67 +825,61 @@ def plastic_blocks():
     return [
         _heading("Reproduce one plastic capacity point"),
         _md(
-            "Use the existing 300 x 600 mm C40/50 beam with its B550 DK design preset. "
-            "Set N = 0 and select a 90-degree sweep orientation, which compresses the top face. "
-            "Concrete has fcd = 40/1.45 MPa, peak strain 0.002, and ultimate strain 0.0035. "
-            "The complete material inputs and reinforcement positions follow. Coordinates use the section center as origin."
+            'Use the existing 300 x 600 mm C40/50 beam with its B550 DK design preset. Set N = 0 and select a 90-degree sweep orientation, which compresses the top face. Concrete has $f_{cd}$ = 40/1.45 MPa, peak strain 0.002, and ultimate strain 0.0035. The full material inputs and reinforcement positions follow. Coordinates use the section center as origin.'
         ),
         _table(
             ["Input", "Value", "Meaning"],
             [
                 [
                     "Concrete law",
-                    "Curve 2; exponent 2",
+                    'Curve 2. Exponent 2',
                     "Parabola followed by a constant plateau",
                 ],
                 [
-                    "fck / gamma_c / alpha_cc",
+                    '$f_{ck}$ / $\\gamma_c$ / $\\alpha_{cc}$',
                     "40 MPa / 1.45 / 1",
-                    "fcd = 27.586206897 MPa",
+                    "$f_{cd}$ = 27.586206897 MPa",
                 ],
                 [
-                    "eps_c2 / eps_cu2",
+                    '$\\varepsilon_{c2}$ / $\\varepsilon_{cu2}$',
                     "0.002 / 0.0035",
                     "Peak and ultimate compression strains",
                 ],
                 [
                     "Steel law",
-                    "Curve 3; active in compression",
+                    'Curve 3. Active in compression',
                     "Same law for all five bars",
                 ],
                 [
-                    "fytk / fyck / futk",
+                    '$f_{ytk}$ / $f_{yck}$ / $f_{utk}$',
                     "550 / 550 / 550 MPa",
                     "Tensile yield, compressive yield and ultimate strength",
                 ],
                 [
-                    "gamma_y / gamma_u / gamma_E",
+                    '$\\gamma_y$ / $\\gamma_u$ / $\\gamma_E$',
                     "1.20 / 1.20 / 1.00",
                     "Strength and modulus factors",
                 ],
                 [
-                    "Es / k / eut",
+                    '$E_s$ / $k$ / $\\varepsilon_{ut}$',
                     "200000 MPa / 1 / 0.05",
                     "Modulus, first-yield ratio and ultimate tensile strain",
                 ],
-                ["ey0t / ey0c", "0 / 0", "Tensile and compressive yield offsets"],
+                ['$\\varepsilon_{0t}$ / $\\varepsilon_{0c}$', "0 / 0", "Tensile and compressive yield offsets"],
                 [
                     "Bars 1, 2, 3: (x, y)",
                     "(-100, -250), (0, -250), (100, -250) mm",
-                    "Each area = pi x 25 squared / 4 mm2",
+                    'Each area: $\\pi\\,25^2/4$ $\\text{mm}^{2}$',
                 ],
                 [
                     "Bars 4, 5: (x, y)",
                     "(-100, 250), (100, 250) mm",
-                    "Each area = pi x 16 squared / 4 mm2",
+                    'Each area: $\\pi\\,16^2/4$ $\\text{mm}^{2}$',
                 ],
             ],
         ),
         _md(
-            "For these inputs, the concrete compression magnitude is "
-            "$f_{cd}[1-(1-\\varepsilon/0.002)^2]$ up to strain 0.002, then fcd up to 0.0035. "
-            "Steel stress is Es times strain up to magnitude 458.333333333 MPa, then stays at that magnitude. "
-            "Its yield strain is 0.002291666667. Use the tensile strain limit 0.05 when selecting the governing curvature."
+            '**Concrete stress for these inputs**\n\nUp to compression strain 0.002, the stress magnitude is:\n\n$f_{cd}[1-(1-\\varepsilon/0.002)^2]$.\n\nFrom strain 0.002 to 0.0035, the stress magnitude is $f_{cd}$.\n\n**Steel stress for these inputs**\n\nSteel stress is $E_s$ times strain up to magnitude 458.333333333 MPa. It then stays at that magnitude. The yield strain is 0.002291666667. Use the tensile strain limit 0.05 to select the governing curvature.'
         ),
         _md(
             "1. **Choose a trial depth c.** The neutral-axis coordinate is $s_{na}=s_{max}-c$. "
@@ -899,81 +888,64 @@ def plastic_blocks():
         ),
         _figure(
             fig_capacity_limits,
-            "Illustrative strain-limit comparison. The right panel assumes a tensile steel limit of 10 \u2030; it represents a different material from the worked beam.",
-            "Two compatible straight strain lines illustrate concrete reaching 3.5 \u2030 compression and steel reaching its own illustrative tension limit while concrete remains below crushing.",
+            'Strain-limit comparison example. The right panel assumes a tensile steel limit of 10 \u2030. It represents a different material from the worked beam.',
+            'Two compatible straight strain lines show different governing limits. One reaches 3.5 \u2030 concrete compression. The other reaches its assigned steel tension limit before concrete crushing.',
         ),
         _md(
-            "2. **Calculate concrete forces.** The plateau begins at $s_{peak}=s_{na}+\\varepsilon_{c2}/\\kappa$. "
-            "Divide the interval from sna to the smaller of speak and smax into 80 equal bands. "
-            "For band i, use the strain at its depth midpoint to obtain the stress. "
-            "Clip the polygon and voids to that band. Multiply stress by signed area for force and by signed first moments for moments."
+            '2. **Calculate concrete forces.** The plateau starts at:\n\n$s_{peak}=s_{na}+\\varepsilon_{c2}/\\kappa$.\n\nDivide the rising region into 80 equal bands. Its endpoints are $s_{na}$ and the smaller of $s_{peak}$ and $s_{max}$.\n\nFor each band, use the strain at its depth midpoint to get the stress. Clip the polygon and voids to that band. Multiply stress by signed area for force. Multiply stress by signed first moments for moments.'
         ),
         _figure(
             fig_plastic_bands,
-            "Worked plastic compression zone. The eight displayed groups each contain ten integration bands. The plateau is integrated separately.",
-            "The upper part carries constant design compression stress; the lower part follows the rising law down to zero stress at the neutral axis.",
+            'Worked plastic compression zone, with depth exaggerated for band visibility. Each displayed group contains ten integration bands. The plateau has its own integral.',
+            'The top part has constant design compression stress. The lower part follows the rising law down to zero stress at the neutral axis.',
         ),
         _md(
-            "For this rectangle, each band has area $A_i=b\\Delta s$ and centroid $y_i=(y_{lower}+y_{upper})/2$. "
-            "Its contributions are $F_i=\\sigma_i A_i$ and $M_{x,i}=F_i y_i$. "
-            "Use MPa and mm2 for force in N, then divide by 1000 for kN. "
-            "The plateau carries fcd throughout its area. The plastic calculation uses the gross net concrete polygon and adds reinforcement forces."
+            'For this rectangle, calculate the geometry of each band:\n\n- Area: $A_i=b\\Delta s$.\n- Centroid: $y_i=(y_{lower}+y_{upper})/2$.\n\nThen calculate its force and moment:\n\n- $F_i=\\sigma_i A_i$.\n- $M_{x,i}=F_i y_i$.\n\nUse MPa and $\\text{mm}^{2}$ for force in N. Divide by 1000 for kN. The plateau carries $f_{cd}$ over its full area.\n\nThe plastic calculation uses the net concrete polygon before reinforcement-area deduction and adds reinforcement forces.'
         ),
         _md(
-            "3. **Calculate reinforcement forces.** Evaluate each bar at the strain plane and its assigned design law. "
-            "For each tendon, combine its tension-positive section strain with its initial strain before evaluating its law. "
-            "Multiply the stress by the element area. Use its x and y coordinates as moment arms."
+            '3. **Calculate reinforcement forces.** Evaluate each bar at the strain plane and its assigned design law. For each tendon, add its initial strain to its tension-positive section strain. Then evaluate its law. Multiply the stress by the element area. Use its x and y coordinates as moment arms.'
         ),
         _md(
-            "4. **Balance axial force.** Compare the sum of compression-positive forces with -N from the input table. "
-            "If the trial force is too small, increase c. If it is too large, decrease c. "
-            "Sector brackets the target and repeatedly halves the depth interval. "
-            "The bracket can extend beyond the full section depth, which permits whole-section compression."
+            '4. **Balance axial force.** Compare the sum of compression-positive forces with -N from the input table. If the trial force is too small, increase c. If it is too large, decrease c. Sector brackets the target and halves the depth interval at each iteration. The bracket can extend beyond the full section depth, which makes whole-section compression possible.'
         ),
         _md(
-            "The lower depth starts at 10^-9 times the projected section depth. The upper depth starts at the full projected depth. "
-            "The upper bound can double up to 80 times to bracket axial compression. Bisection allows 100 iterations. "
-            "The depth interval closes below 10^-12 times the projected depth. Acceptance also requires a reachable target and "
-            "an axial residual no greater than $10^{-6}\\max(1,|N|)$ kN, with N in kN."
+            'The lower depth starts at $10^{-9}$ times the projected section depth. The upper depth starts at the full projected depth. The upper bound can double up to 80 times to bracket axial compression.\n\nBisection uses a maximum of 100 iterations. It stops when the depth interval is smaller than $10^{-12}$ times the projected depth.\n\nAcceptance requires a reachable target and this axial residual limit:\n\n$|\\sum F+N|\\leq10^{-6}\\max(1,|N|)$.\n\nUse forces in kN.'
         ),
         _md(
             f"5. **Sum the accepted state.** The beam balances at **c = {p.compression_depth * 1000:.6f} mm**. "
             f"Its curvature is **{p.curvature:.9f} 1/m**. Concrete reaches its compression strain limit. "
             "The tension reinforcement has yielded. The tables use compression-positive force, with the section origin at mid-depth."
         ),
-        _table(["Concrete region", "Area (mm2)", "Force (kN)", "Mx (kNm)"], grouped),
-        _table(["Contribution", "Force (kN)", "Mx (kNm)"], force_rows),
+        _table(["Concrete region", "Area ($\\text{mm}^{2}$)", "Force (kN)", "$M_x$ (kNm)"], grouped),
+        _table(["Contribution", "Force (kN)", "$M_x$ (kNm)"], force_rows),
         _md(
             f"The moment resistance is **{p.Mx:.6f} kNm**. The axial residual is **{p.axial_residual:.3e} kN**. "
             "The moment contribution of a band uses its area centroid and midpoint stress. "
-            "This is a numerical approximation to the varying stress within that band."
+            "This is a numerical approximation to the varying stress in that band."
         ),
         _heading("Resolution and envelope interpretation"),
         _table(
-            ["Rising-region bands", "Beam resistance Mx (kNm)"],
+            ["Rising-region bands", "Beam resistance $M_x$ (kNm)"],
             [[str(n), f"{m:.6f}"] for n, m in v["refinement"]],
         ),
         _md(
-            "The refinement table changes only the number of stress bands. The section, material laws, axial force and orientation remain fixed. "
-            "The small change demonstrates convergence for this beam. Irregular outlines, small compressed regions and different material laws need their own sensitivity check. "
-            "Equilibrium convergence and integration accuracy describe separate properties of the result."
+            'The refinement table changes only the number of stress bands. The section, material laws, axial force and orientation stay fixed. The small change demonstrates convergence for this beam. Irregular outlines, small compressed regions and different material laws make a sensitivity check necessary. Equilibrium convergence and integration accuracy are different properties of the result.'
         ),
         _figure(
             fig_envelope_ray,
             "A fixed-N envelope from 15-degree orientation steps. The applied biaxial moment lies on a ray from the origin to the boundary.",
-            "Discrete capacity points define a closed moment polygon. A ray through the applied pair Mx = 180 kNm and My = 30 kNm intersects that polygon to define utilization.",
+            "Discrete capacity points define a closed moment polygon. A ray through the applied pair $M_x$ = 180 kNm and $M_y$ = 30 kNm intersects that polygon to define utilization.",
         ),
         _md(
-            "Each accepted orientation supplies one capacity pair at the selected N. Sector intersects the demand ray with segments between capacity points. "
-            "Utilization is the applied radial distance divided by the boundary distance. "
-            "The sweep angle and the direction of the resulting moment generally differ. Refine the angular step to assess interpolation sensitivity. "
-            "A partial sweep provides capacity points over its selected range; a closed envelope is required for radial utilization."
+            'Each accepted orientation supplies one capacity pair at the selected N. Sector intersects the demand ray with segments between capacity points. Utilization is the applied radial distance divided by the boundary distance. The sweep angle and the direction of the resulting moment usually differ. Refine the angular step to assess interpolation sensitivity. A partial sweep gives capacity points over its selected range. A closed envelope is required for radial utilization.'
         ),
         _md(
-            "An N-M diagram varies axial force and shows its associated moment boundaries. "
-            "A conditional bending resistance also preserves the simultaneous orthogonal moment. "
-            "Use that conditional resistance when a chord check must carry both bending components. "
-            "A capacity point with an unreachable axial target retains its convergence status for interpretation."
+            'An N-M diagram varies axial force and shows its related moment boundaries. A conditional bending resistance also keeps the simultaneous orthogonal moment. Use that conditional resistance when a chord check includes the two bending components. A capacity point with an unreachable axial target keeps its convergence status for interpretation.'
+        ),
+        _figure(
+            fig_nm_interaction,
+            "Rectangular beam: axial-force sweeps at 90 and 270 degrees. Each branch has 33 calculated points. Axial tension is positive.",
+            "The two fixed-orientation branches span tensile and compressive axial forces. The positive-bending branch crosses zero axial force at 345.98 kNm.",
         ),
     ]
 
@@ -983,43 +955,32 @@ def other_blocks():
         "Serviceability: cracking and crack width": [
             _heading("Follow the crack-width calculation"),
             _md(
-                "Begin with the uncracked tensile stress and the selected concrete tensile strength. "
-                "The cracking factor identifies the action level at first cracking. Permanent tendon prestress remains fixed while external actions scale. "
-                "Review both sustained and peak states because either can establish the cracked classification."
+                'Start with the uncracked tensile stress and the selected concrete tensile strength. The cracking factor identifies the action level at first cracking. Permanent tendon prestress stays fixed while external actions scale. Examine the sustained and peak states because one state can be cracked while the other is uncracked.'
             ),
             _figure(
                 fig_crack_geometry,
-                "Effective tension areas in the manual's four worked method/system results. Each panel uses the stated example assumptions; heights are not universal defaults.",
-                "Four aligned rectangles show effective heights of 125, 125, 100 and 175 mm above the same bottom tension face for EN 2005, DK fine, DK coarse and EN 2023.",
+                'Effective tension areas for the four worked method/system results. All panels share the depth scale. Section widths are compressed for comparison.',
+                'Four aligned rectangles share the bottom tension face. Effective heights are 125 mm for EN 2005, 125 mm for DK fine, 100 mm for DK coarse and 175 mm for EN 2023.',
             ),
             _md(
-                "For the selected duration, identify the tensile reinforcement and effective concrete area. "
-                "Calculate the reinforcement ratio from those areas. Determine crack spacing from the selected method, cover, diameter and spacing condition. "
-                "Calculate the mean strain difference with the applicable lower bound. Multiply spacing by strain difference, with the selected method's additional factors. "
-                "Compare the resulting width with the criterion for that duration."
+                "For the selected duration:\n\n1. Identify the tensile reinforcement and effective concrete area.\n2. Calculate the reinforcement ratio from those areas.\n3. Calculate crack spacing from the selected method, cover, diameter and spacing condition.\n4. Calculate the mean strain difference with the applicable lower bound.\n5. Multiply spacing by strain difference, with the selected method's additional factors.\n6. Compare the resulting width with the criterion for that duration."
             ),
             _md(
-                "Use the effective-area rules of the selected method. The DK coarse system locates an area whose centroid matches the tension reinforcement. "
-                "The 2023 model constructs layers from the tension-face reinforcement. For biaxial response, Sector uses the resultant strain-gradient direction. "
-                "The reported governing bar identifies the location used by the width calculation."
+                'Use the effective-area rules of the selected method. The DK coarse system locates an area with its centroid at the centroid of the tension reinforcement. The 2023 model constructs layers from the tension-face reinforcement. For biaxial response, Sector uses the resultant strain-gradient direction. The reported governing bar identifies the location used by the width calculation.'
             ),
         ],
-        "Shear resistance without shear reinforcement": [
+        "Shear resistance": [
             _heading("Read the shear force path"),
             _figure(
                 fig_shear_truss,
-                "Shear truss and resistance trade-off. Curves use the rounded values of the C35 linked-beam example; the force-path sketch is schematic.",
-                "Inclined concrete struts transfer load between the chords while vertical links carry tension. Link resistance rises with cotangent theta and concrete crushing resistance falls over the plotted range.",
+                'Shear truss and resistance trade-off. Curves use the rounded values of the C35 linked-beam example. The force-path sketch is schematic.',
+                'Inclined concrete struts transfer load between the chords while vertical links carry tension. Link resistance increases with cotangent theta and concrete crushing resistance falls over the plotted range.',
             ),
             _md(
-                "Identify the active shear direction and its tension face first. Measure d to the centroid of the corresponding tension reinforcement. "
-                "The web width represents the concrete that transfers shear. The internal lever arm connects the compression and tension resultants. "
-                "For biaxial states, use the lever-arm component associated with that bending axis."
+                'Identify the active shear direction and its tension face first. Measure d to the centroid of the related tension reinforcement. The web width represents the concrete that transfers shear. The internal lever arm connects the compression and tension resultants. For biaxial states, use the lever-arm component for that bending axis.'
             ),
             _md(
-                "Increasing cotangent theta engages more links over the load-transfer length. It also increases the longitudinal force demand and changes concrete strut stress. "
-                "The governing resistance is the smaller of the link and strut values. "
-                "The permitted angle range and any applicability condition belong to the selected method."
+                'Increasing cotangent theta engages more links over the load-transfer length. It also increases the longitudinal force demand and changes concrete strut stress. The governing resistance is the smaller of the link and strut values. The permitted angle range and the applicable conditions belong to the selected method.'
             ),
         ],
         "Torsion (thin-walled tube)": [
@@ -1027,18 +988,13 @@ def other_blocks():
             _figure(
                 fig_torsion_tube,
                 "Effective tube for the 300 x 600 mm torsion example. The dashed centerline is 50 mm inside the concrete boundary.",
-                "The outer rectangle encloses a dashed 200 by 500 mm tube centerline. Arrows circulate around that line; its enclosed area is 100000 mm2 and its perimeter is 1400 mm.",
+                'The outer rectangle encloses a dashed 200 by 500 mm tube centerline. Arrows circulate around that line. Its enclosed area is 100000 $\\text{mm}^{2}$ and its perimeter is 1400 mm.',
             ),
             _md(
-                "A torque produces a circulating shear flow around a closed tube. The flow is $q=T/(2A_k)$. "
-                "The wall stress follows from flow divided by effective wall thickness. Closed links carry transverse tension and perimeter reinforcement carries longitudinal tension. "
-                "Concrete struts provide the compression path."
+                'A torque produces a circulating shear flow around a closed tube. The flow is $q=T/(2A_k)$. The wall stress follows from flow divided by effective wall thickness. Closed links carry transverse tension and perimeter reinforcement carries longitudinal tension. Concrete struts form the compression path.'
             ),
             _md(
-                "For the worked rectangle, the centerline dimensions are 200 x 500 mm. "
-                "Their product gives Ak = 100000 mm2, and twice their sum gives uk = 1400 mm. "
-                "At T = 20 kNm, the flow is 100 N/mm. With effective thickness 100 mm, the wall shear stress is 1 MPa. "
-                "Use these values to check the geometry before calculating each resistance."
+                'For the worked rectangle, the centerline dimensions are 200 x 500 mm.\n\n**Tube geometry**\n\n- Area: $A_k=200\\times500=100000$ $\\text{mm}^{2}$.\n- Perimeter: $u_k=2(200+500)=1400$ mm.\n- Effective thickness: 100 mm.\n\n**Shear flow and wall stress**\n\nAt $T=20$ kNm:\n\n- Shear flow: 100 N/mm.\n- Wall shear stress: 1 MPa.\n\nCompare the geometry with these values before you calculate each resistance.'
             ),
         ],
         "Combined M-V-T interaction": [
@@ -1046,60 +1002,42 @@ def other_blocks():
             _figure(
                 fig_combined_paths,
                 "Schematic force paths for concurrent longitudinal and transverse demands.",
-                "All four chord faces surround the section. A separate closed stirrup carries the sum of applicable shear and torsion demands at one common strut angle.",
+                'All four chord faces surround the section. A closed stirrup carries the sum of applicable shear and torsion demands at one common strut angle.',
             ),
             _md(
-                "Start from one named action row. Bending establishes the section force state. "
-                "Shear adds longitudinal chord demand, and torsion adds tension around the perimeter. "
-                "The common-angle calculation must satisfy the applicable strut, stirrup and chord checks together. "
-                "A maximum resistance from another angle cannot be substituted into that state."
+                'Start from one named action row. Bending gives the section force state. Shear adds longitudinal chord demand, and torsion adds tension around the perimeter. The common-angle calculation must satisfy the applicable strut, stirrup and chord checks together. A maximum resistance from a different angle cannot be substituted into that state.'
             ),
             _md(
-                "Read the physical checks and the selected edition's aggregate rule separately. "
-                "The DK aggregate rule uses resistances to actions acting alone. The shared-angle checks use the concurrent force path. "
-                "A conditional result identifies an assumption that requires supporting project evidence. "
-                "A not-assessed result identifies the missing basis needed before a complete comparison is available."
+                "Read each physical check and the selected edition's aggregate rule. The DK aggregate rule uses resistances to actions acting alone. The shared-angle checks use the concurrent force path. A conditional result identifies an assumption for which supporting project evidence is necessary. A not-assessed result identifies the missing basis needed before a full comparison is available."
             ),
         ],
         "Grouped fatigue": [
             _heading("From actions to repeated stress range"),
             _figure(
                 fig_fatigue_actions,
-                "Illustrative fatigue actions: a 100 kNm basic moment and a repeated additional 50 kNm. Cycle count is entered separately.",
-                "Repeated moment peaks rise from a sustained 100 kNm baseline to 150 kNm. The vertical increment is the cyclic action component.",
+                'Fatigue action example: a 100 kNm basic moment and a repeated additional 50 kNm. Enter the cycle count in its field.',
+                'Repeated moment peaks increase from a sustained 100 kNm baseline to 150 kNm. The vertical increment is the cyclic action component.',
             ),
             _md(
-                "Define the sustained/basic action and the cyclic increment for each bin. "
-                "Compare stresses at the same element or concrete location in the two states. "
-                "Apply the selected fatigue action factor as specified by the method. Use the resulting stress range to obtain the allowable cycles. "
-                "For Miner assessment, each bin contributes entered cycles divided by allowable cycles. Sum contributions within the named spectrum."
+                'For each bin:\n\n1. Define the sustained/basic action and the cyclic increment.\n2. Compare stresses at the same element or concrete location in the two states.\n3. Apply the selected fatigue action factor as specified by the method.\n4. Use the resulting stress range to get the allowable cycles.\n\nFor Miner assessment, each bin contributes entered cycles divided by allowable cycles. Sum those contributions in the named spectrum.'
             ),
             _md(
-                "Keep different spectra separate. A bar's peak stress in one state and another bar's stress in the second state do not form one physical stress range. "
-                "Use element IDs and the governing-bin table to trace the reported damage."
+                "Keep each spectrum in its own group. A bar's peak stress in one state and a different bar's stress in the second state do not form one physical stress range. Use element IDs and the governing-bin table to trace the reported damage."
             ),
         ],
         "Reinforcement detailing": [
             _heading("Relate analysis areas to physical reinforcement"),
             _md(
-                "An analysis point supplies area and position for section equilibrium. Its detailing diameter supplies a physical size for spacing and crack geometry. "
-                "When one point represents several bars, document the physical layout separately and use the supported layout controls for spacing checks. "
-                "For two individual circular bars, clear spacing is their center distance minus half the sum of their diameters."
+                'An analysis point supplies area and position for section equilibrium. Its detailing diameter supplies a physical size for spacing and crack geometry. When one point represents more than one bar, record the physical layout. Use the supported layout controls for spacing checks. For two individual circular bars, clear spacing is their center distance minus half the sum of their diameters.'
             ),
             _md(
-                "For example, two 25 mm bars at 100 mm centers have 75 mm clear spacing. "
-                "The governing spacing requirement also depends on aggregate size and the selected rule. "
-                "Minimum longitudinal reinforcement uses the modeled tension region and section cut direction. "
-                "Read the selected case and supplied reinforcement alongside its required area or resistance."
+                'For example, two 25 mm bars at 100 mm centers have 75 mm clear spacing. The governing spacing requirement also depends on aggregate size and the selected rule. Minimum longitudinal reinforcement uses the modeled tension region and section cut direction. Read the selected case and supplied reinforcement with its required area or resistance.'
             ),
         ],
         "Reading the results": [
             _heading("Trace one reported result"),
             _md(
-                "Select the case and identify the reported quantity, units and location. "
-                "Read its method and criterion before interpreting the status. A stress percentage compares stress magnitude with characteristic material strength. "
-                "A capacity utilization compares an action with the resistance defined by that check. "
-                "A crack-width status compares the calculated width with the entered duration-specific limit."
+                'Select the case and identify the reported quantity, units and location. Read its method and criterion before you interpret the status. A stress percentage compares stress magnitude with characteristic material strength. A capacity utilization compares an action with the resistance defined by that check. A crack-width status compares the calculated width with the entered duration-specific limit.'
             ),
             _md(
                 "Use the detailed result and Audit report to follow inputs, intermediate quantities and the governing condition. "
@@ -1110,9 +1048,7 @@ def other_blocks():
         "Material laws": [
             _heading("Choose the law used by the calculation"),
             _md(
-                "The elastic calculation uses the assigned modulus of each bar or tendon. "
-                "The plastic calculation uses its assigned design stress-strain law and strain limits. "
-                "The Active in compression (plastic) switch changes the plastic reinforcement response. Elastic steel remains linear in tension and compression."
+                'The elastic calculation uses the assigned modulus of each bar or tendon. The plastic calculation uses its assigned design stress-strain law and strain limits. The Active in compression (plastic) switch changes the plastic reinforcement response. Elastic steel stays linear in tension and compression.'
             ),
             _md(
                 "For a tendon with initial strain 0.005 and tension-positive section strain 0.001, the total material strain is 0.006. "

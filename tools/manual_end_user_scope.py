@@ -44,6 +44,15 @@ _FORBIDDEN_PATTERNS = (
     ),
 )
 
+# These operating instructions name the file that the user must open or keep.
+# Other executable references still pass through the administration guard.
+_OPERATIONAL_EXECUTABLE_CONTEXTS = (
+    "Keep the _internal folder beside Sector.exe.",
+    "Open Sector.exe.",
+    "Sector.exe stops before the browser opens.",
+    "Keep _internal beside Sector.exe.",
+)
+
 
 def validate_end_user_manual_scope(visible_text: object) -> None:
     """Reject development and former-version administration in visible text."""
@@ -52,7 +61,12 @@ def validate_end_user_manual_scope(visible_text: object) -> None:
         raise AssertionError("manual end-user scope content must be text")
 
     flat_text = " ".join(visible_text.split())
-    folded = flat_text.casefold()
+    scoped_text = flat_text.replace("`", "")
+    for context in _OPERATIONAL_EXECUTABLE_CONTEXTS:
+        scoped_text = scoped_text.replace(
+            context, context.replace("Sector.exe", "the application")
+        )
+    folded = scoped_text.casefold()
     findings = [
         phrase
         for phrase in FORBIDDEN_ADMIN_PHRASES

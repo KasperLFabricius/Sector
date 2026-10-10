@@ -70,74 +70,39 @@ MANUAL_EQUATION_SOURCES = (
         f"{DOC_CURRENT} 5.3.3 when the corresponding edition preset is selected.",
     ),
     _source(
-        4, "manual.plastic.governing-curvature", "C4-1", SOURCE_PROJECT,
+        4, "manual.plastic.governing-curvature", "C5-1", SOURCE_PROJECT,
         "Project-defined / uncited first-material-limit capacity search; selected "
         "material limits keep their stated references.",
     ),
     _source(
-        5, "manual.detailing.minimum-2005", "C5-1", SOURCE_STANDARD,
-        f"{DOC_BASE} 9.2.1.1(1), Formula (9.1N), with {DOC_DK} where selected.",
-    ),
-    _source(
-        6, "manual.detailing.minimum-2023-bending", "C5-2", SOURCE_STANDARD,
-        f"{DOC_CURRENT} 12.2(2)(a), Formula (12.1).",
-    ),
-    _source(
-        7, "manual.detailing.minimum-2023-axial", "C5-3", SOURCE_STANDARD,
-        f"{DOC_CURRENT} 12.2(2)(b), Formula (12.2).",
-    ),
-    _source(
-        8, "manual.detailing.clear-spacing", "C5-4", SOURCE_STANDARD,
-        f"{DOC_BASE} 8.2(2); {DOC_CURRENT} 11.2(2).",
-    ),
-    _source(
-        9, "manual.detailing.links.minimum-ratio", "C5-5", SOURCE_STANDARD,
-        f"{DOC_BASE} 9.2.2(5), Formulas (9.4) and (9.5N); {DOC_DK} "
-        f"9.2.2(5), Formula (9.5N NA), where selected; {DOC_CURRENT} "
-        "12.2(4), Formula (12.4).",
-    ),
-    _source(
-        10, "manual.detailing.links.spacing", "C5-6", SOURCE_STANDARD,
-        f"{DOC_BASE} 9.2.2(6),(8), Formulas (9.6N) and (9.8N), plus "
-        f"9.3.2(2),(4)-(5) for the slab provisions; {DOC_CURRENT} "
-        "Table 12.1 items 5 and 7, plus Table 12.2 items 8 and 10 and "
-        "12.4.2 for the slab provisions.",
-    ),
-    _source(
-        11, "manual.detailing.torsion.minimum-ratio", "C5-7", SOURCE_STANDARD,
-        f"{DOC_BASE} 9.2.3(2), referring to 9.2.2(5), Formulas (9.4) and "
-        f"(9.5N); {DOC_DK} 9.2.2(5), Formula (9.5N NA), where selected; "
-        f"{DOC_CURRENT} 12.2(4), Formula (12.4), and Table 12.1 item 2.",
-    ),
-    _source(
-        12, "manual.crack.2005.width", "C7-1", SOURCE_STANDARD,
+        5, "manual.crack.2005.width", "C6-1", SOURCE_STANDARD,
         f"{DOC_BASE} 7.3.4, Formulas (7.8) and (7.9).",
     ),
     _source(
-        13, "manual.crack.2005.spacing", "C7-2", SOURCE_STANDARD,
+        6, "manual.crack.2005.spacing", "C6-2", SOURCE_STANDARD,
         f"{DOC_BASE} 7.3.4, Formulas (7.11) and (7.14).",
     ),
     _source(
-        14, "manual.crack.dk-na-heightened", "C7-5", SOURCE_STANDARD,
+        7, "manual.crack.dk-na-heightened", "C6-3", SOURCE_STANDARD,
         f"{DOC_DK} 7.3.2(1)P, Formula (7.100 NA).",
     ),
     _source(
-        15, "manual.crack.2023.width", "C7-3", SOURCE_STANDARD,
+        8, "manual.crack.2023.width", "C6-4", SOURCE_STANDARD,
         f"{DOC_CURRENT} 9.2.3, Formulas (9.8) and (9.9).",
     ),
     _source(
-        16, "manual.crack.2023.spacing", "C7-4", SOURCE_STANDARD,
+        9, "manual.crack.2023.spacing", "C6-5", SOURCE_STANDARD,
         f"{DOC_CURRENT} 9.2.3, Formulas (9.15)-(9.18).",
     ),
     _source(
-        17, "manual.fatigue.stress-range", "C8-1", SOURCE_MIXED,
+        10, "manual.fatigue.stress-range", "C7-1", SOURCE_MIXED,
         "Project-defined / uncited Elastic stress calculation with "
         f"a selected fatigue action factor; {DOC_BASE} 2.4.2.3 and 6.8.4(1), "
         f"or {DOC_CURRENT} 10.2 and Annex E, defines how that factor applies "
         "for the selected edition.",
     ),
     _source(
-        18, "manual.fatigue.reinforcement.design-range", "C8-2",
+        11, "manual.fatigue.reinforcement.design-range", "C7-2",
         SOURCE_MIXED,
         "Project-defined / uncited characteristic range for Custom / imported "
         f"fatigue details; {DOC_BASE} 6.8.4 and Tables 6.3N-6.4N, or "
@@ -145,74 +110,109 @@ MANUAL_EQUATION_SOURCES = (
         "edition preset.",
     ),
     _source(
-        19, "manual.fatigue.reinforcement.life", "C8-3", SOURCE_MIXED,
+        12, "manual.fatigue.reinforcement.life", "C7-3", SOURCE_MIXED,
         "Project-defined / uncited S-N relationship for Custom / imported "
         f"fatigue details; {DOC_BASE} 6.8.4 and Tables 6.3N-6.4N, or "
         f"{DOC_CURRENT} Annex E.5 and Tables E.1-E.2, for the corresponding "
         "edition preset.",
     ),
     _source(
-        20, "manual.fatigue.reinforcement.miner", "C8-4", SOURCE_STANDARD,
+        13, "manual.fatigue.reinforcement.miner", "C7-4", SOURCE_STANDARD,
         f"{DOC_BASE} 6.8.4, Palmgren-Miner summation; {DOC_CURRENT} "
         "Annex E.5, Palmgren-Miner summation.",
     ),
     _source(
-        21, "manual.fatigue.concrete.strength-2005", "C8-5", SOURCE_STANDARD,
+        14, "manual.fatigue.concrete.strength-2005", "C7-5", SOURCE_STANDARD,
         f"{DOC_BASE} 3.1.6 and 6.8.7, Formula (6.76).",
     ),
     _source(
-        22, "manual.fatigue.concrete.strength-2023", "C8-6", SOURCE_STANDARD,
+        15, "manual.fatigue.concrete.strength-2023", "C7-6", SOURCE_STANDARD,
         f"{DOC_CURRENT} 5.1.6(1), Formula (5.3), and 10.5, Formula (10.5).",
     ),
     _source(
-        23, "manual.fatigue.concrete.life", "C8-7", SOURCE_MIXED,
+        16, "manual.fatigue.concrete.life", "C7-7", SOURCE_MIXED,
         "Project-defined / uncited concrete Miner S-N relation when the "
         f"user-defined method is selected; {DOC_BRIDGE} corrected 6.106, or "
         f"{DOC_CURRENT} E.5.3, Formulas (E.7)-(E.8), for the corresponding "
         "standard Miner method.",
     ),
     _source(
-        24, "manual.fatigue.concrete.equivalent", "C8-8", SOURCE_STANDARD,
+        17, "manual.fatigue.concrete.equivalent", "C7-8", SOURCE_STANDARD,
         f"{DOC_BASE} 6.8.7, Formula (6.72); {DOC_CURRENT} E.4.3, "
         "Formula (E.2).",
     ),
     _source(
-        25, "manual.shear.no-links.variable", "C9-1", SOURCE_STANDARD,
+        18, "manual.shear.no-links.variable", "C8-1", SOURCE_STANDARD,
         f"{DOC_BASE} 6.2.2(1), Formula (6.2a), with {DOC_DK} where selected.",
     ),
     _source(
-        26, "manual.shear.no-links.minimum", "C9-2", SOURCE_STANDARD,
+        19, "manual.shear.no-links.minimum", "C8-2", SOURCE_STANDARD,
         f"{DOC_BASE} 6.2.2(1), Formula (6.2b), with {DOC_DK} where selected.",
     ),
     _source(
-        27, "manual.shear.action-factor-2023", "C9-3", SOURCE_STANDARD,
+        20, "manual.shear.action-factor-2023", "C8-3", SOURCE_STANDARD,
         f"{DOC_CURRENT} 8.2.2(3)-(4), Formulas (8.30) and (8.31).",
     ),
     _source(
-        28, "manual.shear.links-2005", "C9-4", SOURCE_STANDARD,
+        21, "manual.shear.links-2005", "C8-4", SOURCE_STANDARD,
         f"{DOC_BASE} 6.2.3(3), Formulas (6.8) and (6.9), with {DOC_DK} "
         "6.2.3(2)-(3) where selected.",
     ),
     _source(
-        29, "manual.shear.links-2023", "C9-5", SOURCE_STANDARD,
+        22, "manual.shear.links-2023", "C8-5", SOURCE_STANDARD,
         f"{DOC_CURRENT} 8.2.3(5), Formulas (8.42) and (8.44).",
     ),
     _source(
-        30, "manual.torsion.resistance", "C10-1", SOURCE_STANDARD,
+        23, "manual.torsion.resistance", "C9-1", SOURCE_STANDARD,
         f"{DOC_BASE} 6.3.2(1), Formula (6.27), 6.2.3(3), Formula (6.8), "
         f"and 6.3.2(4), Formula (6.30), with {DOC_DK} where selected.",
     ),
     _source(
-        31, "manual.torsion.strut-interaction", "C10-2", SOURCE_STANDARD,
+        24, "manual.torsion.strut-interaction", "C9-2", SOURCE_STANDARD,
         f"{DOC_BASE} 6.3.2(4), Formula (6.29).",
     ),
     _source(
-        32, "manual.combined.strut-interaction", "C11-1", SOURCE_STANDARD,
+        25, "manual.combined.strut-interaction", "C10-1", SOURCE_STANDARD,
         f"{DOC_BASE} 6.3.2(4), Formula (6.29).",
     ),
     _source(
-        33, "manual.combined.utilisation", "C11-2", SOURCE_STANDARD,
+        26, "manual.combined.utilisation", "C10-2", SOURCE_STANDARD,
         f"{DOC_DK} 6.3.2(6).",
+    ),
+    _source(
+        27, "manual.detailing.minimum-2005", "C11-1", SOURCE_STANDARD,
+        f"{DOC_BASE} 9.2.1.1(1), Formula (9.1N), with {DOC_DK} where selected.",
+    ),
+    _source(
+        28, "manual.detailing.minimum-2023-bending", "C11-2", SOURCE_STANDARD,
+        f"{DOC_CURRENT} 12.2(2)(a), Formula (12.1).",
+    ),
+    _source(
+        29, "manual.detailing.minimum-2023-axial", "C11-3", SOURCE_STANDARD,
+        f"{DOC_CURRENT} 12.2(2)(b), Formula (12.2).",
+    ),
+    _source(
+        30, "manual.detailing.clear-spacing", "C11-4", SOURCE_STANDARD,
+        f"{DOC_BASE} 8.2(2); {DOC_CURRENT} 11.2(2).",
+    ),
+    _source(
+        31, "manual.detailing.links.minimum-ratio", "C11-5", SOURCE_STANDARD,
+        f"{DOC_BASE} 9.2.2(5), Formulas (9.4) and (9.5N); {DOC_DK} "
+        f"9.2.2(5), Formula (9.5N NA), where selected; {DOC_CURRENT} "
+        "12.2(4), Formula (12.4).",
+    ),
+    _source(
+        32, "manual.detailing.links.spacing", "C11-6", SOURCE_STANDARD,
+        f"{DOC_BASE} 9.2.2(6),(8), Formulas (9.6N) and (9.8N), plus "
+        f"9.3.2(2),(4)-(5) for the slab provisions; {DOC_CURRENT} "
+        "Table 12.1 items 5 and 7, plus Table 12.2 items 8 and 10 and "
+        "12.4.2 for the slab provisions.",
+    ),
+    _source(
+        33, "manual.detailing.torsion.minimum-ratio", "C11-7", SOURCE_STANDARD,
+        f"{DOC_BASE} 9.2.3(2), referring to 9.2.2(5), Formulas (9.4) and "
+        f"(9.5N); {DOC_DK} 9.2.2(5), Formula (9.5N NA), where selected; "
+        f"{DOC_CURRENT} 12.2(4), Formula (12.4), and Table 12.1 item 2.",
     ),
 )
 

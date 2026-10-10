@@ -24,11 +24,11 @@ class _ContainsEverything(str):
 
 
 _REPORT_LITERAL = (
-    "Report details and publication controls are grouped separately from the "
-    "Project input stage."
+    "Report details and publication controls are in Report. "
+    "Save/load and autosave are in Inputs > Project > Save / Load."
 )
 _RESULT_LITERAL = (
-    "Report labels identify the physical quantity represented by each result field."
+    "Select the case and identify the reported quantity, units and location."
 )
 _REPLACED_REPORT_LITERAL = (
     "Report details and publication controls are no longer mixed with the "
@@ -92,7 +92,7 @@ def test_current_manual_program_statements_reject_duplicates(
         ),
         (
             _REPORT_LITERAL,
-            _REPORT_LITERAL.replace("grouped separately", "grouped  separately"),
+            _REPORT_LITERAL.replace("are in", "are  in"),
         ),
         (
             _REPORT_LITERAL,
@@ -100,11 +100,11 @@ def test_current_manual_program_statements_reject_duplicates(
         ),
         (
             _RESULT_LITERAL,
-            _RESULT_LITERAL.replace("Report", "report", 1),
+            _RESULT_LITERAL.replace("Select", "select", 1),
         ),
         (
             _RESULT_LITERAL,
-            _RESULT_LITERAL.replace("physical quantity", "physical  quantity"),
+            _RESULT_LITERAL.replace("reported quantity", "reported  quantity"),
         ),
         (
             _RESULT_LITERAL,

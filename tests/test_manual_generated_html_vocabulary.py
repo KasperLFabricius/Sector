@@ -114,7 +114,7 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
         "fragment_href_pattern",
     )
     assert vocabulary.current_head_style_sha256 == (
-        "3a54528393a8bff923e31bb97c818bde9a362b665683ddc27613637d326c4dd6"
+        "c0bc3def5f095720542356a439c21c1dc263c79fc7ecae45751a640122f53d28"
     )
     assert vocabulary.body_block_tags == frozenset(
         {
