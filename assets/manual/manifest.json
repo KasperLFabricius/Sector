@@ -1,0 +1,101 @@
+{
+  "version": "0.96.5",
+  "figures": {
+    "fig_workspace_overview": {
+      "figure_sha256": "911890baef3fc67ffbb2a50eb1140971e7696c49a8ede5a5b2600a80e23c6cf5",
+      "png_sha256": "d3b93fa8610341e5ee3f6813457b69640bade38db5b3e302d82d58a8f35b0827"
+    },
+    "fig_beam_section": {
+      "figure_sha256": "a9bee7c3c421cc60c4f7b8bcdced58f0b8c70f0b8790f2ff93be45d3281e1193",
+      "png_sha256": "7a424ade9957467aaeffe1bbf1214158011e2926099301f33a8193417fdbfd9f"
+    },
+    "fig_circular_section": {
+      "figure_sha256": "15961839d941ef408afad887e58a69abfe84065db7559f1cd7fdd1ac0b009bb4",
+      "png_sha256": "59adc3e0412f915be95c0f6b54f23ffcfcc7925f93bdf4bdbff391e51980d9fc"
+    },
+    "fig_beam_concrete_law": {
+      "figure_sha256": "b5159901317e04290d7b8be99623bbbb423c13ddc32eb2c85296f515fd79b1f9",
+      "png_sha256": "a200400d85f94c2f88a9f345b6592ce5c434e479dae9a6f66ce0f3a83f2378fe"
+    },
+    "fig_beam_steel_law": {
+      "figure_sha256": "d8ee7ef85de922ad1f53a774bb0627a264c8a3c3ef2965b5b40e116787054719",
+      "png_sha256": "d75a51b6973e774db1a70306ff844de1b2acdb863bc2b496e17fc22e7d5f26ac"
+    },
+    "fig_circular_prestress_law": {
+      "figure_sha256": "a6f1d022e9c578ef64fba4d05fc8ad21418e042850ce52758c4f000d12efd416",
+      "png_sha256": "688acbbb15561766cd5456a63b96f9c957cad8b46d1c23e0969d9c2c7ececdc2"
+    },
+    "fig_beam_envelope": {
+      "figure_sha256": "8dd1fcaed1b2823e74e5d736b96067e093e7e740715b475f34b32f8c6513da37",
+      "png_sha256": "5dffc6ad1b786fd43f5fd966d4d9aac87fabf5c0fe582b20f2db3458affc0d8b"
+    },
+    "fig_sign_convention": {
+      "figure_sha256": "9788bcc88e8e5a14e0a34a8a24d6ac75295702cc6aaa8a05b50d870c2eba8e82",
+      "png_sha256": "bd2faf5a5260eef320b37eb5e56bf08ed38111b39709bb9e7879916df13ad9ea"
+    },
+    "fig_discretization": {
+      "figure_sha256": "416c186ea0babcc9ed1fad99034e5af6d30c28f98faa9e1d667ef3dd1cec6f47",
+      "png_sha256": "2f5316106fb409d37e656bbf2b906aef5dd4cb6cb89dd3d56111f8eea0f749a4"
+    },
+    "fig_strain_plane": {
+      "figure_sha256": "eb8ad05ac226931fa54d195bc8681820e95ae0e31c5b5e119d95bbc5ff74104d",
+      "png_sha256": "bafb834b97018bfaae0ef447bd512223cf7051eccefcf63fdf29caebc769b0a0"
+    },
+    "fig_capacity_limits": {
+      "figure_sha256": "361ba9df752fb7950305f1cdafa83bd31f5129bf6c9feb490520cbe00fcea8da",
+      "png_sha256": "df15416a8d6f4443b1628f1d92faaaac2c3918e8c737f2d951167ef5e78072ae"
+    },
+    "fig_plastic_bands": {
+      "figure_sha256": "ae1c7857b7b3b2493add556fac7993216eb82276f865a81c4234d8927d965b8e",
+      "png_sha256": "8ef6f38a3826a88d8a2cf0be9a629ace7276ff30ef444a50ffad6fded3447ef7"
+    },
+    "fig_envelope_ray": {
+      "figure_sha256": "50ba58e72a397fe34421f3d66d556c6f024d3c2aed22e7ef63a3563ec5457066",
+      "png_sha256": "1b133dd048a48f084f39eb12b97f18a6a2e4c30fb751d73e3c78357d14e0150b"
+    },
+    "fig_beam_cracked": {
+      "figure_sha256": "cd85aae9c0377466fb221b8606dfffab3fa4a9b7d1c6388a53d96324633a2172",
+      "png_sha256": "2d82ba582d52cde98982a77aa215127eaf0374613d450802ed29873e38d7ad44"
+    },
+    "fig_elastic_fields": {
+      "figure_sha256": "6d88d2ea1e0426c21e9bd199922946de6e9d1774ae07d73b0339be2ea80888df",
+      "png_sha256": "167b36fa2a9b361b132ff3084b6a5194ca4438aeafb13ab10f891e5c17535f17"
+    },
+    "fig_elastic_balance": {
+      "figure_sha256": "48419d782d82b572c72d8398f63cb31af1d48cd843b17648116e2fbde5c090be",
+      "png_sha256": "0472dd659c9913db85b4321de9ff9c9f2c477c19f6589254e0d08b00340e8419"
+    },
+    "fig_duration_components": {
+      "figure_sha256": "a5bf3704aaf61e52ccd048d4b75f3153fae0a24ce03dad2150fe11762d5369a6",
+      "png_sha256": "932791fb740e1a24aa36d2b08861c8bcd564ef642355a5db79cfdf625e59c788"
+    },
+    "fig_crack_geometry": {
+      "figure_sha256": "f6dfac8836133f57437f54a0f5facc5b8c5370a0bc19e362b159d800a6059c6b",
+      "png_sha256": "de70d4fe191204178a2096530ea476ea6d69612f3a8add2b362bc202ecd13cac"
+    },
+    "fig_fatigue_sn": {
+      "figure_sha256": "7f73a071b4a90704916c288b2026ac68a6b29ef8f2004bdd6b4278ad504db26e",
+      "png_sha256": "bef6f38928a4b07984ca0a4a4278ee3f4508824aa3cda0084c1acc6d669160a9"
+    },
+    "fig_fatigue_damage": {
+      "figure_sha256": "27a64d5f60059b63c3cb259cba26896c6cece5c55fe30038eaa042cb0ec05641",
+      "png_sha256": "c24e707206055cec80529ec5a9a403bffcf881e4d9877ccad969da39b473c236"
+    },
+    "fig_fatigue_actions": {
+      "figure_sha256": "5cd48f751c94c3f68d86c86ce5e85bb4a58612ab655809f7d592f474fc49e232",
+      "png_sha256": "db2cbd32be3988d40c1ee194f0aedbae43e85ac8e96f18da8f25c283c6db90d6"
+    },
+    "fig_shear_truss": {
+      "figure_sha256": "219b1f604ede436065a36644f96d558a0dea6e07dbe9887f3723065eada96aa3",
+      "png_sha256": "82e52969662f7f334ae394c904b2c74b0742a9091ce7e8dafe10f539c16287ed"
+    },
+    "fig_torsion_tube": {
+      "figure_sha256": "f66076049116db671cbb65b7a12e0318edef5ca425464680a88f776a352e30a2",
+      "png_sha256": "e081a45128b4a4288e1cc9788ae7f5eeba19fed4d3c5cb6c3bdb7c9888daa710"
+    },
+    "fig_combined_paths": {
+      "figure_sha256": "84772733ae7507e73a03cbe9211c14b1af913542072040bd3db9ba82ae0e4af1",
+      "png_sha256": "bb87c2214b0a64842f402899428f60ea13c9ae16d16d41cbb2e55e15cb3bd4e3"
+    }
+  }
+}

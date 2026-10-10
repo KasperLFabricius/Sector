@@ -6,7 +6,7 @@
 | --- | --- |
 | Run Sector and understand its supported calculations | [Project README](../README.md) |
 | Product scope and engineering responsibility | [Product identity](product_identity.md) |
-| Current version and compatibility | [0.96.4 notes](v0964_release_notes.md) and [changelog](../CHANGELOG.md) |
+| Current version and compatibility | [0.96.5 notes](v0965_release_notes.md) and [changelog](../CHANGELOG.md) |
 | Geometry validation and ring compatibility | [Geometry topology](geometry_topology.md) |
 | Build and run the Windows package | [Packaging guide](../packaging/README.md) |
 

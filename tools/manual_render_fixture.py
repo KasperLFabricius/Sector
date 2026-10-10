@@ -42,7 +42,7 @@ from tools.publication_preflight import (  # noqa: E402
 )
 from tools.report_render_fixture import validate_outline_destinations  # noqa: E402
 
-_EXPECTED_FIGURE_COUNT = 16
+_EXPECTED_FIGURE_COUNT = 28
 _UNRENDERED_MATH_TOKENS = (
     "sqrt",
     "Cfrac",
@@ -59,15 +59,15 @@ _MANUAL_CROPS = (
         "manual contents navigation",
         1,
         (0.09, 0.18, 0.92, 0.45),
-        "125e9ed48f82f2c00206bc9494dea7b12ac4c82dd401d928ed814e227d29a00f",
+        "66818c5a0fb281f4f33d7c99e9a46acf7e9756f702a78ccad62766e1d1c999c2",
     ),
     RasterCrop(
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # The reviewed 0.96.4 footer has the current version and 72-page count;
+        # The reviewed 0.96.5 footer has the current version and 89-page count;
         # the crop geometry is unchanged.
-        "859ff9a36ca25b19de6c74d92fc10551f401b83c23640f57eb71d4dec156355a",
+        "5a517247c0ac5404dc787f89a43568174bb89bb953ceacdc22195884fc12a76f",
     ),
 )
 
@@ -113,7 +113,7 @@ class _HTMLInventory(HTMLParser):
             self.scripts += 1
         if tag in {"img", "script", "iframe", "link"}:
             target = values.get("src") or values.get("href")
-            if target:
+            if target and not (tag == "img" and target.startswith("data:image/png;base64,")):
                 self.external_resources.append((tag, target))
         if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
             self.heading_levels.append(int(tag[1]))

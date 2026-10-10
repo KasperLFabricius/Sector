@@ -1678,13 +1678,14 @@ def manual_blocks() -> list:
     h2("The strain plane at capacity")
     md("Plane sections remain plane, so the strain is linear across the depth: "
        "$\\varepsilon_{sec}(s) = \\kappa\\,(s - s_{na})$, where $\\kappa$ is the "
-       "curvature and $s_{na}$ the neutral-axis depth. At capacity the extreme "
-       "compression fibre reaches the concrete crushing strain "
-       "$\\varepsilon_{cu2}$; the compression depth is $c = s_{max}-s_{na}$.")
+       "curvature and $s_{na}$ the neutral-axis coordinate. At capacity, the first "
+       "material strain limit governs. Concrete can reach its crushing strain, "
+       "or a bar or tendon can reach its assigned limit first. "
+       "The compression depth is $c = s_{max}-s_{na}$.")
     fig(fig_strain_plane, "The capacity strain plane (reported tension-positive "
         "convention): one straight line -- zero at the neutral axis, compression "
         "(negative) above it and tension (positive) below, the top fibre at the "
-        "crushing strain. The calculation formula above is compression-positive; "
+        "crushing strain in this concrete-governed example. The calculation formula above is compression-positive; "
         "the reported strains negate it.",
         "A straight strain line crosses zero at the neutral axis; negative compression "
         "lies above it, positive tension below it, and the top fibre reaches ultimate "
@@ -1719,10 +1720,11 @@ def manual_blocks() -> list:
          "$\\varepsilon_s$ is shown.")
     h2("Force resultants and equilibrium")
     md("The concrete compression force is the integral of $\\sigma_c$ over the "
-       "compression zone. The parabola is split into its rising region and the "
-       "plateau and integrated over the polygon by Green's theorem. Each bar and tendon adds "
+       "compression zone. Sector divides the rising stress region into 80 equal-depth bands. "
+       "Each band uses its midpoint stress and exact polygon area and first moments, calculated by Green's theorem. "
+       "The constant-stress plateau is integrated separately. Each bar and tendon adds "
        "$\\sigma(\\varepsilon)\\,A$. The compression depth $c$ is solved so the "
-       "axial force balances, $\\sum F = N$; the first moments of the resultants "
+       "axial force balances, $\\sum F = -N$ for compression-positive internal forces and tension-positive input N; the first moments of the resultants "
        "about the origin are the capacity moments $M_x$, $M_y$.")
     h2("The interaction envelope")
     md(("Rotating the neutral-axis angle $\\varphi_{NA}$ and solving at each gives "
@@ -1732,7 +1734,7 @@ def manual_blocks() -> list:
        "reaches its "
        "crushing strain ($3.5$ per mille) while the most tensile bars are well past "
        "yield ($19.5$ per mille, against the $2.29$ per mille yield), so this "
-       "tension-controlled point gives $M_{x} = 346$ kNm. The applied $M_x=300$ "
+       "concrete-governed state with yielded tension reinforcement gives $M_{x} = 346$ kNm. The applied $M_x=300$ "
        "kNm is then a utilisation of $300/346 = 0.87$.").replace(
            "per mille", _PERMILLE
        ))
@@ -1841,12 +1843,12 @@ def manual_blocks() -> list:
        "The Stage I cracking check and uncracked section properties use $(n_i-1)A_i$ "
        "for all reinforcement, since concrete is active in both directions. "
        "The solver normalises $E_c$ to 1 and solves a "
-       "reference-stress plane $(\\sigma_0,g_x,g_y)$. The "
+       "reference-stress plane $(\\sigma_0,g_x,g_y)$.\n\nThe "
        "physical concrete strain is $\\varepsilon_c=\\sigma_{ref}/E_c$. Report "
        "labels identify the physical quantity represented by each result field. "
-       "Newton iteration determines the "
-       "reference-stress plane so the transformed-section resultants equal "
-       "$(N,M_x,M_y)$, updating the compression zone until it settles.")
+       "\n\nNewton iteration determines the "
+       "reference-stress plane so the transformed-section resultants balance "
+       "the applied axial force and moments, updating the compression zone until it settles.")
     md("Creep enters through the modular ratio: the long-term state uses "
        "$n_l = E_s/E_{c,eff}$ with $E_{c,eff}=E_c/(1+\\varphi)$, and the "
        "short-term state uses $n_s = E_s/E_c$. The reported total combines the two, "
@@ -2522,8 +2524,8 @@ def manual_blocks() -> list:
        "linear across the section.\n"
        "- **Perfect bond.** Reinforcement strain equals the concrete strain at the "
        "same point (before cracking) and follows the strain plane after.\n"
-       "- **No tension in the concrete** for the cracked-elastic and plastic "
-       "analyses; the tensile strength enters only the cracking threshold.\n"
+       "- **Concrete stress.** Cracked-elastic and plastic section equilibrium use compression-only concrete. "
+       "Concrete tensile strength enters the cracking threshold, crack-width rules and applicable resistance checks.\n"
        "- **Ultimate is strain-controlled.** The section fails when the first "
        "material reaches its strain limit (concrete crushing or steel/tendon "
        "rupture); no material is driven past its limit.\n"
@@ -2593,7 +2595,9 @@ def manual_blocks() -> list:
            ["$h_{c,ef}$", "Effective tension-zone height (crack width)"],
            ["Stage I / II", "Uncracked / fully cracked elastic state"]])
 
-    return blocks
+    from manual_walkthroughs import extend_manual
+
+    return extend_manual(blocks)
 
 
 _PART_SUMMARIES = {
@@ -3602,6 +3606,8 @@ def _manual_equation_html(equation) -> str:
 def build_manual_html_bytes() -> bytes:
     """Build the self-contained, JavaScript-free accessible manual companion."""
 
+    from manual_assets import figure_data_uri
+
     published_blocks = tuple(
         publish_manual_blocks(manual_publication_blocks(manual_blocks()))
     )
@@ -3640,7 +3646,9 @@ def build_manual_html_bytes() -> bytes:
                 )
             caption = _inline_md_to_html(item.caption)
             body.append(
-                f'<figure id="{item.anchor}"><div class="figure-alternative" '
+                f'<figure id="{item.anchor}"><img class="manual-figure" '
+                f'src="{figure_data_uri(block[1])}" alt="">'
+                '<div class="figure-alternative" '
                 f'role="img" aria-label="{html.escape(alternative, quote=True)}">'
                 + _inline_md_to_html(alternative)
                 + "</div><figcaption><strong>"
@@ -3712,7 +3720,8 @@ th {{ background:var(--surface); }} .table-scroll {{ overflow-x:auto; }}
 .callout,.equation,figure {{ border:1px solid var(--rule); padding:1rem; margin:1rem 0; break-inside:avoid; }}
 .display-math,.equation-text {{ overflow-wrap:anywhere; padding:.5rem; background:#f7f8fa; }}
 .math,code {{ font-family:"Courier New", monospace; }}
-.figure-alternative {{ padding:1rem; border:2px dashed var(--rule); background:#f7f8fa; }}
+.manual-figure {{ width:100%; height:auto; display:block; }}
+.figure-alternative {{ padding:.4rem 0; color:var(--muted); font-size:.9rem; }}
 @media print {{ body {{ max-width:none; padding:1cm; }} a {{ color:inherit; }} }}
 </style>
 </head>

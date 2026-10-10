@@ -47,7 +47,7 @@ class _ManualHTMLParser(HTMLParser):
             self.scripts += 1
         if tag in {"img", "script", "iframe", "link"}:
             target = values.get("src") or values.get("href")
-            if target:
+            if target and not (tag == "img" and target.startswith("data:image/png;base64,")):
                 self.external_resources.append((tag, target))
         if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
             self.heading_levels.append(int(tag[1]))

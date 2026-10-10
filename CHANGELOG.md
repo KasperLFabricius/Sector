@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.96.5 - 2026-10-10
+
+The manual explains elastic and plastic section equilibrium through worked
+calculations, force contribution tables and numerical resolution examples.
+New figures connect section geometry, strain and stress, creep combinations,
+crack geometry, shear, torsion and combined force paths. The accessible HTML
+includes checked offline images. Manual body text and paragraph spacing are
+larger. Production solvers and project schema 27 retain their behavior.
+
 ## 0.96.4 - 2026-09-14
 
 Sector 0.96.4 improves report-profile content, input navigation and manual reading
