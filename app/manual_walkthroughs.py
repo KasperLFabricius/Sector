@@ -348,7 +348,7 @@ def fig_capacity_limits():
         )
         fig.update_xaxes(
             range=[-6, 23],
-            title_text="Tension-positive strain (per mille)",
+            title_text="Tension-positive strain (\u2030)",
             row=1,
             col=col,
         )
@@ -638,7 +638,7 @@ def common_blocks():
         _md(
             "Use mm, N, N mm and MPa together for the worked arithmetic. Convert kN to N by multiplying by 1000. "
             "Convert kNm to N mm by multiplying by 10^6. A curvature stated in 1/m is 1000 times its value in 1/mm. "
-            "The material laws use dimensionless strain; multiply by 1000 to express strain in per mille."
+            "The material laws use dimensionless strain; multiply by 1000 to express strain in \u2030."
         ),
     ]
 
@@ -899,8 +899,8 @@ def plastic_blocks():
         ),
         _figure(
             fig_capacity_limits,
-            "Illustrative strain-limit comparison. The right panel assumes a tensile steel limit of 10 per mille; it represents a different material from the worked beam.",
-            "Two compatible straight strain lines illustrate concrete reaching 3.5 per mille compression and steel reaching its own illustrative tension limit while concrete remains below crushing.",
+            "Illustrative strain-limit comparison. The right panel assumes a tensile steel limit of 10 \u2030; it represents a different material from the worked beam.",
+            "Two compatible straight strain lines illustrate concrete reaching 3.5 \u2030 compression and steel reaching its own illustrative tension limit while concrete remains below crushing.",
         ),
         _md(
             "2. **Calculate concrete forces.** The plateau begins at $s_{peak}=s_{na}+\\varepsilon_{c2}/\\kappa$. "

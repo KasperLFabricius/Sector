@@ -1937,7 +1937,8 @@ def test_2005_mixed_bond_correction_applies_eta_to_rebar_only():
     )
 
 
-def test_2023_mixed_bond_correction_uses_equivalent_tendon_area():
+@pytest.mark.parametrize("displace_concrete", [False, True])
+def test_2023_mixed_bond_correction_uses_equivalent_tendon_area(displace_concrete):
     section = Section.from_polygon(
         corners=[
             (-0.20, -0.30),
@@ -1951,8 +1952,11 @@ def test_2023_mixed_bond_correction_uses_equivalent_tendon_area():
     n_ratio = 10.0
     short_force = 100.0
     beta = 0.5
-    actual_area = section.gross_area + n_ratio * 0.002
-    equivalent_area = section.gross_area + n_ratio * 0.0015
+    # The uncracked transformed section uses the additional steel area when
+    # concrete occupies the same geometry. Cover both supported conventions.
+    added_ratio = n_ratio - int(displace_concrete)
+    actual_area = section.gross_area + added_ratio * 0.002
+    equivalent_area = section.gross_area + added_ratio * 0.0015
     expected_elastic = n_ratio * short_force / actual_area / 1000.0
     expected_equivalent = (
         n_ratio * short_force / equivalent_area / 1000.0
@@ -1969,6 +1973,7 @@ def test_2023_mixed_bond_correction_uses_equivalent_tendon_area():
         check_concrete=False,
         n_mult=np.ones(2),
         prestress_stress=np.zeros(2),
+        displace_concrete=displace_concrete,
     )
 
     mild = result.reinforcement[0].bins[0]

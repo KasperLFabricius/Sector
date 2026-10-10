@@ -33,3 +33,12 @@ standard-library worker. This avoids measuring the Windows virtual-environment
 redirector's child-process lifetime. The private-handle assertions, expected
 protocol output and 1.5-second limit remain in place. Both corrections affect
 tests only.
+
+The complete CI run also exposed three fatigue-test failures that reproduce on
+the unchanged base. The mixed-bond arithmetic now covers both displaced-concrete
+settings explicitly. The report-depth checks accept either symmetric top corner
+only after verifying their raw criterion values and the narrow governing tie.
+They still require one Standard row, all Audit rows and matching profile headings.
+The introduced strain-notation finding uses the established U+2030 symbol in the
+manual text, captions, alternatives and figure axis. Its PNG and manifest are
+regenerated from the corrected source.
