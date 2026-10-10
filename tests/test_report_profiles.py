@@ -100,7 +100,7 @@ def test_profiles_describe_omissions_and_audit_depth_for_engineers():
     assert "all calculation inputs" in profiles.AUDIT_PROFILE.description
     assert "intermediate values" in profiles.AUDIT_PROFILE.description
     assert "Values and statuses match" in profiles.AUDIT_PROFILE.description
-    assert "all inputs relevant" in profiles.BRIEF_PROFILE.description
+    assert "all inputs applicable to each reported result" in profiles.BRIEF_PROFILE.description
     assert "worked result chain" not in profiles.BRIEF_PROFILE.description
 
 

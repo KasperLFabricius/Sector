@@ -135,8 +135,8 @@ def test_crack_comparison_guidance_uses_independent_zero_value_contract():
         encoding="utf-8"
     )
     assert "A 0 mm limit leaves that duration's calculated width" in manual_text
-    assert "crack-width-enabled Elastic row" in manual_text
-    assert "Independent long-term and short-term crack-width limits" in manual_text
+    assert "For each Elastic row with crack width enabled" in manual_text
+    assert "Long-term and short-term limits are independent" in manual_text
     assert "Independent long-term and short-term crack-width limits" in product_identity
     assert "Elastic action that requests crack width" in product_identity
     assert "0 mm value leaves that duration's calculated width" in product_identity
@@ -257,7 +257,7 @@ def test_results_overview_warning_routes_to_the_shared_review_entry():
     assert workflow.warning_key == "results-review"
     warning = ia.warning_reference("results-review")
     assert "Analysis > Results Overview" in warning.correction
-    assert "complete requested-check register" in warning.correction
+    assert "full requested-check register before you accept the calculation" in warning.correction
 
     source = (ROOT / "app" / "sector_app.py").read_text("utf-8")
     assert '"results-review"' in source

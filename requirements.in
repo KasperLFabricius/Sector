@@ -14,6 +14,8 @@ numba>=0.62; python_version < "3.14"
 streamlit>=1.52,<2
 # Security floor for Streamlit's GitPython dependency (GHSA-59cr-6r3x-644w).
 gitpython>=3.1.62,<4
+# Security floor for Requests' urllib3 dependency (PYSEC-2026-4175/4176/4177).
+urllib3>=2.8.0,<3
 plotly>=5.18,<7
 reportlab>=4.0,<5
 kaleido>=1.3,<2

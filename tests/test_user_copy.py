@@ -68,14 +68,43 @@ def test_generated_manual_and_report_have_no_development_process_jargon() -> Non
 
 
 def test_interactive_explanations_remain_concise() -> None:
+    def is_document_copy(row):
+        if row["file"] in {
+            "app/manual.py", "app/manual_numerics.py", "app/manual_walkthroughs.py",
+            "app/sector_report.py",
+        }:
+            return True
+        # WORKFLOWS are expanded into numbered manual procedures. The same
+        # module's warning, stage and result-view copy remains interactive.
+        if row["file"] == "app/manual_information_architecture.py":
+            return str(row["surface"]).startswith("workflow_")
+        # These governed figure texts appear in the manual exports/viewer.
+        return row["file"] == "app/publication_items.py" and row["surface"] in {
+            "caption", "alternative",
+        }
+
+    inventory = _inventory()
     interactive = [
         row
-        for row in _inventory()
-        if row["file"] not in {"app/manual.py", "app/sector_report.py"}
+        for row in inventory
+        if not is_document_copy(row)
     ]
 
     assert interactive
-    assert max(row["words"] for row in interactive) <= 50
+    assert any(row["file"] == "app/sector_app.py" for row in interactive)
+    assert any(row["file"] == "app/manual_information_architecture.py"
+               and str(row["surface"]).startswith("warningreference_")
+               for row in interactive)
+    assert [(row["file"], row["line"], row["surface"], row["words"])
+            for row in interactive if row["words"] > 50] == []
+
+    # Document text remains in the complete jargon inventory above. The manual
+    # numerical, workflow and figure contract suites also check its content.
+    document_files = {row["file"] for row in inventory if is_document_copy(row)}
+    assert {
+        "app/manual_numerics.py", "app/manual_information_architecture.py",
+        "app/publication_items.py",
+    } <= document_files
 
 
 def test_lexical_signals_remain_review_aids_not_automatic_defects() -> None:

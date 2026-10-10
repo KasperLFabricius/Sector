@@ -94,7 +94,7 @@ def test_profile_policy_explains_standard_and_audit_depth_to_engineers():
     audit = sector_report.report_profiles.AUDIT_PROFILE
 
     assert standard.substitution_scope == "none"
-    assert "complete result tables, governing criteria" in (
+    assert "full result tables, governing criteria" in (
         standard.description
     )
     assert "Detailed substitutions" in standard.omitted_detail

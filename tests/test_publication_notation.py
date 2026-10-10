@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 import pytest
@@ -91,9 +92,16 @@ def test_report_and_manual_entry_points_apply_the_same_trusted_contract():
     manual_markup = manual._inline_md_to_rl(source)
 
     for rendered in (report, manual_markup):
-        assert "1 &#215; 10<super>-12</super>" in rendered
-        assert "mm<super>2</super>" in rendered
-        assert "2 &#215; 10<super>3</super>&nbsp;deg" in rendered
+        # Manual typography sets an explicit rise. The notation contract is
+        # the same raised exponent and unit power at each publication entry.
+        canonical = re.sub(r'<super rise="35%">', "<super>", rendered)
+        assert "1 &#215; 10<super>-12</super>" in canonical
+        assert "mm<super>2</super>" in canonical
+        assert "2 &#215; 10<super>3</super>&nbsp;deg" in canonical
+        paragraph = Paragraph(rendered, getSampleStyleSheet()["BodyText"])
+        raised = [(fragment.text, fragment.rise) for fragment in paragraph.frags
+                  if getattr(fragment, "rise", 0) > 0]
+        assert [text for text, _rise in raised] == ["-12", "2", "3"]
         assert notation.normalize_trusted_markup(rendered) == rendered
 
 

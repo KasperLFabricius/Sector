@@ -107,3 +107,30 @@ test setup and selected the fatigue element that the test changes. All original
 tolerances and required assertions remain. Thirteen focused cases pass because
 the report-placement test checks both Standard and Audit profiles. The detailed
 causes and evidence are in the task's independent-ci-failure-review.md record.
+
+The next complete CI run passed the native, report and combined primary groups
+with 882, 1,014 and 202 tests respectively. Its remaining primary group found
+eleven assertions that still used the former manual wording, equation numbers
+or markup. Nine test files now check the reviewed publication. The corrections
+retain all 70 test functions, all three numerical tolerance checks and the
+50-word limit for interactive explanations. Manual procedures, numerical tables
+and figure descriptions remain subject to the manual content checks. All 111
+focused tests pass. Independent review records zero findings in this correction.
+
+The standalone report fixture also retained a stress value from the former
+gross-concrete model. Both the unchanged 0.96.4 base and the release candidate
+produce 956.4877695572533 MPa. Independent rectangular-section equilibrium gives
+956.4877695572573 MPa. The fixture now requires the published 956.488 MPa and
+adds a numerical check with relative and absolute tolerances of 1e-10. A report
+page fingerprint was updated after a pixel comparison isolated the change to
+the footer version digit. All report checks pass across 82 pages.
+
+The dependency audit identified nine advisories in two locked packages. The
+security correction updates urllib3 from 2.7.0 to 2.8.0 and the QA dependency
+pypdf from 6.18.0 to 6.19.0. All other locked versions and hashes are retained.
+The audit policy, empty suppression list and workflow remain unchanged. The
+updated audit covers 101 packages with zero reported vulnerabilities. A fresh
+hash-locked installation passes 121 focused tests. All 143 manual pages retain
+identical text, pixels, dimensions, links and bookmarks; HTML is byte-identical.
+Independent review records zero findings for these corrections. The final
+commit review and complete CI remain required before publication.

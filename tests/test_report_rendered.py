@@ -82,6 +82,11 @@ def test_reference_fixture_engineering_is_internally_consistent():
             actions, load_cases.ELASTIC_TABLE_KEY, inp,
         )
     first, second = [entry["results"]["elastic"] for entry in out["elastic_cases"]]
+    # Independent rectangular-section equilibrium with displaced concrete,
+    # including the retained long-term stress and instantaneous response.
+    assert second["max_steel"] == pytest.approx(
+        956.4877695572573, rel=1.0e-10, abs=1.0e-10,
+    )
     assert second["max_steel"] > first["max_steel"]
     assert second["max_conc"] > first["max_conc"]
     assert second["lambda_cr"] < first["lambda_cr"]

@@ -92,7 +92,7 @@ _REPORT_CROPS = (
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "70e7531e3dfda5354f4f1bf03c4bd2063fb520ad0955e9319a130f314c222128",
+        "af6d798a2b34fc2bf829a6d6c3b613bd8ecbccc7e476d9b95b8bb875ebc38852",
     ),
 )
 
@@ -1211,9 +1211,11 @@ def validate_pdf_content(
         # formatting vector remains in test_multi_case_report_includes_later_
         # governing_case_and_all_details; it is not this native calculation.
         "220.8 %",
-        # The native governing Elastic result; retained 245.000/456.000 MPa
-        # formatting vectors have independent multi-case unit coverage.
-        "955.729 MPa",
+        # EL-QA-2 uses the default net transformed section: compression-side
+        # bars displace concrete. Independent rectangular equilibrium gives
+        # 956.4877695572573 MPa, published to three decimal places. The old
+        # 955.729 MPa value used the legacy gross-concrete overlap model.
+        "956.488 MPa",
         "Candidate summary for governing crack example",
         f"Generated 2026-07-19 12:00 by Sector {__version__}",
     ):
