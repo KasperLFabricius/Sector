@@ -27,11 +27,9 @@ MODULES = {
         "tests/test_report_real_route_matrix.py",
         "tests/test_result_presentation.py",
     ),
-    "combined": ("tests/test_combined.py",),
+    "combined": ("tests/test_combined.py", "tests/test_shear.py"),
     "native": (
-        "tests/test_app_smoke.py",
         "tests/test_torsion.py",
-        "tests/test_shear.py",
         "tests/test_reproducible_example.py",
         "tests/test_report_profile_integration.py",
     ),

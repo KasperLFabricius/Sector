@@ -71,7 +71,7 @@ def test_small_tables_retain_the_minimum_type_and_authored_order():
     )
 
     table, = _tables(builder)
-    assert table._sector_font_size == pytest.approx(9.0)
+    assert table._sector_font_size == pytest.approx(9.5)
     assert table._sector_source_columns == (0, 1)
     assert table._sector_panel_number == 1
     assert table._sector_panel_count == 1
@@ -89,7 +89,10 @@ def test_digit_only_identifier_segments_remain_wrappable(separator):
 
     table, = _tables(builder)
     identity_floor, value_floor = table._sector_width_floors
-    assert identity_floor <= 32 * mm + 1e-7
+    assert identity_floor <= (
+        sector_report._A4_CONTENT_WIDTH / 3
+        + 2 * sector_report._REPORT_TABLE_HORIZONTAL_PADDING + 1e-7
+    )
     assert value_floor <= 28 * mm + 1e-7
     assert _pdf(builder).startswith(b"%PDF")
 
@@ -180,7 +183,7 @@ def test_dense_tables_form_ordered_panels_with_repeated_identity_columns():
 
     tables = _tables(builder)
     assert len(tables) > 1
-    assert all(table._sector_font_size == pytest.approx(9.0) for table in tables)
+    assert all(table._sector_font_size == pytest.approx(9.5) for table in tables)
     assert all(table._sector_source_columns[:2] == (0, 1) for table in tables)
     emitted = [
         column

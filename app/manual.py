@@ -784,7 +784,7 @@ def manual_blocks() -> list:
 
     h1("Start the portable application")
     md('The Windows release contains the full application in a portable ZIP. Microsoft Edge, or a different supported Chromium-family browser, supplies the image-export dependency for report figures.')
-    md('1. Download the **0.96.6 Windows portable ZIP** from the repository release.\n2. Use **Extract All** to extract the full archive to a short local path, such as `C:\\Sector`.\n3. Keep the `_internal` folder beside `Sector.exe`.\n4. Open `Sector.exe`.\n5. Wait for the Sector interface to open in the default browser.')
+    md('1. Download the **0.96.7 Windows portable ZIP** from the repository release.\n2. Use **Extract All** to extract the full archive to a short local path, such as `C:\\Sector`.\n3. Keep the `_internal` folder beside `Sector.exe`.\n4. Open `Sector.exe`.\n5. Wait for the Sector interface to open in the default browser.')
     md("Sector runs on the local computer. Keep its console window open during use. "
        "To stop Sector, close that console window or press **Ctrl+C** in it.")
     md('Before an update, download the current project file. Keep the issued report. Extract the new release into a different folder. Open the saved project in the new version. Examine its inputs. Calculate again.')
@@ -1303,6 +1303,31 @@ def manual_blocks() -> list:
         ],
     )
     md('**Brief** starts with project and section identity, requested-check outcomes, governing results and essential limitations. The full effective inputs follow the results. These inputs include geometry, assigned materials, reinforcement, tendons, actions and active settings. Brief does not include non-governing results and worked derivations. Brief includes the available governing Plastic and Elastic plots.\n\n**Standard** includes the used inputs, full results, criteria, statuses and concise methods. It also includes references and limitations.\n\n**Audit** adds the detailed calculation sequences, numerical substitutions, worked examples and method theory. Calculation values, rounding, statuses and warnings are the same in all three profiles.')
+
+    h2("Read the report")
+    md("Start with the results overview. Follow a numbered result note to read its source and assessment conditions. "
+       "The input schedules give the geometry, assigned material properties, actions and active settings used for those results.")
+    md("The method register identifies the selected basis for each calculation family. "
+       "Standard groups related final results and gives the source for each result. "
+       "Audit also gives numerical substitutions, intermediate results and the applicable calculation sequence.")
+    h2("Report diagrams")
+    md("With figures enabled, Standard and Audit show section coordinates and element IDs. "
+       "Use the coordinates and the element schedule to locate the reinforcement.")
+    md("The action inset identifies one selected current case and its concurrent signed actions. "
+       "Its sign guide identifies axial tension and the bending tension faces. "
+       "For an Elastic case, TOTAL is the sum of the long-term and short-term external actions.")
+    md("The crack-control diagram shows the effective concrete area for the selected calculation. "
+       "Circles identify bars, and diamonds identify tendons. Filled markers identify reinforcement inside the effective area. "
+       "Open markers identify other reinforcement. Marker sizes are fixed for readability. The element schedule gives their areas.")
+    md("The dashed neutral axis is the zero line of the accepted reference-stress plane within the concrete. "
+       "Initial tendon strain can cause tendon stress to differ from this reference plane. "
+       "The cover note identifies the governing clear cover and its source.")
+    md("The longitudinal-chord diagram compares concurrent demand and conditional resistance for each assessed physical face. "
+       "Read each pair on the common equivalent-moment scale. The resistance includes the applied axial force and the moment about the other axis.")
+    md("The combined-action diagram identifies its case, shear component and accepted member strut angle. "
+       "Each demand represents longitudinal tension at the named face, expressed as an equivalent moment.")
+    md("The crack-control and longitudinal-chord diagrams require the corresponding accepted calculation evidence. "
+       "If that evidence is unavailable, read the explanation beside the result and recalculate where requested.")
 
     # =====================================================================
     # PART C - THEORY & METHODOLOGY

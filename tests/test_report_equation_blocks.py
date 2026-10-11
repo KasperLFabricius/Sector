@@ -21,11 +21,19 @@ import sector_report
 
 from app import publication_equation_layout as publication_equations
 
-EM_DASH = chr(0x2014)
 DELTA = chr(0x0394)
 ETA = chr(0x03B7)
 GAMMA = chr(0x03B3)
 SUM = chr(0x2211)
+
+# Independent publication spellings. Contract units stay unchanged in metadata.
+_EXPECTED_UNIT_MARKUP = {
+    "m2": "m<super>2</super>",
+    "m3": "m<super>3</super>",
+    "m4": "m<super>4</super>",
+    "mm2": "mm<super>2</super>",
+    "kN/m2": "kN/m<super>2</super>",
+}
 
 
 def _builder(*, profile="Standard"):
@@ -45,6 +53,27 @@ def _pdf(flow):
         bottomMargin=20 * mm,
     ).build(flow)
     return buffer.getvalue()
+
+
+def _last_equation(builder):
+    """Resolve exactly one original equation from its bounded layout group."""
+    item = builder.flow[-1]
+    if isinstance(item, sector_report._EquationFlowable):
+        equation = item
+    else:
+        equations = tuple(getattr(item, "_sector_equations", ()))
+        assert len(equations) == 1
+        equation = equations[0]
+        assert isinstance(equation, sector_report._EquationFlowable)
+        # The metadata object must describe the exact visible flowables.
+        for child in equation._content:
+            assert sum(visible is child for visible in item._content) == 1
+    scope = next(reversed(builder._equations))
+    record = builder._equations[scope]
+    assert equation._sector_equation_key == record["key"]
+    assert equation._sector_equation_anchor == record["anchor"]
+    assert equation._sector_equation_number == record["number"]
+    return equation
 
 
 def _role_rows(equation, role):
@@ -211,7 +240,7 @@ def test_authored_fatigue_substitution_keeps_mpa_outside_the_fraction(key, numer
                      subst=substitution, result=authored("result"),
                      note=authored("note") if "note" in keywords else None,
                      ref="Retained fatigue equation source")
-    actual = _math_line(builder.flow[-1], "numerical-substitution").expression
+    actual = _math_line(_last_equation(builder), "numerical-substitution").expression
     _assert_denominator(actual, "1.15")
     fraction, = [node for node in _walk_math(actual)
                  if isinstance(node, publication_equations.Fraction)]
@@ -252,12 +281,12 @@ def test_torsion_qualifier_is_literal_but_unrelated_results_remain_math(key):
     builder._h1("Torsion component")
     builder._formula("T<sub>Ed</sub> / T<sub>Rd</sub>", equation_key=key,
                      subst="17.05 / 10", result="170.5% (transverse/strut component FAIL)")
-    result = _math_line(builder.flow[-1], "result").expression
+    result = _math_line(_last_equation(builder), "result").expression
     assert isinstance(result, publication_equations.LiteralText)
     assert result.text == "170.5% (transverse/strut component FAIL)"
     builder._formula("V<sub>Ed</sub> / V<sub>Rd,c</sub>",
                      equation_key="shear.2005.utilisation", subst="8 / 4", result="8 / 4")
-    assert isinstance(_math_line(builder.flow[-1], "result").expression, publication_equations.Fraction)
+    assert isinstance(_math_line(_last_equation(builder), "result").expression, publication_equations.Fraction)
 
 
 @pytest.mark.parametrize(
@@ -283,13 +312,13 @@ def test_every_supported_contract_publishes_one_complete_ordered_role_block(
         equation_spec=contract,
         **kwargs,
     )
-    equation = builder.flow[-1]
+    equation = _last_equation(builder)
 
     expected_roles = ["identity", "symbolic-expression"]
     if contract.substitution_role == "numerical":
         expected_roles.append("numerical-substitution")
     if contract.expects_result:
-        expected_roles.append("result")
+        expected_roles.extend(["result-quantity", "result"])
     if contract.applicability_note_required:
         expected_roles.append("applicability-note")
     expected_roles.extend(
@@ -309,10 +338,16 @@ def test_every_supported_contract_publishes_one_complete_ordered_role_block(
 
     if contract.expects_result:
         result_line = _math_line(equation, "result")
-        assert result_line.label.startswith(
-            f"Result {EM_DASH} {_visible(contract.result_symbol)} "
+        assert result_line.label == "Result:"
+        quantity_line = _math_line(equation, "result-quantity")
+        assert quantity_line.label == "Result quantity:"
+        assert quantity_line.expression == publication_equations.compile_report_fragment(
+            f"{contract.result_symbol} [{_EXPECTED_UNIT_MARKUP.get(contract.result_unit, contract.result_unit)}]"
         )
-        assert f"[{contract.result_unit}]" in result_line.label
+        assert quantity_line.semantic_text == (
+            f"Result quantity: {_visible(contract.result_symbol)} "
+            f"[{_visible(contract.result_unit, math=False)}]"
+        )
         assert publication_equations.linear_math_text(
             result_line.expression
         ).endswith("candidate publication value")
@@ -347,14 +382,18 @@ def test_every_supported_contract_identity_passes_semantic_vector_and_raster_qa(
             equation_variant=variant,
             **kwargs,
         )
-        equations.append(builder.flow[-1])
+        equations.append(_last_equation(builder))
 
     pdf = _pdf(builder.flow)
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     page_texts = [page.extract_text() or "" for page in reader.pages]
 
     assert len(equations) == 144
-    assert sum(text.count("Mathematical expression:") for text in page_texts) == 416
+    assert sum(len(_math_flowable(eq).block.lines) for eq in equations) == 552
+    assert sum(
+        "result-quantity" in eq._sector_equation_roles for eq in equations
+    ) == 136
+    assert sum(text.count("Mathematical expression:") for text in page_texts) == 552
     for equation in equations:
         math = _math_flowable(equation)
         identity_pages = [
@@ -432,13 +471,14 @@ def test_numerical_result_has_explicit_roles_canonical_identity_and_symbols():
         subst="0.9 x 0.85 x 40 / 1.5",
         result="f<sub>cd</sub> = 20.4 MPa",
     )
-    equation = builder.flow[-1]
+    equation = _last_equation(builder)
     text = equation.getPlainText()
 
     assert equation._sector_equation_roles == (
         "identity",
         "symbolic-expression",
         "numerical-substitution",
+        "result-quantity",
         "result",
         "symbols-heading",
         "symbol",
@@ -450,13 +490,13 @@ def test_numerical_result_has_explicit_roles_canonical_identity_and_symbols():
     )
     assert f"Symbolic expression: fcd = {ETA}cc ktc fck / {GAMMA}c" in text
     assert "Numerical substitution: 0.9 x 0.85 x 40 / 1.5" in text
-    assert f"Result {EM_DASH} fcd [MPa]: fcd = 20.4 MPa" in text
+    assert "Result: fcd [MPa]: fcd = 20.4 MPa" in text
     assert (
-        f"Symbols: fcd {EM_DASH} design concrete compressive strength [MPa]"
+        "Symbols: fcd: design concrete compressive strength [MPa]"
         in text
     )
     assert (
-        f"ktc {EM_DASH} time and sustained-loading factor [dimensionless]"
+        "ktc: time and sustained-loading factor [dimensionless]"
         in text
     )
 
@@ -471,13 +511,13 @@ def test_applicability_note_is_distinct_from_the_numerical_substitution():
         note="M and V are checked separately.",
         result="&#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) = 70.0% (PASS)",
     )
-    equation = builder.flow[-1]
+    equation = _last_equation(builder)
     text = equation.getPlainText()
 
     assert "Applicability / method note: M and V are checked separately." in text
     assert "Numerical substitution: max(0.5 + 0.2, 0.4 + 0.2)" in text
     assert (
-        f"Result {EM_DASH} {SUM}(SEd/SRd) "
+        f"Result: {SUM}(SEd/SRd) "
         f"[dimensionless; displayed as %]: {SUM}(SEd/SRd) = 70% (PASS)"
     ) in text
     roles = equation._sector_equation_roles
@@ -492,7 +532,7 @@ def test_relation_only_block_has_no_intermediate_or_result_row():
         "F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> - N = 0",
         equation_key="basis.plastic.equilibrium",
     )
-    equation = builder.flow[-1]
+    equation = _last_equation(builder)
     assert "numerical-substitution" not in equation._sector_equation_roles
     assert "applicability-note" not in equation._sector_equation_roles
     assert "result" not in equation._sector_equation_roles
@@ -530,12 +570,12 @@ def test_equation_only_math_tokens_do_not_rewrite_symbol_meanings():
         equation_key="test.math-tokens",
         equation_spec=contract,
     )
-    text = builder.flow[-1].getPlainText()
+    text = _last_equation(builder).getPlainText()
 
     assert f"Symbolic expression: {DELTA} R = {SUM}(x)" in text
-    assert f"Result {EM_DASH} {DELTA} R [kN]: {DELTA} R = 3 kN" in text
-    assert f"{DELTA} R {EM_DASH} sum of retained terms [kN]" in text
-    assert f"{SUM} x {EM_DASH} governing sum [kN]" in text
+    assert f"Result: {DELTA} R [kN]: {DELTA} R = 3 kN" in text
+    assert f"{DELTA} R: sum of retained terms [kN]" in text
+    assert f"{SUM} x: governing sum [kN]" in text
 
 
 def test_long_unbroken_expression_and_maximum_symbol_inventory_fit_a4():
@@ -556,7 +596,7 @@ def test_long_unbroken_expression_and_maximum_symbol_inventory_fit_a4():
         equation_key="test.long-expression",
         equation_spec=contract,
     )
-    equation = builder.flow[-1]
+    equation = _last_equation(builder)
 
     assert isinstance(
         _math_flowable(equation), publication_equations.EquationFlowable
@@ -573,3 +613,110 @@ def test_long_unbroken_expression_and_maximum_symbol_inventory_fit_a4():
     assert "Mathematicalexpression:" in compact
     assert compact.count("abcdefghij") >= 24
     assert "retainedlong-expressionquantity8[kN]" in compact
+
+
+def _numeric_tree_expression(node):
+    """Read the actual display tree as parenthesized numeric arithmetic."""
+    pe = publication_equations
+    if isinstance(node, pe.Number):
+        return node.text
+    if isinstance(node, pe.MathSpace):
+        return " "
+    if isinstance(node, pe.Operator):
+        assert node.text in {"+", "-", "*", "/", chr(0x00D7)}
+        return "*" if node.text == chr(0x00D7) else node.text
+    if isinstance(node, pe.MathSequence):
+        return "(" + "".join(_numeric_tree_expression(x) for x in node.items) + ")"
+    if isinstance(node, pe.Fraction):
+        return f"({_numeric_tree_expression(node.numerator)}/{_numeric_tree_expression(node.denominator)})"
+    if isinstance(node, pe.Delimited):
+        return "(" + _numeric_tree_expression(node.content) + ")"
+    if isinstance(node, pe.Script):
+        assert node.subscript is None and node.superscript is not None
+        return f"({_numeric_tree_expression(node.base)}**{_numeric_tree_expression(node.superscript)})"
+    raise AssertionError(f"Unexpected numeric display node: {node!r}")
+
+
+@pytest.mark.parametrize(("source", "expected"), [
+    ("100000 / 5.831e11", 100000 / 5.831e11),
+    ("100000 / 5.408e14", 100000 / 5.408e14),
+    ("2 / -5e-3", 2 / -5e-3),
+    ("-2e3 + 1", -2e3 + 1),
+    ("2 - -5e-3", 2 - -5e-3),
+    ("5.e3 / .5E-2", 5.e3 / .5E-2),
+    (".5e-7", .5e-7),
+    ("2e3 * 5e-2", 2e3 * 5e-2),
+    ("1e3 / 2e2 + 3e-2", 1e3 / 2e2 + 3e-2),
+    ("2 / (5e3 * 2)", 2 / (5e3 * 2)),
+    ("2 / 5e3 / 4", 2 / 5e3 / 4),
+    ("5e3<super>2</super>", (5e3)**2),
+    ("-5e3<super>2</super>", -(5e3)**2),
+    ("(-5e3)<super>2</super>", (-5e3)**2),
+    ("1e3/(-.5e-7)", 1e3/(-.5e-7)),
+    ("1e3 / -5.e+2", 1e3 / -5.e+2),
+    ("(.5e-7)<super>2</super>", (.5e-7)**2),
+])
+def test_scientific_display_preserves_complete_numeric_operands(source, expected):
+    tree = publication_equations.compile_report_fragment(
+        sector_report._scientific_equation_markup(source)
+    )
+    expression = _numeric_tree_expression(tree)
+    parsed = ast.parse(expression, mode="eval")
+    assert all(isinstance(node, (
+        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant, ast.Add,
+        ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.USub, ast.UAdd,
+    )) for node in ast.walk(parsed))
+    actual = eval(compile(parsed, "<numeric display tree>", "eval"), {"__builtins__": {}})
+    assert actual == pytest.approx(expected, rel=1e-14, abs=0)
+
+
+@pytest.mark.parametrize("source", ["case1e3", "F_1e3", "1e3case", "case.1e3", "1e3.case"])
+def test_scientific_display_preserves_embedded_identifiers(source):
+    assert sector_report._scientific_equation_markup(source) == source
+
+
+@pytest.mark.parametrize("label", ["yk/proof", "cd,min/max", "c,min/max,Ed"])
+def test_alternative_subscript_labels_keep_a_literal_slash(label):
+    tree = publication_equations.compile_report_fragment(f"f<sub>{label}</sub> / 2")
+    assert isinstance(tree, publication_equations.Fraction)
+    assert isinstance(tree.numerator, publication_equations.Script)
+    assert isinstance(tree.numerator.subscript, publication_equations.LiteralText)
+    assert tree.numerator.subscript.text == label
+    assert tree.denominator == publication_equations.Number("2")
+
+
+def test_true_quotient_subscript_keeps_its_fraction():
+    tree = publication_equations.compile_report_fragment("f<sub>1/r</sub> / 2")
+    assert isinstance(tree, publication_equations.Fraction)
+    assert isinstance(tree.numerator.subscript, publication_equations.Fraction)
+    assert tree.numerator.subscript.numerator == publication_equations.Number("1")
+    assert tree.numerator.subscript.denominator == publication_equations.Variable("r")
+
+
+@pytest.mark.parametrize("unit", ["m2", "m3", "m4", "mm2", "kN/m2", "1/m"])
+def test_result_quantity_unit_power_is_explicit_without_metadata_changes(unit):
+    contract = contracts.EquationContract(
+        symbols=(contracts.EquationSymbol("q", "result quantity", unit),),
+        result_symbol="q", result_unit=unit, substitution_role="numerical",
+    )
+    builder = _builder(profile="Audit")
+    builder._h1("Unit powers")
+    builder._formula("q = 2", subst="q = 2", result=f"q = 2 {unit}",
+                     equation_key="test.unit-power", equation_spec=contract)
+    eq = _last_equation(builder)
+    quantity = _math_line(eq, "result-quantity")
+    expected_markup = _EXPECTED_UNIT_MARKUP.get(unit, unit)
+    assert quantity.expression == publication_equations.compile_report_fragment(
+        f"q [{expected_markup}]"
+    )
+    assert quantity.semantic_text == f"Result quantity: q [{unit}]"
+    assert contract.result_unit == unit
+    assert _role_rows(eq, "symbol")[0]._sector_equation_symbol == contract.symbols[0]
+
+
+def test_alternative_label_exception_is_report_only():
+    tree = publication_equations.compile_manual_math(r"f_{yk/proof}")
+    assert isinstance(tree, publication_equations.Script)
+    assert isinstance(tree.subscript, publication_equations.Fraction)
+    assert tree.subscript.numerator == publication_equations.Upright("yk")
+    assert tree.subscript.denominator == publication_equations.Upright("proof")

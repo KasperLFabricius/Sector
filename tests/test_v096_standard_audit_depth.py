@@ -161,10 +161,10 @@ def test_standard_omits_plastic_populations_but_keeps_selected_state():
     ):
         assert heading not in standard_headings
         assert heading in audit_headings
-    assert ["Candidate", "Element", "Strain limit", "Distance to NA",
-            "Curvature", "Selected"] not in standard_headers
-    assert ["Candidate", "Element", "Strain limit", "Distance to NA",
-            "Curvature", "Selected"] in audit_headers
+    assert ["Candidate", "Element", "Strain limit (&#8240;)", "Distance to NA (mm)",
+            "Curvature (1/m)", "Selected"] not in standard_headers
+    assert ["Candidate", "Element", "Strain limit (&#8240;)", "Distance to NA (mm)",
+            "Curvature (1/m)", "Selected"] in audit_headers
     for key in (
         "plastic.worked.curvature-candidate",
         "plastic.worked.curvature-selection",
@@ -423,7 +423,7 @@ def test_existing_audit_only_solver_and_crack_candidate_ledgers_remain_separate(
     for profile, text in texts.items():
         assert "Governing reinforcement element - R1" in text
         selected_fibres[profile] = {
-            int(value) for value in re.findall(r"Governing concrete fibre - (\d+)", text)
+            int(value) for value in re.findall(r"Governing concrete fiber - (\d+)", text)
         }
         assert len(selected_fibres[profile]) == 1
         assert selected_fibres[profile] <= expected_fibres

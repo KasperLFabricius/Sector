@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.96.7 - 2026-10-11
+
+Reports use larger text, shorter explanations, linked governing-result notes
+and separate material-property schedules. A method register identifies the
+selected basis for each calculation family. Related final results share tables;
+Audit keeps the detailed calculation sequences and numerical evidence.
+
+New report diagrams show section coordinates and element IDs, effective
+crack-control areas, and concurrent longitudinal-chord demand and resistance.
+Figure blocks keep their captions, signs and supporting values together.
+
+The CI workflow checks inexpensive policies before the main test groups and
+balances the groups using recorded durations. All existing tests, numerical
+tolerances, coverage requirements and security checks remain in place.
+
+The production solvers and project schema 27 retain their existing behavior.
+
 ## 0.96.6 - 2026-10-11
 
 Longitudinal stress and strain maps show concrete, bars and tendons in the

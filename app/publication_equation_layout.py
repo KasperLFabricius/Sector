@@ -1500,9 +1500,10 @@ def _lex_character(
 
 
 class _Parser:
-    def __init__(self, tokens: tuple[_Token, ...]):
+    def __init__(self, tokens: tuple[_Token, ...], *, report: bool = False):
         self._tokens = tokens
         self._index = 0
+        self._report = report
         self._unit_identifier_indices: set[int] = set()
 
     @property
@@ -1800,6 +1801,21 @@ class _Parser:
     def _script_operand(self, marker: _Token) -> MathNode:
         self._skip_spaces()
         if self.current.kind == "LBRACE":
+            # These authored engineering labels name alternatives. Their slash
+            # is literal punctuation, while other scripted quotients retain
+            # normal mathematical parsing.
+            if self._report and marker.kind == "SUB":
+                end = self._index + 1
+                while self._tokens[end].kind not in {"RBRACE", "LBRACE", "EOF"}:
+                    end += 1
+                label = "".join(
+                    token.value for token in self._tokens[self._index + 1:end]
+                )
+                if self._tokens[end].kind == "RBRACE" and label in {
+                    "yk/proof", "cd,min/max", "c,min/max,Ed",
+                }:
+                    self._index = end + 1
+                    return LiteralText(label)
             saved_index = self._index
             self._advance()
             self._skip_spaces()
@@ -1927,13 +1943,13 @@ def compile_manual_math(source: str) -> MathNode:
 def compile_report_math(source: str) -> MathNode:
     """Compile the accepted report-markup subset into a frozen display tree."""
 
-    return _Parser(_lex_report(source)).parse()
+    return _Parser(_lex_report(source), report=True).parse()
 
 
 def compile_report_fragment(source: str) -> MathNode:
     """Compile substitution/result math, explicitly allowing a leading relation."""
 
-    return _Parser(_lex_report(source)).parse_fragment()
+    return _Parser(_lex_report(source), report=True).parse_fragment()
 
 
 def compile_report_literal(source: str) -> LiteralText:

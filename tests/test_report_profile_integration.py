@@ -1136,7 +1136,7 @@ def test_standard_keeps_results_and_sources_while_audit_owns_worked_sequences():
     for detail in (
         "Numerical substitution:",
         "Step 1 - converged long-term state",
-        "Step 2 - neutralise the long-term concrete stress",
+        "Step 2 - neutralize the long-term concrete stress",
         "Converged strain plane",
         "Worked calculation - governing reinforcement fatigue",
         "Worked calculation - governing concrete fatigue",
@@ -1209,7 +1209,7 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
         "Section resultants at convergence",
         "Governing reinforcement and tendon response",
         "Governing cracking threshold",
-        "Step 2 - neutralise the long-term concrete stress",
+        "Step 2 - neutralize the long-term concrete stress",
         "Governing reinforcement element - R1",
         "Worked calculation - governing reinforcement fatigue",
         "Worked calculation - governing concrete fatigue",
@@ -1223,7 +1223,7 @@ def test_calculation_subheadings_retain_first_table_or_equation_on_same_page():
             if profile == "Audit" or heading not in {
                 "Converged strain plane", "Section resultants at convergence",
                 "Governing reinforcement and tendon response",
-                "Step 2 - neutralise the long-term concrete stress",
+                "Step 2 - neutralize the long-term concrete stress",
                 "Worked calculation - governing reinforcement fatigue",
                 "Worked calculation - governing concrete fatigue",
             }

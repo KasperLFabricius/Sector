@@ -1011,7 +1011,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "DS/EN 1992-1-1:2023, 10.4(1)" in text
     assert "66.000 MPa" in text and "73.000 MPa" in text
     assert "Concrete fatigue" in text
-    assert "Bounded governing-fibre search" in text
+    assert "Bounded governing-fiber search" in text
     assert "Upper D" in text
     assert "Fatigue total" in text
     assert "Bond factor / method" in text
@@ -1029,7 +1029,7 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "Max Miner D" in text
     assert "Max yield / proof" in text
     assert "Governing util." in text
-    assert "governing utilisation" in text
+    assert "governing utilization" in text
     assert "Status / range" in text
     assert "shear and torsion fatigue remain separate checks" in text
     compact = text.replace(" ", "")
@@ -1056,13 +1056,16 @@ def test_report_profiles_publish_retained_simplified_fatigue_screen(profile):
         {}, inp, out, figures=False, profile=profile
     )).split())
 
-    assert "Simplified stress-range screen" in text
+    assert (
+        "Fatigue stress-range screen outcomes" if profile == "Brief"
+        else "Simplified stress-range screen"
+    ) in text
     assert "PASS - DETAILED CHECK NOT REQUIRED" in text
     assert "66.000" in text
     assert "73.000" in text
     assert "DS/EN 1992-1-1:2023, 10.4(1)" in text
-    assert "Miner D" in text
-    assert "Yield / proof util." in text
+    assert ("Miner damage D" if profile == "Brief" else "Miner D") in text
+    assert ("Yield / proof utilization" if profile == "Brief" else "Yield / proof util.") in text
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
@@ -1156,7 +1159,7 @@ def test_fatigue_report_limits_worked_detail_to_independent_global_extrema():
     assert "Spectrum - Traffic B" in text
     assert "Spectrum - Traffic C" not in text
     assert "Governing reinforcement element - R1" in text
-    assert "Governing concrete fibre - 4" in text
+    assert "Governing concrete fiber - 4" in text
 
 
 def test_fatigue_worked_formulas_use_retained_operands(monkeypatch):
@@ -1367,7 +1370,7 @@ def test_report_includes_damage_equivalent_concrete_method_evidence():
 
     assert method in text
     assert "Formula (E.2)" in text
-    assert "Equivalent utilisation" in text
+    assert "Equivalent utilization" in text
     assert "Cycle count" in text and "Not used" in text
     assert "cycle count is not used for concrete" in text
 
@@ -1745,11 +1748,11 @@ def test_report_fatigue_chapter_requests_all_engineering_figures(monkeypatch):
     monkeypatch.setattr(sector_report.ReportBuilder, "_fig", capture)
     _build_report_with_selection({}, inp, out, figures=True)
 
-    assert sum(title.startswith("Fatigue utilisation") for title in titles) == 2
+    assert sum(title.startswith("Fatigue utilization") for title in titles) == 2
     assert sum(title.startswith("S-N assessment") for title in titles) == 1
     assert sum(title.startswith("Miner damage - R1") for title in titles) == 1
     assert sum(
-        title.startswith("Miner damage - concrete fibre")
+        title.startswith("Miner damage - concrete fiber")
         for title in titles
     ) == 1
 
@@ -2012,12 +2015,12 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
         "Compression-depth solution",
         "Section resultants at convergence",
         "Step 1 - converged long-term state",
-        "Step 2 - neutralise the long-term concrete stress",
+        "Step 2 - neutralize the long-term concrete stress",
         "Step 3 - converged instantaneous combined state",
         "Step 4 - combine the element stress components",
     ):
         assert heading in text
-    assert "3.5e-3" in text
+    assert "3.5 \u00d7 10-3" in text
     assert "0.175 m" in text
     assert "Compression-zone depth c 175.000 mm" in text
     assert "Bisection iterations 8" in text
@@ -2028,7 +2031,7 @@ def test_report_publishes_retained_plastic_and_elastic_textbook_chains():
         text.casefold()
     )
     assert "Long-term reference-stress plane" in text
-    assert "not a physical-unit norm" in text
+    assert "not a norm with consistent physical units" in text
 
 
 def test_report_uses_retained_nonzero_worked_point_for_both_depth_rows():
@@ -2455,10 +2458,10 @@ def test_report_profiles_publish_core_m02_refinement_evidence(profile):
         assert "CORE-M02-357" in text
         return
     assert "100.1 %" in text
-    assert "governing utilisation" in text
-    assert "Angular resolution: initial 15\u00b0 envelope" in text
-    assert "achieved governing interval 0.083\u00b0 for the 0.100\u00b0 target" in text
-    assert "65 angles retained; all retained angles converged; assessment resolved" in text
+    assert "governing utilization" in text
+    assert "Angular resolution: the initial envelope uses 15\u00b0 intervals." in text
+    assert "Achieved governing interval: 0.083\u00b0. Target: 0.100\u00b0." in text
+    assert "Retained angles: 65. All retained angles converged; assessment resolved." in text
     assert "utilisation interval 100.0560 to 100.0620 %" in text
 
 
@@ -2542,7 +2545,7 @@ def test_report_maps_unresolved_core_m02_result_to_engineering_guidance():
 
     assert "NOT ASSESSED - The nominal resistance is too close" in text
     assert "assess this case separately" in text
-    assert "achieved governing interval 0.009\u00b0 for the 0.010\u00b0 target" in text
+    assert "Achieved governing interval: 0.009\u00b0. Target: 0.010\u00b0." in text
     assert "utilisation interval 99.9999 to 100.0002 %" in text
     assert "separate assessment required" in text
     assert "available angular resolution" not in text
@@ -2631,8 +2634,8 @@ def test_report_hides_retained_angle_boundary_for_moved_direction_failure(
         "be refined consistently" in text
     )
     assert "assess this case separately" in text
-    assert "achieved governing interval 15.000\u00b0 for the 0.010\u00b0 target" in text
-    assert "3080 angles retained" in text
+    assert "Achieved governing interval: 15.000\u00b0. Target: 0.010\u00b0." in text
+    assert "Retained angles: 3080." in text
     assert "separate assessment required" in text
     assert "4097" not in text
     assert "point limit" not in text.lower()
@@ -2670,7 +2673,7 @@ def test_report_publishes_canonical_direction_and_html_safe_project_alias():
     assert "Modelled reinforcement direction " + label in text
     assert "Minimum reinforcement - " + label in text
     assert label + " minimum reinforcement" in text
-    assert "Modelled direction: " + label in text
+    assert "Modeled direction: " + label in text
     assert "Longitudinal (project alias:" not in text
 
 
@@ -3201,7 +3204,7 @@ def test_multi_case_report_includes_later_governing_case_and_all_details(later_s
     assert f"{later_stress:.3f} MPa" in flat
     assert flat.count("Selected sweep point") == 1
     assert flat.count("Method: cracked-section elastic equilibrium") == 1
-    assert "including retained prestress neutralisation" in flat
+    assert "including retained prestress neutralization" in flat
     assert "The state-by-state calculation is in Audit." in flat
 
 
@@ -3881,7 +3884,7 @@ def test_report_mirrors_the_views():
     assert "Cracked" in txt                        # cracked transformed-props column
     assert "both load cases" in txt                # full crack-width table
     assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
-    assert "Utilisation check" in txt              # analysis settings documented
+    assert "Utilization check" in txt              # analysis settings documented
     assert "Max / Min" in txt                      # both extremes for Mx and My
 
 
@@ -4617,7 +4620,7 @@ def test_tables_only_load_tables_omit_entry_guidance_without_raw_tex(profile):
     )
     assert policy not in flat
     assert "Fatigue action components" in flat
-    assert "Long is the sustained state; short is the cyclic increment" in flat
+    assert "Long is the sustained state. Short is the cyclic increment." in flat
     assert "1.235" in flat and "2.346" in flat
     assert "3.457" in flat
     assert not any(token in text for token in (r"\Delta", "_{", "}"))
@@ -6081,7 +6084,7 @@ def test_retained_report_includes_torsion_section(tmp_path):
     assert chr(0x3B8) in txt                        # theta glyph rendered
     assert "1177" in txt                            # required Asl
     assert "NOT ASSESSED" in txt                    # overall, not component PASS
-    assert "All modelled passive bars" in txt
+    assert "All modeled passive bars" in txt
     assert "every torsion-tube side" in " ".join(txt.split())
     assert "anchorage along the member" in " ".join(txt.split())
     assert chr(0x2211) in txt                       # summation operator
@@ -6177,7 +6180,7 @@ def test_retained_report_profiles_fail_closed_for_unestablished_torsion_scope(
     assert "FAIL" not in text
     if profile in {"Standard", "Audit"}:
         assert "Torsion applicability and member scope" in text
-        assert "Resistance, utilisation, governing angle" in text
+        assert "Resistance, utilization, governing angle" in text
         assert "6.3.1(1)-(3)" in text
         assert "6.3.3(1)-(2)" in text
         assert "Formula (6.28) demand" not in text
@@ -6493,7 +6496,7 @@ def test_torsion_applicability_component_rendering_rejects_untrusted_evidence(
     assert "PASS" not in text
     assert "FAIL" not in text
     if profile in {"Standard", "Audit"}:
-        assert "Resistance, utilisation, governing angle" in text
+        assert "Resistance, utilization, governing angle" in text
         assert "Formula (6.28) demand" not in text
 
 
@@ -7136,7 +7139,7 @@ def test_retained_report_withholds_full_torsion_verdict_without_current_closed_l
         assert "Cracking transparency" in text
         assert "Formula (6.28) demand" in text
         assert "supports the concrete cap and reinforcement demand" in text
-        assert "its utilisation require current closed links" in text
+        assert "its utilization require current closed links" in text
         assert "Torsion resistance from the thin-walled closed-tube" not in text
         assert "T Rd = min" not in text
 
@@ -8250,7 +8253,7 @@ def test_base_en_2005_component_rendering_separates_chord_and_overall_utilisatio
         text,
     )
     if profile in {"Standard", "Audit"}:
-        assert "Chord utilisation" in text
+        assert "Chord utilization" in text
         assert re.search(r"50[.,]0\s*%\s*PASS", text)
         assert "Overall longitudinal reinforcement assessment: 200.0 % FAIL" in text
         assert (
@@ -8316,7 +8319,7 @@ def test_base_en_2005_component_rendering_retains_failed_chord_with_incomplete_f
         text,
     )
     if profile in {"Standard", "Audit"}:
-        assert "Chord utilisation" in text
+        assert "Chord utilization" in text
         assert re.search(r"150[.,]0\s*%\s*FAIL", text)
         assert "Overall longitudinal reinforcement assessment: 150.0 % FAIL" in text
         assert "Governing check: combined M + V + T tension chord" in text
@@ -8637,11 +8640,7 @@ def _pub_h01_2005_component_unit_pdf(inp, combined, profile, *, bind_positive_ch
     tables = [item for item in builder.flow
               if getattr(item, "_sector_results_overview", False)]
     assert len(tables) == 1
-    actual_rows = [
-        tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
-              for cell in row)
-        for row in tables[0]._cellvalues
-    ]
+    actual_rows = _overview_rows_with_linked_notes(builder, tables[0])
     assert sum(row[0] == "Combined longitudinal reinforcement"
                for row in actual_rows) == 1
     positive_operand_pattern = None
@@ -8660,7 +8659,7 @@ def _pub_h01_2005_component_unit_pdf(inp, combined, profile, *, bind_positive_ch
                     elif isinstance(item, sector_report.Table):
                         yield item
 
-            header = ("MEd", "Shear shift", "Torsion share", "MEd,total", "MRd", "Chord utilisation")
+            header = ("MEd", "Shear shift", "Torsion share", "MEd,total", "MRd", "Chord utilization")
             expected = tuple(
                 f"{sector_report._fmt(chord[key], 3)} kNm"
                 for key in ("m_ed", "mv", "mt", "m_total", "m_rd")
@@ -9448,10 +9447,7 @@ def test_native_base_en_report_rejects_unsupported_2023_combined_marker(
             else case_type + "; " + scope_note if case_type not in {"", "-"}
             else scope_note
         )
-        assert re.search(
-            row_pattern(target, ("check", "case", "status", "result", "criterion"))
-            + r"\s+" + text_pattern(source_note), text,
-        )
+        _assert_pdf_overview_note(pdf, target, source_note)
         assert all(re.search(row_pattern(row), text) is None for row in positive_rows)
         visible_rows = result_presentation.governing_result_rows(
             result_presentation.governing_summary_rows(all_negative_rows)
@@ -10848,7 +10844,7 @@ def test_report_combined_zero_2023_chord_candidates_stays_not_assessed(
     assert "Required 2023 longitudinal chord faces" in shear_text
     assert "Longitudinal chord assessment: NOT ASSESSED" in shear_text
     assert "Complete both required longitudinal chord checks" in shear_text
-    assert "Enable shear links for the full utilisation check" not in text
+    assert "Enable shear links for the full utilization check" not in text
     assert "both beyond the bending steel" not in text
     assert "SHEAR-LONGITUDINAL" not in text
 
@@ -13092,8 +13088,7 @@ def _retained_dkna_sum_unit_pdf(inp, combined, profile):
     assert calls == [True]
     tables = [item for item in builder.flow if getattr(item, "_sector_results_overview", False)]
     assert len(tables) == 1
-    actual_rows = [tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
-                         for cell in cells) for cells in tables[0]._cellvalues]
+    actual_rows = _overview_rows_with_linked_notes(builder, tables[0])
     actual = [item for item in actual_rows if item[0] == row["check"]]
     assert len(actual) == 1
     assert row["source"] == "Combination register C1"
@@ -13170,6 +13165,132 @@ def _retained_angle_note_pdf(meta, inp, out, *, figures, profile, artifact_path)
     return pdf
 
 
+def _overview_rows_with_linked_notes(builder, table):
+    """Resolve each note through its authored link, retaining the complete row."""
+    def paragraphs(items):
+        for item in items:
+            if isinstance(item, sector_report.KeepTogether):
+                yield from paragraphs(item._content)
+            elif isinstance(item, sector_report.Paragraph):
+                yield item
+
+    notes = {}
+    retained_paragraphs = list(paragraphs(builder.flow))
+    for index, paragraph in enumerate(retained_paragraphs):
+        anchors = re.findall(r'<a name="(result-note-[0-9]+)"/>', paragraph.text)
+        for anchor in anchors:
+            assert anchor not in notes, ("duplicate overview note", anchor)
+            parts = []
+            current = paragraph
+            position = index
+            while getattr(current, "keepWithNext", 0):
+                position += 1
+                assert position < len(retained_paragraphs), ("incomplete note", anchor)
+                current = retained_paragraphs[position]
+                assert '<a name="result-note-' not in current.text
+                parts.append(current.getPlainText())
+            assert parts, ("missing source and assessment", anchor)
+            notes[anchor] = (paragraph.getPlainText(), tuple(parts))
+    result = []
+    used = []
+    groups = set(table._sector_overview_groups)
+    for index, cells in enumerate(table._cellvalues):
+        row = tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
+                    for cell in cells)
+        if index >= table._sector_data_start and row[0] not in groups:
+            matches = re.findall(
+                r'<link href="#(result-note-([0-9]+))">Note ([0-9]+)</link>',
+                cells[-1].text,
+            )
+            assert len(matches) == 1
+            anchor, number, label_number = matches[0]
+            assert number == label_number
+            assert row[-1] == "Note " + number
+            assert anchor in notes, ("missing overview note", anchor)
+            heading, parts = notes[anchor]
+            assert heading == f"Note {number}. {row[0]}: {row[1]}.", (row, heading)
+            # Reconstruct the original semantic field from complete paragraphs.
+            # Semicolons inside a source or assessment remain literal content.
+            full_note = "; ".join(parts)
+            assert full_note
+            row = (*row[:-1], full_note)
+            used.append(anchor)
+        result.append(row)
+    assert len(used) == len(set(used))
+    assert set(used) == set(notes)
+    return result
+
+
+def _assert_pdf_overview_note(pdf, row, source_note):
+    """Check the row, its actual PDF link and the complete target note."""
+    import pypdf
+    import pypdfium2
+
+    def pattern(value):
+        return re.escape(str(value)).replace(r"\ ", r"\s+").replace(r"\-", r"-\s*")
+
+    reader = pypdf.PdfReader(io.BytesIO(pdf))
+    row_pattern = r"\s+".join(
+        pattern(row[key]) for key in ("check", "case", "status", "result", "criterion")
+    ) + r"\s+Note\s+([0-9]+)\b"
+    matches = [
+        (index, match.group(1))
+        for index, page in enumerate(reader.pages)
+        for match in re.finditer(row_pattern, " ".join(page.extract_text().split()))
+    ]
+    assert len(matches) == 1
+    source_page, number = matches[0]
+    source = str(row.get("source") or "").strip()
+    case_type = str(row.get("case_type") or "").strip()
+    note = str(row.get("note") or "").strip()
+    parts = []
+    if source not in {"", "-"}:
+        parts.append("Source: " + source)
+    elif case_type not in {"", "-"}:
+        parts.append(case_type)
+    if note:
+        parts.append(note)
+    parts = parts or ["-"]
+    assert "; ".join(parts) == source_note
+    expected = f"Note {number}. {row['check']}: {row['case']}. " + " ".join(parts)
+    document = pypdfium2.PdfDocument(pdf)
+    try:
+        page = document[source_page]
+        text_page = page.get_textpage()
+        targets = []
+        try:
+            for annotation in reader.pages[source_page].get("/Annots", []):
+                annotation = annotation.get_object()
+                rect = list(map(float, annotation["/Rect"]))
+                label = text_page.get_text_bounded(
+                    rect[0] - 0.2, rect[1] - 0.5, rect[2] + 0.2, rect[3] + 0.5
+                ).strip()
+                if label == f"Note {number}":
+                    destination = annotation["/Dest"]
+                    targets.append((
+                        reader.get_page_number(destination[0].get_object()),
+                        float(destination[3]),
+                    ))
+        finally:
+            text_page.close()
+            page.close()
+        assert len(targets) == 1
+        target_page, y = targets[0]
+        assert re.search(pattern(expected), " ".join(
+            reader.pages[target_page].extract_text().split()
+        ))
+        page = document[target_page]
+        text_page = page.get_textpage()
+        try:
+            near_anchor = text_page.get_text_bounded(50, y - 45, 550, y + 10)
+            assert re.search(rf"Note\s+{number}\.", near_anchor)
+        finally:
+            text_page.close()
+            page.close()
+    finally:
+        document.close()
+
+
 def _declared_member_overview_unit(inp, out, rows, profile, title):
     """Render explicit retained rows; no native currentness/scheduling claim.
 
@@ -13195,11 +13316,7 @@ def _declared_member_overview_unit(inp, out, rows, profile, title):
     assert calls == [True]
     tables = [item for item in builder.flow if getattr(item, "_sector_results_overview", False)]
     assert len(tables) == 1
-    actual = [
-        tuple(cell.getPlainText() if hasattr(cell, "getPlainText") else str(cell)
-              for cell in values)
-        for values in tables[0]._cellvalues
-    ]
+    actual = _overview_rows_with_linked_notes(builder, tables[0])
     # The real overview selects one governing row per check type. Its
     # informational rows are printed separately below the comparison table.
     selected = result_presentation.governing_summary_rows(rows)
@@ -13232,6 +13349,59 @@ def _declared_member_overview_unit(inp, out, rows, profile, title):
         assert actual_information.count(text) == 1
     assert pickle.dumps((inp, out, rows)) == before
     return buffer, builder
+
+
+@pytest.mark.parametrize("defect", [
+    None, "missing", "duplicate", "wrong-case", "wrong-link",
+    "missing-source", "missing-assessment", "changed-source", "changed-assessment",
+])
+def test_overview_note_resolution_preserves_complete_row_and_link_target(defect):
+    row = {
+        "check": "Retained check", "family": "plastic", "case": "CASE-1",
+        "status": "NOT ASSESSED", "result": "-", "criterion": "<= 100 %",
+        "source": "Calculation register C1", "note": "Required evidence is incomplete.",
+        "case_type": "ULS", "util": None, "overview_key": "retained-check",
+    }
+    buffer, builder = _declared_member_overview_unit(
+        _inp(), {}, [row], "Brief", "Linked-note contract"
+    )
+    table, = [item for item in builder.flow
+              if getattr(item, "_sector_results_overview", False)]
+    note, = [item for item in builder.flow if isinstance(item, sector_report.Paragraph)
+             and '<a name="result-note-1"/>' in item.text]
+    expected = "Source: Calculation register C1; Required evidence is incomplete."
+    if defect is None:
+        pdf = _finish_retained_unit_pdf(buffer, builder)
+        _assert_pdf_overview_note(pdf, row, expected)
+        return
+    if defect == "missing":
+        builder.flow.remove(note)
+    elif defect == "duplicate":
+        builder.flow.append(note)
+    elif defect == "wrong-case":
+        index = builder.flow.index(note)
+        builder.flow[index] = sector_report.Paragraph(
+            note.text.replace("CASE-1", "CASE-2"), note.style
+        )
+    elif defect in {"missing-source", "missing-assessment", "changed-source", "changed-assessment"}:
+        index = builder.flow.index(note) + (1 if "source" in defect else 2)
+        target = builder.flow[index]
+        if defect.startswith("missing"):
+            builder.flow.remove(target)
+        else:
+            replacement = sector_report.Paragraph(target.text + " ALTERED", target.style)
+            replacement.keepWithNext = getattr(target, "keepWithNext", 0)
+            builder.flow[index] = replacement
+    else:
+        cells = next(cells for cells in table._cellvalues
+                     if cells[0].getPlainText() == row["check"])
+        cells[-1] = sector_report.Paragraph(
+            '<link href="#result-note-2">Note 1</link>', cells[-1].style
+        )
+    with pytest.raises(AssertionError):
+        actual = _overview_rows_with_linked_notes(builder, table)
+        resolved = [item for item in actual if item[0] == row["check"]]
+        assert len(resolved) == 1 and resolved[0][-1] == expected
 
 
 def _finish_retained_unit_pdf(buffer, builder):
@@ -13319,9 +13489,9 @@ def _retained_torsion_quantity_unit_pdf(inp, torsion, profile):
         assert len(quantities) == 1
         assert quantities[0] == [
             ("Required longitudinal area", f'{assessment["required_asl_mm2"]:.0f} mm2', "Formula (6.28)"),
-            ("All modelled passive bars - gross area",
+            ("All modeled passive bars - gross area",
              f'{assessment["provided_gross_area_mm2"]:.0f} mm2', "Upper bound before bending demand"),
-            ("All modelled passive bars - equivalent area at selected fyd",
+            ("All modeled passive bars - equivalent area at selected fyd",
              f'{assessment["provided_equivalent_area_mm2"]:.0f} mm2', assessment["status"]),
         ]
     pdf = _finish_retained_unit_pdf(buffer, builder)

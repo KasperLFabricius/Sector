@@ -53,14 +53,14 @@ REPORT_TEXT = MappingProxyType({
         11.5, before=8, after=4, color=PALETTE.primary,
         bold=True, keep_next=True,
     ),
-    "body": TextStyle(10, leading=13.5, after=4),
-    "small": TextStyle(10, leading=13.5, color=PALETTE.ink),
+    "body": TextStyle(10.5, leading=14.5, after=6),
+    "small": TextStyle(10, leading=13.5, after=5, color=PALETTE.ink),
     "publication_ref": TextStyle(
-        8, leading=10, before=2, after=2, color=PALETTE.muted,
+        9.5, leading=12, before=2, after=3, color=PALETTE.muted,
         keep_next=True,
     ),
     "publication_caption": TextStyle(
-        8, leading=10, before=2, after=2, color=PALETTE.ink,
+        9.5, leading=12, before=2, after=4, color=PALETTE.ink,
         keep_next=True,
     ),
 })

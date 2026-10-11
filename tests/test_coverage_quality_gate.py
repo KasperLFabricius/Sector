@@ -27,6 +27,7 @@ from tools.verify_coverage_gate import (
     CORE_DOWNLOAD_STEP_NAME,
     _branch_tests,
     expected_core_job,
+    expected_preflight_job,
     expected_branch_coverage_command,
     expected_coverage_command,
     expected_validator_command,
@@ -79,6 +80,7 @@ def test_exact_contract_and_workflow_are_aligned():
     assert "qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts" in command
     assert "parallel core shards ($phaseExit)" in command
     assert _workflow()["jobs"]["core"] == expected_core_job()
+    assert _workflow()["jobs"]["preflight"] == expected_preflight_job()
     assert command.count("-n 0") == 3
     assert command.count("--cov-append") == 3
     assert "--cov-branch" not in command
@@ -221,6 +223,33 @@ def test_core_matrix_and_exact_artifact_contract_cannot_be_weakened(mutation):
     elif mutation == "download_failure_not_counted":
         step = _step(workflow, COVERAGE_STEP_NAME)
         step["run"] = step["run"].replace('$phaseFailures += "core artifact download"', '$ignored = "download"')
+    with pytest.raises(CoverageGateContractError):
+        validate_workflow(_contract(), _workflow_text(workflow))
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_preflight", "core_bypass", "masked_job", "skipped_job",
+    "missing_marker_policy", "masked_step", "parallel_preflight", "unlocked_install",
+])
+def test_fast_preflight_contract_cannot_be_bypassed_or_weakened(mutation):
+    workflow = _workflow()
+    preflight = workflow["jobs"]["preflight"]
+    if mutation == "missing_preflight":
+        workflow["jobs"].pop("preflight")
+    elif mutation == "core_bypass":
+        workflow["jobs"]["core"].pop("needs")
+    elif mutation == "masked_job":
+        preflight["continue-on-error"] = True
+    elif mutation == "skipped_job":
+        preflight["if"] = "false"
+    elif mutation == "missing_marker_policy":
+        preflight["steps"][-1]["run"] = "python -m pytest tests/test_ascii_only.py -n 0 -q"
+    elif mutation == "masked_step":
+        preflight["steps"][-1]["continue-on-error"] = True
+    elif mutation == "parallel_preflight":
+        preflight["steps"][-1]["run"] = preflight["steps"][-1]["run"].replace("-n 0", "-n 4")
+    elif mutation == "unlocked_install":
+        preflight["steps"][3]["run"] = "python -m pip install -r requirements-dev.txt"
     with pytest.raises(CoverageGateContractError):
         validate_workflow(_contract(), _workflow_text(workflow))
 

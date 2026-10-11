@@ -23,7 +23,8 @@ def _step(job, name: str):
 
 def test_workflow_has_only_engineering_qa_and_one_real_portable_build():
     workflow = _workflow()
-    assert set(workflow["jobs"]) == {"core", "test", "portable"}
+    assert set(workflow["jobs"]) == {"preflight", "core", "test", "portable"}
+    assert workflow["jobs"]["core"]["needs"] == "preflight"
     portable = workflow["jobs"]["portable"]
     assert portable["needs"] == ["core", "test"]
     assert portable["name"] == "Build and run portable Sector"

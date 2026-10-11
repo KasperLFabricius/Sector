@@ -379,7 +379,7 @@ def _validate_report(pdf: bytes, profile: str) -> None:
     if profile in {"Standard", "Audit"}:
         operand_row = re.compile(
             r"MEd\s+Shear shift\s+Torsion share\s+MEd,total\s+MRd\s+"
-            r"Chord utilisation\s+80[.,]000 kNm\s+4[.,]214 kNm\s+"
+            r"Chord utilization\s+80[.,]000 kNm\s+4[.,]214 kNm\s+"
             r"39[.,]712 kNm\s+123[.,]925 kNm\s+100[.,]000 kNm\s+"
             r"123[.,]9\s*%\s+FAIL"
         )
