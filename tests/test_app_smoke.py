@@ -228,7 +228,7 @@ def _select_view(at, value):
 
 
 def _section_outline_from_result_view(at):
-    """Return the plotted section outline from a Plastic/Elastic result view."""
+    """Return the retained section diagram's complete concrete outline."""
 
     for chart in at.get("plotly_chart"):
         spec = json.loads(chart.proto.spec)
@@ -243,13 +243,14 @@ def _section_outline_from_result_view(at):
             x_title == "x (mm)"
             and data
             and data[0].get("fill") == "toself"
+            and data[0].get("name") is None
         ):
             return data[0]["x"], data[0]["y"]
     raise AssertionError("No section-state Plotly figure was rendered")
 
 
 def _section_hover_from_result_view(at):
-    """Return all custom hover text from a Plastic/Elastic section result."""
+    """Return response hover from the retained section diagram."""
 
     for chart in at.get("plotly_chart"):
         spec = json.loads(chart.proto.spec)
@@ -264,6 +265,7 @@ def _section_hover_from_result_view(at):
             x_title == "x (mm)"
             and data
             and data[0].get("fill") == "toself"
+            and data[0].get("name") is None
         ):
             return [
                 str(value)

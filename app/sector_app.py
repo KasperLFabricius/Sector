@@ -82,6 +82,7 @@ session_state_migrations = deferred_module("session_state_migrations")
 table_fields = deferred_module("app.table_field_definitions")
 modelled_direction = deferred_module("app.modelled_direction")
 viz = deferred_module("viz")
+section_fields = deferred_module("section_fields")
 
 capacity = deferred_module("sector.capacity")
 combined = deferred_module("sector.combined")
@@ -6157,12 +6158,14 @@ _PLASTIC_CONTEXT_SIG_KEYS = (
 _PLASTIC_RESULT_CONTRACT_TOKEN = (
     "plastic-result-contract",
     "m-m-origin-containment-simple-envelope-v2",
+    "section-fields-v1",
 )
 _ELASTIC_RESULT_CONTRACT_TOKEN = (
     "elastic-result-contract",
     "displaced-concrete-v1",
     "prestress-only-cracking-v1",
     "dual-crack-criteria-v1",
+    "section-fields-v1",
 )
 _CAPACITY_RESULT_CONTRACT_TOKEN = (
     "capacity-result-contract",
@@ -8903,6 +8906,7 @@ def _plastic_point_result(point, inp):
 
     return dict(
         V=point.V,
+        field_context=section_fields.context_signature(inp, "Plastic"),
         Mx=point.Mx,
         My=point.My,
         na_x=point.na_x_intercept,
@@ -9528,6 +9532,7 @@ def _run_single_analysis(
             bar_ids=bar_ids, tendon_ids=tendon_ids,
         )
         out["elastic"] = dict(
+            field_context=section_fields.context_signature(inp, "Elastic"),
             total=total, long=mpa(r.bar_stress_long), dif=mpa(r.bar_stress_dif),
             rst1=mpa(r.bar_stress_rst1),
             max_conc=r.max_concrete_compression / 1000.0,
@@ -12744,6 +12749,7 @@ def plastic_view(inp, results):
                        key="pl_state",
                        help="Inspect the section state at one swept neutral-axis angle.")
     pt = pts[sel]
+    _section_field_panel(inp, p, family="Plastic", point_index=sel)
     retained_state = presentation.plastic_state_rows(pt)
     hp = retained_state["halfplane"]
     na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"],
@@ -13028,6 +13034,41 @@ def interaction_view(inp, results):
                    "may use different numerical points.")
 
 
+def _section_field_panel(inp, result, *, family, point_index=None):
+    """Show the shared retained-state maps and exact static extrema."""
+    st.markdown("### Section stress and strain maps")
+    duration = "TOTAL"
+    if family == "Elastic":
+        duration = st.selectbox("Map action duration", ("TOTAL", "LONG"),
+                                key="elastic_field_duration",
+                                format_func=lambda value: "Combined actions (TOTAL)" if value == "TOTAL" else "Sustained actions (LONG)")
+    try:
+        field, figures = section_fields.field_pair(
+            inp, result, family=family, point_index=point_index, duration=duration)
+    except section_fields.FieldUnavailable as exc:
+        st.info("Section maps unavailable. " + str(exc))
+        return
+    st.caption(field.state + ". " + field.caption)
+    for quantity, figure in figures:
+        st.plotly_chart(figure, width="stretch")
+        unit = _PERMILLE if quantity == "strain" else "MPa"
+        st.dataframe([
+            {"Extremum": label, f"Value ({unit})": value,
+             "x (mm)": x * _MM, "y (mm)": y * _MM}
+            for label, value, x, y in section_fields.extrema(field, quantity)
+        ], hide_index=True, width="stretch")
+    st.caption(
+        "Tension is positive. Compression is negative. Concrete and reinforcement have different stress scales. "
+        "Color limits stay fixed across valid states of this action. Other actions can have different limits."
+    )
+    st.caption(
+        "Filled bands show values from the accepted field. The tables give exact extrema. "
+        "Marker sizes identify elements. They do not represent bar diameter."
+    )
+    if field.density:
+        st.caption("Slab-density markers identify the retained integration points or nominal axes. Their areas are the tabulated tributary areas.")
+
+
 def _calculation_output_metric(box, label, output):
     """Render one output quantity without an acceptance verdict."""
     value = output.get("value")
@@ -13106,6 +13147,8 @@ def elastic_view(inp, results, *, global_results=None):
                    f"$M_x$ = {ps[1]:.3f} kNm, $M_y$ = {ps[2]:.3f} kNm "
                    r"(added to the external $N$ and $M$; $N$ is tension-positive).")
 
+    _section_field_panel(inp, e, family="Elastic")
+
     # The neutral axis and the compression/tension zones only make sense when the
     # concrete actually carries compression; a fully tensile case has none.
     has_comp = e["max_conc"] > 0.0
@@ -13164,6 +13207,7 @@ def elastic_view(inp, results, *, global_results=None):
                 e.get("concrete_corners"), e.get("elements"),
                 e.get("stress_plane"), ec_mpa=inp["conc_Ec"] * 1000.0),
             width="stretch")
+        st.caption("Concrete profile: instantaneous stress-plane strain. Markers: TOTAL material strain, including retained long-term deformation and tendon initial strain.")
 
     # Complete, explicitly typed element evidence: no tendon is called a bar, and
     # geometry/area/strain stay beside every stress component for direct QA.
@@ -13219,7 +13263,7 @@ def elastic_view(inp, results, *, global_results=None):
                     "Ring point": [r["ring_point_no"] for r in corner_rows],
                     "x (mm)": [round(r["x_mm"], 2) for r in corner_rows],
                     "y (mm)": [round(r["y_mm"], 2) for r in corner_rows],
-                    f"Strain ({_EPS}, {_PERMILLE})": [
+                    f"Instantaneous strain ({_EPS}, {_PERMILLE})": [
                         round(r["strain_permille"], 5) for r in corner_rows],
                     f"Concrete stress ({_SIGMA}c, MPa)": [
                         round(r["stress_mpa"], 3) for r in corner_rows],

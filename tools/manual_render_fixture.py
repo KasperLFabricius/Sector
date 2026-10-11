@@ -42,7 +42,7 @@ from tools.publication_preflight import (  # noqa: E402
 )
 from tools.report_render_fixture import validate_outline_destinations  # noqa: E402
 
-_EXPECTED_FIGURE_COUNT = 36
+_EXPECTED_FIGURE_COUNT = 40
 _UNRENDERED_MATH_TOKENS = (
     "sqrt",
     "Cfrac",
@@ -65,9 +65,9 @@ _MANUAL_CROPS = (
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # The reviewed 0.96.5 footer has the current version and 143-page count;
+        # The reviewed 0.96.6 footer has the current version and 148-page count;
         # the crop geometry is unchanged.
-        "d6b6e894e131cdd1bb4dcda6d4cae7d1a2be5ebe3616effecec547c47d4b56e1",
+        "b7d54ea835b63692e8632e8ddcfb8cced7309b82ad53562ca9278b692e9c8504",
     ),
 )
 

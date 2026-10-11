@@ -16,6 +16,7 @@ MARKER = "pytest.mark.real_image_export"
 XDIST_GROUP = "publication-real-figures"
 
 DIRECT_EXPORT_TESTS = {
+    "tests/test_viz.py::test_oblique_concave_map_leaves_open_recess_pixels_empty",
     "tests/test_viz.py::test_report_and_app_size_shear_callout_borders_have_pixel_gaps",
     "tests/test_viz.py::test_report_size_tall_axis_x_callouts_are_contained_and_separate",
     "tests/test_viz.py::test_report_size_wide_axis_y_callouts_are_contained_and_separate",

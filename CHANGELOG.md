@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.96.6 - 2026-10-11
+
+Longitudinal stress and strain maps show concrete, bars and tendons in the
+Plastic and Elastic result views. Exact extrema, state identities, compatible
+creep strain and tendon initial strain support interpretation. Standard and
+Audit reports include the maps. Four worked manual figures explain their use.
+
+The existing production solvers and project schema 27 are unchanged.
+
 ## 0.96.5 - 2026-10-10
 
 The revised manual covers first use, application features, engineering methods,

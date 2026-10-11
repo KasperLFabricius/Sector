@@ -10,7 +10,7 @@ SPEC = ROOT / "packaging" / "sector.spec"
 RESOURCE = ROOT / "packaging" / "windows_version_info.txt"
 
 EXPECTED = {
-    "__version__": "0.96.5",
+    "__version__": "0.96.6",
     "__product_name__": "Sector",
     "__description__": "Structural-analysis and design calculation tool",
     "__author__": "Kasper Lindskov Fabricius",
@@ -58,7 +58,7 @@ def _sector_metadata_helper():
     return namespace["_sector_metadata"]
 
 
-def test_source_product_identity_is_exact_and_version_is_0965():
+def test_source_product_identity_is_exact_and_version_is_0966():
     assert _source_identity() == EXPECTED
 
 
@@ -66,10 +66,10 @@ def test_windows_resource_is_exact_and_syntactically_valid():
     text = RESOURCE.read_text(encoding="utf-8")
     ast.parse(text, filename=str(RESOURCE))
     for token in (
-        "filevers=(0, 96, 5, 0)",
-        "prodvers=(0, 96, 5, 0)",
-        "StringStruct('FileVersion', '0.96.5.0')",
-        "StringStruct('ProductVersion', '0.96.5.0')",
+        "filevers=(0, 96, 6, 0)",
+        "prodvers=(0, 96, 6, 0)",
+        "StringStruct('FileVersion', '0.96.6.0')",
+        "StringStruct('ProductVersion', '0.96.6.0')",
         "StringStruct('ProductName', 'Sector')",
         "StringStruct('OriginalFilename', 'Sector.exe')",
     ):

@@ -675,7 +675,8 @@ def test_manual_documents_current_analysis_hover_semantics():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     assert "hover text reports the plotted capacity or material response" in text
     assert "Section-result markers show stress and strain" in text
-    assert 'Coordinates and reinforcement area stay in section input previews' in text
+    assert 'Section maps also show coordinates' in text
+    assert 'The full result tables give reinforcement areas and coordinates' in text
 
 
 def test_manual_editable_table_matrix_is_generated_from_shared_registry():
