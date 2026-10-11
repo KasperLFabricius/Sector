@@ -16,11 +16,45 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 
+def _dot3(left, right):
+    """Evaluate three terms in a fixed order, independent of BLAS dispatch."""
+    return (float(left[0]) * float(right[0]) +
+            float(left[1]) * float(right[1]) +
+            float(left[2]) * float(right[2]))
+
+
+def _solve3(matrix, target):
+    """Solve three equations by scalar elimination with partial pivoting.
+
+    Fixed-order Python float operations keep the published worksheet operands
+    reproducible across CPU-specific BLAS kernels. No operands are rounded.
+    """
+    rows = [[float(value) for value in row] + [float(rhs)]
+            for row, rhs in zip(matrix, target)]
+    for column in range(3):
+        pivot = max(range(column, 3), key=lambda row: abs(rows[row][column]))
+        if rows[pivot][column] == 0:
+            raise ValueError("The manual worksheet matrix is singular.")
+        rows[column], rows[pivot] = rows[pivot], rows[column]
+        for row in range(column + 1, 3):
+            factor = rows[row][column] / rows[column][column]
+            rows[row][column] = 0.0
+            for entry in range(column + 1, 4):
+                rows[row][entry] -= factor * rows[column][entry]
+    solution = [0.0] * 3
+    for row in range(2, -1, -1):
+        rhs = rows[row][3]
+        for column in range(row + 1, 3):
+            rhs -= rows[row][column] * solution[column]
+        solution[row] = rhs / rows[row][row]
+    return np.array(solution)
+
+
 def clip_polygon(points, plane):
     """Keep q <= 0 with the edge intersection stated in the manual."""
     if not points:
         return []
-    q0, gx, gy = plane
+    q0, gx, gy = map(float, plane)
     result = []
     for a, b in zip(points, points[1:] + points[:1]):
         da = q0 + gx * a[0] + gy * a[1]
@@ -35,18 +69,20 @@ def clip_polygon(points, plane):
 
 def polygon_sums(points):
     """Signed A, Sx, Sy, Sxx, Syy and Sxy, using explicit edge sums."""
-    values = np.zeros(6)
+    values = [0.0] * 6
     if len(points) < 3:
-        return values
+        return np.array(values)
     for (x, y), (u, v) in zip(points, points[1:] + points[:1]):
         cross = x * v - u * y
-        values += cross * np.array([
+        terms = [
             1 / 2, (x + u) / 6, (y + v) / 6,
             (x * x + x * u + u * u) / 12,
             (y * y + y * v + v * v) / 12,
             (2 * x * y + x * v + u * y + 2 * u * v) / 24,
-        ])
-    return values
+        ]
+        for index, term in enumerate(terms):
+            values[index] += cross * term
+    return np.array(values)
 
 
 def worksheet_matrix(outer, holes, elements, plane, *, cracked):
@@ -57,46 +93,52 @@ def worksheet_matrix(outer, holes, elements, plane, *, cracked):
     for hole in holes:
         cut = clip_polygon(hole, plane) if cracked else hole
         clipped_holes.append(cut)
-        moments -= polygon_sums(cut)
-    area, sx, sy, sxx, syy, sxy = moments
-    matrix = np.array([[area, sx, sy], [sy, sxy, syy], [sx, sxx, sxy]])
+        moments = np.array([float(a) - float(b)
+                            for a, b in zip(moments, polygon_sums(cut))])
+    area, sx, sy, sxx, syy, sxy = map(float, moments)
+    matrix = [[area, sx, sy], [sy, sxy, syy], [sx, sxx, sxy]]
     for x, y, area, ratio, _locked in elements:
-        q = np.dot(plane, [1, x, y])
+        q = _dot3(plane, [1, x, y])
         weight = (ratio - int(not cracked or q < 0)) * area
-        matrix += weight * np.outer([1, y, x], [1, x, y])
-    return matrix, moments, region, clipped_holes
+        for row, row_factor in enumerate((1, y, x)):
+            for column, column_factor in enumerate((1, x, y)):
+                matrix[row][column] += weight * (row_factor * column_factor)
+    return np.array(matrix), moments, region, clipped_holes
 
 
 def worksheet_solve(outer, holes, elements, target):
     """Full-step Newton iteration with retained operands for publication."""
     initial, _, _, _ = worksheet_matrix(outer, holes, elements, np.zeros(3), cracked=False)
-    plane = np.linalg.solve(initial, target)
+    plane = _solve3(initial, target)
     trace = []
     tolerance = 1e-9 * max(1, max(abs(target)))
     for iteration in range(1, 101):
         matrix, moments, region, voids = worksheet_matrix(outer, holes, elements, plane, cracked=True)
-        internal = matrix @ plane
-        residual = internal - target
+        internal = np.array([_dot3(row, plane) for row in matrix])
+        residual = np.array([float(a) - float(b) for a, b in zip(internal, target)])
         accepted = max(abs(residual)) <= tolerance
-        correction = np.zeros(3) if accepted else np.linalg.solve(matrix, -residual)
+        correction = np.zeros(3) if accepted else _solve3(matrix, -residual)
         trace.append(dict(iteration=iteration, plane=plane.copy(), matrix=matrix,
                           moments=moments, region=region, voids=voids,
                           internal=internal, residual=residual, correction=correction))
         if accepted:
             break
-        plane += correction
+        plane = np.array([float(a) + float(b) for a, b in zip(plane, correction)])
     else:
         raise ValueError("The manual worksheet example did not converge.")
-    passive = np.array([ratio * np.dot(plane, [1, x, y])
+    passive = np.array([ratio * _dot3(plane, [1, x, y])
                         for x, y, _area, ratio, _locked in elements])
     return dict(initial=initial, trace=trace, plane=plane, passive=passive,
                 tolerance=tolerance, target=np.array(target), elements=elements)
 
 
 def element_resultants(stresses, elements):
-    return sum((stress * area * np.array([1, y, x])
-                for stress, (x, y, area, _ratio, _locked) in zip(stresses, elements)),
-               start=np.zeros(3))
+    values = [0.0] * 3
+    for stress, (x, y, area, _ratio, _locked) in zip(stresses, elements):
+        force = float(stress) * area
+        for index, factor in enumerate((1, y, x)):
+            values[index] += force * factor
+    return np.array(values)
 
 
 @lru_cache(maxsize=1)

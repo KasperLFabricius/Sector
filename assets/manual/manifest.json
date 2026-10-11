@@ -50,7 +50,7 @@
       "png_sha256": "2f5316106fb409d37e656bbf2b906aef5dd4cb6cb89dd3d56111f8eea0f749a4"
     },
     "fig_beam_cracked": {
-      "figure_sha256": "5e7d72254a9d7874f8cece1a7777dcb0c8c67e2851a55c76422bf14816bf37eb",
+      "figure_sha256": "e4e6cf7c5d94f02eefec138b701d8949f0ebd1d67c4aea94a079a5f88967f816",
       "png_sha256": "0c39b381822f56db64804da762990bf3ea53808c3846718ff301ceea8a78dd26"
     },
     "fig_elastic_fields": {
@@ -118,7 +118,7 @@
       "png_sha256": "3a55b28e8a44ccfaeed5c1380edf6782014e4c86b4b41be319c762d21ac0b996"
     },
     "fig_elastic_iteration": {
-      "figure_sha256": "42fbb4a8354b04ab66199d5036fd08f288ad27f58e6b65e077cab0eb4a5c07b1",
+      "figure_sha256": "cc98b337c6183735b5b6285b197dd2fcca03770e9fd3450ba6333db1027addb5",
       "png_sha256": "31b216ce4003d25ff5365752b3bdc927e8c857023411c1a1d648d00a8ae13a23"
     },
     "fig_plastic_bisection": {

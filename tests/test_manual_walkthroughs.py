@@ -83,6 +83,43 @@ def test_offline_figures_match_the_live_factories_and_png_checksums():
         )
 
 
+def test_native_cracked_figure_publication_precision_is_bounded_and_stable(monkeypatch):
+    import copy
+
+    native_section_figure = manual.viz.section_figure
+    unrounded = []
+    perturb = False
+
+    def capture_native_geometry(*args, **kwargs):
+        figure = native_section_figure(*args, **kwargs)
+        unrounded.append(copy.deepcopy(figure))
+        if perturb:
+            for trace in figure.data:
+                for axis in ("x", "y"):
+                    values = getattr(trace, axis, None)
+                    if values is not None:
+                        trace.update({axis: [float(np.nextafter(value, -np.inf))
+                                             if value is not None else None for value in values]})
+        return figure
+
+    monkeypatch.setattr(manual.viz, "section_figure", capture_native_geometry)
+    published = manual.fig_beam_cracked()
+    perturb = True
+    assert manual.fig_beam_cracked().to_json() == published.to_json()
+    # Compare every plotted coordinate with its unrounded native counterpart.
+    for actual, native in zip(published.data, unrounded[0].data, strict=True):
+        for axis in ("x", "y"):
+            coordinates = getattr(actual, axis, None)
+            if coordinates is not None:
+                for value, raw in zip(coordinates, getattr(native, axis), strict=True):
+                    if raw is None:
+                        assert value is None
+                    else:
+                        assert abs(value - raw) <= 5e-10
+                        if value == 0:
+                            assert not np.signbit(value)
+
+
 def test_damaged_offline_image_cannot_be_published(tmp_path, monkeypatch):
     name = "fig_beam_section"
     (tmp_path / (name + ".png")).write_bytes(b"\x89PNG\r\n\x1a\nchanged")

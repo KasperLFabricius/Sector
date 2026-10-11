@@ -272,6 +272,15 @@ def fig_beam_cracked():
     figure = viz.section_figure(ex["outer"], ex["holes"], ex["bars"], na_line=na,
                               zones=zones, title="Cracked section (Stage II)",
                               show_labels=False, height=460, scale=_MM, unit="mm")
+    # Publish coordinates to 1e-9 mm. This removes CPU-kernel last-bit noise
+    # while preserving the native cracked state and its displayed geometry.
+    for trace in figure.data:
+        for axis in ("x", "y"):
+            coordinates = getattr(trace, axis, None)
+            if coordinates is not None:
+                rounded = [round(float(value), 9) if value is not None else None
+                           for value in coordinates]
+                trace.update({axis: [0.0 if value == 0 else value for value in rounded]})
     _manual_native_plot(figure, height=720)
     figure.update_xaxes(range=[-225, 225], constrain="domain")
     figure.update_yaxes(range=[-375, 375], constrain="domain")

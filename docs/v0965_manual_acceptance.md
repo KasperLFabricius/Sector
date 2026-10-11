@@ -134,3 +134,19 @@ hash-locked installation passes 121 focused tests. All 143 manual pages retain
 identical text, pixels, dimensions, links and bookmarks; HTML is byte-identical.
 Independent review records zero findings for these corrections. The final
 commit review and complete CI remain required before publication.
+
+A later CI runner exposed CPU-dependent last-bit differences in the manual's
+independent worksheet. These differences changed the exact signature of the
+elastic residual table and two figure definitions. Reproduction across CPU
+kernels confirmed that the dependency updates were unrelated. The worksheet
+now uses fixed-order scalar arithmetic and partial-pivot Gaussian elimination.
+It retains calculated residuals and the original convergence criterion. The native
+cracked-section figure publishes coordinates to 1e-9 mm while retaining its
+native calculation result. Its coordinate-rounding error is at most 5e-10 mm.
+
+Ten fresh processes, covering five kernel settings and both dependency
+environments, produce identical raw worksheet data, all 77 tables and all 32
+figure definitions. The original numerical tests and exact publication guards
+remain. Both figure PNGs are byte-identical to the approved images. A complete
+143-page comparison isolates the visible change to three residual cells on
+page 124. Those cells received a new visual and numerical review.

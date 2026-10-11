@@ -1,5 +1,7 @@
 """Independent manual worksheet against the production equilibrium solvers."""
 
+import ast
+import inspect
 import math
 import sys
 from pathlib import Path
@@ -14,6 +16,46 @@ from sector.elastic import solve_elastic, solve_elastic_combined
 from sector.section import Section
 from sector.materials import Concrete, MildSteel
 from sector.plastic import plastic_capacity_at_angle
+
+
+def test_scalar_equilibrium_solve_pivots_and_rejects_singular_matrix():
+    from manual_numerics import _solve3
+
+    # The first and second elimination columns each require a row swap.
+    matrix = [[0., 0., 2.], [3., 0., 1.], [1., 4., 0.]]
+    assert _solve3(matrix, [6., 6., 9.]) == pytest.approx([1., 2., 3.], rel=0, abs=1e-14)
+    with pytest.raises(ValueError, match="singular"):
+        _solve3([[1., 2., 3.], [2., 4., 6.], [0., 0., 0.]], [1., 2., 0.])
+
+
+def test_published_worksheet_does_not_use_cpu_dispatched_linear_algebra(monkeypatch):
+    import manual_numerics
+
+    # ndarray's @ operator bypasses a patched np.matmul module attribute.
+    source = ast.parse(inspect.getsource(manual_numerics))
+    assert not any(isinstance(node, ast.MatMult) for node in ast.walk(source))
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Published worksheet arithmetic must be independent of BLAS.")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(np.linalg, "solve", forbidden)
+        patch.setattr(np, "dot", forbidden)
+        patch.setattr(np, "matmul", forbidden)
+        # Bypass the cached result so all three elastic solves run in this test.
+        case = biaxial_example.__wrapped__()
+        patch.setattr(manual_numerics, "biaxial_example", lambda: case)
+        assert len(manual_numerics.fig_elastic_iteration().data) == 10
+    for route in ("elastic", "long", "instant"):
+        result = case[route]
+        assert result["tolerance"] == 1e-9 * max(1, max(abs(result["target"])))
+        for state in result["trace"]:
+            assert state["internal"] == pytest.approx(
+                state["matrix"] @ state["plane"], rel=0, abs=1e-12)
+            if max(abs(state["residual"])) > result["tolerance"]:
+                assert state["correction"] == pytest.approx(
+                    np.linalg.solve(state["matrix"], -state["residual"]), rel=1e-12, abs=1e-12)
+        assert max(abs(result["trace"][-1]["residual"])) <= result["tolerance"]
 
 
 def _native_section(case):
