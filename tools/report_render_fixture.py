@@ -75,9 +75,9 @@ _AUDIT_SPARSE_BODY_THRESHOLD = 0.35
 # Geometry, concrete law, two steel laws, clear-spacing and minimum-reinforcement
 # geometry, derived shear geometry, shear truss, torsion tube, two V-T interaction
 # figures, one plastic interaction and state, one elastic state and strain profile,
-# and four grouped-fatigue figures. An intentional fixture change must update this
-# explicit contract.
-_EXPECTED_FIGURE_COUNT = 19
+# four grouped-fatigue figures, and eight section maps for two Plastic and two
+# Elastic cases. An intentional fixture change must update this explicit contract.
+_EXPECTED_FIGURE_COUNT = 27
 _EXPECTED_PLASTIC_WORKED_HEADING = (
     "Worked plastic calculation (utilisation direction)"
 )
@@ -86,13 +86,13 @@ _REPORT_CROPS = (
         "report contents",
         2,
         (0.10, 0.08, 0.92, 0.90),
-        "4649b5afe6bf0c537fd9efe4298ba8c5d93bd2ff29ba8a80bea30b90d8c7b591",
+        "32a0d0c1e731962bdefdb2f57c62c4cfbeefa41c7c194be7284124dbaaf69071",
     ),
     RasterCrop(
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "af6d798a2b34fc2bf829a6d6c3b613bd8ecbccc7e476d9b95b8bb875ebc38852",
+        "f4f17027f859b41db1f4b9385aea6cff1f87d5612517f5579527062b3d1cd32a",
     ),
 )
 

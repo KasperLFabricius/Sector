@@ -55,6 +55,7 @@ import publication_theme
 import report_equation_contract
 import viz
 import result_presentation as presentation
+import section_fields
 from app import engineer_messages
 from sector import capacity
 from sector import codes as ec2_codes
@@ -2623,6 +2624,10 @@ class ReportBuilder:
                         ) is not None
                     )
                 ):
+                    if key == "plastic" and self.figures:
+                        jobs.append((case_inp, case_out,
+                                     f"Plastic section maps - {case_id}...",
+                                     "_plastic_field_chapter", True))
                     continue
                 jobs.append((
                     case_inp, case_out, f"{label} - {case_id}...", method, True
@@ -2689,6 +2694,10 @@ class ReportBuilder:
                     case_inp, case_out,
                     f"Elastic stresses - {case_id}...", "_elastic", True,
                 ))
+            elif "elastic" in case_out and self.figures:
+                jobs.append((case_inp, case_out,
+                             f"Elastic section maps - {case_id}...",
+                             "_elastic_field_chapter", True))
             if (
                 any(
                     item.get("case_id") == self._case_id(case_inp, "elastic")
@@ -6557,6 +6566,9 @@ class ReportBuilder:
                 self._plastic_nm_boundary(nm)
         if self.profile.key == "Audit":
             self._plastic_sweep_population(pl)
+        # Each case has its own retained capacity point. Map publication is
+        # independent of the report's cross-case worked-calculation selection.
+        self._section_field_maps(pl, family="Plastic", point_index=pl.get("worked_point_index"))
         if self._selected_family("plastic", self.inp) is not None:
             self._plastic_worked(pl)
         else:
@@ -6565,6 +6577,46 @@ class ReportBuilder:
                 "governing utilisation (or capacity extremum when no utilisation "
                 "is assessed) across all plastic cases."
             )
+
+    def _plastic_field_chapter(self):
+        case_id = self._case_id(self.inp, "plastic")
+        self._h1(f"Plastic section maps - {case_id}")
+        result = self.out["plastic"]
+        self._section_field_maps(result, family="Plastic", point_index=result.get("worked_point_index"))
+
+    def _elastic_field_chapter(self):
+        case_id = self._case_id(self.inp, "elastic")
+        self._h1(f"Elastic section maps - {case_id}")
+        self._section_field_maps(self.out["elastic"], family="Elastic")
+
+    def _section_field_maps(self, result, *, family, point_index=None):
+        if not self.figures:
+            return
+        self._h2("Section stress and strain maps")
+        try:
+            field, figures = section_fields.field_pair(
+                self.inp, result, family=family, point_index=point_index)
+        except section_fields.FieldUnavailable as exc:
+            self._small("Section maps unavailable. " + _html_escape(str(exc)))
+            return
+        self._p(_html_escape(field.state + ". " + field.caption))
+        case = self.inp.get("plastic_case" if family == "Plastic" else "elastic_case") or {}
+        case_label = str(case.get("id") or "Unnamed action")
+        for quantity, figure in figures:
+            self._fig(figure, 170, 140,
+                      caption=f"{case_label}: {family.lower()} {quantity}. {field.state}.")
+            unit = "&#8240;" if quantity == "strain" else "MPa"
+            rows = [["Extremum", f"Value ({unit})", "x (mm)", "y (mm)"]]
+            rows.extend([_html_escape(label), _fmt(value, 5), _fmt(x * _MM, 2), _fmt(y * _MM, 2)]
+                        for label, value, x, y in section_fields.extrema(field, quantity))
+            self._table(rows, [80 * mm, 35 * mm, 25 * mm, 25 * mm], font=8)
+        self._small(
+            "Tension is positive. Compression is negative. Concrete and reinforcement have different stress scales. "
+            "Color limits stay fixed across valid states of this action. Other actions can have different limits. "
+            "Display bands show values from the accepted field. Marker sizes identify elements. They do not represent bar diameter."
+        )
+        if field.density:
+            self._small("Slab-density markers identify retained integration points or nominal axes with tabulated tributary areas.")
 
     def _plastic_nm_boundary(self, nm):
         self._h2("Numerical N-M boundary")
@@ -10811,6 +10863,7 @@ class ReportBuilder:
                 "stress-limit criterion is applied. Percentages compare the displayed "
                 "stress with the stated characteristic strength."
             )
+        self._section_field_maps(el, family="Elastic")
         # Elastic state diagram (bars coloured by stress sign, compression zone).
         if self.figures and el.get("max_conc", 0.0) > 0.0:
             hp = viz.elastic_halfplane(el["na_x"], el["na_y"],
@@ -10843,6 +10896,7 @@ class ReportBuilder:
                 el.get("stress_plane"),
                 ec_mpa=float(self.inp.get("conc_Ec", 0.0)) * 1000.0,
                 title="Elastic strain profile"), 150, 100)
+            self._small("Concrete profile: instantaneous stress-plane strain. Markers: TOTAL material strain, including retained long-term deformation and tendon initial strain.")
         # Transformed properties: uncracked and (when cracked) cracked, n_l-weighted.
         self._h2("Transformed section properties (n<sub>l</sub>)")
         pu = el.get("props_un") or {}
@@ -10915,7 +10969,7 @@ class ReportBuilder:
         if corner_rows:
             self._h2("Concrete corner stress and strain")
             rows = [["Point", "Ring", "Ring point", "x", "y",
-                     "Strain", "Concrete stress / f_ck"]]
+                     "Instantaneous<br/>strain", "Concrete stress / f_ck"]]
             for row in corner_rows:
                 rows.append([
                     row["point_no"], row["ring"], row["ring_point_no"],

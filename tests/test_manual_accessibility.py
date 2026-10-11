@@ -183,7 +183,7 @@ def test_pdf_declares_document_control_language_and_detailed_navigation():
 
 def test_figure_accessible_names_use_rendered_math_without_latex():
     labels = _parsed().figure_labels
-    assert len(labels) == 36
+    assert len(labels) == 40
     assert all(not any(token in label for token in ("$", "\\", "{", "}", "^", "_"))
                for label in labels)
     assert any("Mx = 180 kNm and My = 30 kNm" in label for label in labels)

@@ -55,6 +55,10 @@ from sector.section import Section
 from sector.serviceability import analyse_cracking
 
 import viz
+from manual_section_fields import (
+    fig_elastic_strain_map, fig_elastic_stress_map,
+    fig_plastic_strain_map, fig_plastic_stress_map,
+)
 from manual_additional_figures import (
     fig_directional_shear_faces, fig_slab_spacing_cover, fig_torsion_partition,
 )
@@ -1208,8 +1212,28 @@ def manual_blocks() -> list:
     h2("Results overview")
     md("Select a result under **Result details**. Select **Open selected result** to open its view.")
     md('The overview shows one governing row for each engineering check. Each row identifies its action set, direction or scope, result, criterion and status. A calculated result takes precedence over an inactive state. For equal states, the largest valid utilization governs. An exact tie keeps the first listed case.\n\nFor a check with different directions, the most unfavorable direction governs. Its label identifies that direction. **Not run**, **Not calculated**, **Not applicable** and **Not requested** identify the calculation scope and state. Headline counts summarize the rows on the screen. Each row keeps its own status.')
-    md('In analysis figures, hover text reports the plotted capacity or material response represented by the selected point. Section-result markers show stress and strain. Coordinates and reinforcement area stay in section input previews and the full result tables.\n\n**Plot controls**\n\nThe plot toolbar gives these controls:\n\n- **Download plot as a PNG:** save the plot shown as an image.\n- **Zoom:** select a region to make it larger.\n- **Pan:** move the region shown.\n- **Zoom in** and **Zoom out:** change the scale.\n- **Autoscale:** change the axis ranges to include all plotted data.\n- **Reset axes:** use the initial axis ranges.\n- **Fullscreen:** show the plot on the full screen.\n\nSelect the required control in the plot toolbar. For Zoom or Pan, drag within the plot.')
+    md('In analysis figures, hover text reports the plotted capacity or material response represented by the selected point. Section-result markers show stress and strain. Section maps also show coordinates. The full result tables give reinforcement areas and coordinates.\n\n**Plot controls**\n\nThe plot toolbar gives these controls:\n\n- **Download plot as a PNG:** save the plot shown as an image.\n- **Zoom:** select a region to make it larger.\n- **Pan:** move the region shown.\n- **Zoom in** and **Zoom out:** change the scale.\n- **Autoscale:** change the axis ranges to include all plotted data.\n- **Reset axes:** use the initial axis ranges.\n- **Fullscreen:** show the plot on the full screen.\n\nSelect the required control in the plot toolbar. For Zoom or Pan, drag within the plot.')
     h2("Plastic results")
+    md("**Section stress and strain maps** show the selected ultimate-capacity state. "
+       "Select its angle with **Neutral-axis state**. Read the strain map and stress map together. "
+       "Both use the section coordinates, with tension positive and compression negative.")
+    md("The concrete fill shows values from the accepted strain plane and selected design material law. "
+       "Circles identify bars. Diamonds identify tendons. Tendon material strain includes initial prestress strain. "
+       "A tendon can remain in tension inside the concrete compression region.")
+    md("Strain uses one common color scale. Concrete and reinforcement have different stress scales. Each scale has a material label. "
+       "Color limits stay fixed across valid angles of the selected action. Other actions can have different limits. "
+       "Use the extrema tables and element values for exact comparisons.")
+    md("The filled display bands show values from the accepted field. They keep the concrete outline and voids. "
+       "The number of display bands changes only the image. The plastic calculation uses its own integration bands. "
+       "The extrema include concrete-law turning points. They do not depend on display-band spacing.")
+    md("In a section map, move the pointer over a concrete vertex or reinforcement marker to read its value and coordinates. "
+       "The extrema table gives the largest and smallest values with their locations. The element tables give reinforcement areas.")
+    fig(fig_plastic_strain_map,
+        "Circular example at ultimate capacity: axial compression 1500 kN and neutral-axis angle 45 degrees. Tendon material strain includes initial strain.",
+        "The annular section has a diagonal compatible strain field. Bar circles and tendon diamonds use the same strain scale. The central void stays empty.")
+    fig(fig_plastic_stress_map,
+        "Stress in the same ultimate-capacity state. Concrete and reinforcement use different stress scales with material labels.",
+        "Concrete compression occupies one side of the annulus. Discrete bar and tendon markers show the calculated material stresses. The void remains empty.")
     md("Open **Selected neutral-axis state - calculation details** for the selected sweep point. "
        "Its concrete-corner rows show compatible strain and design stress. Reinforcement rows also show the force from stress multiplied by entered area. "
        "Use the point and element IDs to compare these values with the section drawing.")
@@ -1225,6 +1249,23 @@ def manual_blocks() -> list:
        "trace. Use the full fixed-$N$ biaxial envelope to assess the concurrent "
        "applied moment pair. A nonconverged boundary is identified as diagnostic output.")
     h2("Elastic results")
+    md("Use **Map action duration** to select **Combined actions (TOTAL)** or **Sustained actions (LONG)**. "
+       "The maps use the same section geometry and fixed color limits for these two states. "
+       "The captions identify the selected action and duration.")
+    md("The strain fill shows compatible section deformation. TOTAL includes retained long-term deformation and the instantaneous response. "
+       "LONG uses the effective concrete modulus for sustained actions. Reinforcement markers show material strain. Tendon markers also include initial strain.")
+    md("The concrete stress map uses the retained cracked elastic state. Tensile concrete stress is zero, while tensile section strain can remain positive. "
+       "Under creep, the zero section-strain line can differ from the concrete stress boundary. Each map identifies its own dashed line.")
+    md("The depth profile and concrete-corner table show instantaneous concrete stress-plane strain. "
+       "The depth-profile markers and reinforcement table show TOTAL material strain. These component labels explain their difference from the compatible section-strain map.")
+    md("Marker size identifies an element and has no physical diameter scale. For slab-density input, markers identify retained integration points or nominal axes. "
+       "Read their tributary areas in the element table. A missing or inconsistent retained state gives **Section maps unavailable**. Calculate again before you use the maps.")
+    fig(fig_elastic_strain_map,
+        "Rectangular example: TOTAL compatible strain for sustained moment 100 kNm, additional moment 50 kNm, concrete modulus 35 GPa and creep coefficient 2. Axial force is zero.",
+        "A vertical compatible strain gradient crosses the rectangular section. The bar strains lie on that plane. A dashed line marks zero section strain.")
+    fig(fig_elastic_stress_map,
+        "Stress for the same combined actions. Concrete compression uses the instantaneous stress plane. Bar stress includes retained long-term stress.",
+        "Concrete stress is zero in the tensile region and becomes compressive toward the top. Bar circles show their total stresses on the reinforcement scale.")
     md('Open **Concrete corner stress/strain details** to examine the entered outer-ring and void vertices. Compatible tensile strain can occur where concrete stress is zero. Read the displayed peak concrete result together with these point values.')
     md('**Transformed section properties** compares the uncracked section with the calculated cracked section at the sustained modular ratios. The uncracked properties include the full concrete region. The cracked properties use the calculated compression region. The two sets of properties include the transformed reinforcement contribution.')
     md("Open **All crack-width candidates** to compare the governing and other evaluated crack locations. "
@@ -1247,6 +1288,9 @@ def manual_blocks() -> list:
     md('The **M-V-T Combined** view gives the $M$, $V$ and $T$ utilizations and the applicable DK NA $\\sum(S_{Ed}/S_{Rd})$ sum. It also shows the concrete-crushing interaction and a $V$-$T$ envelope.\n\nThree component results identify the concrete compression strut, shared closed stirrup and governing longitudinal reinforcement. Each detail block shows its contributions and the selected member strut angle. A longitudinal torsion failure governs the combined result. An unverified longitudinal requirement gives **NOT ASSESSED**, with the calculated component values available for you to examine.')
     h2("PDF report")
     md('Choose **Brief**, **Standard** or **Audit** in the Report workspace. Standard is the default. The profile changes presentation depth only: engineering values, rounding policy, statuses, warnings and sources are the same. Each profile includes its applicable figures.')
+    md("With figures enabled, Standard and Audit include stress and strain maps for each calculated Plastic and Elastic case. "
+       "Plastic maps use the retained selected capacity point. Elastic maps use Combined actions (TOTAL). "
+       "Each pair has its action identity, state, units, signs and extrema tables. Brief keeps its governing capacity and elastic-response figures.")
     table(
         ["Profile", "Purpose", "Not included"],
         [

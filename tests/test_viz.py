@@ -134,8 +134,8 @@ def test_elastic_strain_profile_distinguishes_bars_and_tendons():
         ec_mpa=30_000.0,
     )
     names = [trace.name for trace in fig.data]
-    assert "Concrete strain plane" in names
-    assert "Bars" in names and "Tendons" in names
+    assert "Concrete instantaneous strain" in names
+    assert "Bars (TOTAL)" in names and "Tendons (TOTAL)" in names
     assert fig.layout.yaxis.autorange == "reversed"
     assert _PERMILLE in fig.layout.xaxis.title.text
 
@@ -2057,3 +2057,46 @@ def test_fatigue_figures_escape_user_controlled_plotly_text():
     assert list(damage.data[0].x) == [
         "FAT &lt;i&gt;1&lt;/i&gt; &amp; peak"
     ]
+
+
+@pytest.mark.real_image_export
+@pytest.mark.xdist_group(name="publication-real-figures")
+@pytest.mark.parametrize("shape", ["u", "c"])
+def test_oblique_concave_map_leaves_open_recess_pixels_empty(shape):
+    from io import BytesIO
+
+    import numpy as np
+    from PIL import Image
+
+    from app import section_fields as fields
+
+    outer = ((-2., -2.), (2., -2.), (2., 2.), (1., 2.),
+             (1., -1.), (-1., -1.), (-1., 2.), (-2., 2.))
+    plane = (0., .00037, .001)
+    box = (-.8, .8, -.8, 1.8)
+    if shape == "c":
+        outer = tuple((-y, x) for x, y in outer)
+        plane = (plane[0], -plane[2], plane[1])
+        box = (-1.8, .8, -.8, .8)
+    field = fields.SectionField("Elastic", "Exterior pixel regression", outer, (),
+                                plane, plane, None, (), "")
+    figure = fields.section_field_figure(field, "strain")
+    layout = figure.full_figure_for_development(warn=False).layout
+    image = np.array(Image.open(BytesIO(figure.to_image(format="png", scale=2))).convert("RGB"))
+    margin = layout.margin
+    width = layout.width - margin.l - margin.r
+    height = layout.height - margin.t - margin.b
+
+    def pixel_x(x):
+        axis = layout.xaxis
+        fraction = (x * 1000 - axis.range[0]) / (axis.range[1] - axis.range[0])
+        return int(2 * (margin.l + width * (axis.domain[0] + fraction * (axis.domain[1] - axis.domain[0]))))
+
+    def pixel_y(y):
+        axis = layout.yaxis
+        fraction = (y * 1000 - axis.range[0]) / (axis.range[1] - axis.range[0])
+        return int(2 * (margin.t + height * (1 - axis.domain[0] - fraction * (axis.domain[1] - axis.domain[0]))))
+
+    recess = image[pixel_y(box[3]):pixel_y(box[2]), pixel_x(box[0]):pixel_x(box[1])]
+    assert recess.size > 0
+    assert np.all(recess >= 250), "Colored clipping bridges cross the empty section recess"
