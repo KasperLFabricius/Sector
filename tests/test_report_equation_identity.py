@@ -79,6 +79,19 @@ def _builder(*, profile="Standard"):
     return builder
 
 
+def _sealed_equation(item):
+    """Require the one sealed equation retained by a heading layout group."""
+    if isinstance(item, sector_report._EquationFlowable):
+        return item
+    assert isinstance(item, KeepTogether)
+    equation, = item._sector_equations
+    assert isinstance(equation, sector_report._EquationFlowable)
+    # The measured wrapper uses the same visible objects as the sealed record.
+    for child in equation._content:
+        assert sum(candidate is child for candidate in item._content) == 1
+    return equation
+
+
 def _pdf(flow):
     buffer = io.BytesIO()
     SimpleDocTemplate(
@@ -138,7 +151,7 @@ def test_equation_substitution_and_result_publish_only_compact_numbers():
         equation_key="compact.values",
     )
 
-    equation = builder.flow[-1]
+    equation = _sealed_equation(builder.flow[-1])
     math = next(
         child
         for child in equation._content
@@ -146,7 +159,7 @@ def test_equation_substitution_and_result_publish_only_compact_numbers():
     )
     text = equation.getPlainText()
     assert f"Numerical substitution: = 14 + 14.5 + 4 {TIMES} 10-7" in text
-    assert f"Result {EM_DASH} R [kN]: R = 14.5 kN" in text
+    assert f"Result: R [kN]: R = 14.5 kN" in text
     assert "14.000" not in text
     assert "14.500" not in text
 
@@ -185,11 +198,11 @@ def test_equation_compaction_does_not_change_symbolic_source_note_or_table():
         equation_spec=_TEST_NUMERIC_RESULT_WITH_NOTE,
     )
 
-    equation = builder.flow[-1]
+    equation = _sealed_equation(builder.flow[-1])
     text = equation.getPlainText()
     assert "Symbolic expression: R = 14.000 a" in text
     assert "Numerical substitution: = 14" in text
-    assert f"Result {EM_DASH} R [kN]: R = 14 kN" in text
+    assert f"Result: R [kN]: R = 14 kN" in text
     assert "Applicability / method note: Retained branch 14.000" in text
     assert "Source / method note: Project method 14.000" in text
 
@@ -212,7 +225,7 @@ def test_equation_flowable_seals_public_identity_number_and_source():
         equation_key="resistance.direction-x.result",
     )
 
-    equation = builder.flow[-1]
+    equation = _sealed_equation(builder.flow[-1])
     assert isinstance(equation, sector_report._EquationFlowable)
     assert equation._sector_equation_key == "resistance.direction-x.result"
     assert equation._sector_equation_anchor == (
@@ -229,14 +242,16 @@ def test_equation_flowable_seals_public_identity_number_and_source():
     assert tuple(line.role for line in math.block.lines) == (
         "symbolic-expression",
         "numerical-substitution",
+        "result-quantity",
         "result",
     )
+    assert math.block.lines[2].semantic_text == "Result quantity: R [kN]"
     assert equation.getPlainText() == (
         "Equation (1.1) "
         "Symbolic expression: R = a + b "
         "Numerical substitution: 4 + 6 "
-        f"Result {EM_DASH} R [kN]: R = 10 kN "
-        f"Symbols: R {EM_DASH} test result [kN] "
+        f"Result: R [kN]: R = 10 kN "
+        "Symbols: R: test result [kN] "
         "Source / method note: EN 1992-1-1 Formula (1.2)"
     )
 
@@ -249,7 +264,7 @@ def test_derived_source_is_explicit_and_unnumbered_relation_does_not_consume_num
     )
     builder._formula("c = d", equation_key="basis.governing")
 
-    informative, governing = builder.flow[-2:]
+    informative, governing = map(_sealed_equation, builder.flow[-2:])
     assert informative._sector_equation_number is None
     assert "Derived relation; no separate normative source assigned." in (
         informative.getPlainText()
@@ -258,7 +273,7 @@ def test_derived_source_is_explicit_and_unnumbered_relation_does_not_consume_num
 
     builder._h1("Next")
     builder._formula("e = f", equation_key="next.governing")
-    assert builder.flow[-1]._sector_equation_number == "2.1"
+    assert _sealed_equation(builder.flow[-1])._sector_equation_number == "2.1"
 
 
 def test_invalid_duplicate_and_blank_source_fail_before_publication():
@@ -360,7 +375,7 @@ def test_unknown_reference_is_atomic_and_valid_prior_links_render():
         equation_key="resistance.governing",
         references=("resistance.component-1", "resistance.component-2"),
     )
-    assert builder.flow[-1]._sector_equation_number == "1.3"
+    assert _sealed_equation(builder.flow[-1])._sector_equation_number == "1.3"
     assert "Uses: Equation (1.1), Equation (1.2)" in (
         builder.flow[-1].getPlainText()
     )
@@ -394,7 +409,7 @@ def test_equation_anchor_encoding_preserves_dot_and_hyphen_identity():
         references=("capacity.x-y", "capacity-x.y"),
     )
 
-    first, second, governing = builder.flow[-3:]
+    first, second, governing = map(_sealed_equation, builder.flow[-3:])
     assert first._sector_equation_anchor == (
         "sector-equation-1-1-capacity__x-y"
     )
@@ -418,7 +433,7 @@ def test_grouping_preserves_equation_without_publishing_internal_identifier():
         "sum(SEd / SRd) &lt;= 1",
         equation_key="combined.directional.sum",
     )
-    equation = builder.flow[-1]
+    equation = _sealed_equation(builder.flow[-1])
 
     builder._keep_from(start)
 
@@ -439,7 +454,7 @@ def test_equation_keep_measurement_adds_only_unapplied_visible_leading_space():
     builder = _builder(profile="Audit")
     builder._h1("Pagination measurement")
     builder._formula("x = y", equation_key="pagination.measurement")
-    equation = builder.flow[-1]
+    equation = _sealed_equation(builder.flow[-1])
     equation.canv = Canvas(io.BytesIO(), pagesize=A4)
     frame = SimpleNamespace(
         _atTop=False,
@@ -516,7 +531,7 @@ def test_same_semantic_key_is_reusable_in_a_new_titled_subsection():
     builder._formula("u = 0.5", equation_key="shear.utilisation")
     builder._h2("Direction y")
     builder._formula("u = 0.7", equation_key="shear.utilisation")
-    assert builder.flow[-1]._sector_equation_anchor == (
+    assert _sealed_equation(builder.flow[-1])._sector_equation_anchor == (
         "sector-equation-1-2-shear__utilisation"
     )
 

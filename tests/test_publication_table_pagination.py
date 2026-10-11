@@ -150,9 +150,29 @@ def test_report_overview_uses_governing_selector_and_retains_source(monkeypatch)
         for cell in row
     )
 
-    assert "PL-HIGH" in text and "register B" in text
-    assert "PL-LOW" not in text and "register A" not in text
-    assert "EL-01" in text and "register C" in text
+    assert "PL-HIGH" in text and "Note 1" in text
+    assert "PL-LOW" not in text
+    assert "EL-01" in text and "Note 2" in text
+    case_rows = {
+        row[1].getPlainText(): row for row in overview._cellvalues
+        if hasattr(row[1], "getPlainText")
+        and row[1].getPlainText() in {"PL-HIGH", "EL-01"}
+    }
+    paragraphs = [item for item in builder.flow if isinstance(item, Paragraph)]
+    for case, check, number, source in (
+        ("PL-HIGH", "Plastic bending", 1, "register B"),
+        ("EL-01", "Concrete stress", 2, "register C"),
+    ):
+        assert f'href="#result-note-{number}"' in case_rows[case][5].text
+        anchor = f'<a name="result-note-{number}"/><b>Note {number}. {check}: {case}.</b>'
+        index = next(i for i, item in enumerate(paragraphs) if item.text == anchor)
+        assert paragraphs[index + 1].getPlainText() == "Source: " + source
+    pdf_text = " ".join((page.extract_text() or "") for page in pypdf.PdfReader(
+        io.BytesIO(_pdf(builder.flow))
+    ).pages)
+    assert "PL-HIGH" in pdf_text and "register B" in pdf_text
+    assert "EL-01" in pdf_text and "register C" in pdf_text
+    assert "PL-LOW" not in pdf_text and "register A" not in pdf_text
 
 
 def test_ordinary_split_retains_three_data_rows_at_both_edges():

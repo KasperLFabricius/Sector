@@ -1935,7 +1935,7 @@ def test_complete_profiles_compact_many_curvature_candidates_without_loss():
     assert sector_report._fmt(point["kappa"], 4) + " 1/m" in standard
     assert "Ultimate-curvature candidates" not in standard
     assert "i = 1 : 29" not in standard
-    assert "1.966e-2" not in standard
+    assert f"1.966 {chr(0x00D7)} 10-2" not in standard
     for candidate in candidates[1:]:
         assert candidate["element_id"] not in standard
         assert sector_report._fmt(candidate["curvature_per_m"], 8) not in standard
@@ -1947,7 +1947,7 @@ def test_complete_profiles_compact_many_curvature_candidates_without_loss():
     audit = " ".join(_pdf_text(audit_pdf).split())
     assert "Ultimate-curvature candidates" in audit
     assert "i = 1 : 29" in audit
-    assert "1.966e-2" in audit
+    assert f"1.966 {chr(0x00D7)} 10-2" in audit
     assert "0.01965939" in audit
     for candidate in candidates[1:]:
         assert candidate["element_id"] in audit
@@ -2049,7 +2049,7 @@ def test_report_uses_retained_nonzero_worked_point_for_both_depth_rows():
         {}, _inp(), out, figures=False, profile="Audit",
     )).split())
 
-    assert "Selected sweep point 2 of 2" in text
+    assert "Selected sweep point: 2 of 2. Neutral-axis angle = 45" in text
     assert "Compression-zone depth c 222.000 mm" in text
     assert "Lever components zx, zy" in text
     assert "lever-arm components, not effective depth d" not in text
@@ -2361,8 +2361,8 @@ def test_report_includes_minimum_reinforcement_and_clear_spacing_evidence():
     assert "A s,min" in text or "As,min" in text
     assert "Reinforcement clear spacing" in text
     assert "R1 - R2" in text
-    assert "1.508e-3" in text
-    assert "1.3e-3" in text
+    assert f"1.508 {chr(0x00D7)} 10-3" in text
+    assert f"1.3 {chr(0x00D7)} 10-3" in text
     assert "81.432 mm" in text
     assert "aggregate allowance" in text
     assert "80" in text and "60 mm" in text
@@ -2810,7 +2810,7 @@ def test_report_includes_shear_torsion_link_detailing_evidence():
     assert "Minimum ratio" in text
     assert "Closed-link spacing" in text
     assert "0.00069" in text
-    assert "governing limit: u_k/8" in text
+    assert "Torsion Tube: governing limit: uk/8" in text
     assert "sqrt" not in text
 
 
@@ -3824,10 +3824,16 @@ def test_report_publishes_one_globally_critical_cracking_threshold():
     assert "Cracking threshold - EL-A" not in flat
     assert "Cracking threshold - EL-C" not in flat
     assert "EQ-CRACKING.THRESHOLD" not in flat
+    threshold = flat[flat.rfind("Cracking threshold - EL-B"):]
+    assert re.search(r"\u03bbcr = 0\.8\b", threshold)
     assert (
-        "0.8 -> section is cracked "
-        "(strictly below 1: cracked; 1 or above: uncracked)"
-    ) in flat
+        "The section is cracked. Strictly below 1 means cracked. "
+        "A value of 1 or above means uncracked."
+    ) in threshold
+    assert (
+        "Source: Stage-I extreme tensile stress reaches fct,eff "
+        "(DS/EN 1992-1-1 \u00a77.1)"
+    ) in threshold
 
 
 def test_report_publishes_ordinary_cracking_threshold_relation():
@@ -3853,8 +3859,12 @@ def test_report_publishes_ordinary_cracking_threshold_relation():
     assert (
         chr(0x03BB) + "cr=fct,eff/" + chr(0x03C3) + "ct,I"
     ) in compact_ordinary
-    assert "Locked-in prestress remains fixed" not in ordinary
-    assert "lambda_cr 0.403; cracked" in ordinary
+    assert "Locked-in prestress stays fixed." not in ordinary
+    assert re.search(r"\u03bbcr = 0\.403\b", ordinary)
+    assert (
+        "The section is cracked. Strictly below 1 means cracked. "
+        "A value of 1 or above means uncracked."
+    ) in ordinary
 
 
 def test_report_escapes_user_entered_action_provenance():
@@ -3883,8 +3893,14 @@ def test_report_mirrors_the_views():
     assert "Governing reinforcement and tendon response" in txt
     assert "Cracked" in txt                        # cracked transformed-props column
     assert "both load cases" in txt                # full crack-width table
-    assert "Sweep start" in txt                    # explicit Vstart/Vend/Vinc
-    assert "Utilization check" in txt              # analysis settings documented
+    # Retain the entered start, end and maximum angular increment.
+    for label, key in (
+        ("Neutral-axis sweep start", "v_min"),
+        ("Neutral-axis sweep end", "v_max"),
+        ("Neutral-axis maximum increment", "v_inc"),
+    ):
+        assert f"{label} {_inp()[key]:.3f}{chr(0x00B0)}" in flat
+    assert "Applied-moment utilization yes" in flat
     assert "Max / Min" in txt                      # both extremes for Mx and My
 
 
@@ -3915,7 +3931,7 @@ def test_report_includes_sls_outputs_strain_and_candidate_evidence():
     assert "Reinforcement and tendon response" in txt
     assert "Concrete corner stress and strain" in txt
     assert "Candidate summary for governing crack example" in txt
-    assert "Crack-width element diameter" in txt
+    assert "Crack-width diameter per-element values" in " ".join(txt.split())
     assert "Element diameter" in txt
     assert "Bar diameter" not in txt
     assert "bar 1" in txt
@@ -4377,7 +4393,7 @@ def test_report_crack_example_publishes_every_retained_interim_selection():
     assert "first candidate" in flat
     assert "lower bound" in flat
     assert "formula-7.9" in flat
-    assert "close-centre threshold" in flat
+    assert "close-center threshold" in flat
     assert "Formula (7.11) selected" in flat
     assert "235 mm" in flat
 
@@ -4430,7 +4446,7 @@ def test_report_wide_spacing_shows_geometric_formula():
     out["elastic"]["crack_short"] = _wide_crack()
     txt = _pdf_text(_build_report_with_selection({}, _inp(), out, figures=False))
     assert "(7.14)" in txt
-    assert "close centres" in txt
+    assert "bars not at close centers: selected because nearest spacing" in " ".join(txt.split())
 
 
 def test_report_dk_na_shows_fine_and_coarse_columns():
@@ -4738,7 +4754,7 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
     txt = _pdf_text(_build_report_with_selection({}, _inp(), invalid, figures=False))
     assert "INVALID - Plastic bending" in txt
     assert "diagnostic only" in txt
-    assert "Utilisation (applied direction)" not in txt
+    assert "Utilization (applied direction)" not in txt
 
     capacity_invalid = _out()
     capacity_invalid["plastic"].update(
@@ -4767,14 +4783,14 @@ def test_report_marks_failed_and_invalid_plastic_assessments_explicitly():
     assert "does not contain the zero-moment origin" in " ".join(txt.split())
     assert "Global moment origin lies outside the closed M-M envelope" not in txt
     assert "open arc" not in txt.casefold()
-    assert "Utilisation (applied direction)" not in txt
+    assert "Utilization (applied direction)" not in txt
     assert "Worked plastic calculation (peak resultant moment)" in " ".join(txt.split())
 
     legacy = _out()
     legacy["plastic"].pop("util_valid")
     txt = _pdf_text(_build_report_with_selection({}, _inp(), legacy, figures=False))
     assert "saved result cannot confirm that the M-M envelope contains" in " ".join(txt.split())
-    assert "Utilisation (applied direction)" not in txt
+    assert "Utilization (applied direction)" not in txt
 
     absent = _out()
     absent["plastic"].update(util=None, util_valid=True, util_gov=None)
@@ -5283,7 +5299,7 @@ def test_retained_report_includes_shear_section(tmp_path):
     assert "Shear resistance" in txt          # the section heading
     assert "6.2.2" in txt                     # the clause reference
     assert "103.4" in txt                     # the VRd,c value
-    assert "Utilisation" in txt
+    assert "Utilization" in txt
     assert "selected 2005 no-links resistance has no z operand" in " ".join(txt.split())
 
 
@@ -6612,7 +6628,7 @@ def test_torsion_applicability_component_rendering_requires_exact_authority(
         assert "inf kN" not in text
         if profile in {"Standard", "Audit"}:
             assert re.search(
-                r"T\s*Ed\s+T\s*Rd\s+Utilisation\s+Overall status\s+"
+                r"T\s*Ed\s+T\s*Rd\s+Utilization\s+Overall status\s+"
                 r"-\s+-\s+-\s+NOT ASSESSED",
                 text,
             )
@@ -7209,7 +7225,7 @@ def test_retained_report_compound_torsion_requires_subdivision(tmp_path):
     t["compound_detected"] = True
     out["torsion"] = t
     txt = _pdf_text(_retained_torsion_component_unit_pdf({}, _inp(), out, figures=False, unit_kind="components", artifact_path=tmp_path / "retained-torsion-unit.pdf"))
-    assert "Torsion not evaluated" in txt
+    assert "Torsion is not evaluated" in txt
     assert "6.3.1(3)" in txt
     assert "Enable sub-tubes" in txt
     assert "Current shared links / closed torsion stirrups are required" not in txt
@@ -7330,8 +7346,8 @@ def test_retained_report_torsion_subdivided(tmp_path):
     assert "A/u and reinforcement lower bound" in txt
     assert "reinforcement lower bound" in txt
     assert "Bar positions" in txt
-    assert all(f"Wall {wall}\n {wall}" in txt for wall in range(1, 5))
-    assert all(f"Wall {wall}\n {wall + 4}" in txt for wall in range(1, 5))
+    assert all(f"web Wall {wall} {wall} 50.0 mm 100.0 mm -" in " ".join(txt.split()) for wall in range(1, 5))
+    assert all(f"part 2 Wall {wall} {wall + 4} 45.5 mm 91.0 mm -" in " ".join(txt.split()) for wall in range(1, 5))
 
 
 def test_retained_report_invalid_subtube_partition_withholds_verdict(tmp_path):
@@ -7346,7 +7362,7 @@ def test_retained_report_invalid_subtube_partition_withholds_verdict(tmp_path):
     out["torsion"] = t
     txt = _pdf_text(_retained_torsion_component_unit_pdf({}, _inp(), out, figures=False, unit_kind="components", artifact_path=tmp_path / "retained-torsion-unit.pdf"))
     flat = " ".join(txt.split())
-    assert "Torsion not assessed" in flat
+    assert "Torsion is not assessed" in flat
     assert "sub-tubes do not partition the concrete section" in flat
     assert "gaps, overlaps or boundary crossings" in flat
     assert "Torsion resistance and dependent interaction" in flat
@@ -7359,6 +7375,30 @@ def test_retained_report_torsion_shows_combined_interaction(tmp_path):
     txt = _pdf_text(_retained_torsion_component_unit_pdf({}, _inp(), out, figures=False, unit_kind="interaction", artifact_path=tmp_path / "retained-torsion-unit.pdf"))
     assert "6.29" in txt                            # the combined crushing clause
     assert "Combined shear" in txt
+
+
+def _assert_pdf_lowered_scripts(pdf, expected_pairs):
+    """Require actual smaller, lowered PDF glyph runs for authored symbols."""
+    from pypdf import PdfReader
+
+    runs = []
+    for page in PdfReader(io.BytesIO(pdf)).pages:
+        size, rise = None, 0.0
+        for operands, operator in page.get_contents().operations:
+            if operator == b"Tf":
+                size = float(operands[1])
+            elif operator == b"Ts":
+                rise = float(operands[0])
+            elif operator == b"Tj":
+                runs.append((str(operands[0]), size, rise))
+    for base_text, script in expected_pairs:
+        matches = [
+            (base, sub) for base, sub in zip(runs, runs[1:])
+            if base[0].endswith(base_text) and sub[0] == script
+        ]
+        assert matches, (base_text, script)
+        assert all(sub[1] < base[1] and sub[2] < base[2]
+                   for base, sub in matches), matches
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
@@ -7480,18 +7520,14 @@ def test_report_profiles_retain_dkna_formula_631_normal_and_moment_scope(
     inp, out = native_formula_631_cases(n_ed=n_ed, mx_ed=mx_ed, my_ed=my_ed)
     assert out["torsion"]["min_reinf"]["applicable"] is applicable
 
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    pdf = _build_report_with_selection({}, inp, out, figures=False, profile=profile)
+    text = " ".join(_pdf_text(pdf).split())
 
     if applicable:
         assert "low-action condition satisfied" in text.casefold()
     else:
-        assert "With acting N_Ed or M_Ed under the Danish National Annex" in text
+        assert "With acting NEd or MEd under the Danish National Annex" in text
+        _assert_pdf_lowered_scripts(pdf, [("With acting N", "Ed"), (" or M", "Ed")])
         assert "DK NA 6.3.2(6) combined N-M-V-T check" in text
         assert "low-action condition satisfied" not in text.casefold()
 
@@ -7569,13 +7605,8 @@ def test_report_profiles_keep_dkna_requirement_across_other_631_scope_limits(
     assert native_minimum["status"] == minimum["status"]
     assert native_minimum["scope_key"] == minimum["scope_key"]
 
-    text = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    pdf = _build_report_with_selection({}, inp, out, figures=False, profile=profile)
+    text = " ".join(_pdf_text(pdf).split())
 
     assert minimum["status"] == "NOT APPLICABLE"
     assert minimum["scope_key"] == "dkna_combined_normal_or_moment"
@@ -7587,7 +7618,8 @@ def test_report_profiles_keep_dkna_requirement_across_other_631_scope_limits(
         assert minimum["model_2023"] is True
         assert minimum["shear_method"] == codes.EC2_2023.label
         assert minimum["torsion_method"] == codes.EC2_2005_DKNA.label
-    assert "With acting N_Ed or M_Ed under the Danish National Annex" in text
+    assert "With acting NEd or MEd under the Danish National Annex" in text
+    _assert_pdf_lowered_scripts(pdf, [("With acting N", "Ed"), (" or M", "Ed")])
     assert "DK NA 6.3.2(6) combined N-M-V-T check" in text
     assert "low-action condition satisfied" not in text.casefold()
 
@@ -7614,7 +7646,7 @@ def test_report_profiles_keep_dkna_requirement_across_other_631_scope_limits(
         (
             "NOT ASSESSED",
             "shear_resistance_unavailable",
-            "Calculate the first-generation V_Rd,c shear result",
+            "Calculate the first-generation VRd,c shear result",
         ),
     ),
 )
@@ -7636,13 +7668,8 @@ def test_report_profiles_publish_formula_631_scope_without_false_sufficiency(
     assert minimum["status"] == status
     assert minimum["scope_key"] == reason
 
-    txt = " ".join(
-        _pdf_text(
-            _build_report_with_selection(
-                {}, inp, out, figures=False, profile=profile
-            )
-        ).split()
-    )
+    pdf = _build_report_with_selection({}, inp, out, figures=False, profile=profile)
+    txt = " ".join(_pdf_text(pdf).split())
 
     assert "6.31" in txt
     assert re.search(r"minimum-\s*reinforcement screen", txt.casefold())
@@ -7655,6 +7682,9 @@ def test_report_profiles_publish_formula_631_scope_without_false_sufficiency(
         assert "reported 2023 shear check" not in txt
         assert "2023 shear-and-torsion" not in txt
 
+
+    if reason == "shear_resistance_unavailable":
+        _assert_pdf_lowered_scripts(pdf, [("Calculate the first-generation V", "Rd,c")])
 
 def _combined_out(mv_independent=False):
     dkna = combined_core.dkna_interaction_result(
@@ -10259,7 +10289,7 @@ def _dkna_2005_component_unit_pdf(inp, combined, profile, *, include_input_conte
                   for cell in row)
             for row in table._cellvalues
         ]
-        if rows[header] == ("Component", "Utilisation", "Status", "Assessment note"):
+        if rows[header] == ("Component", "Utilization", "Status", "Assessment note"):
             matches.append((table, rows))
     assert len(matches) == 1
     table, rows = matches[0]
@@ -10320,7 +10350,7 @@ def _assert_retained_component_positive_pdf(pdf, method, profile):
     if method == codes.EC2_2005_DKNA.label or profile != "Brief":
         assert "Concrete compression strut (6.29)" in text
         assert re.search(r"68[.,]2\s*%\s*\(PASS\)", text)
-        assert "ONE member strut angle shared" in text
+        assert "member strut angle shared by the participating shear and torsion checks (6.3.2(2))." in text
     if method == codes.EC2_2005_DKNA.label:
         assert re.search(r"closed-stirrup utilisation = 58\s*%\s*\(PASS\)", text)
         assert re.search(r"utilisation = 60\s*%\s*\(PASS\)", text)
@@ -10539,7 +10569,7 @@ def test_retained_2005_component_rendering_rejects_formula_629_conflicts(
                 "does not identify how the member strut angle was selected"
                 in text
             )
-            assert "ONE member strut angle shared" not in text
+            assert "member strut angle shared by the participating shear and torsion checks (6.3.2(2))." not in text
         if method == codes.EC2_2005.label:
             assert "recalculate the shared member-angle check" in text
         else:
@@ -10971,7 +11001,7 @@ def test_report_publishes_only_governing_transverse_family_worked_examples(nativ
     assert "EQ-COMBINED.DK-NA.SUM" not in flat
     assert flat.count("The complete shear worked example is published in Audit only") == 1
     assert flat.count("The complete torsion worked example is published in Audit only") == 1
-    assert flat.count("complete combined M-V-T worked example is published in Audit only") == 1
+    assert flat.count("Audit gives the complete combined M-V-T worked example for the governing utilization across all plastic cases.") == 1
     assert "Vx+T" in flat and "Vy+T" in flat
 
 
@@ -11263,7 +11293,8 @@ def test_retained_report_includes_combined_section(tmp_path):
     out = _out()
     out["combined"] = _combined_out()
     inp = _inp()
-    inp.update(strut_cot_min=1.0, strut_cot_max=2.5)
+    inp.update(strut_cot_min=1.0, strut_cot_max=2.5,
+               shear_on=True, torsion_on=True, shear_links=True, check_util=True)
     txt = _pdf_text(_retained_dkna_member_component_pdf({}, inp, out, figures=False, artifact_path=tmp_path / "retained-dkna-member-component.pdf", include_input_context=True))
     flat = " ".join(txt.split())
     assert "Combined bending" in txt or "M-V-T" in txt
@@ -11282,8 +11313,7 @@ def test_retained_report_includes_combined_section(tmp_path):
         "Source / method note: DS/EN 1992-1-1 DK NA:2024, 6.3.2(6)"
         in flat
     )
-    assert "Shared compression-strut cot " + chr(0x03B8) + "min" in txt
-    assert "Shared compression-strut cot " + chr(0x03B8) + "max" in txt
+    assert "Compression-strut cot " + chr(0x03B8) + " range 1.00 to 2.50" in flat
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
@@ -12035,7 +12065,7 @@ def test_retained_report_combined_longitudinal_conditional_mrd(tmp_path):
     # Collapse the PDF's line wrapping so multi-word phrases can be asserted.
     txt = " ".join(_pdf_text(_retained_dkna_member_component_pdf({}, _inp(), out,
                                                         figures=False, artifact_path=tmp_path / "retained-dkna-member-component.pdf")).split())
-    assert "conditional on the coexisting My = 90.0 kNm" in txt
+    assert "capacity about x at the applied N, with coexisting My = 90.0 kNm). The M-M envelope point carries both moments." in txt
     assert "Biaxial bending" not in txt
     assert "pure-axis substitute" not in txt
 
@@ -12126,7 +12156,7 @@ def test_retained_report_partial_torsion_face_coverage_disclosed(tmp_path):
     assert c["torsion_longitudinal_assessment"]["status"] == "FAIL"
     txt = " ".join(_pdf_text(_retained_dkna_member_component_pdf({}, _inp(), out,
                                                         figures=False, artifact_path=tmp_path / "retained-dkna-member-component.pdf")).split())
-    assert "may not be the critical face" in txt
+    assert "The reported governing chord can therefore be less critical than an unchecked face." in txt
     assert (
         "utilisation = - (NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE)"
         in txt
@@ -12176,7 +12206,7 @@ def test_retained_report_off_axis_chord_block(tmp_path):
     txt = " ".join(_pdf_text(pdf).split())
     assert "NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE" in txt
     assert "Off-axis chord (about y" in txt          # header now names the governing face
-    assert "conditional on the coexisting Mx = 20.0 kNm" in txt
+    assert "capacity about y at the applied N, with coexisting Mx = 20.0 kNm). The M-M envelope point carries both moments." in txt
     assert "fitted circular section" in txt
     assert "circular_fitted_section" not in txt
 
@@ -12439,7 +12469,7 @@ def test_report_profiles_fail_closed_for_invalid_circular_off_axis_arm(
         )
         assert "NOT ASSESSED - CHORD ASSESSMENT INCOMPLETE" in text
         assert (
-            "fitted-section lever arm required for the circular off-axis chord"
+            "The fitted-section lever arm for the circular off-axis chord is not established."
             in text
         )
         assert "for both directions" in text
@@ -12491,9 +12521,9 @@ def test_report_includes_shear_links_section():
     assert "stirrups" in txt                       # governing mechanism
     assert chr(0x3B8) in txt                       # theta glyph rendered
     normalized = " ".join(txt.split())
-    assert "Calculated arm z = 506.448 mm = |z_y| from PL-TEST" in normalized
+    assert "Calculated arm z = 506.448 mm = |zy| from PL-TEST" in normalized
     assert "bottom (-y) 90" in normalized
-    assert "used in V_Rd,s and V_Rd,max" in normalized
+    assert "used in VRd,s and VRd,max" in normalized
 
 
 def test_retained_report_with_unavailable_calculated_link_arm_fails_closed(tmp_path):
@@ -12539,7 +12569,7 @@ def test_report_includes_2023_shear_links_stress_checks(h06_circular_report_resu
     text = _pdf_text(pdf)
     assert "8.42" in text and "8.44" in text
     assert "8.50" not in text
-    assert "no longitudinal shear force is applied" in text
+    assert "no longitudinal shear force is applied" in " ".join(text.split())
     assert "0.500" in text
     assert "not implemented" not in text
 
@@ -12944,9 +12974,10 @@ def test_retained_report_no_load_longitudinal_note_states_resistance_optimum(pro
         profile=profile,
         artifact_path=tmp_path / "retained-angle-note.pdf",
     )).split())
-    assert "No shear or torsion is acting" in txt
-    assert "resistance-optimum" in txt
-    assert "minimise the governing utilisation" not in txt
+    assert "No active shear-shift or torsion term controls the strut-angle selection." in txt
+    assert "Each action uses the angle that gives its greatest resistance." in txt
+    assert "These terms are zero in this chord check." in txt
+    assert "This angle minimizes the governing utilization." not in txt
 
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
@@ -12957,8 +12988,8 @@ def test_retained_report_shared_longitudinal_note_states_the_common_angle(profil
         profile=profile,
         artifact_path=tmp_path / "retained-angle-note.pdf",
     )).split())
-    assert "ONE member strut angle shared" in txt
-    assert "minimise the governing utilisation" in txt
+    assert "member strut angle shared by the participating shear and torsion checks (6.3.2(2))." in txt
+    assert "This angle minimizes the governing utilization." in txt
 
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
@@ -12974,8 +13005,9 @@ def test_retained_report_unknown_longitudinal_angle_mode_uses_neutral_note(
         artifact_path=tmp_path / "retained-angle-note.pdf",
     )).split())
     assert "does not identify how the member strut angle was selected" in txt
-    assert "No shear or torsion is acting" not in txt
-    assert "resistance-optimum" not in txt
+    assert "No active shear-shift or torsion term controls the strut-angle selection." not in txt
+    assert "Each action uses the angle that gives its greatest resistance." not in txt
+    assert "This angle minimizes the governing utilization." not in txt
 
 
 
@@ -13211,7 +13243,10 @@ def _overview_rows_with_linked_notes(builder, table):
             assert heading == f"Note {number}. {row[0]}: {row[1]}.", (row, heading)
             # Reconstruct the original semantic field from complete paragraphs.
             # Semicolons inside a source or assessment remain literal content.
-            full_note = "; ".join(parts)
+            assert parts[0].startswith("Source: "), parts
+            full_note = parts[0]
+            if len(parts) > 1:
+                full_note += "; " + " ".join(parts[1:])
             assert full_note
             row = (*row[:-1], full_note)
             used.append(anchor)
@@ -13609,14 +13644,14 @@ def test_native_subdivided_report_discloses_off_axis_skip(
                 yield item.getPlainText()
 
     combined_paragraphs = list(paragraphs(builder.flow))
-    disclosures = [p for p in combined_paragraphs if "per sub-tube" in p]
+    disclosures = [p for p in combined_paragraphs if "for each sub-tube" in p]
     assert len(disclosures) == 1
-    assert "the off-axis chord's torsion share is not evaluated" in disclosures[0]
+    assert "The torsion share of the off-axis chord is not evaluated." in disclosures[0]
     assert any("Longitudinal reinforcement: combined M + V + T tension chord" in p
                for p in combined_paragraphs)
     text = " ".join(_pdf_text(pdf).split())
-    assert "per sub-tube" in text
-    assert "the off-axis chord's torsion share is not evaluated" in text
+    assert "for each sub-tube" in text
+    assert "The torsion share of the off-axis chord is not evaluated." in text
     assert pickle.dumps((inp, out)) == original
     (tmp_path / "native-subdivision-evidence.json").write_text(
         json.dumps({
@@ -14070,6 +14105,15 @@ def test_native_report_rejects_isolated_consumed_transverse_terms(native_schedul
                        "number": item._sector_equation_number,
                        "text": item.getPlainText()}
             elif isinstance(item, sector_report.KeepTogether):
+                sealed = getattr(item, "_sector_equations", ())
+                assert len({id(record) for record in sealed}) == len(sealed)
+                for record in sealed:
+                    assert isinstance(record, sector_report._EquationFlowable)
+                    for child in record._content:
+                        assert sum(child is visible for visible in item._content) == 1
+                    yield {"key": record._sector_equation_key,
+                           "number": record._sector_equation_number,
+                           "text": record.getPlainText()}
                 yield from equation_records(item._content)
 
     def chapter(payload, family, label, *, shear_component=None):
@@ -14120,7 +14164,7 @@ def test_native_report_rejects_isolated_consumed_transverse_terms(native_schedul
             assert record["number"] is not None
             assert "Equation ("+record["number"]+")" in positive_text
             assert "Numerical substitution:" in record["text"]
-            assert "Result " in record["text"]
+            assert "Result:" in record["text"]
         rejected=copy.deepcopy(out)
         rejected_source=pickle.dumps(rejected)
         entry=next(item for item in rejected["plastic_cases"] if item["name"]=="PL-GOV")
@@ -14212,3 +14256,49 @@ def test_document_role_cover_rows_are_optional_independent_and_literal(profile, 
         else:
             assert label not in fields
     assert fields["Prepared by"] == ""
+
+@pytest.mark.parametrize("authored", [False, True])
+@pytest.mark.parametrize("source", ["Calculation register C1", "Literal source; f_ck;"])
+def test_overview_note_resolution_retains_authored_clause_delimiters(authored, source):
+    import report_summary_notation as notation
+    note = "First condition; second condition; final condition."
+    row = {
+        "check": "Retained check", "family": "plastic", "case": "CASE-1",
+        "status": "NOT ASSESSED", "result": "-", "criterion": "<= 100 %",
+        "source": source, "note": notation.authored(note) if authored else note,
+        "case_type": "ULS", "util": None, "overview_key": "retained-check",
+    }
+    notation.attach(row)
+    buffer, builder = _declared_member_overview_unit(
+        _inp(), {}, [row], "Brief", "Linked clause-note contract"
+    )
+    texts = [item.getPlainText() for item in builder.flow
+             if isinstance(item, sector_report.Paragraph)]
+    assert texts.count("Source: " + source) == 1
+    if authored:
+        assert texts.count("First condition;") == 1
+        assert texts.count("second condition;") == 1
+        assert texts.count("final condition.") == 1
+    else:
+        assert texts.count(note) == 1
+    pdf = _finish_retained_unit_pdf(buffer, builder)
+    _assert_pdf_overview_note(pdf, row, "Source: " + source + "; " + note)
+
+@pytest.mark.parametrize("script_markup,valid", [
+    ("<sub>Ed</sub>", True),
+    ("Ed", False),
+    ("<super>Ed</super>", False),
+    ('<font size="8">Ed</font>', False),
+])
+def test_pdf_script_oracle_requires_lowered_smaller_glyphs(script_markup, valid):
+    buffer = io.BytesIO()
+    builder = sector_report.ReportBuilder(buffer, {}, _inp(), {}, figures=False)
+    builder._p("With acting N" + script_markup + " or M" + script_markup
+               + " under the Danish National Annex")
+    pdf = _finish_retained_unit_pdf(buffer, builder)
+    pairs = [("With acting N", "Ed"), (" or M", "Ed")]
+    if valid:
+        _assert_pdf_lowered_scripts(pdf, pairs)
+    else:
+        with pytest.raises(AssertionError):
+            _assert_pdf_lowered_scripts(pdf, pairs)

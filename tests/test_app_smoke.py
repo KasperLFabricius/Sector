@@ -2298,14 +2298,14 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
         "Elastic modulus Ep 195.0 GPa",
         "P1 P1 195000.0 0.002564 500.000 1000.0 500.000",
         "Long-term 0.000 0.000 0.000 Short-term 0.000 0.000 0.000",
-        "Locked-in prestress remains fixed",
-        "A prestress-only fibre above",
-        "only external N/M scales",
-        "lowest positive fibre solution governs",
-        "Calculated output:",
+        "Locked-in prestress stays fixed.",
+        "If a prestress-only fiber stress exceeds fct,eff, " + chr(0x03BB) + "cr = 0.",
+        "only the external N and M are scaled.",
+        "The smallest positive fiber solution governs.",
+        f"Calculated {chr(0x03C3)}ct,I = {expected_sigma_ct:.3f} MPa.",
         f"{expected_sigma_ct:.3f} MPa",
-        "0.000; section is cracked",
-        "below 1: cracked; 1 or above: uncracked",
+        "Calculated " + chr(0x03BB) + "cr = 0.000.", "The section is cracked.",
+        "Below 1 means cracked. A value of 1 or above means uncracked.",
     ):
         assert expected in report_text
     assert "Report profile Standard" in report_text

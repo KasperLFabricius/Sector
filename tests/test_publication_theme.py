@@ -27,10 +27,10 @@ REPORT_MATRIX = {
     "subtitle": (11, None, 0, 2, "#5a5a5a", False, False),
     "h1": (14, None, 10, 6, "#1f3b66", True, True),
     "h2": (11.5, None, 8, 4, "#1f3b66", True, True),
-    "body": (10, 13.5, 0, 4, None, False, False),
-    "small": (10, 13.5, 0, 0, "#2c2c2a", False, False),
-    "publication_ref": (8, 10, 2, 2, "#5a5a5a", False, True),
-    "publication_caption": (8, 10, 2, 2, "#2c2c2a", False, True),
+    "body": (10.5, 14.5, 0, 6, None, False, False),
+    "small": (10, 13.5, 0, 5, "#2c2c2a", False, False),
+    "publication_ref": (9.5, 12, 2, 3, "#5a5a5a", False, True),
+    "publication_caption": (9.5, 12, 2, 4, "#2c2c2a", False, True),
 }
 
 MANUAL_MATRIX = {

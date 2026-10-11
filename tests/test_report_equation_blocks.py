@@ -222,8 +222,10 @@ def test_authored_fatigue_substitution_keeps_mpa_outside_the_fraction(key, numer
     values = {
         "_fmt": sector_report._fmt,
         "_html_escape": sector_report._html_escape,
+        "_fatigue_report_label": sector_report._fatigue_report_label,
         "fatigue_presentation": sector_report.fatigue_presentation,
         "yield_check": {"branch": "Retained yield/proof branch"},
+        "result": {"kind": "mild"},
         "selected_bin": {"delta_sigma_rsk_mpa": numerator,
                          "delta_sigma_rd_mpa": numerator / material_factor},
         "material_factor": material_factor, "characteristic": numerator,

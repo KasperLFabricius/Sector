@@ -26,9 +26,9 @@ Successful output is written below `%USERPROFILE%\SectorBuilds` unless
 `SECTOR_PORTABLE_OUTPUT` selects a different new directory:
 
 ```text
-Sector-v0.96.6-windows-portable/
-Sector-v0.96.6-windows-portable.zip
-Sector-v0.96.6-windows-portable.zip.sha256
+Sector-v0.96.7-windows-portable/
+Sector-v0.96.7-windows-portable.zip
+Sector-v0.96.7-windows-portable.zip.sha256
 ```
 
 Keep or distribute the complete folder/ZIP; `Sector.exe` does not work when

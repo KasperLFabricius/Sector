@@ -3052,14 +3052,15 @@ class ReportBuilder:
         self._small("Slab-density reinforcement defines an area per metre of strip width. The schedules distinguish reinforcement series and physical bar positions.")
         self._small("Layout verification: " + _html_escape(str(density.get("status") or "Not stated")))
         if density.get("status") != "VERIFIED":
-            known_reason = (
+            known_reason = EngineerMessage(
+                "REPORT-SLAB-LAYOUT",
                 "The slab-spacing layout no longer matches the current point tables. "
                 "Reapply the slab layout, or define explicit bars, before relying on "
                 "crack-width or clear-spacing results."
             )
             reason = engineer_messages.resolve_state(
                 density.get("reason"),
-                authored={known_reason: EngineerMessage("REPORT-SLAB-LAYOUT", known_reason)},
+                authored={known_reason.text: known_reason},
                 fallback=EngineerMessage("REPORT-SLAB-UNVERIFIED", "Verify the slab-density layout before relying on its physical spacing or cover."),
                 context="report slab-density layout reason",
             ).text
@@ -3421,7 +3422,7 @@ class ReportBuilder:
                             "; fatigue proof-stress input "
                             "f<sub>p0.1k</sub> = "
                             f"{_fmt(record.get('fytk'), 3)} MPa "
-                            "(fatigue yield/proof check input; not a "
+                            "(fatigue yield/proof check input, not a "
                             "fixed-curve plastic-law field)"
                         )
                 else:
@@ -11310,8 +11311,12 @@ class ReportBuilder:
             if cw.get("edition") == "2023":
                 self._small("Refined control of cracking (&#167;9.2.3) converts the mean crack width to the calculated value with:")
                 self._small("k<sub>w</sub> = 1.7.")
-                self._small("The curvature factor is:")
-                self._small("k<sub>1/r</sub> = (h-x)/(h-a<sub>y</sub>-x).")
+                if spacing.get("flexural_factor_method") == "formula-9.20-direct-tension":
+                    self._small("For direct tension, the curvature factor is:")
+                    self._small(f"k<sub>1/r</sub> = {_fmt(cw['k1_r'], 3)}.")
+                else:
+                    self._small("The curvature factor is:")
+                    self._small("k<sub>1/r</sub> = (h-x)/(h-a<sub>y</sub>-x).")
                 self._small("The lower bound for the mean strain is:")
                 self._small("(1 - k<sub>t</sub>)&#183;sigma<sub>s</sub>/E<sub>s</sub>.")
             elif "DK NA" in code:
@@ -11773,15 +11778,26 @@ class ReportBuilder:
         spacing = candidate["spacing_operands"]
         mean = candidate["mean_strain_operands"]
         cap = spacing.get("cap_spacing")
-        self._formula(
+        direct_tension = (
+            spacing.get("flexural_factor_method") == "formula-9.20-direct-tension"
+        )
+        expression = (
             "s<sub>r,m,cal</sub> = 1.5&#183;c + (k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
-            "&#183;phi/rho<sub>p,eff</sub> &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)",
+            "&#183;phi/rho<sub>p,eff</sub>"
+        )
+        if not direct_tension:
+            expression += " &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)"
+        self._formula(
+            expression,
             equation_key="crack.2023.spacing",
             ref="DS/EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)",
             note=(
                 f"k<sub>fl</sub> method: {spacing.get('flexural_factor_method', '-')}; "
                 f"selected: {spacing.get('selected_candidate', '-')}"
-                + ("; no finite tension-zone cap" if cap is None else "")
+                + (
+                    "; no finite tension-zone cap; h-x applies to the bending cap"
+                    if direct_tension else ""
+                )
             ),
             subst=(
                 f"formula = {_fmt(spacing.get('cover_coefficient'), 8)} &#183; "

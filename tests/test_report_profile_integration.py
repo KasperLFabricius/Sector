@@ -53,6 +53,13 @@ def _set_elastic_result_fields(out: dict, **values) -> None:
         case["results"]["elastic"].update(values)
 
 
+def _set_ordinary_crack_request(inp: dict, enabled: bool) -> None:
+    """Set the named-case requests and the legacy scalar switch together."""
+    inp["sls_cw"] = enabled
+    for case in inp.get("elastic_cases", []):
+        case["calculate_crack_width"] = enabled
+
+
 def test_brief_frozen_fixture_is_a_compact_auditable_engineering_report():
     reader = PdfReader(io.BytesIO(_profile_pdf("Brief")))
     assert reader.pages
@@ -97,10 +104,11 @@ def test_brief_retains_relevant_input_rows_without_standard_derivations():
         "Shear method DS/EN 1992-1-1:2005 + DK NA:2024",
         "Closed-link diameter 10.0 mm",
         "Spectrum basis notes QA traffic spectrum REF-FAT-01",
-        "n = 2.000",
-        "preset = EC2:2005 - straight reinforcing bars",
-        "source = DS/EN 1992-1-1:2005, Table 6.3N",
-        "stress model = fixed; bend reduction = no",
+        "n 2.000",
+        "Preset EC2:2005 - straight reinforcing bars",
+        "Source DS/EN 1992-1-1:2005, Table 6.3N",
+        "Stress model Fixed characteristic stress range",
+        "Bend reduction no",
     ):
         assert expected in text
     assert "Converged strain plane" not in text
@@ -153,7 +161,8 @@ def test_brief_retains_tendon_layout_assignment_and_fixed_curve_properties():
     assert "Tendon P1 45.000 -50.000 78.540 10.000 mm; Diameter P1" in text
     assert "Prestress / P1 Tendons P1" in text
     assert "built-in fixed curve 1" in text
-    assert "fp0.1k / fpk = 0.000 / 0.000 MPa" not in text
+    assert "fp0.1k 0.000 MPa" not in text
+    assert "fpk 0.000 MPa" not in text
 
 
 def test_brief_retains_curve_specific_mild_steel_inputs_and_compression_switch():
@@ -206,23 +215,23 @@ def test_brief_retains_curve_specific_mild_steel_inputs_and_compression_switch()
 
     for expected in (
         "curve 1",
-        "fytk / fyck / futk = 510.000 / 470.000 / 620.000 MPa",
-        "\u03b5ut = 41.000 \u2030",
-        "\u03b3y / \u03b3u / \u03b3E = 1.100 / 1.250 / 1.050",
-        "compression branch active = yes",
+        "fytk 510.000 MPa", "fyck 470.000 MPa", "futk 620.000 MPa",
+        "\u03b5ut 41.000 \u2030",
+        "\u03b3y 1.100", "\u03b3u 1.250", "\u03b3E 1.050",
+        "compression branch active yes",
     ):
         assert expected in m1
-    assert "; k =" not in m1
-    assert "\u03b50t / \u03b50c" not in m1
+    assert re.search(r"\bk\s+[-+]?\d", m1) is None
+    assert "\u03b50t" not in m1 and "\u03b50c" not in m1
 
     for expected in (
         "curve 3",
-        "fytk / fyck / futk = 525.000 / 315.000 / 645.000 MPa",
-        "\u03b5ut = 56.000 \u2030",
-        "\u03b3y / \u03b3u / \u03b3E = 1.120 / 1.280 / 1.040",
-        "k = 0.870",
-        "\u03b50t / \u03b50c = 3.250 / 4.750 \u2030",
-        "compression branch active = no",
+        "fytk 525.000 MPa", "fyck 315.000 MPa", "futk 645.000 MPa",
+        "\u03b5ut 56.000 \u2030",
+        "\u03b3y 1.120", "\u03b3u 1.280", "\u03b3E 1.040",
+        "k 0.870",
+        "\u03b50t 3.250 \u2030", "\u03b50c 4.750 \u2030",
+        "compression branch active no",
     ):
         assert expected in m2
 
@@ -241,7 +250,7 @@ def test_brief_retains_only_the_active_concrete_exponent():
     text = _brief_text(inp, report_render_fixture._results(inp))
     concrete = text[text.index("Concrete Concrete rings"):text.index("Mild / M1")]
     assert "curve 2" in concrete
-    assert "n = 1.730" in concrete
+    assert "n 1.730" in concrete
 
     inp["concrete"] = report_render_fixture.Concrete(
         fck=42.0,
@@ -255,7 +264,7 @@ def test_brief_retains_only_the_active_concrete_exponent():
     text = _brief_text(inp, report_render_fixture._results(inp))
     concrete = text[text.index("Concrete Concrete rings"):text.index("Mild / M1")]
     assert "curve 1" in concrete
-    assert "; n =" not in concrete
+    assert re.search(r"\bn\s+[-+]?\d", concrete) is None
 
 
 def test_brief_retains_curve_specific_prestress_inputs():
@@ -334,23 +343,23 @@ def test_brief_retains_curve_specific_prestress_inputs():
     p2 = text[text.index("Prestress / P2"):text.index("Actions")]
     for expected in (
         "curve 6",
-        "fp0.1k / fpk = 1575.000 / 1815.000 MPa",
-        "\u03b5p,0 = 4.800 \u2030",
-        "\u03b5ut = 31.000 \u2030",
-        "\u03b3y / \u03b3u / \u03b3E = 1.080 / 1.160 / 1.030",
+        "fp0.1k 1575.000 MPa", "fpk 1815.000 MPa",
+        "\u03b5p,0 4.800 \u2030",
+        "\u03b5ut 31.000 \u2030",
+        "\u03b3y 1.080", "\u03b3u 1.160", "\u03b3E 1.030",
     ):
         assert expected in p1
-    assert "; k =" not in p1
+    assert re.search(r"\bk\s+[-+]?\d", p1) is None
     assert "\u03b50t" not in p1
 
     for expected in (
         "curve 7",
-        "fp0.1k / fpk = 1685.000 / 1915.000 MPa",
-        "\u03b5p,0 = 6.100 \u2030",
-        "\u03b5ut = 39.000 \u2030",
-        "\u03b3y / \u03b3u / \u03b3E = 1.110 / 1.210 / 1.020",
-        "k = 0.860",
-        "\u03b50t = 2.750 \u2030",
+        "fp0.1k 1685.000 MPa", "fpk 1915.000 MPa",
+        "\u03b5p,0 6.100 \u2030",
+        "\u03b5ut 39.000 \u2030",
+        "\u03b3y 1.110", "\u03b3u 1.210", "\u03b3E 1.020",
+        "k 0.860",
+        "\u03b50t 2.750 \u2030",
     ):
         assert expected in p2
 
@@ -377,6 +386,7 @@ def test_brief_mild_bond_inputs_require_active_ordinary_crack_route():
         "sls_bond": "stale heightened-only bond selection",
         "sls_k1": 9.99,
     })
+    _set_ordinary_crack_request(inp, False)
     out["elastic"]["show_cw"] = False
     for case in out["elastic_cases"]:
         case["results"]["elastic"]["show_cw"] = False
@@ -388,7 +398,7 @@ def test_brief_mild_bond_inputs_require_active_ordinary_crack_route():
     assert "Mild-steel bond coefficient k1" not in heightened_only
     assert "stale heightened-only bond selection" not in heightened_only
 
-    inp["sls_cw"] = True
+    _set_ordinary_crack_request(inp, True)
     ordinary = _brief_text(inp, out)
     assert (
         "Mild-steel bond selection stale heightened-only bond selection"
@@ -406,6 +416,7 @@ def test_brief_retains_fctm_for_minimum_reinforcement_without_crack_checks():
         "sls_fctm": 3.37,
         "minimum_reinforcement_on": True,
     })
+    _set_ordinary_crack_request(inp, False)
     out["elastic"]["show_cw"] = False
     for case in out["elastic_cases"]:
         case["results"]["elastic"]["show_cw"] = False
@@ -473,14 +484,14 @@ def test_brief_retains_active_fatigue_detail_modifiers():
 
     text = _brief_text(inp, out)
     for expected in (
-        "stress model = ec2_2023_bar_diameter",
-        "bend reduction = yes",
-        "mandrel diameter = 88.000 mm",
-        "Fatigue detail F2 Bonded tendon",
-        "stress model = fixed",
-        "bend reduction = no",
-        "bond ratio xi = 0.720",
-        "bond-equivalent diameter = 15.200 mm",
+        "Stress model EC2:2023 bar-diameter-dependent stress range",
+        "Bend reduction yes",
+        "Mandrel diameter 88.000 mm",
+        "Detail ID F2 Name Bonded tendon",
+        "Stress model Fixed characteristic stress range",
+        "Bend reduction no",
+        "Bond-strength ratio \u03be 0.720",
+        "Bond-equivalent diameter 15.200 mm",
     ):
         assert expected in text
 
@@ -505,10 +516,10 @@ def test_brief_retains_2023_concrete_applicability_and_derived_factor():
     ]
     for expected in (
         "DS/EN 1992-1-1:2023",
-        "\u03b7cc = 0.912345",
-        "ktc = 0.85",
-        "\u03b1cc = \u03b7cc ktc = 0.775493",
-        "n = 1.750",
+        "\u03b7cc 0.912345",
+        "ktc 0.85",
+        "\u03b1cc \u03b7cc ktc = 0.775493",
+        "n 1.750",
     ):
         assert expected in concrete_085
 
@@ -524,8 +535,8 @@ def test_brief_retains_2023_concrete_applicability_and_derived_factor():
     concrete_100 = text_100[
         text_100.index("Concrete Concrete rings"):text_100.index("Mild / M1")
     ]
-    assert "ktc = 1.00" in concrete_100
-    assert "\u03b1cc = \u03b7cc ktc = 0.912345" in concrete_100
+    assert "ktc 1.00" in concrete_100
+    assert "\u03b1cc \u03b7cc ktc = 0.912345" in concrete_100
     assert concrete_100 != concrete_085
 
 
@@ -554,11 +565,11 @@ def test_brief_invalid_fatigue_falls_back_to_assigned_source_catalog():
         "Review the fatigue inputs and recalculate",
         "Fatigue detail F2",
         "Fatigue detail F1",
-        "preset = EC2:2023 - bent reinforcing bars",
-        "source = DS/EN 1992-1-1:2023, Table E.1, note a",
-        "stress model = ec2_2023_bar_diameter",
-        "bend reduction = yes",
-        "mandrel diameter = 0.000 mm",
+        "Preset EC2:2023 - bent reinforcing bars",
+        "Source DS/EN 1992-1-1:2023, Table E.1, note a",
+        "Stress model EC2:2023 bar-diameter-dependent stress range",
+        "Bend reduction yes",
+        "Mandrel diameter 0.000 mm",
     ):
         assert expected in text
     assert text.index("Fatigue detail F2") < text.index("Fatigue detail F1")
@@ -591,12 +602,12 @@ def test_brief_tendon_bond_ratio_is_2023_source_input_not_derived_xi1():
         "sls_tendon_xi": 0.72,
     })
     text_2023 = _brief_text(inp, out)
-    assert "Bonded-tendon bond-strength ratio xi 0.720" in text_2023
-    assert "Prestressing bond ratio xi1" not in text_2023
+    assert "Bonded-tendon bond-strength ratio \u03be 0.720" in text_2023
+    assert re.search(r"bond(?:-strength)? ratio (?:xi|\u03be)\s*1\b", text_2023, re.I) is None
 
     inp["sls_tendon_xi"] = 0.0
     assert (
-        "Bonded-tendon bond-strength ratio xi not set"
+        "Bonded-tendon bond-strength ratio \u03be not set"
         in _brief_text(inp, out)
     )
 
@@ -620,6 +631,7 @@ def test_brief_elastic_basis_fctm_and_coarse_member_follow_live_routes():
         "sls_fctm": 3.41,
         "minimum_reinforcement_on": False,
     })
+    _set_ordinary_crack_request(inp, False)
     _set_elastic_result_fields(out, show_cw=False, crack_member=None)
     elastic_only = _brief_text(inp, out)
     assert "Crack-control settings" not in elastic_only
@@ -636,6 +648,7 @@ def test_brief_elastic_basis_fctm_and_coarse_member_follow_live_routes():
         ),
         "sls_member": "Slab",
     })
+    _set_ordinary_crack_request(inp, True)
     _set_elastic_result_fields(out, show_cw=True, crack_member="Slab")
     assert "Member type Slab" in _brief_text(inp, out)
 
@@ -792,11 +805,13 @@ def test_brief_builtin_prestress_proof_stress_is_fatigue_input_only():
     })
     text = _brief_text(inp, out)
     assert "built-in fixed curve 1" in text
+    material = text[text.index("Prestress / P1"):text.index("Actions")]
     assert (
-        "fatigue proof-stress input fp0.1k = 1640.000 MPa "
-        "(fatigue yield/proof check input; not a fixed-curve plastic-law field)"
-        in text
+        "fatigue proof-stress input fp0.1k 1640.000 MPa "
+        "(fatigue yield/proof check input, not a fixed-curve plastic-law field)"
+        in material
     )
+    assert "Definition not a fixed-curve plastic-law field)" not in material
 
     inp["fatigue_check_steel"] = False
     out["fatigue"]["checks"]["reinforcement"] = False
@@ -980,7 +995,7 @@ def test_brief_tendon_only_crack_route_omits_stale_mild_bond_inputs():
         "sls_tendon_xi": 0.72,
     })
     text = _brief_text(inp, out)
-    assert "Bonded-tendon bond-strength ratio xi 0.720" in text
+    assert "Bonded-tendon bond-strength ratio \u03be 0.720" in text
     assert "Mild-steel bond selection" not in text
     assert "Mild-steel bond coefficient k1" not in text
     assert "stale mild-bond selection" not in text
@@ -1146,7 +1161,8 @@ def test_standard_keeps_results_and_sources_while_audit_owns_worked_sequences():
     for retained in (
         "Internal lever arm", "Effective depth", "Concrete corner stress and strain",
         "Stress as percentage of characteristic strength", "fcd,fat",
-        "Cracking threshold", "Source / method",
+        "Cracking threshold", "Method, condition and source",
+        "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010, 6.8.6(1)-(2)",
     ):
         assert retained in standard
     assert "Governing worked example:" not in standard
@@ -1160,7 +1176,7 @@ def test_brief_governing_register_contains_results_before_complete_inputs():
     assert start < inputs
     summary = text[start:inputs]
     assert "Plastic bending PL-QA-2 FAIL 220.8 %" in summary
-    assert "Crack width - Long-term EL-QA-1" in summary
+    assert re.search(r"Crack width - Long-\s*term EL-QA-1", summary)
     assert "0.530 mm" in summary
     assert "0.200 mm" in summary
     assert "Torsion transverse/strut resistance PL-QA-1 FAIL 170.5 %" in summary
@@ -1292,8 +1308,112 @@ def test_distinct_cracking_threshold_section_retains_its_first_equation(profile,
                 # PDF visitors split lambda and its subscript into separate
                 # fragments; bind the Standard assertion to the actual result.
                 "Mathematical expression:" if profile == "Audit"
-                else "= 0.103 -> section is cracked"
+                else "= 0.103"
             )
             assert any(y < heading_y - 4 and value.startswith(result_prefix)
                        for value, y, _size in fragments), (profile, page_number)
+            if profile == "Standard":
+                next_chapter_y = max(
+                    (y for value, y, size in fragments
+                     if size == 14.0 and y < heading_y
+                     and re.match(r"\d+\. ", value)),
+                    default=0.0,
+                )
+                local = [
+                    value for value, y, _size in fragments
+                    if next_chapter_y < y < heading_y - 4
+                ]
+                assert "= 0.103" in local
+                local_text = " ".join(local)
+                assert (
+                    "The section is cracked. Strictly below 1 means cracked. "
+                    "A value of 1 or above means uncracked." in local_text
+                ), (profile, page_number, "missing local interpretation")
+                assert re.search(
+                    r"Source: Stage-I extreme tensile stress reaches f\s*ct,eff "
+                    r"\(DS/EN 1992-1-1 \u00a77\.1\)", local_text,
+                ), (profile, page_number, "missing local method source")
     assert len(seen) == 1
+
+
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_named_crack_request_retains_inputs_before_results(profile):
+    """A named request is authoritative even when the legacy switch is false."""
+    inp = report_render_fixture._inputs()
+    _set_ordinary_crack_request(inp, False)
+    inp["elastic_cases"][-1]["calculate_crack_width"] = True
+    inp["sls_heightened_on"] = False
+    inp["sls_bond"] = "Requested-only bond basis & f_ck"
+    inp["sls_k1"] = 1.234
+    pdf = report_render_fixture.sector_report.build_report(
+        {}, inp, {}, figures=False, profile=profile,
+    )
+    text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in PdfReader(io.BytesIO(pdf)).pages
+    )
+    assert inp["sls_cw"] is False
+    assert "Crack-control settings" in text
+    assert "Mild-steel bond selection Requested-only bond basis & f_ck" in text
+    assert "Mild-steel bond coefficient k1 1.234" in text
+    assert "Long-term user limit wk,long 0.200 mm" in text
+    assert "Short-term user limit wk,short 0.200 mm" in text
+
+
+@pytest.mark.parametrize("curve", (1, 2, 3, 4, 5))
+def test_brief_fixed_curve_fatigue_caveat_is_one_complete_property_row(curve):
+    """All built-in tendon curves retain the fatigue-only qualification."""
+    import html
+    import pickle
+
+    inp = report_render_fixture._inputs()
+    entry = report_render_fixture.material_catalog.default_entry(
+        "prestress", preset=f"Curve {curve} (built-in)"
+    )
+    entry["fytk"] = 1640.0
+    law = report_render_fixture.material_catalog.build_material(entry, "prestress")
+    assert law.curve == curve
+    inp.update({
+        "tendons": [(0.045, -0.05, 78.54)],
+        "tendon_elements": [{"id": "P1", "material_id": "P1"}],
+        "prestress_material_catalog": {"items": [entry]},
+        "prestress_materials": {"P1": law},
+        "prestress": law,
+        "fatigue_on": True,
+    })
+    before = pickle.dumps(inp)
+    tables_by_route = {}
+    for enabled in (False, True):
+        builder = object.__new__(report_render_fixture.sector_report.ReportBuilder)
+        builder._base_inp = inp
+        builder._base_out = {"fatigue": {"checks": {"reinforcement": enabled}}}
+        builder._h2 = lambda *args, **kwargs: None
+        captured = []
+        builder._table = lambda rows, *args, **kwargs: captured.append(
+            (kwargs["caption"], rows)
+        )
+        builder._brief_material_summary()
+        matches = [rows for caption, rows in captured
+                   if caption == "Material properties: Prestress / P1"]
+        assert len(matches) == 1
+        rows = [[html.unescape(re.sub(r"<[^>]*>", "", str(cell)))
+                 for cell in row] for row in matches[0]]
+        proof_rows = [row for row in rows
+                      if row[0] == "fatigue proof-stress input fp0.1k"]
+        if enabled:
+            assert proof_rows == [[
+                "fatigue proof-stress input fp0.1k",
+                "1640.000 MPa (fatigue yield/proof check input, "
+                "not a fixed-curve plastic-law field)",
+            ]]
+        else:
+            assert proof_rows == []
+        assert all(not (row[0] == "Definition" and "plastic-law" in row[1])
+                   for row in rows)
+        tables_by_route[enabled] = [
+            (caption, [row for row in values
+                       if "fatigue proof-stress input" not in str(row[0])])
+            for caption, values in captured
+        ]
+    assert tables_by_route[True] == tables_by_route[False]
+    assert pickle.dumps(inp) == before

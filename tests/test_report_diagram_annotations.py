@@ -248,8 +248,9 @@ def test_standard_ratio_basis_matches_native_edition_and_bond_weighting(edition,
     expected = [sector_report._fmt(basis["as_eff"] * 1e6, 3) + " mm<super>2</super>",
                 sector_report._fmt(tendon * 1e6, 3) + " mm<super>2</super>",
                 sector_report._fmt(cw["ac_eff"] * 1e6, 3) + " mm<super>2</super>",
-                sector_report._fmt_sig(cw["rho_p_eff"], 6)]
+                f"{cw['rho_p_eff']:.8f}"]
     assert [row[1] for row in tables[0][1:]] == expected
+    assert abs(float(tables[0][-1][1]) - cw["rho_p_eff"]) <= 0.5e-8
     assert any("bond weighting" in note for note in notes) == (edition == "2023")
     if edition == "2023" and mixed:
         assert basis["ap_eff_weighted"] != basis["ap_eff"]

@@ -95,3 +95,59 @@ def test_only_closed_bond_choices_receive_authored_notation(profile, value, expe
     assert expected in str(tables)
     assert "Bonded-tendon bond-strength ratio &#958;" in str(tables)
     assert pickle.dumps(inp) == original
+
+
+@pytest.mark.parametrize("direct", [False, True])
+def test_native_direct_and_bending_explanations_use_real_equation_contract(direct):
+    from pypdf import PdfReader
+    from reportlab.platypus import SimpleDocTemplate
+
+    cw = _native(direct)
+    before = pickle.dumps(cw)
+    output = io.BytesIO()
+    builder = report.ReportBuilder(
+        output, {}, {}, {"elastic": {"crack_code": "DS/EN 1992-1-1:2023"}},
+        profile="Audit", figures=False,
+    )
+    builder._h1("Native crack calculation")
+    calls = []
+    original_formula = builder._formula
+
+    def capture(expression, *args, **kwargs):
+        original_formula(expression, *args, **kwargs)
+        calls.append((expression, kwargs))
+
+    builder._formula = capture
+    builder._crack_worked(cw)
+    expression, payload = next(
+        call for call in calls if call[1]["equation_key"] == "crack.2023.spacing"
+    )
+    base = (
+        "s<sub>r,m,cal</sub> = 1.5&#183;c + (k<sub>fl</sub>&#183;k<sub>b</sub>/7.2)"
+        "&#183;phi/rho<sub>p,eff</sub>"
+    )
+    cap_expression = " &lt;= (1.3/k<sub>w</sub>)&#183;(h-x)"
+    assert expression == base + ("" if direct else cap_expression)
+    assert payload.get("equation_variant") is None
+    assert payload["ref"] == "DS/EN 1992-1-1:2023 &#167;9.2.3, Eq (9.15)"
+    assert ("; cap = " in payload["subst"]) is not direct
+    assert ("no finite tension-zone cap" in payload["note"]) is direct
+    assert ("h-x applies to the bending cap" in payload["note"]) is direct
+    spacing = cw["governing_candidate"]["spacing_operands"]
+    assert payload["result"] == (
+        "s<sub>r,m,cal</sub> = " + report._fmt(spacing["selected_spacing"], 3) + " mm"
+    )
+    assert calls[-1][1]["result"] == "w<sub>k</sub> = " + report._fmt(cw["wk"], 3) + " mm"
+    identities = [(kw["equation_key"], kw.get("equation_variant")) for _, kw in calls]
+    assert ("crack.effective-area.2023", "direct-tension" if direct else "bending") in identities
+    assert identities[-3:] == [
+        ("crack.2023.spacing", None), ("crack.2023.mean-strain", None),
+        ("crack.2023.width", None),
+    ]
+    SimpleDocTemplate(output).build(builder.flow)
+    text = " ".join(" ".join(page.extract_text().split()) for page in PdfReader(output).pages)
+    assert ("For direct tension, the curvature factor is:" in text) is direct
+    assert ("k1/r = (h-x)/(h-ay-x)." in text) is not direct
+    if direct:
+        assert "k1/r = 1.000." in text
+    assert pickle.dumps(cw) == before

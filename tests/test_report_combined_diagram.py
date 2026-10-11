@@ -52,7 +52,20 @@ def test_owned_combined_chart_retains_exact_candidates_and_context(monkeypatch, 
     assert list(figure.data[0].x) == [row["m_total"] for row in c["longitudinal_candidates"]]
     assert list(figure.data[1].x) == [row["m_rd"] for row in c["longitudinal_candidates"]]
     assert "Case Combined <case>" in unescape(caption)
-    assert "<case>" not in caption
+    # _fig owns escaping at the publication boundary. Exercise that boundary
+    # with a tiny in-memory image so literal user text stays visible exactly.
+    from PIL import Image
+    image = io.BytesIO()
+    Image.new("RGB", (2, 2), "white").save(image, format="PNG")
+    monkeypatch.setattr(report, "_fig_png", lambda *a: (image.getvalue(), False))
+    publisher = report.ReportBuilder(io.BytesIO(), {}, {}, {}, figures=True)
+    publisher._fig(figure, caption=caption)
+    table, = [item for item in publisher.flow
+              if getattr(item, "_sector_publication_label", "").startswith("Figure")]
+    published_caption = table._cellvalues[1][0]
+    assert "<case>" not in published_caption.text
+    assert "Case Combined <case>" in unescape(published_caption.text)
+    assert "Case Combined <case>" in published_caption.getPlainText()
     assert f"shear component {'Vx' if direction == 'vx' else 'Vy'}" in caption
     assert "31.25 degrees" in caption
     assert "zero demand" in " ".join(notes)

@@ -7,6 +7,7 @@ import pathlib
 import pickle
 import sys
 from unittest.mock import MagicMock
+from types import MethodType
 
 import pytest
 from pypdf import PdfReader
@@ -100,6 +101,11 @@ def test_optional_subtube_route_keeps_all_tables_and_equations_without_factory(f
                                    "torque": sub["t_ed"]} for sub in subs)}}
     builder = MagicMock()
     builder.figures = False
+    # Run the extracted retained-evidence helper too. An unconfigured mock
+    # would make the exact True guard stop before publishing any operands.
+    builder._subtube_evidence_tables = MethodType(
+        sector_report.ReportBuilder._subtube_evidence_tables, builder
+    )
     sector_report.ReportBuilder._subtube_section(builder, result)
     assert builder._table.call_count >= 3
     keys = {call.kwargs.get("equation_key") for call in builder._formula.call_args_list}

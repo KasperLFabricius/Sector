@@ -50,8 +50,8 @@ def test_generic_table_owns_destination_and_first_caption_without_self_reference
         keep=False,
     )
 
-    table = next(
-        item for item in builder.flow
+    table, = (
+        item for item in _all_flowables(builder.flow)
         if isinstance(item, sector_report._PaginatedReportTable)
     )
     assert "See Table" not in " ".join(

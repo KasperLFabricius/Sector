@@ -72,7 +72,7 @@ def test_result_only_reference_resolves_and_preserves_literal_source():
     assert "Stress = -20 MPa" in text
 
 
-def test_standard_adjacent_groups_retain_rows_and_stop_at_source_or_prose():
+def test_standard_adjacent_groups_retain_each_source_and_stop_at_prose():
     builder = report.ReportBuilder(io.BytesIO(), {}, {}, {}, figures=False, profile="Standard")
     builder._h1("Results")
     builder._standard_result_projection("a", "R", "100 kN", "Source A", None, "R")
@@ -80,11 +80,19 @@ def test_standard_adjacent_groups_retain_rows_and_stop_at_source_or_prose():
     assert len(builder._standard_projection_group["rows"]) == 2
     assert builder._standard_projection_group["item"].number == "1.1"
     builder._standard_result_projection("c", "d", "500 mm", "Source B", "Face x+", "d")
-    assert len(builder._standard_projection_group["rows"]) == 1
-    assert builder._standard_projection_group["item"].number == "1.2"
+    assert len(builder._standard_projection_group["rows"]) == 3
+    assert builder._standard_projection_group["item"].number == "1.1"
+    assert builder._standard_projection_group["rows"] == [
+        ['<a name="a"/>R', "100 kN", "<b>Source:</b> Source A"],
+        ['<a name="b"/>u', "80%", "<b>Source:</b> Source A"],
+        ['<a name="c"/>d', "500 mm", "Face x+<br/><b>Source:</b> Source B"],
+    ]
     builder._p("Separate assessment")
     builder._standard_result_projection("d", "z", "450 mm", "Source B", None, "z")
-    assert builder._standard_projection_group["item"].number == "1.3"
+    assert builder._standard_projection_group["item"].number == "1.2"
+    assert builder._standard_projection_group["rows"] == [
+        ['<a name="d"/>z', "450 mm", "<b>Source:</b> Source B"],
+    ]
     builder._write_pdf()
     text = "\n".join(page.extract_text() for page in pypdf.PdfReader(builder.buffer).pages)
     assert all(value in text for value in ("100 kN", "80%", "500 mm", "450 mm", "Face x+"))
