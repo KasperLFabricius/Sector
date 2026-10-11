@@ -29,7 +29,7 @@ def worked_field(family):
                                      x=row.x, y=row.y, area=row.area * 1e6,
                                      strain=row.material_strain, stress=row.material_stress,
                                      initial=row.initial_strain))
-        return SectionField("Plastic", "Ultimate capacity: N = −1500 kN; neutral-axis angle = 45°",
+        return SectionField("Plastic", "Ultimate capacity: N = \u22121500 kN; neutral-axis angle = 45\u00b0",
                             tuple(map(tuple, ex["outer"])), tuple(tuple(map(tuple, h)) for h in ex["holes"]),
                             strain, strain, ex["concrete"], tuple(elements), "")
     ex = manual.example_beam()
@@ -45,7 +45,7 @@ def worked_field(family):
     elements = tuple(dict(id=f"Bar {i + 1}", kind="Bar", x=p[0], y=p[1], area=p[2],
                           strain=float(s) / (es * 1000), stress=float(s) / 1000, initial=0.)
                      for i, (p, s) in enumerate(zip(ex["bars"], result.bar_stress_total)))
-    return SectionField("Elastic", "TOTAL: sustained Mₓ = 100 kN·m; additional Mₓ = 50 kN·m; φ = 2",
+    return SectionField("Elastic", "TOTAL: sustained M\u2093 = 100 kN\u00b7m; additional M\u2093 = 50 kN\u00b7m; \u03c6 = 2",
                         tuple(map(tuple, ex["outer"])), (), strain, stress, None, elements, "")
 
 

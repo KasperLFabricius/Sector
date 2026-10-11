@@ -80,13 +80,28 @@ def test_report_profiles_publish_each_current_case_map_with_native_values(
             expected.extend(figure.to_json() for _, figure in figures)
 
     captured = []
+    warmup_calls = []
+
+    def capture_warmup():
+        warmup_calls.append(True)
+
+    def unexpected_worker():
+        raise AssertionError("Map-capture test started a real image worker")
+
     def capture(self, figure, *args, **kwargs):
         if any(trace.name == "Concrete display band" for trace in figure.data):
             assert "<" not in kwargs["caption"]
             captured.append(figure.to_json())
     monkeypatch.setattr(sector_report.ReportBuilder, "_fig", capture)
+    monkeypatch.setattr(sector_report, "ensure_image_server", capture_warmup)
+    monkeypatch.setattr(
+        sector_report.publication_image_export._COORDINATOR,
+        "_worker_launcher",
+        unexpected_worker,
+    )
     pdf = sector_report.build_report({}, inp, out, profile=profile, figures=True)
     assert pdf.startswith(b"%PDF")
+    assert warmup_calls == [True]
     assert sorted(captured) == (sorted(expected) if profile != "Brief" else [])
 
 

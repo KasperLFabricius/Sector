@@ -13059,7 +13059,9 @@ def _section_field_panel(inp, result, *, family, point_index=None):
         ], hide_index=True, width="stretch")
     st.caption(
         "Tension is positive. Compression is negative. Concrete and reinforcement have different stress scales. "
-        "Color limits stay fixed across valid states of this action. Other actions can have different limits. "
+        "Color limits stay fixed across valid states of this action. Other actions can have different limits."
+    )
+    st.caption(
         "Filled bands show values from the accepted field. The tables give exact extrema. "
         "Marker sizes identify elements. They do not represent bar diameter."
     )
