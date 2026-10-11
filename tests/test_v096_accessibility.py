@@ -95,7 +95,19 @@ def test_skip_link_is_first_body_control_and_targets_unique_main_landmark():
 
 def test_every_figure_has_a_distinct_governed_descriptive_alternative():
     parser = _parsed()
-    expected = [spec.alternative for spec in MANUAL_FIGURE_SPECS]
+    # Accessible names and extracted visible alternatives preserve all words
+    # and values, with authored mathematics expressed as plain text.
+    plain_math = {
+        "$M_x$": "Mx", "$M_y$": "My", r"$\text{mm}^{2}$": "mm2",
+        "$q_a=0.32$": "qa=0.32", "$q_b=-0.28$": "qb=-0.28", "$8/15$": "8/15",
+    }
+    expected = []
+    for spec in MANUAL_FIGURE_SPECS:
+        alternative = spec.alternative
+        for authored, plain in plain_math.items():
+            alternative = alternative.replace(authored, plain)
+        assert "$" not in alternative and "\\" not in alternative
+        expected.append(alternative)
     assert parser.figure_labels == expected
     assert parser.figure_texts == expected
     assert all(
@@ -127,7 +139,8 @@ def test_html_math_is_rendered_labelled_and_free_of_raw_tex_or_pseudo_tags():
         "SECTOR-MATH",
     ):
         assert token not in text
-    assert '<code class="math" aria-label="Mathematical expression: N^*">' in text
+    assert '<code class="math" aria-label="Mathematical expression: N*">N<sup>*</sup></code>' in text
+    assert not any("N^*" in label for label in parser.math_labels)
     assert 'aria-label="Mathematical expression: N^<em>' not in text
 
 

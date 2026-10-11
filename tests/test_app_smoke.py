@@ -2224,7 +2224,15 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
     assert n_mult == pytest.approx([0.975], rel=1e-12)
     assert prestress_stress == pytest.approx([500_000.0], rel=1e-12)
 
-    expected_sigma_ct = 3.7389176145082486
+    # Independent Stage-I equilibrium in N and mm. The transformed tendon
+    # replaces its occupied concrete area, so its added area is (Ep/Ec - 1)Ap.
+    added_area = (6.85 * 0.975 - 1.0) * 1000.0
+    stress_intercept, stress_gradient = np.linalg.solve(
+        [[300.0 * 600.0 + added_area, -250.0 * added_area],
+         [-250.0 * added_area, 300.0 * 600.0**3 / 12.0 + 250.0**2 * added_area]],
+        [-500.0 * 1000.0, 500.0 * 1000.0 * 250.0],
+    )
+    expected_sigma_ct = stress_intercept + 300.0 * stress_gradient
     elastic_results = (
         results["elastic"],
         results["elastic_cases"][0]["results"]["elastic"],
@@ -2293,7 +2301,7 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
         "only external N/M scales",
         "lowest positive fibre solution governs",
         "Calculated output:",
-        "3.739 MPa",
+        f"{expected_sigma_ct:.3f} MPa",
         "0.000; section is cracked",
         "below 1: cracked; 1 or above: uncracked",
     ):
@@ -3164,7 +3172,15 @@ def test_slab_mixed_series_captions_and_preview_total_multiple_layers():
     bars = at.session_state["bars_base"]
     expected = 4.0 * 5.0 * (bar_area(20.0) + bar_area(16.0))
     assert bars["area (mm2)"].sum() == pytest.approx(expected)
-    assert len(bars) == 260
+    # Each physical layer contains five primary axes and six interleaved axes.
+    # The two boundary axes in the interleaved row have half tributary areas.
+    assert len(bars) == 4 * (5 + 6)
+    for _height, layer in bars.groupby("y (mm)"):
+        primary = layer[layer["diameter (mm)"] == 20.0]
+        interleaved = layer[layer["diameter (mm)"] == 16.0]
+        assert sorted(primary["x (mm)"]) == [-400.0, -200.0, 0.0, 200.0, 400.0]
+        assert sorted(interleaved["x (mm)"]) == [-500.0, -300.0, -100.0, 100.0, 300.0, 500.0]
+        assert interleaved.loc[interleaved["x (mm)"].abs() == 500.0, "area (mm2)"].tolist() == pytest.approx([bar_area(16.0) / 2.0] * 2)
 
 
 @pytest.mark.parametrize(
@@ -3478,7 +3494,8 @@ def test_slab_density_tendon_uses_nominal_physical_axes_in_native_2005_check():
     operands = tendon["spacing_operands"]
     assert operands["nearest_neighbour_spacing"] == pytest.approx(300.0)
     assert operands["selected_candidate"] == "formula-7.14"
-    assert tendon["wk"] == pytest.approx(3.3989530986177257)
+    # Current net-concrete model and full-precision automatic material values.
+    assert tendon["wk"] == pytest.approx(3.395850571343649)
     assert operands["nearest_neighbour_spacing"] != pytest.approx(15.625)
     assert operands["nearest_neighbour_spacing"] != pytest.approx(31.25)
 
@@ -3689,7 +3706,8 @@ def test_native_density_spacing_is_reciprocal_for_off_centre_tendon_and_biaxial(
     biaxial_spacing = biaxial["governing_candidate"]["spacing_operands"][
         "nearest_neighbour_spacing"
     ]
-    assert biaxial_spacing == pytest.approx(50.347943780324755)
+    # Nominal physical bars supply the stiffness as well as the spacing map.
+    assert biaxial_spacing == pytest.approx(50.34233761397938)
     assert biaxial["governing_candidate"]["spacing_operands"][
         "selected_candidate"
     ] == "formula-7.11"
@@ -3709,7 +3727,7 @@ def test_native_density_spacing_is_reciprocal_for_off_centre_tendon_and_biaxial(
     assert tendon_governing["element_type"] == "Tendon"
     assert tendon_governing["governing_candidate"]["spacing_operands"][
         "nearest_neighbour_spacing"
-    ] == pytest.approx(50.1788374023685)
+    ] == pytest.approx(50.17598786369339)
 
 
 def test_applied_quick_section_scalars_replace_draft_preferences_for_saving():
@@ -5691,6 +5709,11 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
         governing_bin=changed_steel_result.governing_damage_bin,
         utilisation=changed_steel_result.damage,
     )
+    # The detail table follows the selected element. Select the element whose
+    # screen this test changes, independently of the governing-element default.
+    at.selectbox(key="_fatigue_result_element").set_value(
+        changed_steel_result.element_id
+    ).run()
     fatigue["spectra"] = (
         dataclasses.replace(
             fatigue["spectra"][0],
@@ -10051,7 +10074,7 @@ def test_page_navigation_and_input_stages_follow_the_workflow_order():
         f"4 {d} Loads",
         "Project",
     ]
-    assert at.selectbox(key="_input_tab").options == expected_outer
+    assert [tab.label for tab in at.tabs] == expected_outer
     assert at.session_state["_input_tab"] == expected_outer[0]
     labels = [ex.label for ex in at.expander]
     assert labels == [
@@ -10259,8 +10282,8 @@ def test_auto_all_updates_concrete_while_mild_family_is_mounted():
         "conc_eps_c2": 2.0,
         "conc_eps_cu2": 3.5,
         "conc_n": 2.0,
-        "sls_fctm": 3.21,
-        "conc_Ec": 34.1,
+        "sls_fctm": 0.3 * 35.0 ** (2.0 / 3.0),
+        "conc_Ec": 22.0 * ((35.0 + 8.0) / 10.0) ** 0.3,
     }
     assert at.session_state["_material_tab"] == "Reinforcing steel"
     for key, value in expected.items():
@@ -11633,9 +11656,11 @@ def test_crack_width_auto_cover_circular_section():
 
 def test_b2_inactive_settings_restore_values_and_legacy_material_selection():
     at = _fresh()
-    at.session_state["_input_tab"] = f"3 {chr(0x00B7)} Material parameters"
     at.session_state["_material_tab"] = "Mild steel"
     at.run()
+    # Start on the normal settings stage before visiting the saved legacy family.
+    # AppTest replays its first native-tab selection on later widget events.
+    _goto_input_tab(at, "Material parameters")
     assert at.session_state["_material_tab"] == "Reinforcing steel"
     assert at.session_state["_material_tab_preference"] == "Reinforcing steel"
     assert at.number_input(key="mild_fytk")

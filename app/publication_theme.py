@@ -77,7 +77,7 @@ MANUAL_TEXT = MappingProxyType({
     ),
     "h2": TextStyle(12.5, before=9, after=4, bold=True, keep_next=True),
     "h3": TextStyle(11, before=6, after=3, bold=True, keep_next=True),
-    "body": TextStyle(10, leading=13.5, after=4),
+    "body": TextStyle(10.5, leading=14.5, after=6),
     "math": TextStyle(11, leading=15, before=6, after=6),
     "small": TextStyle(9.5, leading=12, color=PALETTE.ink),
     "publication_ref": TextStyle(

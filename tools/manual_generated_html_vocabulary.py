@@ -29,7 +29,7 @@ class GeneratedManualHTMLVocabulary:
 
 CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
     current_head_style_sha256=(
-        "d2795ea970117826f034557c358dce77107d7d8c5b6409cdd79e1dca6c8a155e"
+        "c0bc3def5f095720542356a439c21c1dc263c79fc7ecae45751a640122f53d28"
     ),
     body_block_tags=frozenset(
         {
@@ -66,7 +66,7 @@ CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
     body_inline_tags=frozenset(
         {"a", "code", "em", "strong", "sub", "sup"}
     ),
-    body_void_tags=frozenset({"br"}),
+    body_void_tags=frozenset({"br", "img"}),
     head_void_tags=frozenset({"meta"}),
     table_children=(
         ("table", frozenset({"tbody", "thead"})),
@@ -96,6 +96,7 @@ CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
         ("head", frozenset()),
         ("header", frozenset()),
         ("html", frozenset({"lang"})),
+        ("img", frozenset({"alt", "class", "src"})),
         ("li", frozenset({"class"})),
         ("main", frozenset({"id"})),
         ("meta", frozenset({"charset", "content", "name"})),
@@ -127,6 +128,7 @@ CURRENT_GENERATED_MANUAL_HTML_VOCABULARY = GeneratedManualHTMLVocabulary(
         ("div", frozenset({"display-math", "figure-alternative", "table-scroll"})),
         ("dl", frozenset({"equation-results"})),
         ("figure", frozenset({"table-figure"})),
+        ("img", frozenset({"manual-figure"})),
         ("li", frozenset({"toc-level-0", "toc-level-1", "toc-level-2"})),
         (
             "p",

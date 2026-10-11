@@ -15,9 +15,10 @@ def test_transverse_provenance_reaches_every_publication_surface():
         "app/sector_report.py": ("wall shear flow (6.27)",
                                  "transverse equilibrium (6.8)",
                                  'ref="EN 1992-1-1 (6.28)"'),
-        "app/manual.py": ("torsional wall shear ", "flow (6.27)",
-                          "transverse equilibrium (6.8)",
-                          "(6.28), **in addition**"),
+        "app/manual.py": ("wall shear flow in Formula (6.27)",
+                          "transverse equilibrium in Formula (6.8)",
+                          "Formula (6.28) gives:",
+                          "this reinforcement supplements the bending reinforcement"),
         "sector/torsion.py": ("6.27 + 6.8", "Formula 6.28 separately defines"),
     }
 

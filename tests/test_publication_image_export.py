@@ -690,6 +690,10 @@ def test_source_worker_command_is_a_dedicated_script_not_the_streamlit_app(
 
 
 def test_worker_protocol_uses_private_noninheritable_native_handles() -> None:
+    # This stdlib-only check targets native handle inheritance. The Windows venv
+    # redirector can wait for a child process tree after the worker has exited.
+    # Use the underlying interpreter so that launcher lifetime is not measured.
+    interpreter = getattr(sys, "_base_executable", sys.executable)
     script = textwrap.dedent(
         f"""
         import os
@@ -725,7 +729,7 @@ def test_worker_protocol_uses_private_noninheritable_native_handles() -> None:
     )
     started = time.monotonic()
     completed = subprocess.run(
-        [sys.executable, "-c", script],
+        [interpreter, "-c", script],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,

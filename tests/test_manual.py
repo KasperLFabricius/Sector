@@ -32,6 +32,17 @@ from sector.serviceability import analyse_cracking  # noqa: E402
 APP = str(ROOT / "app" / "sector_app.py")
 
 
+def _prose_block_containing(marker):
+    """Keep related conditions together, independently of paragraph wrapping."""
+    return next(
+        text
+        for block in manual.manual_blocks()
+        if block[0] in {"md", "callout"}
+        for text in [block[2] if block[0] == "callout" else block[1]]
+        if marker in text
+    )
+
+
 def _section(ex):
     return Section.from_polygon(corners=ex["outer"], holes=ex["holes"],
                                 bars_xy_area_mm2=ex["bars"],
@@ -89,28 +100,24 @@ def test_manual_blocks_are_wellformed():
 
 
 def test_manual_limits_formula_631_condition_and_separates_detailing():
-    text = "\n".join(
-        str(block[2] if block[0] == "callout" else block[1])
-        for block in manual.manual_blocks()
-        if block[0] in {"md", "callout"}
-    )
+    text = _prose_block_containing("approximately solid rectangular sections")
 
     assert "approximately solid rectangular sections" in text
-    assert "first-generation $V_{Rd,c}$ route" in text
-    assert "Hollow, circular, triangular, flanged or compound sections" in text
-    assert "For the 2023 shear method, Formula (6.31) is unavailable" in text
-    assert "Assess shear using the 2023 check" in text
-    assert "assess torsion and interaction using their selected methods" in text
+    assert 'first-generation $V_{Rd,c}$ method' in text
+    assert 'hollow, circular, triangular, flanged or compound sections' in text
+    assert 'Formula (6.31) is unavailable for that combination' in text
+    assert 'For the 2023 shear method, assess shear with the 2023 check' in text
+    assert 'Assess torsion and interaction with their selected methods' in text
     assert "reported 2023 shear check" not in text
     assert "2023 shear-and-torsion" not in text
-    assert "low-action screen" in text
-    assert "does not verify the minimum ratio, spacing" in text
-    assert "PASS, FAIL, NOT RUN or NOT ASSESSED" in text
-    assert "arrangement and anchorage remain separate engineering checks" in text
-    assert "Formula (6.31) condition result" in text
-    assert "use their complete shear-and-torsion checks" in text
+    assert 'cases where designed shear-and-torsion reinforcement beyond the required minimum is necessary' in text
+    assert 'Each link minimum-ratio and spacing check has its own result' in text
+    assert '**PASS**, **FAIL**, **NOT RUN** or **NOT ASSESSED**' in text
+    assert 'Do engineering checks of the arrangement and anchorage independently of the section calculation' in text
+    assert 'directional Formula (6.31) condition for $V_x+T$ and $V_y+T$' in text
+    assert 'use the full shear-and-torsion checks' in text
     assert "DK NA 6.3.2(6) combined N-M-V-T check" in text
-    assert "Formula (6.31) is not used as the combined verdict" in text
+    assert 'Its verdict includes the applicable concurrent actions' in text
     assert "sufficiency verdict" not in text
 
 
@@ -125,11 +132,11 @@ def test_manual_dkna_combined_rule_includes_n_and_action_alone_resistances():
     assert "$N+M+T$ and $N+V+T$" in text
     assert "separate M/V route as a design assumption" in text
     assert "CONDITIONAL" in text
-    assert "above the limit is **FAIL** even under" in text
+    assert 'larger than the limit is **FAIL** even under' in text
     assert "ordinary simultaneous sum cannot be smaller" in text
-    assert "reinforcement area, distribution and anchorage" in text
-    assert "does **not** condition the DK NA action-alone denominators" in text
-    assert "Scope: cross-section resistance. Complete the applicable Annex F member and detailing assessment separately." in text
+    assert 'reinforcement area, distribution or anchorage' in text
+    assert 'calculates each DK NA denominator for its action acting alone' in text
+    assert "Scope: cross-section resistance. Complete the applicable Annex F member and detailing assessment independently." in text
     assert "Annex F" in text
     assert "N$ is folded" not in text
 
@@ -139,17 +146,17 @@ def test_manual_distinguishes_slab_density_from_finite_face_spacing():
         block[1] for block in manual.manual_blocks() if block[0] == "md"
     )
 
-    assert "reinforcement area per metre" in text
-    assert r"A_s = A_{bar}\,1000/s" in text
+    assert 'reinforcement area per meter' in text
+    assert 'A_s=A_{bar}\\,1000/s' in text
     assert r"5A_{bar}=1570.796\,\mathrm{mm^2/m}" in text
-    assert "second complete series at the true half-spacing positions" in text
-    assert "summed $A_s$ per layer and per face" in text
+    assert 'full second series at half-spacing positions' in text
+    assert 'total area for each layer and face' in text
     assert "contains ten bars per layer with 50 mm edge offsets" in text
-    assert "weights preserve the specified steel area per metre" in text
+    assert "weights keep the specified steel area per meter" in text
     assert "nominal spacing and face cover" in text
     assert "strip sides are not physical concrete edges" in text
-    assert "spacing is instead a maximum gap" in text
-    assert "derived count and actual centre-to-centre spacing" in text
+    assert 'spacing defines the maximum gap' in text
+    assert 'calculated count and actual center-to-center spacing' in text
 
 
 def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope():
@@ -166,18 +173,15 @@ def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope(
     for retained in (
         "published project-adoption basis",
         "no Danish National Annex",
-        "confinement enhancement is not included or assessed",
+        "concrete law without the 2023 confinement enhancement",
         (
-            "Loading a project restores its inputs and clears earlier results. "
-            "Review the restored inputs"
+            "When you load a project, Sector restores its inputs and clears earlier results."
         ),
+        "Examine the restored inputs",
+        "Report details and publication controls are in **Report**",
+        "Save/load and autosave are in **Inputs > Project > Save / Load**",
         (
-            "Report details and publication controls are grouped separately from "
-            "the Project input stage."
-        ),
-        (
-            "Report labels identify the physical quantity represented by each "
-            "result field."
+            'identify the reported quantity, units and location'
         ),
         "DS/EN 1992-2:2005/AC:2008",
         "6.106",
@@ -236,7 +240,7 @@ def test_manual_covers_both_examples_and_all_crack_editions():
     text += "\n".join(str(b) for b in manual.manual_blocks() if b[0] == "table")
     for edition in ("2005", "DK NA", "2023"):
         assert edition in text
-    assert "mild steel" in text.lower() and "prestress" in text.lower()
+    assert "reinforcing-steel" in text.lower() and "prestress" in text.lower()
 
 
 def test_manual_distinguishes_fixed_prestress_cracking_threshold():
@@ -245,15 +249,15 @@ def test_manual_distinguishes_fixed_prestress_cracking_threshold():
     )
 
     for expected in (
-        "locked-in prestress is permanent and is not scaled",
+        'Locked-in tendon prestress is permanent. Sector keeps it fixed',
         "Sector assigns",
-        "directly",
+        'classifies the section as cracked',
         r"\sigma_{pre,i}+\lambda_{cr}\sigma_{ext,i}=f_{ctm}",
-        "scaling only the external $N/M$",
-        "prestress-only fibre is above",
+        'Only the external $N/M$ scales',
+        'prestress-only fiber stress is larger than',
         r"$\lambda_{cr}=0$",
-        r"$\lambda_{cr}<1$ is cracked",
-        r"$\lambda_{cr}\ge 1$ is uncracked",
+        '$\\lambda_{cr}<1$: cracked',
+        '$\\lambda_{cr}\\ge 1$: uncracked',
     ):
         assert expected in text
 
@@ -264,7 +268,7 @@ def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     assert "Material laws" in text
     assert "Stress-Strain diagrams" not in text
     assert "the section, the material-law diagrams" not in text
-    assert "Open *Analysis*, review *Results Overview*" in text
+    assert 'Open Analysis > Results Overview' in text
     for term in ("varphi_{NA}", "V_{Ed}", "A_{sl}", "A_{s,min}",
                  "D_{upper}", "A_{sw}/s", "z_x", "z_y",
                  "TOTAL", "LONG", "DIF", "RST1", "F_c"):
@@ -281,10 +285,10 @@ def test_manual_defines_the_calculated_arm_and_uses_it_in_the_links_example():
         "sign-split contributions from concrete, mild steel and tendons",
         "$|z_y|$",
         "$|z_x|$",
-        "calculated $z = 509.151$ mm",
+        'calculated lever arm is $z = 509.151$ mm',
         "$V_{Rd,s} = 555.4$ kN",
         "V_{Rd,max} = 667.5$ kN",
-        "links resistance is not assessed",
+        'links resistance is **NOT ASSESSED**',
     ):
         assert expected in text
     assert "slightly smaller" not in text
@@ -295,14 +299,14 @@ def test_manual_defines_the_calculated_arm_and_uses_it_in_the_links_example():
 def test_manual_matches_the_merged_geometry_topology_contract():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     for expected in (
-        "at least three distinct points",
-        "non-adjacent crossing, touch or overlap",
+        'Three or more distinct points',
+        'non-adjacent edge crossings, contacts and overlaps',
         "Forward collinear points",
-        "Clockwise and counter-clockwise winding",
+        'Clockwise and counter-clockwise sequences are valid',
         "strictly inside the outer ring",
         "8 ULP of the coordinate magnitude",
-        "Validation preserves the entered coordinates exactly",
-        "valid section whose calculation later fails to converge",
+        "Validation keeps the entered coordinate values unchanged",
+        "A valid section can have a calculation that fails to converge",
     ):
         assert expected in text
 
@@ -318,7 +322,7 @@ def test_manual_pins_the_tendon_projection_sign_and_per_element_extreme():
         "s_{p,j}",
         "\\varepsilon_{p,IS,j}",
         "s_{p,min}=\\min_j s_{p,j}",
-        "Each tendon is checked using its own position, initial strain and material limit",
+        "Sector evaluates each tendon at its own position, initial strain and material limit",
     ):
         assert expected in text
     assert "s_{cab,min}" not in text
@@ -328,8 +332,8 @@ def test_manual_distinguishes_user_curve2_from_eurocode_curve3_identity():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     assert "Eurocode design stress-strain diagram" in text
     assert "Curve 2 (elastic-perfectly-plastic)" in text
-    assert "user-defined/project-defined and uncited preset" in text
-    assert "Edited values remain associated with the selected preset label" in text
+    assert "project-defined preset with no cited edition" in text
+    assert 'Edited values keep the selected preset label' in text
 
     for example in (manual.example_beam(), manual.example_circular()):
         assert example["mild_preset"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
@@ -340,7 +344,8 @@ def test_manual_distinguishes_user_curve2_from_eurocode_curve3_identity():
 def test_manual_has_the_expected_parts_in_order():
     parts = [b[1] for b in manual.manual_blocks() if b[0] == "part"]
     assert parts == ["Part A - Get started", "Part B - Features & options",
-                     "Part C - Theory & methodology", "Part D - Reference"]
+                     "Part C - Theory & methodology", "Part D - Numerical procedures",
+                     "Part E - Reference"]
 
 
 def test_manual_distinguishes_concrete_and_total_compression_resultants():
@@ -351,9 +356,9 @@ def test_manual_distinguishes_concrete_and_total_compression_resultants():
         for row in block[2]
     )
 
-    assert "$F_c$ Concrete compression resultant; kN" in text
+    assert "$F_c$ Concrete compression resultant (kN)" in text
     assert "$F_{comp}$ Total compression resultant" in text
-    assert "reinforcement acting in compression" in text
+    assert "reinforcement in compression" in text
 
 
 def test_manual_part_navigation_preserves_every_block_in_order():
@@ -398,7 +403,7 @@ def test_part_c_worked_numbers_match_the_engine():
     r = plastic_capacity_at_angle(sec, c, s, 0.0, 90.0)
     assert r.Mx == pytest.approx(346.0, abs=2.0)                            # capacity
     # eps_steel is a percentage: about -1.95% = 19.5 per mille, past yield but
-    # below rupture (50) -- the worked point is tension-controlled, as stated.
+    # below rupture (50). Concrete reaches its compression strain limit first.
     eps_frac = abs(r.eps_steel) / 100.0
     assert eps_frac == pytest.approx(0.0195, abs=0.0001)
     assert yield_strain < eps_frac < s.eut
@@ -430,8 +435,8 @@ def test_manual_documents_project_recovery_and_ownership():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     for expected in (
         "Project files and autosave",
-        "five-minute interval",
-        "autosave is recovery",
+        'default interval is five minutes',
+        'for local recovery',
     ):
         assert expected in text
     import pypdf
@@ -449,23 +454,23 @@ def test_manual_documents_shared_strut_angle_and_stirrup():
     # both checks. The pre-v0.69 "per action" strut angle no longer exists, so that
     # wording must be gone from the manual.
     text = "\n".join(str(b) for b in manual.manual_blocks())
-    assert "minimise the governing utilisation" in text   # note (a): one shared angle
+    assert 'minimize the governing utilization' in text   # note (a): one shared angle
     assert "shared closed stirrup" in text                # note (b)
     assert "one compression-strut range" in text
-    assert "three physical component checks" in text
-    assert "shared-link selection establishes link presence" in text
-    assert "transverse/strut resistance and its utilisation require current links" in text
-    assert "every side of every torsion tube" in text
+    assert 'Three component results identify the concrete compression strut, shared closed stirrup and governing longitudinal reinforcement' in text
+    assert 'shared-link selection records the presence of links' in text
+    assert 'Current links are necessary for the transverse/strut resistance and its utilization' in text
+    assert 'each side of each torsion tube' in text
     assert "A shortfall is **FAIL**" in text
-    assert "remains **NOT ASSESSED**" in text
+    assert 'stays **NOT ASSESSED**' in text
     assert "one leg of the same closed, anchored loop" in text
-    assert "applied only when current closed links are present" in text
-    assert "complete entered compression-strut interval" in text
-    assert "Exact boundaries are admissible" in text
-    assert "dependent interactions are NOT ASSESSED" in text
-    assert "verdict for the links and every dependent interaction check" in text
-    assert "angle-dependent torsion resistance" in text
-    assert "$T_{Rd,c}$ may remain as angle-independent cracking context" in text
+    assert 'With current shared links, Sector also calculates' in text
+    assert 'full compression-strut interval' in text
+    assert 'Exact boundaries are permitted' in text
+    assert '**NOT ASSESSED** for linked shear, torsion and dependent interactions' in text
+    assert 'verdict for links and each dependent interaction check' in text
+    assert 'angle-dependent checks give **NOT ASSESSED**' in text
+    assert 'angle-independent cracking torque can stay available' in text
     assert "reports the resulting demand/resistance verdict with a warning" not in text
     assert "reported with an applicability warning" not in text
     assert "bands not overlap" not in text
@@ -480,36 +485,36 @@ def test_manual_documents_direct_torsion_tensile_factor_and_benchmark():
     )
 
     assert "f_{ctd}=f_{ctk,0.05}/\\gamma_{ct}" in text
-    assert "starting values are 1.50 for EN and 1.70 for DK/NA" in text
-    assert "T_{Rd,c} = 26.435" in text
+    assert "is 1.50 for EN and 1.70 for DK/NA" in text
+    assert 'T_{Rd,c}=26.435' in text
 
 
 def test_manual_documents_automatic_subtube_wall_thickness_boundary():
     text = "\n".join(str(block) for block in manual.manual_blocks())
 
     assert "global effective-wall-thickness override to 0 mm" in text.casefold()
-    assert "complete bar-to-wall evidence is required for every sub-tube" in text
-    assert "positive global $t_{ef}$ override" in text
-    assert "wall-specific automatic thickness for each sub-tube" in text
+    assert 'full bar-to-wall evidence for each sub-tube' in text
+    assert 'positive global override prevents the subdivided calculation' in text
+    assert 'calculates the thickness for each tube wall' in text
     assert "$t_{ef,i}\\\\geq2a_i$" in text
-    assert "A manual override does not replace that location evidence" in text
-    assert "**Torsion example** (300 x 600 mm rectangle with bar centres" in text
+    assert 'A thickness override does not supply this location evidence' in text
+    assert 'Section: 300 x 600 mm rectangle, C35, DK NA:2024' in text
 
 
 def test_manual_distinguishes_torsion_basis_and_member_scope_limitations():
     text = "\n".join(str(block) for block in manual.manual_blocks())
 
-    assert "equilibrium torsion, which must be resisted" in text
-    assert "deliberately retained residual compatibility torsion" in text
-    assert "compatibility torsion requiring a member/system assessment" in text
+    assert "Equilibrium torsion must be resisted" in text
+    assert "Deliberately retained residual compatibility torsion" in text
+    assert "Compatibility torsion that makes a member/system assessment necessary" in text
     assert "open thin-walled or warping-sensitive" in text
-    assert "warping-torsion/member analysis outside Sector" in text
-    assert "Sector does not establish redistribution, restraints or member response" in text
-    assert "resistance, utilisation, governing angle, longitudinal demand" in text
-    assert "dependent M-V-T verdicts are shown as **NOT ASSESSED**" in text
-    assert "Classify every Plastic case separately" in text
+    assert 'A warping-torsion/member analysis can be necessary' in text
+    assert 'Do checks of redistribution, restraints and member response independently of Sector' in text
+    assert 'torsion resistance, utilization, longitudinal demand and dependent interaction' in text
+    assert 'Sector gives **NOT ASSESSED** before the sectional torsion calculation for these conditions' in text
+    assert 'For each nonzero $T_{Ed}$, select one torsion classification' in text
     assert "new or renamed case starts as Not established" in text
-    assert "remain attached to the named case when rows are reordered" in text
+    assert 'stays attached to the named case when rows are reordered' in text
 
 
 def test_manual_pdf_keeps_ordered_torsion_scope_and_combined_applicability():
@@ -517,59 +522,54 @@ def test_manual_pdf_keeps_ordered_torsion_scope_and_combined_applicability():
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     pages = [" ".join((page.extract_text() or "").split()) for page in reader.pages]
 
-    torsion_page = next(
-        index for index, text in enumerate(pages)
-        if "6.7 Torsion (TRd, thin-walled tube)" in text
-    )
-    combined_page = next(
-        index for index, text in enumerate(pages)
-        if "6.8 Combined M-V-T interaction" in text
-    )
-    assert torsion_page > 0
-    assert "upper angle limit is 2.5 for class B/C" in pages[torsion_page - 1]
-    assert combined_page >= torsion_page
-    ordered_text = " ".join(pages[torsion_page:combined_page + 1])
-    torsion_section, combined_intro = ordered_text.split(
-        "6.8 Combined M-V-T interaction", 1
-    )
-    assert "With Check combined M-V-T on" in combined_intro
-    assert "otherwise the combined check is not applicable to that row" in (
-        pages[combined_page]
-    )
-    assert "withholds the angle-dependent resistance" in torsion_section
-    assert "NOT ASSESSED until the limits are corrected" in torsion_section
+    # Test reading order independently of pagination. More white space can move
+    # a heading to another page without changing the applicability explanation.
+    rendered = " ".join(pages)
+    torsion_heading = re.search(r"\b\d+\.\d+ Torsion capacity settings", rendered)
+    combined_heading = re.search(r"\b\d+\.\d+ Combined M-V-T interaction", rendered)
+    assert torsion_heading is not None and combined_heading is not None
+    assert torsion_heading.start() < combined_heading.start()
+    assert "maximum cotangent is 2.5 for class B/C without axial tension" in rendered[:torsion_heading.start()]
+    torsion_section = rendered[torsion_heading.end():combined_heading.start()]
+    next_heading = re.search(r"\b\d+\.\d+ Modular ratios and creep", rendered)
+    assert next_heading is not None and combined_heading.end() < next_heading.start()
+    combined_intro = rendered[combined_heading.end():next_heading.start()]
+    assert "Enable Check combined M-V-T" in combined_intro
+    assert "Enable Plastic, Shear and Torsion" in combined_intro
+    assert "in the same capacity row" in combined_intro
+    assert "These conditions make the combined check applicable to that row" in combined_intro
+    assert "angle-dependent results as NOT ASSESSED" in torsion_section
+    assert "Correct the limits before calculation" in torsion_section
     assert "Subdivide into sub-tubes" in torsion_section
-    assert "whether the action is equilibrium torsion" in torsion_section
-    assert "open thin-walled members may require warping-torsion" in (
-        torsion_section.casefold()
-    )
+    assert "Equilibrium torsion" in torsion_section
+    assert "warping-torsion/member analysis can be necessary for open thin-walled members" in torsion_section
 
 
 def test_manual_documents_2023_k_tc_axial_shear_and_anchorage_assumption():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     assert "general / other cases" in text
-    assert "at-least-three-month" in text
+    assert "a delay of three or more months before design loading" in text
     assert "k_{vp}" in text and "a_{cs}" in text
     assert "4.3.3 and Table 4.3 (NDP)" in text
     assert "The input starts at 1.40" in text
-    assert "select the positive value required by the project basis" in text
+    assert 'Select the positive value specified by the project basis' in text
     assert "Clause 8.2.2 uses that value" in text
     assert "parallel to the member axis" in text and "beta=1" in text
     assert "assumed fully anchored" in text
-    assert "reduced $f_{yk}$ / $f_{ywk}$" in text
+    assert "reduce $f_{yk}$ / $f_{ywk}$ to the strength that the anchorage can resist" in text
     assert "per action" not in text                       # stale pre-v0.69 wording
 
 
 def test_manual_documents_2023_axial_compression_applicability_boundary():
     text = "\n".join(str(block) for block in manual.manual_blocks())
 
-    assert "conservative applicability boundary" in text
-    assert "net axial compression is positive" in text
+    assert "For net axial compression, Sector reports the reinforced-shear result as **NOT ASSESSED**" in text
+    assert "For net axial compression" in text
     assert "force assigned to the web" in text
-    assert "action-state compression-chord depth" in text
+    assert "compression-chord depth for the action state" in text
     assert "8.2.3(11)" in text
-    assert "The reinforced-shear result is therefore NOT ASSESSED" in text
-    assert "including Annex G" in text
+    assert 'A member assessment must supply these quantities' in text
+    assert "with Annex G where applicable" in text
 
 
 def test_manual_documents_variable_circular_and_duct_shear_rules():
@@ -579,27 +579,27 @@ def test_manual_documents_variable_circular_and_duct_shear_rules():
         for value in block[1:]
     )
 
-    assert "Automatic treatment is limited to a solid rectangle" in text
+    assert 'Automatic geometry applies to a solid rectangle' in text
     assert "variable-width web" in text
     assert r"multiplies $A_{sw}$ by $\cos\delta$" in text
     assert r"multiplies $A_{sw}$ by $b_w/D_h$" in text
     assert "$b_w/D_h=400/600=2/3$" in text
-    assert "ratio to the corrected contribution is 1.5" in text
+    assert "unadjusted contribution is 1.5 times the corrected contribution" in text
     assert r"$b_{w,nom}=b_w-k_{duct}\sum\phi_{duct}$" in text
     assert "$k_{duct}=0.5$" in text
     assert "$k_{duct}=0.8$" in text
     assert "$k_{duct}=1.2$" in text
-    assert "2005-family links check applies its duct allowance" in text
-    assert "NOT ASSESSED rather than using a rectangular result" in text
+    assert "For the 2005 family, Clause 6.2.3(6) applies it to $V_{Rd,max}$" in text
+    assert "With a first-generation method, Sector reports **NOT ASSESSED**" in text
 
 
 def test_manual_distinguishes_base_en_components_from_the_danish_rule():
     text = "\n".join(str(block) for block in manual.manual_blocks())
 
-    assert "supported concrete-crushing, closed-stirrup and longitudinal" in text
-    assert "Base EN reports those physical checks separately" in text
+    assert 'Base-EN method assesses concrete crushing, the closed stirrup and longitudinal reinforcement' in text
+    assert "Base EN reports each physical check" in text
     assert "does not publish an additional aggregate interaction verdict" in text
-    assert "Danish edition additionally applies the DK NA" in text
+    assert 'Danish method also applies' in text
     assert "Combined M-V-T (Base EN)" in text
     assert "Combined M-V-T (Danish edition)" in text
 
@@ -612,10 +612,16 @@ def test_manual_documents_both_2023_chords_and_the_exact_failed_fixture():
     assert r"N_{Vd}=|V_{Ed}|\cot\theta" in text
     assert r"F_{td}=M_{Ed}/z+N_{Vd}+N_{Ed}/2" in text
     assert r"F_{cd}=M_{Ed}/z-N_{Vd}+N_{Ed}/2" in text
-    assert "checks both physical faces with their correct bending signs" in text
+    chords = _prose_block_containing(r"F_{td}=M_{Ed}/z+N_{Vd}+N_{Ed}/2")
+    assert "$M_{Ed}$ is the moment magnitude" in chords
+    assert "Positive $F_{cd}$ is compression" in chords
+    assert "Negative $F_{cd}$ is" in chords and "tension in this chord" in chords
+    assert "acting axial force and the moment about the other axis" in chords
+    assert "does not add that action a second time" in chords
+    assert 'checks the two physical faces with the correct bending sign for each face' in text
     assert r"M_{Ed,total}=90+250\cdot0.5=215" in text
-    assert "$215/100=2.15$: **FAIL**" in text
-    assert "not assessed, never passed" in text
+    assert '$215/100=2.15$, which gives **FAIL**' in text
+    assert 'full longitudinal-chord assessment is **NOT ASSESSED**' in text
 
 
 def test_manual_describes_solvers_without_assigning_limit_states():
@@ -637,19 +643,19 @@ def test_manual_documents_native_case_tables_results_and_report():
     for expected in (
         "Plastic / capacity",
         "names are unique across the Plastic/capacity, Elastic and fatigue-bin",
-            "Stresses are always output; optionally calculate crack width",
-            "zero disables only that component",
-        "single global creep coefficient",
+            "Stresses are always output. Optionally calculate crack width",
+            "Zero disables only that component",
+        'global creep coefficient',
         "Results overview",
         "Select a Plastic/capacity case",
         "Select an Elastic case",
-        "complete effective geometry",
+        'inputs include geometry, assigned materials, reinforcement, tendons, actions and active settings',
         "governing results and essential limitations",
-        "omits non-governing results and worked derivations",
-        "selected governing Plastic and Elastic result plots",
+        "does not include non-governing results and worked derivations",
+        'available governing Plastic and Elastic plots',
         "Brief",
         "Standard",
-        "Values and statuses match the other report profiles",
+        'Calculation values, rounding, statuses and warnings are the same in all three profiles',
     ):
         assert expected in text
     assert "Default report + QA appendix" not in text
@@ -657,10 +663,10 @@ def test_manual_documents_native_case_tables_results_and_report():
 
 def test_manual_documents_current_governing_results_overview():
     text = "\n".join(str(block) for block in manual.manual_blocks())
-    assert "one fully expanded governing row for each engineering check type" in text
+    assert 'one governing row for each engineering check' in text
     assert "A calculated result takes precedence over an inactive state" in text
-    assert "the most unfavourable direction governs" in text
-    assert "listed separately as scope and calculation state" in text
+    assert 'the most unfavorable direction governs' in text
+    assert 'identify the calculation scope and state' in text
     assert "one row per evaluated check and case" not in text
     assert "All named cases" not in text
 
@@ -669,7 +675,7 @@ def test_manual_documents_current_analysis_hover_semantics():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     assert "hover text reports the plotted capacity or material response" in text
     assert "Section-result markers show stress and strain" in text
-    assert "coordinates and reinforcement area remain in section input previews" in text
+    assert 'Coordinates and reinforcement area stay in section input previews' in text
 
 
 def test_manual_editable_table_matrix_is_generated_from_shared_registry():
@@ -704,13 +710,13 @@ def test_manual_documents_decimal_blank_and_precision_contracts():
     text = "\n".join(str(block) for block in manual.manual_blocks())
 
     for expected in (
-        "Plastic/capacity and Elastic action fields, and grouped-fatigue numeric",
-        "accept either a dot or comma as the decimal separator",
-        "Blank ordinary action cells are treated as zero",
-        "Optional fields left blank remain absent rather than becoming zero",
-        "required name, ID and cycle fields must be entered",
+        'Plastic/capacity, Elastic and grouped-fatigue numeric fields',
+        'accept a dot or comma as the decimal separator',
+        'Sector uses zero for blank ordinary action cells',
+        'Optional fields left blank stay empty',
+        'Enter the required names, IDs and cycle values',
         "Calculations use the entered numeric precision",
-        "display rounding does not change the calculation value",
+        'Display rounding does not change the calculation value',
     ):
         assert expected in text
 
@@ -732,14 +738,14 @@ def test_manual_documents_grouped_fatigue_inputs_results_and_methodology():
         "90 MPa design range",
         "19 MPa design range",
         "DS/EN 1992-1-1:2023, 10.4(1)",
-        "exactly equal to the stated limit passes",
+        "equal to the stated limit passes",
         "always reports the detailed S-N/Miner result",
-        "yield/proof-stress check remains independent",
-        "same fibre",
+        'yield/proof-stress check stays independent',
+        'same fiber',
         "conservative upper bound",
         "DS/EN 1992-1-1:2023",
         "DS/EN 1992-2:2005/AC:2008",
-        "each spectrum is independent",
+        "Each spectrum is independent",
         "fatigue calculation covers normal force and bending",
     ):
         assert expected in text
@@ -750,16 +756,16 @@ def test_manual_uses_exact_elastic_state_and_crack_example_terminology():
     text = "\n".join(str(block) for block in manual.manual_blocks())
 
     for expected in (
-        "normalises $E_c$ to 1",
+        'normalize $E_c$ to 1',
         "reference-stress plane",
-        "solves a reference-stress plane",
+        'solve the reference-stress plane',
         "physical concrete strain",
         "three code options give four method/system results",
-        "globally governing crack-width result in Standard and Audit",
-        "fine-system and coarse-system",
-        "governing worked examples in Audit",
-        "Brief includes the complete effective inputs",
-        "no worked example or non-governing case register",
+        'Standard and Audit show the globally governing ordinary crack width',
+        'governing fine and coarse results',
+        'Audit gives their worked examples',
+        'Brief gives full effective inputs',
+        'Brief does not include non-governing results and worked derivations',
     ):
         assert expected in text
 
@@ -772,20 +778,22 @@ def test_manual_documents_optional_crack_criterion_and_dk_heightened_boundary():
         if isinstance(item, str)
     )
 
-    assert "independent long-term and short-term user limits" in text
-    assert "Select the limits and action classifications required by the project basis" in text
-    assert "separate Formula 7.100 NA permitted width" in text
-    assert "separate Formula 7.100 NA permitted-width input" in text
-    assert "A 0 mm limit leaves that duration's calculated width" in text
-    assert "Independent long-term and short-term crack-width limits" in text
+    assert "user limit for each duration" in text
+    assert "Select the limits and action classifications specified by the project basis" in text
+    assert "permitted width for Formula 7.100 NA" in text
+    heightened = _prose_block_containing("Sector uses the permitted width for Formula 7.100 NA")
+    assert "user supplies" in heightened and "permitted width $w_k$" in heightened
+    assert 'effective area entered for each system $A_{c,eff}$' in heightened
+    assert "A 0 mm limit gives the calculated width without a limit comparison" in text
+    assert "Long-term and short-term limits are independent" in text
     assert "shared Analysis permitted width" not in text
     assert "supply the shared permitted width" not in text
     assert "With no criterion" not in text
     assert "Without a criterion" not in text
     assert "DK NA heightened crack-control minimum" in text
     assert r"m_s=\sqrt{2}" in text
-    assert "option is unavailable for the 2023 basis" in text
-    assert "largest calculated ordinary width, selected by width rather than ratio" in text
+    assert 'option applies to the first-generation Danish basis' in text
+    assert 'selection uses width, rather than the ratio to the limit' in text
 
 
 def test_manual_fatigue_figures_use_engine_lives_and_full_bin_evidence():
@@ -818,19 +826,19 @@ def test_manual_documents_modelled_direction_and_link_detailing_scope():
         "Formula (9.1N)",
         "uncracked gross-concrete strain plane",
         "12.2(2)",
-        "initial closed 15-degree",
-        "retained utilisation interval",
-        "reported **Not assessed**",
+        'closed nominal-resistance envelope at 15-degree intervals',
+        '**Utilization interval**',
+        'report **NOT ASSESSED**',
         "D_{upper}",
         "\\rho_{w,min}",
         "0.063",
         "transverse distance between legs",
         "u_k/8",
-        "Anchorage is assumed",
+        "The resistance assumes full anchorage",
         "BN1-59-5",
         "Bulk assignments",
         "high beam webs",
-        "Prestressing tendons are not credited",
+        "modeled-direction minimum check uses ordinary reinforcing bars only",
         "Section cut direction",
         "Transverse cut",
         "Longitudinal cut",
@@ -849,6 +857,10 @@ def test_manual_documents_modelled_direction_and_link_detailing_scope():
         "350 mm value applies to",
     ):
         assert expected in text
+    interval = _prose_block_containing("**Utilization interval**")
+    assert "From the 0.1-degree stage, calculate:" in interval
+    assert r"u_f\pm\max(2|u_f-u_c|,10^{-6})" in interval
+    assert "fine result" in interval and "coarse result from the last stage" in interval
     assert "Lap / bundle ID" not in text
 
 
@@ -861,14 +873,15 @@ def test_manual_separates_nominal_shear_resistance_from_link_detailing():
     )
     structured_text = "\n".join(str(block) for block in blocks)
 
-    assert "$V_{Rd,c}$ as the nominal resistance" in text
-    assert "$|V_{Ed}| \\leq V_{Rd,c}$" in text
-    assert "Only above that boundary does the designed-link resistance" in text
-    assert "Minimum reinforcement, spacing and other link-detailing" in text
-    assert "requirements remain separate checks" in text
-    assert "including when links are entered" in structured_text
-    assert "the same selected" in structured_text
-    assert "gamma_V" in structured_text
+    assert '$V_{Rd,c}$ as nominal resistance' in text
+    assert '$|V_{Ed}|\\leq V_{Rd,c}$' in text
+    assert 'Above that boundary, the designed-link resistance' in text
+    assert 'Minimum reinforcement and link spacing each have their own check' in text
+    assert 'becomes the nominal route, under 6.2.3 or 8.2.3' in text
+    assert "with or without links" in structured_text
+    selected_factor = _prose_block_containing("**2023 shear factor**")
+    assert "When links are entered" in selected_factor
+    assert r"selected $\gamma_V$ wherever the 8.2.2 concrete route applies" in selected_factor
     assert "the shear resistance becomes" not in text
     assert "instead of $V_{Rd,c}$" not in text
 
@@ -1223,7 +1236,7 @@ def test_sign_convention_figure_has_real_elements():
     assert "x" in texts and "y" in texts                       # axis labels
     assert any("M<sub>x</sub>" in t for t in texts)             # moment arrows labelled
     assert any("M<sub>y</sub>" in t for t in texts)
-    assert "tension, out of page" in joined                    # N symbol label
+    assert "N: tension (+)<br>out of page" in joined                    # N symbol label
     assert "neutral axis" in joined                            # V / NA
     # curved arrows + arc are drawn as line traces (not just annotations)
     assert sum(1 for tr in fig.data if getattr(tr, "mode", None) == "lines") >= 3
@@ -1248,7 +1261,7 @@ def test_crack_spacing_comparison_labels_each_edition_without_changing_values():
 def test_manual_explains_displaced_concrete_and_plastic_only_compression_switch():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     assert "Active in compression (plastic)" in text
-    assert "concrete occupied by reinforcement" in text
+    assert 'concrete displaced by reinforcement' in text
     assert "$(n_i-1)A_i$" in text
     assert "refinement off" not in text
     ex = manual.example_beam()

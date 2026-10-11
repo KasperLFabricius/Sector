@@ -114,7 +114,7 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
         "fragment_href_pattern",
     )
     assert vocabulary.current_head_style_sha256 == (
-        "d2795ea970117826f034557c358dce77107d7d8c5b6409cdd79e1dca6c8a155e"
+        "c0bc3def5f095720542356a439c21c1dc263c79fc7ecae45751a640122f53d28"
     )
     assert vocabulary.body_block_tags == frozenset(
         {
@@ -151,7 +151,7 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
     assert vocabulary.body_inline_tags == frozenset(
         {"a", "code", "em", "strong", "sub", "sup"}
     )
-    assert vocabulary.body_void_tags == frozenset({"br"})
+    assert vocabulary.body_void_tags == frozenset({"br", "img"})
     assert vocabulary.head_void_tags == frozenset({"meta"})
     assert vocabulary.table_children == (
         ("table", frozenset({"tbody", "thead"})),
@@ -184,6 +184,7 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
         "head": frozenset(),
         "header": frozenset(),
         "html": frozenset({"lang"}),
+        "img": frozenset({"alt", "class", "src"}),
         "li": frozenset({"class"}),
         "main": frozenset({"id"}),
         "meta": frozenset({"charset", "content", "name"}),
@@ -217,6 +218,7 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
         "div": frozenset({"display-math", "figure-alternative", "table-scroll"}),
         "dl": frozenset({"equation-results"}),
         "figure": frozenset({"table-figure"}),
+        "img": frozenset({"manual-figure"}),
         "li": frozenset({"toc-level-0", "toc-level-1", "toc-level-2"}),
         "p": frozenset(
             {
@@ -519,7 +521,7 @@ def test_generated_manual_html_vocabulary_is_data_only_with_one_bounded_consumer
     ) == {
             "dataclass": 1,
             "GeneratedManualHTMLVocabulary": 1,
-            "frozenset": 61,
+            "frozenset": 63,
         }
     assert functions == []
     assert callsites == ["tools/manual_generated_html.py"]

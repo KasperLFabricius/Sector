@@ -31,6 +31,7 @@ class _ManualHTMLParser(HTMLParser):
         self.tables = 0
         self.table_header_scopes: list[str | None] = []
         self.figure_alternatives = 0
+        self.figure_labels: list[str] = []
         self.figcaptions = 0
         self.equations = 0
         self.lang: str | None = None
@@ -47,7 +48,7 @@ class _ManualHTMLParser(HTMLParser):
             self.scripts += 1
         if tag in {"img", "script", "iframe", "link"}:
             target = values.get("src") or values.get("href")
-            if target:
+            if target and not (tag == "img" and target.startswith("data:image/png;base64,")):
                 self.external_resources.append((tag, target))
         if tag in {"h1", "h2", "h3", "h4", "h5", "h6"}:
             self.heading_levels.append(int(tag[1]))
@@ -59,6 +60,7 @@ class _ManualHTMLParser(HTMLParser):
             assert values.get("role") == "img"
             assert values.get("aria-label")
             self.figure_alternatives += 1
+            self.figure_labels.append(values["aria-label"])
         if tag == "figcaption":
             self.figcaptions += 1
         if tag == "section" and "equation" in values.get("class", ""):
@@ -177,3 +179,14 @@ def test_pdf_declares_document_control_language_and_detailed_navigation():
         text = " ".join((page.extract_text() or "").split())
         assert f"Sector v{manual.APP_VERSION} - user manual" in text
         assert "Rev:" not in text
+
+
+def test_figure_accessible_names_use_rendered_math_without_latex():
+    labels = _parsed().figure_labels
+    assert len(labels) == 36
+    assert all(not any(token in label for token in ("$", "\\", "{", "}", "^", "_"))
+               for label in labels)
+    assert any("Mx = 180 kNm and My = 30 kNm" in label for label in labels)
+    assert any("100000 mm2" in label for label in labels)
+    assert any("qa=0.32 MPa and qb=-0.28 MPa" in label
+               and "8/15" in label for label in labels)

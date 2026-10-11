@@ -21,52 +21,78 @@ import manual_equation_location as location  # noqa: E402
 
 
 EXPECTED_KEYS = (
-    "manual.material.concrete-law",
-    "manual.material.steel-law",
-    "manual.material.prestress-law",
-    "manual.plastic.governing-curvature",
-    "manual.detailing.minimum-2005",
-    "manual.detailing.minimum-2023-bending",
-    "manual.detailing.minimum-2023-axial",
-    "manual.detailing.clear-spacing",
-    "manual.detailing.links.minimum-ratio",
-    "manual.detailing.links.spacing",
-    "manual.detailing.torsion.minimum-ratio",
-    "manual.crack.2005.width",
-    "manual.crack.2005.spacing",
-    "manual.crack.dk-na-heightened",
-    "manual.crack.2023.width",
-    "manual.crack.2023.spacing",
-    "manual.fatigue.stress-range",
-    "manual.fatigue.reinforcement.design-range",
-    "manual.fatigue.reinforcement.life",
-    "manual.fatigue.reinforcement.miner",
-    "manual.fatigue.concrete.strength-2005",
-    "manual.fatigue.concrete.strength-2023",
-    "manual.fatigue.concrete.life",
-    "manual.fatigue.concrete.equivalent",
-    "manual.shear.no-links.variable",
-    "manual.shear.no-links.minimum",
-    "manual.shear.action-factor-2023",
-    "manual.shear.links-2005",
-    "manual.shear.links-2023",
-    "manual.torsion.resistance",
-    "manual.torsion.strut-interaction",
-    "manual.combined.strut-interaction",
-    "manual.combined.utilisation",
+    'manual.material.concrete-law',
+    'manual.material.steel-law',
+    'manual.material.prestress-law',
+    'manual.plastic.governing-curvature',
+    'manual.crack.2005.width',
+    'manual.crack.2005.spacing',
+    'manual.crack.dk-na-heightened',
+    'manual.crack.2023.width',
+    'manual.crack.2023.spacing',
+    'manual.fatigue.stress-range',
+    'manual.fatigue.reinforcement.design-range',
+    'manual.fatigue.reinforcement.life',
+    'manual.fatigue.reinforcement.miner',
+    'manual.fatigue.concrete.strength-2005',
+    'manual.fatigue.concrete.strength-2023',
+    'manual.fatigue.concrete.life',
+    'manual.fatigue.concrete.equivalent',
+    'manual.shear.no-links.variable',
+    'manual.shear.no-links.minimum',
+    'manual.shear.action-factor-2023',
+    'manual.shear.links-2005',
+    'manual.shear.links-2023',
+    'manual.torsion.resistance',
+    'manual.torsion.strut-interaction',
+    'manual.combined.strut-interaction',
+    'manual.combined.utilisation',
+    'manual.detailing.minimum-2005',
+    'manual.detailing.minimum-2023-bending',
+    'manual.detailing.minimum-2023-axial',
+    'manual.detailing.clear-spacing',
+    'manual.detailing.links.minimum-ratio',
+    'manual.detailing.links.spacing',
+    'manual.detailing.torsion.minimum-ratio',
 )
 
 EXPECTED_NUMBERS = (
-    "C3-1", "C3-2", "C3-3", "C4-1", "C5-1", "C5-2", "C5-3",
-    "C5-4", "C5-5", "C5-6", "C5-7", "C7-1", "C7-2", "C7-5",
-    "C7-3", "C7-4", "C8-1", "C8-2", "C8-3", "C8-4", "C8-5", "C8-6",
-    "C8-7", "C8-8", "C9-1", "C9-2", "C9-3", "C9-4", "C9-5",
-    "C10-1", "C10-2", "C11-1", "C11-2",
+    'C3-1',
+    'C3-2',
+    'C3-3',
+    'C5-1',
+    'C6-1',
+    'C6-2',
+    'C6-3',
+    'C6-4',
+    'C6-5',
+    'C7-1',
+    'C7-2',
+    'C7-3',
+    'C7-4',
+    'C7-5',
+    'C7-6',
+    'C7-7',
+    'C7-8',
+    'C8-1',
+    'C8-2',
+    'C8-3',
+    'C8-4',
+    'C8-5',
+    'C9-1',
+    'C9-2',
+    'C10-1',
+    'C10-2',
+    'C11-1',
+    'C11-2',
+    'C11-3',
+    'C11-4',
+    'C11-5',
+    'C11-6',
+    'C11-7',
 )
 
-EXPECTED_CATALOGUE_SEAL = (
-    "70da9ad9c778efa62dbb21fee9c7b6afdbf39440b495907a3e88f0a249d9eb8b"
-)
+EXPECTED_CATALOGUE_SEAL = 'c78fd6f5660f51827fa48894edf4c3f7d2a899988228b15d3264b69cf9cfed26'
 
 
 class _CustomSet(Set):
@@ -135,7 +161,7 @@ def test_complete_catalogue_has_exact_seal():
 
 @pytest.mark.parametrize(
     "part_name",
-    ["Part A - Get started", "Part B - Features & options", "Part D - Reference"],
+    ["Part A - Get started", "Part B - Features & options", "Part D - Numerical procedures", "Part E - Reference"],
 )
 @pytest.mark.parametrize("shape", ["markdown", "heading", "excluded"])
 def test_display_content_outside_part_c_is_inert(part_name, shape):
@@ -347,13 +373,13 @@ def test_h1_level_equations_deliberately_retain_empty_subsection():
     assert tuple(
         item.number for item in location.MANUAL_EQUATION_LOCATIONS
         if item.subsection == ""
-    ) == ("C9-1", "C9-2", "C9-3", "C10-1", "C10-2", "C11-1", "C11-2")
+    ) == ("C8-1", "C8-2", "C8-3", "C9-1", "C9-2", "C10-1", "C10-2")
 
 
 def test_formula_6_29_keeps_two_distinct_semantic_identities():
     by_number = {item.number: item for item in location.MANUAL_EQUATION_LOCATIONS}
-    torsion = by_number["C10-2"]
-    combined = by_number["C11-1"]
+    torsion = by_number["C9-2"]
+    combined = by_number["C10-1"]
     assert torsion.expression_sha256 == combined.expression_sha256
     assert (torsion.key, torsion.section) != (combined.key, combined.section)
 

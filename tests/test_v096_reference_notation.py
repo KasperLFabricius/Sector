@@ -118,11 +118,16 @@ def test_neutral_calculation_language_preserves_product_identity() -> None:
         "published evidence",
     ):
         assert removed_phrase not in manual_text.casefold()
-    assert (
-        "Sector publishes calculation inputs, methods, intermediate values and "
-        "result-specific statuses."
-    ) in manual_text
-    assert "The engineer selects the project methods" in manual_text
+    # The expanded introduction and report-profile guidance distribute the
+    # former purpose sentence across the appropriate operating sections.
+    for required in (
+        "all calculation inputs", "intermediate values",
+        "full results, criteria, statuses and concise methods",
+        "Each row identifies its action set, direction or scope, result, criterion and status",
+        "Also select the project design basis, partial factors, creep coefficient",
+        "the applicable acceptance criteria",
+    ):
+        assert required in manual_text
     assert sls.CRACK_CALCULATED_UNASSESSED == (
         "CALCULATED - NO LIMIT COMPARISON"
     )

@@ -40,6 +40,8 @@ ATTRIBUTE_NAMES_BY_TAG = dict(
     CURRENT_GENERATED_MANUAL_HTML_VOCABULARY.attribute_names_by_tag
 )
 ATTRIBUTE_VALUES = {
+    "alt": "",
+    "src": "data:image/png;base64,iVBORw0KGgo=",
     "aria-label": "label",
     "charset": "utf-8",
     "class": "callout",
@@ -371,6 +373,24 @@ def test_non_generator_class_names_fail_closed():
         manual_generated_html_text(html)
 
 
+@pytest.mark.parametrize("source", (
+    "https://example.com/figure.png",
+    "data:image/svg+xml;base64,PHN2Zz4=",
+    "data:image/png;base64,%%%",
+    "data:image/png;base64,aGVsbG8=",
+))
+def test_embedded_manual_image_rejects_external_or_invalid_payload(source):
+    body = f'<figure><img class="manual-figure" alt="" src="{source}"></figure>'
+    with pytest.raises(AssertionError):
+        manual_generated_html_text(_document(body))
+
+
+def test_embedded_manual_image_requires_its_figure_container():
+    body = '<img class="manual-figure" alt="" src="data:image/png;base64,iVBORw0KGgo=">'
+    with pytest.raises(AssertionError, match="generated envelope"):
+        manual_generated_html_text(_document(body))
+
+
 @pytest.mark.parametrize(
     ("owner_tag", "token"),
     tuple(
@@ -383,9 +403,11 @@ def test_each_generated_class_token_is_supported_on_its_owner(owner_tag, token):
     attributes = f'class="{token}"'
     if owner_tag == "code" and token == "math":
         attributes += ' aria-label="Mathematical expression: Visible"'
-    manual_generated_html_text(
-        _document(f'<{owner_tag} {attributes}>Visible</{owner_tag}>')
-    )
+    if owner_tag == "img":
+        body = f'<figure><img {attributes} alt="" src="data:image/png;base64,iVBORw0KGgo="></figure>'
+    else:
+        body = f'<{owner_tag} {attributes}>Visible</{owner_tag}>'
+    manual_generated_html_text(_document(body))
 
 
 @pytest.mark.parametrize(

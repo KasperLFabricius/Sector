@@ -142,9 +142,15 @@ def cracked_elastic_and_crack_width() -> dict[str, object]:
     high = y_top
     for _ in range(100):
         y_na = 0.5 * (low + high)
+        # The compression polygon already contains each compressed bar's area.
+        # Subtract that concrete area from the transformed reinforcement term.
         first_moment = (
             WIDTH_M * 0.5 * (y_top - y_na) ** 2
-            + modular_ratio * sum(area * (y - y_na) for y, area in BARS)
+            + sum(
+                (modular_ratio - (1.0 if y > y_na else 0.0))
+                * area * (y - y_na)
+                for y, area in BARS
+            )
         )
         if first_moment > 0.0:
             low = y_na
@@ -153,7 +159,11 @@ def cracked_elastic_and_crack_width() -> dict[str, object]:
     y_na = 0.5 * (low + high)
     second_moment = (
         WIDTH_M * (y_top - y_na) ** 3 / 3.0
-        + modular_ratio * sum(area * (y - y_na) ** 2 for y, area in BARS)
+        + sum(
+            (modular_ratio - (1.0 if y > y_na else 0.0))
+            * area * (y - y_na) ** 2
+            for y, area in BARS
+        )
     )
     curvature = 55.0 / (EC_MPA * 1000.0 * second_moment)
     concrete_compression = EC_MPA * 1000.0 * curvature * (y_top - y_na) / 1000.0

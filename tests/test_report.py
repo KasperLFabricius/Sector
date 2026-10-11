@@ -5622,11 +5622,19 @@ def test_audit_appendix_claims_combined_method_only_for_assessable_case(native_s
             io.BytesIO(), {}, inp, payload, figures=False, profile="Audit",
         )
         builder._appendix()
-        return " ".join(
-            item.getPlainText()
-            for item in builder.flow
-            if hasattr(item, "getPlainText")
-        )
+
+        def paragraph_text(flowables):
+            # The appendix keeps its heading and notes in a layout group.
+            # Inspect those paragraphs as well as top-level paragraphs.
+            for item in flowables:
+                if isinstance(item, sector_report.KeepTogether):
+                    yield from paragraph_text(item._content)
+                elif hasattr(item, "getPlainText"):
+                    yield item.getPlainText()
+
+        text = " ".join(paragraph_text(builder.flow))
+        assert "QA appendix - references and notes" in text
+        return text
 
     assert sentence not in appendix_text(out)
     out["plastic_cases"][1]["results"]["plastic"]["util_valid"] = True

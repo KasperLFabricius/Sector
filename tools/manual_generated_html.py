@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import re
 from html.parser import HTMLParser
@@ -171,6 +173,22 @@ class _GeneratedManualHTMLParser(HTMLParser):
             not classes or any(token not in generated_class_tokens for token in classes)
         ):
             raise AssertionError("issued manual HTML has non-generator class tokens")
+        if tag == "img":
+            source = attributes.get("src") or ""
+            prefix = "data:image/png;base64,"
+            if (
+                set(attributes) != {"alt", "class", "src"}
+                or attributes["alt"] != ""
+                or attributes["class"] != "manual-figure"
+                or not source.startswith(prefix)
+            ):
+                raise AssertionError("issued manual HTML has a non-generator image")
+            try:
+                image = base64.b64decode(source[len(prefix):], validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise AssertionError("issued manual HTML has invalid image data") from exc
+            if not image.startswith(b"\x89PNG\r\n\x1a\n"):
+                raise AssertionError("issued manual HTML has invalid PNG data")
         if tag == "html":
             if self.html_seen or self.stack:
                 raise AssertionError(_STRUCTURE_ERROR)
@@ -202,6 +220,8 @@ class _GeneratedManualHTMLParser(HTMLParser):
             self.body_seen = True
         elif tag in _BODY_TAGS:
             if not self.in_body:
+                raise AssertionError(_STRUCTURE_ERROR)
+            if tag == "img" and self.current_tag != "figure":
                 raise AssertionError(_STRUCTURE_ERROR)
             open_body_tags = set(self.stack[2:])
             if tag in _BODY_BLOCK_TAGS and (

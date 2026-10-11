@@ -39,7 +39,7 @@ MANUAL_MATRIX = {
     "h1": (15, None, 14, 8, "#1f3b66", True, True),
     "h2": (12.5, None, 9, 4, None, True, True),
     "h3": (11, None, 6, 3, None, True, True),
-    "body": (10, 13.5, 0, 4, None, False, False),
+    "body": (10.5, 14.5, 0, 6, None, False, False),
     "math": (11, 15, 6, 6, None, False, False),
     "small": (9.5, 12, 0, 0, "#2c2c2a", False, False),
     "publication_ref": (9.5, 12, 2, 2, "#5a5a5a", False, True),

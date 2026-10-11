@@ -35,19 +35,119 @@ import sector_report
 
 
 EXPECTED_LABELS = (
-    "Table A2-1", "Figure A3-1", "Table A4-1",
-    "Figure A5-1", "Figure A5-2", "Table A5-1",
-    "Table B1-1", "Table B2-1", "Table B4-1", "Table B4-2",
-    "Figure B5-1", "Figure B5-2", "Figure B5-3",
-    "Figure B6-1", "Table B6-1", "Table B6-2", "Table B6-3",
-    "Table B6-4", "Table B6-5", "Table B6-6", "Table B6-7", "Table B6-8",
-    "Table B7-1", "Table B7-2", "Table B7-3", "Table B7-4", "Table B7-5",
-    "Table B7-6", "Table B7-7", "Table B7-8", "Table B8-1", "Table B8-2",
-    "Table C1-1", "Figure C2-1", "Figure C3-1", "Figure C3-2",
-    "Figure C3-3", "Figure C4-1", "Figure C4-2", "Figure C6-1",
-    "Table C7-1", "Table C8-1", "Figure C8-1", "Figure C8-2",
-    "Table C8-2",
-    "Table D1-1", "Table D2-1", "Table D3-1",
+    'Table A1-1',
+    'Table A1-2',
+    'Table A2-1',
+    'Figure A4-1',
+    'Table A4-1',
+    'Table A4-2',
+    'Table A4-3',
+    'Table A4-4',
+    'Table A4-5',
+    'Table A5-1',
+    'Figure A6-1',
+    'Figure A6-2',
+    'Table A6-1',
+    'Table B1-1',
+    'Table B2-1',
+    'Table B4-1',
+    'Figure B4-1',
+    'Table B4-2',
+    'Table B4-3',
+    'Table B4-4',
+    'Table B4-5',
+    'Table B4-6',
+    'Figure B5-1',
+    'Figure B5-2',
+    'Figure B5-3',
+    'Figure B6-1',
+    'Table B6-1',
+    'Table B6-2',
+    'Table B6-3',
+    'Table B6-4',
+    'Table B6-5',
+    'Table B6-6',
+    'Table B6-7',
+    'Figure B6-2',
+    'Table B6-8',
+    'Figure B6-3',
+    'Table B7-1',
+    'Table B7-2',
+    'Table B7-3',
+    'Table B7-4',
+    'Table B8-1',
+    'Table B8-2',
+    'Table C1-1',
+    'Figure C2-1',
+    'Figure C2-2',
+    'Figure C3-1',
+    'Figure C3-2',
+    'Figure C3-3',
+    'Figure C4-1',
+    'Table C4-1',
+    'Figure C4-2',
+    'Figure C4-3',
+    'Table C4-2',
+    'Table C4-3',
+    'Figure C4-4',
+    'Table C4-4',
+    'Figure C5-1',
+    'Figure C5-2',
+    'Table C5-1',
+    'Figure C5-3',
+    'Figure C5-4',
+    'Table C5-2',
+    'Table C5-3',
+    'Table C5-4',
+    'Figure C5-5',
+    'Figure C5-6',
+    'Table C6-1',
+    'Figure C6-1',
+    'Table C7-1',
+    'Figure C7-1',
+    'Figure C7-2',
+    'Table C7-2',
+    'Figure C7-3',
+    'Figure C8-1',
+    'Figure C9-1',
+    'Figure C10-1',
+    'Table D1-1',
+    'Table D2-1',
+    'Table D2-2',
+    'Table D2-3',
+    'Figure D3-1',
+    'Table D3-1',
+    'Table D4-1',
+    'Table D5-1',
+    'Table D5-2',
+    'Table D5-3',
+    'Table D5-4',
+    'Table D5-5',
+    'Table D5-6',
+    'Table D5-7',
+    'Table D5-8',
+    'Table D5-9',
+    'Figure D5-1',
+    'Table D5-10',
+    'Table D6-1',
+    'Table D6-2',
+    'Figure D6-1',
+    'Table D6-3',
+    'Table D6-4',
+    'Table D6-5',
+    'Table D6-6',
+    'Table D6-7',
+    'Figure D7-1',
+    'Table D7-1',
+    'Table D7-2',
+    'Table D7-3',
+    'Table D7-4',
+    'Table D7-5',
+    'Table D8-1',
+    'Table D8-2',
+    'Table E1-1',
+    'Table E2-1',
+    'Table E3-1',
 )
 
 
@@ -102,8 +202,8 @@ def test_manual_inventory_has_exact_objects_labels_and_destinations():
     ]
 
     assert tuple(item.label for item in items) == EXPECTED_LABELS
-    assert len(MANUAL_FIGURE_SPECS) == 16
-    assert len(MANUAL_TABLE_SPECS) == 32
+    assert len(MANUAL_FIGURE_SPECS) == 36
+    assert len(MANUAL_TABLE_SPECS) == 77
     assert len({item.label for item in items}) == len(items)
     assert len({item.anchor for item in items}) == len(items)
     assert all(item.caption.strip() for item in items)
@@ -175,6 +275,8 @@ def test_manual_pdf_contains_every_reference_caption_and_resolved_link():
         assert f"{item.label}." in text
         caption = re.sub(
             r"\s+", " ", item.caption.replace("*", "").replace("$", "")
+            .replace(r"\,\text{mm}^{2}", " mm2")
+            .replace(r"\le", "\u2264")
         )
         assert caption in flat
     assert len(links) >= len(manual.manual_ia.ALL_DESTINATIONS)
@@ -232,10 +334,10 @@ def test_streamlit_manual_uses_matching_reference_heading_and_caption(monkeypatc
 
     manual.render_manual_streamlit()
 
-    assert "[See Figure A3-1](#figure-a3-1)." not in fake.markdowns
-    assert "##### Figure A3-1" in fake.markdowns
-    assert "[See Table A5-1](#table-a5-1)." not in fake.markdowns
-    assert "##### Table A5-1" in fake.markdowns
+    assert "[See Figure A4-1](#figure-a4-1)." not in fake.markdowns
+    assert "##### Figure A4-1" in fake.markdowns
+    assert "[See Table A6-1](#table-a6-1)." not in fake.markdowns
+    assert "##### Table A6-1" in fake.markdowns
     assert any("Named worked examples" in text for text in fake.captions)
 
 
@@ -310,14 +412,14 @@ def test_manual_long_table_repeats_caption_and_header_when_forced_to_split(
     table = next(
         item
         for item in flow
-        if getattr(item, "_sector_publication_label", None) == "Table B7-6"
+        if getattr(item, "_sector_publication_label", None) == "Table B7-2"
     )
     leading, page_break, trailing = table.split(170 * mm, 60 * mm)
     assert table.repeatRows == 2
     assert table.splitInRow == 0
     assert isinstance(page_break, NotAtTopPageBreak)
     assert "(continued)" not in leading._cellvalues[0][0].getPlainText()
-    assert "Table B7-6 (continued)." in (
+    assert "Table B7-2 (continued)." in (
         trailing._cellvalues[0][0].getPlainText()
     )
     expected_header = [

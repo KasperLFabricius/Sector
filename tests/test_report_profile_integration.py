@@ -1015,12 +1015,14 @@ def test_standard_and_audit_output_is_unchanged_by_the_brief_input_inventory():
 
 
 def test_every_profile_retains_governing_statuses_and_engineering_values(tmp_path):
+    # These snapshots use the current displaced-concrete section model. The
+    # fixture builder checks the retained equilibrium and crack-width operands.
     expected = (
         "Plastic bending PL-QA-2 FAIL 220.8 %",
         "Crack width - Long-term EL-QA-1 "
-        "EXCEEDS USER-SPECIFIED LIMIT 0.529 mm",
+        "EXCEEDS USER-SPECIFIED LIMIT 0.530 mm",
         "Crack width - Short-term EL-QA-1 "
-        "EXCEEDS USER-SPECIFIED LIMIT 0.658 mm",
+        "EXCEEDS USER-SPECIFIED LIMIT 0.659 mm",
         "Torsion PL-QA-1 FAIL FAIL",
         "Torsion transverse/strut resistance PL-QA-1 FAIL 170.5 %",
         "Combined M-V-T - DK NA sum PL-QA-1 FAIL 391.1 %",
@@ -1075,6 +1077,15 @@ def test_brief_omits_non_governing_fatigue_spectra_but_deeper_profiles_retain_th
     out = report_render_fixture._results(inp)
     out["fatigue"] = report_render_fixture.fatigue_analysis.run_analysis(inp)
 
+    rail = next(
+        spectrum for spectrum in out["fatigue"]["spectra"]
+        if spectrum.spectrum_name == "Rail traffic"
+    )
+    # Concrete governs above the reinforcing-bar screen (23.01565%). Retain
+    # that governing value when checking which report profiles include the row.
+    assert rail.governing_domain == "concrete"
+    assert rail.utilisation == pytest.approx(3.468118826340518 / 14.96)
+
     texts = {}
     for profile in ("Brief", "Standard", "Audit"):
         pdf = report_render_fixture.sector_report.build_report(
@@ -1087,9 +1098,9 @@ def test_brief_omits_non_governing_fatigue_spectra_but_deeper_profiles_retain_th
         )
         texts[profile] = text
         assert "Fatigue Road traffic PASS 46.2 %" in text
-    assert "Fatigue Rail traffic PASS 23.0 %" not in texts["Brief"]
-    assert "Fatigue Rail traffic PASS 23.0 %" in texts["Standard"]
-    assert "Fatigue Rail traffic PASS 23.0 %" in texts["Audit"]
+    assert "Fatigue Rail traffic PASS 23.2 %" not in texts["Brief"]
+    assert "Fatigue Rail traffic PASS 23.2 %" in texts["Standard"]
+    assert "Fatigue Rail traffic PASS 23.2 %" in texts["Audit"]
 
 
 def test_every_profile_begins_with_the_same_freshness_and_basis_dashboard():
@@ -1150,7 +1161,7 @@ def test_brief_governing_register_contains_results_before_complete_inputs():
     summary = text[start:inputs]
     assert "Plastic bending PL-QA-2 FAIL 220.8 %" in summary
     assert "Crack width - Long-term EL-QA-1" in summary
-    assert "0.529 mm" in summary
+    assert "0.530 mm" in summary
     assert "0.200 mm" in summary
     assert "Torsion transverse/strut resistance PL-QA-1 FAIL 170.5 %" in summary
 
@@ -1281,7 +1292,7 @@ def test_distinct_cracking_threshold_section_retains_its_first_equation(profile,
                 # PDF visitors split lambda and its subscript into separate
                 # fragments; bind the Standard assertion to the actual result.
                 "Mathematical expression:" if profile == "Audit"
-                else "= 0.105 -> section is cracked"
+                else "= 0.103 -> section is cracked"
             )
             assert any(y < heading_y - 4 and value.startswith(result_prefix)
                        for value, y, _size in fragments), (profile, page_number)

@@ -48,9 +48,7 @@ BRIEF_PROFILE: Final = ReportProfilePolicy(
     key="Brief",
     label="Brief",
     description=(
-        "Project and section identity, requested-check outcomes, governing "
-        "results and essential limitations, followed by all inputs relevant "
-        "to each reported result."
+        'Project and section identity, requested-check outcomes, governing results and essential limitations, followed by all inputs applicable to each reported result.'
     ),
     omitted_detail=(
         "Non-governing results are available in Standard and Audit. "
@@ -69,8 +67,7 @@ STANDARD_PROFILE: Final = ReportProfilePolicy(
     key="Standard",
     label="Standard",
     description=(
-        "Default design-review report with all used inputs, complete result "
-        "tables, governing criteria, statuses, methods, references and limitations."
+        'Default design-review report with all used inputs, full result tables, governing criteria, statuses, methods, references and limitations.'
     ),
     omitted_detail=(
         "Detailed substitutions, calculation sequences and numerical worked "

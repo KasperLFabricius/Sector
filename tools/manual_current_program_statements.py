@@ -1,11 +1,11 @@
 """Dormant current-program statements for the issued user manual."""
 
 CURRENT_REPORT_METADATA_WORDING = (
-    "Report details and publication controls are grouped separately from the "
-    "Project input stage."
+    "Report details and publication controls are in Report. "
+    "Save/load and autosave are in Inputs > Project > Save / Load."
 )
 CURRENT_RESULT_LABEL_WORDING = (
-    "Report labels identify the physical quantity represented by each result field."
+    "Select the case and identify the reported quantity, units and location."
 )
 
 REPLACED_REPORT_METADATA_WORDING = (

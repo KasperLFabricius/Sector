@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import copy
 import io
+import math
 import pathlib
 import pickle
+import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import fatigue_presentation
+import fatigue_analysis
 import result_presentation as presentation
 import sector_report
 
@@ -31,6 +34,25 @@ def _builder(profile: str):
 
 def _snapshot(value) -> bytes:
     return pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def _fixture_governing_concrete_ties(payload):
+    """Check the symmetric top-corner tie from the raw criterion values."""
+    spectra = fatigue_presentation.items(payload, "spectra")
+    assert len(spectra) == 1
+    results = fatigue_presentation.items(spectra[0], "concrete")
+    metrics = {
+        result.fibre_index: max(result.damage_utilisation, result.stress_utilisation)
+        for result in results
+    }
+    largest = max(metrics.values())
+    assert math.isclose(largest, 0.297823814251576, rel_tol=1e-10)
+    ties = {
+        index for index, value in metrics.items()
+        if math.isclose(value, largest, rel_tol=1e-12, abs_tol=0.0)
+    }
+    assert ties == {2, 3}
+    return ties
 
 
 def _capture(builder):
@@ -72,7 +94,7 @@ def test_profile_policy_explains_standard_and_audit_depth_to_engineers():
     audit = sector_report.report_profiles.AUDIT_PROFILE
 
     assert standard.substitution_scope == "none"
-    assert "complete result tables, governing criteria" in (
+    assert "full result tables, governing criteria" in (
         standard.description
     )
     assert "Detailed substitutions" in standard.omitted_detail
@@ -256,8 +278,10 @@ def test_standard_clear_spacing_table_contains_only_the_retained_governing_pair(
 
 def test_standard_fatigue_population_tables_keep_only_governing_element_and_fibre():
     published = {}
+    expected_fibres = None
     for profile in ("Standard", "Audit"):
         builder = _builder(profile)
+        expected_fibres = _fixture_governing_concrete_ties(builder._base_out["fatigue"])
         before = _snapshot(builder._base_out)
         _headings, tables, _equations = _capture(builder)
         builder._fatigue_reinforcement_formulas = lambda *_args, **_kwargs: None
@@ -288,7 +312,8 @@ def test_standard_fatigue_population_tables_keep_only_governing_element_and_fibr
     assert [row[0] for row in audit_reinforcement[1:]] == ["R1", "R2", "R3", "R4"]
     assert [row[1] for row in standard_screens[1:]] == ["R1"]
     assert [row[1] for row in audit_screens[1:]] == ["R1", "R2", "R3", "R4"]
-    assert [row[0] for row in standard_concrete[1:]] == [2]
+    assert len(standard_concrete[1:]) == 1
+    assert standard_concrete[1][0] in expected_fibres
     assert [row[0] for row in audit_concrete[1:]] == [0, 1, 2, 3, 4]
 
 
@@ -373,6 +398,9 @@ def test_audit_miner_sums_keep_all_retained_bin_operands():
 
 def test_existing_audit_only_solver_and_crack_candidate_ledgers_remain_separate():
     texts = {}
+    expected_fibres = _fixture_governing_concrete_ties(
+        fatigue_analysis.run_analysis(report_render_fixture._inputs())
+    )
     for profile in ("Standard", "Audit"):
         pdf = report_render_fixture.build_fixture_pdf(
             figures=False, profile=profile
@@ -391,12 +419,15 @@ def test_existing_audit_only_solver_and_crack_candidate_ledgers_remain_separate(
         assert heading in texts["Audit"]
     assert "Worked plastic calculation (utilisation direction)" not in texts["Standard"]
     assert "Worked plastic calculation (utilisation direction)" in texts["Audit"]
-    for heading in (
-        "Governing reinforcement element - R1",
-        "Governing concrete fibre - 2",
-    ):
-        assert heading in texts["Standard"]
-        assert heading in texts["Audit"]
+    selected_fibres = {}
+    for profile, text in texts.items():
+        assert "Governing reinforcement element - R1" in text
+        selected_fibres[profile] = {
+            int(value) for value in re.findall(r"Governing concrete fibre - (\d+)", text)
+        }
+        assert len(selected_fibres[profile]) == 1
+        assert selected_fibres[profile] <= expected_fibres
+    assert selected_fibres["Standard"] == selected_fibres["Audit"]
 
 
 def test_brief_separates_fatigue_results_and_keeps_conflicting_detail_records():
