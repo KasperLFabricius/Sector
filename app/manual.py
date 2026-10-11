@@ -784,7 +784,7 @@ def manual_blocks() -> list:
 
     h1("Start the portable application")
     md('The Windows release contains the full application in a portable ZIP. Microsoft Edge, or a different supported Chromium-family browser, supplies the image-export dependency for report figures.')
-    md('1. Download the **0.96.5 Windows portable ZIP** from the repository release.\n2. Use **Extract All** to extract the full archive to a short local path, such as `C:\\Sector`.\n3. Keep the `_internal` folder beside `Sector.exe`.\n4. Open `Sector.exe`.\n5. Wait for the Sector interface to open in the default browser.')
+    md('1. Download the **0.96.6 Windows portable ZIP** from the repository release.\n2. Use **Extract All** to extract the full archive to a short local path, such as `C:\\Sector`.\n3. Keep the `_internal` folder beside `Sector.exe`.\n4. Open `Sector.exe`.\n5. Wait for the Sector interface to open in the default browser.')
     md("Sector runs on the local computer. Keep its console window open during use. "
        "To stop Sector, close that console window or press **Ctrl+C** in it.")
     md('Before an update, download the current project file. Keep the issued report. Extract the new release into a different folder. Open the saved project in the new version. Examine its inputs. Calculate again.')
