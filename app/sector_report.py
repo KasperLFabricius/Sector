@@ -1608,8 +1608,12 @@ class ReportBuilder:
     def _p(self, text):
         self.flow.append(Paragraph(_greek(text), self.s["body"]))
 
-    def _small(self, text):
-        self.flow.append(Paragraph(_greek(text), self.s["small"]))
+    def _small(self, text, *, keep_with_next=False):
+        paragraph = Paragraph(_greek(text), self.s["small"])
+        if keep_with_next:
+            paragraph.keepWithNext = 1
+            paragraph._sector_table_lead = True
+        self.flow.append(paragraph)
 
     def _status_block(self, text, status):
         """Add a prominent, print-readable assessment banner."""
@@ -1961,7 +1965,7 @@ class ReportBuilder:
                 if index + 1 < len(parts):
                     self.flow[-1].keepWithNext = 1
         if information_rows:
-            self._small("<b>Scope and calculation state</b>")
+            self._small("<b>Scope and calculation state</b>", keep_with_next=True)
             for row in information_rows:
                 self._small(
                     f"{_html_escape(row['check'])} | "
@@ -2477,6 +2481,13 @@ class ReportBuilder:
             raise ValueError("Every report table row must retain the same columns.")
         if len(widths) != column_count:
             raise ValueError("Report table widths must match the column count.")
+        table_leads = []
+        while self.flow and getattr(self.flow[-1], "_sector_table_lead", False):
+            table_leads.insert(0, self.flow.pop().text)
+        table_start = len(self.flow)
+        table_lead_markup = "<br/>".join(table_leads)
+        if table_lead_markup:
+            table_lead_markup += "<br/>"
         profile_floor = 9.5
         font = max(float(font), _MIN_REPORT_TABLE_FONT, profile_floor)
         body = ParagraphStyle("c", parent=self.s["body"], fontSize=font,
@@ -2546,14 +2557,16 @@ class ReportBuilder:
             )
             if panel_widths is None:
                 raise ValueError("Unable to fit a report table column panel.")
+            panel_lead = ""
             if len(panels) > 1:
                 labels = (
                     [rows[0][index].getPlainText() for index in columns]
                     if header else [f"Column {index + 1}" for index in columns]
                 )
-                self._small(
+                panel_lead = (
                     f"<b>Column panel {panel_number} of {len(panels)}:</b> "
                     + ", ".join(_html_escape(label) for label in labels)
+                    + "<br/>"
                 )
             source_rows = [[row[index] for index in columns] for row in rows]
             panel_note = (
@@ -2569,7 +2582,8 @@ class ReportBuilder:
             )
             anchor = f'<a name="{table_item.anchor}"/>' if not continued else ""
             caption_markup = (
-                f"{anchor}<b>{visible_label}.</b> "
+                (table_lead_markup if panel_number == 1 else "")
+                + panel_lead + f"{anchor}<b>{visible_label}.</b> "
                 f"{_greek(_html_escape(table_item.caption))}"
                 f"{_greek(_html_escape(panel_note))}"
             )
@@ -2607,7 +2621,9 @@ class ReportBuilder:
             table._sector_caption_markup = caption_markup
             table._sector_continued_caption_markup = continuation_markup
             table._sector_caption_style = self.s["publication_caption"]
-            table._sector_is_continuation = continued
+            # The first fragment of each horizontal panel retains its lead.
+            # Its caption already says "continued" when appropriate.
+            table._sector_is_continuation = False
             table._sector_publication_label = table_item.label
             table._sector_header_row = header_row
             table._sector_data_start = repeat_rows
@@ -2657,8 +2673,13 @@ class ReportBuilder:
                 ])
             table_style.extend(context_style)
             table.setStyle(TableStyle(table_style))
+            if table_lead_markup or panel_lead:
+                # A separate trailing spacer can create an empty final page.
+                # Table splitting carries spaceAfter on the last fragment only.
+                table.spaceAfter = 4
             self.flow.append(KeepTogether(table) if keep else table)
-            self._gap(4)
+            if not (table_lead_markup or panel_lead):
+                self._gap(4)
         if self._preceding_headings(table_start) < table_start:
             self._keep_from(table_start)
         return table_item
@@ -5222,9 +5243,7 @@ class ReportBuilder:
             if inp.get("fatigue_on") else []
         )
         if fatigue_rows:
-            self._small("<b>Grouped fatigue spectra</b>")
-            if self.profile.key == "Brief":
-                self.flow[-1].keepWithNext = 1
+            self._small("<b>Grouped fatigue spectra</b>", keep_with_next=True)
             rows = [["Spectrum", "Bin", "Description", "Cycles"]]
             rows.extend([
                 [_html_escape(row[fatigue_inputs.SPECTRUM]),
@@ -5264,9 +5283,7 @@ class ReportBuilder:
                 if inp.get("plastic_cases") is not None else []
             )
             if plastic:
-                self._small("<b>Plastic / capacity cases</b>")
-                if self.profile.key == "Brief":
-                    self.flow[-1].keepWithNext = 1
+                self._small("<b>Plastic / capacity cases</b>", keep_with_next=True)
                 table_key = table_fields.PLASTIC_CASES_TABLE_KEY
                 rows = [[
                     "Case", "Description",
@@ -5308,9 +5325,7 @@ class ReportBuilder:
                 if inp.get("elastic_cases") is not None else []
             )
             if elastic:
-                self._small("<b>Elastic cases</b>")
-                if self.profile.key == "Brief":
-                    self.flow[-1].keepWithNext = 1
+                self._small("<b>Elastic cases</b>", keep_with_next=True)
                 rows = [[
                     "Case", "Description", "Part", "N<sub>Ed</sub>",
                     "M<sub>x,Ed</sub>", "M<sub>y,Ed</sub>",
@@ -6614,6 +6629,7 @@ class ReportBuilder:
                                      ("y", "M<sub>y</sub>", "My")):
                 d = nm[axis]
                 self._h2(f"Axial-moment (N-{mlab}) interaction")
+                diagram_start = len(self.flow)
                 if self.figures:
                     self._fig(viz.interaction_nm_figure(
                         d["N"], d["M"], axis=axis,
@@ -6623,6 +6639,7 @@ class ReportBuilder:
                 self._small("Concrete carries compression only. Reinforcement therefore controls the tension end.")
                 if pl.get("check_util", True) and d.get("applied") is not None:
                     self._small("The marked point is the applied plastic action.")
+                self._keep_from(diagram_start)
             if self.profile.key == "Audit":
                 self._plastic_nm_boundary(nm)
         if self.profile.key == "Audit":
@@ -6762,14 +6779,14 @@ class ReportBuilder:
             if cable:
                 row.append(_fmt(p["eps_cable"], 3))
             detail_rows.append(row)
-        self._small("<b>Capacity and neutral axis</b>")
+        self._small("<b>Capacity and neutral axis</b>", keep_with_next=True)
         self._table(
             capacity_rows,
             [18 * mm, 38 * mm, 38 * mm, 38 * mm, 38 * mm],
             font=7.5,
             keep=False,
         )
-        self._small("<b>Strain and equilibrium detail</b>")
+        self._small("<b>Strain and equilibrium detail</b>", keep_with_next=True)
         detail_cols = len(detail_head)
         self._table(
             detail_rows,
@@ -10510,16 +10527,18 @@ class ReportBuilder:
         ]]
         for label, row in zip(("N", "Mx", "My"), matrix):
             matrix_rows.append([label, *[_fmt(value, 9) for value in row]])
+        matrix_start = len(self.flow)
+        self._small('Final transformed equilibrium matrix J:', keep_with_next=True)
         self._table(
             matrix_rows,
             [31 * mm, 43 * mm, 43 * mm, 43 * mm],
             font=7.0,
             keep=False,
         )
-        self._small('Final transformed equilibrium matrix J:')
         self._small('The N row has column units m<super>2</super>, m<super>3</super> and m<super>3</super>.')
         self._small('The M<sub>x</sub> and M<sub>y</sub> rows have column units m<super>3</super>, m<super>4</super> and m<super>4</super>.')
         self._small('The reference-stress plane has coefficient units kN/m<super>2</super> and kN/m<super>3</super>. Matrix multiplication gives N in kN and moments in kN&#183;m.')
+        self._keep_from(matrix_start)
         self._table(
             [["Resultant", "Target", "Internal", "Residual", "Unit"],
              ["N", _fmt(equilibrium["target"]["n"], 9),

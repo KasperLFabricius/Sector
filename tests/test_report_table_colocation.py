@@ -121,9 +121,25 @@ def test_multi_panel_table_publishes_one_destination_and_compact_captions():
         if isinstance(item, sector_report._PaginatedReportTable)
     ]
     assert len(tables) > 1
-    assert tables[0]._cellvalues[0][0].getPlainText().startswith(
+    expected_leads = [
+        "Column panel 1 of 3: Spectrum, Bin, Result 0, Result 1, Result 2",
+        "Column panel 2 of 3: Spectrum, Bin, Result 3, Result 4, Result 5",
+        "Column panel 3 of 3: Spectrum, Bin, Result 6",
+    ]
+    actual_leads = []
+    for table in tables:
+        caption = table._cellvalues[0][0]
+        lead_markup, _ = caption.text.split("<br/>", 1)
+        actual_leads.append(Paragraph(lead_markup, caption.style).getPlainText())
+    assert actual_leads == expected_leads
+    first_caption = tables[0]._cellvalues[0][0]
+    _, caption_markup = first_caption.text.split("<br/>", 1)
+    assert Paragraph(caption_markup, first_caption.style).getPlainText().startswith(
         "Table 0.1."
     )
+    assert sum(
+        table._cellvalues[0][0].text.count('<a name="') for table in tables
+    ) == 1
     assert all(
         "See Table" not in table._cellvalues[0][0].getPlainText()
         and "Table 0.1 (continued)." in table._cellvalues[0][0].getPlainText()
