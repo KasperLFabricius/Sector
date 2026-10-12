@@ -610,13 +610,13 @@ def test_tube_figure_draws_outline_centre_line_and_inner_face():
     fig = viz.tube_figure(outer, holes=None, tef_mm=90.0, ak_m2=0.09)
     names = [getattr(t, "name", "") or "" for t in fig.data]
     assert any("outline" in n for n in names)
-    assert any("centre-line" in n for n in names)      # tef/2 inward offset
+    assert any("center-line" in n for n in names)      # tef/2 inward offset
     assert any("inner wall face" in n for n in names)  # tef inward offset
     # Drawn in mm (scale 1000): the outline spans -200..200 in x.
     outline = next(t for t in fig.data if (t.name or "") == "outline")
     assert max(outline.x) == pytest.approx(200.0)
     # The centre-line sits inside the outline (offset inward by tef/2 = 45 mm).
-    centre = next(t for t in fig.data if "centre-line" in (t.name or ""))
+    centre = next(t for t in fig.data if "center-line" in (t.name or ""))
     assert max(centre.x) < 200.0
     assert max(centre.x) == pytest.approx(155.0, abs=1.0)
 
@@ -638,7 +638,7 @@ def test_tube_figure_degrades_without_a_wall():
     fig = viz.tube_figure(outer, tef_mm=0.0)
     names = [getattr(t, "name", "") or "" for t in fig.data]
     assert any("outline" in n for n in names)
-    assert not any("centre-line" in n for n in names)
+    assert not any("center-line" in n for n in names)
 
 
 def test_marker_sizes_scale_with_relative_diameter():
@@ -718,14 +718,14 @@ def test_interaction_figures_state_positive_bending_direction():
     up, right = chr(0x2191), chr(0x2192)
     mm = viz.interaction_figure([100.0, 0.0, -80.0], [0.0, 90.0, 0.0])
     txt = " ".join(a.text or "" for a in mm.layout.annotations)
-    assert up + " +Mx: tension at the bottom face" in txt
-    assert right + " +My: tension at the left face" in txt
+    assert up + " +M<sub>x</sub>: tension at the bottom face" in txt
+    assert right + " +M<sub>y</sub>: tension at the left face" in txt
     nmx = viz.interaction_nm_figure([0.0, -500.0, 500.0], [200.0, 0.0, 0.0], axis="x")
     tx = " ".join(a.text or "" for a in nmx.layout.annotations)
-    assert "+Mx: tension at the bottom face" in tx and "+N: axial tension" in tx
+    assert "+M<sub>x</sub>: tension at the bottom face" in tx and "+N: axial tension" in tx
     nmy = viz.interaction_nm_figure([0.0, -500.0, 500.0], [200.0, 0.0, 0.0], axis="y")
     ty = " ".join(a.text or "" for a in nmy.layout.annotations)
-    assert "+My: tension at the left face" in ty
+    assert "+M<sub>y</sub>: tension at the left face" in ty
 
 
 def test_interaction_figure_partial_arc_is_not_filled():
@@ -932,7 +932,7 @@ def test_nm_interaction_marks_landmarks():
     fig = viz.interaction_nm_figure(N, M, axis="x")
     assert any(getattr(t, "name", None) == "landmarks" for t in fig.data)
     anns = " ".join(a.text for a in fig.layout.annotations)
-    assert "squash" in anns and "tension" in anns and "max Mx" in anns
+    assert "squash" in anns and "tension" in anns and "max M<sub>x</sub>" in anns
 
 
 @pytest.mark.parametrize("axis", ["x", "y"])

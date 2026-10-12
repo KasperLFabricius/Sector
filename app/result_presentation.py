@@ -264,6 +264,71 @@ _PLASTIC_REASON_MESSAGES = {
     ),
 }
 _MINIMUM_REINFORCEMENT_REASON_MESSAGES = {
+    'the minimum secondary reinforcement is defined relative to orthogonal primary reinforcement, which is not represented in this section cut': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-SECONDARY-SLAB",
+        'The minimum secondary reinforcement depends on the orthogonal primary reinforcement. This section cut does not represent that primary reinforcement.',
+    ),
+    'Formula (9.1N) needs a bending tension face; the selected case has no moment about the concrete centroid': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-BENDING-FACE",
+        'Formula (9.1N) needs a bending tension face. The selected case has no moment about the concrete centroid.',
+    ),
+    'gross-concrete resultant tension plane could not be derived': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-GROSS-TENSION-PLANE",
+        'The gross-concrete resultant tension plane could not be calculated.',
+    ),
+    'cracking action inputs must be finite': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-ACTION-FINITE",
+        'The cracking action inputs must be finite.',
+    ),
+    'fctm must be finite and positive': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-TENSILE-STRENGTH",
+        'The mean concrete tensile strength must be finite and positive.',
+    ),
+    'uncracked section solve did not converge': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-UNCRACKED-SOLVE",
+        'The uncracked section calculation did not converge.',
+    ),
+    'cracking stress planes must be finite': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-STRESS-PLANE",
+        'The cracking stress planes must be finite.',
+    ),
+    'cracking action is not representable with finite values': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-CRACKING-FINITE",
+        'The cracking action cannot be represented with finite values.',
+    ),
+    'moment direction creates no tension': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-NO-TENSION",
+        'The moment direction creates no tension.',
+    ),
+    'nominal reinforcement tension resistance is below NEd,min': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-AXIAL-RESISTANCE",
+        'The nominal reinforcement tension resistance is below the axial force used for the minimum-reinforcement check.',
+    ),
+    'no ordinary reinforcement': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-NO-REINFORCEMENT",
+        'The section has no reinforcing steel.',
+    ),
+    'zero moment lies outside the nominal envelope at NEd,min': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-ZERO-MOMENT",
+        'Zero moment lies outside the nominal envelope at the axial force used for the minimum-reinforcement check.',
+    ),
+    'compressive NEd is not less than 0.5 Ac fcd': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-COMPRESSION-LIMIT",
+        'The compressive axial force is not less than one half of the concrete area multiplied by its design compressive strength.',
+    ),
+    'case is compression-only and brittle tensile failure is excluded': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-COMPRESSION-ONLY",
+        'The case has compression only, and brittle tensile failure is excluded.',
+    ),
+    'nominal axial-moment envelope did not converge': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-NOMINAL-CONVERGENCE",
+        'The nominal axial-moment envelope did not converge.',
+    ),
+    'no usable tension reinforcement or geometry': EngineerMessage(
+        "MINIMUM-REINFORCEMENT-TENSION-GEOMETRY",
+        'The case has no usable tension reinforcement or geometry.',
+    ),
+    **_PLASTIC_REASON_MESSAGES,
     "No ordinary reinforcement bar lies in the tension zone.": EngineerMessage(
         "MINIMUM-REINFORCEMENT-TENSION-ZONE",
         "No ordinary reinforcement bar lies in the tension zone.",
@@ -283,6 +348,102 @@ _MINIMUM_REINFORCEMENT_REASON_MESSAGES = {
     ),
 }
 _TRANSVERSE_REASON_MESSAGES = {
+    'web width or effective leg count is unavailable': EngineerMessage(
+        'TRANSVERSE-NATIVE-1',
+        'The web width or effective number of link legs is unavailable.',
+    ),
+    'effective depth is unavailable': EngineerMessage(
+        'TRANSVERSE-NATIVE-2',
+        'The effective depth is unavailable.',
+    ),
+    'beam torsion-link detailing is not applied to slabs': EngineerMessage(
+        'TRANSVERSE-NATIVE-3',
+        'The beam torsion-link detailing method does not apply to slabs.',
+    ),
+    'invalid torsion tube': EngineerMessage(
+        'TRANSVERSE-NATIVE-4',
+        'The torsion tube is invalid.',
+    ),
+    'invalid torsion-link geometry': EngineerMessage(
+        'TRANSVERSE-NATIVE-5',
+        'The torsion-link geometry is invalid.',
+    ),
+    'missing shear-link geometry': EngineerMessage(
+        'TRANSVERSE-NATIVE-6',
+        'The shear-link geometry is missing.',
+    ),
+    'missing torsion-link geometry': EngineerMessage(
+        'TRANSVERSE-NATIVE-7',
+        'The torsion-link geometry is missing.',
+    ),
+    'the 2023 minimum-link requirement for statically determinate beams with d > 500 mm cannot be decided because the structural system is not declared by the section model': EngineerMessage(
+        'TRANSVERSE-NATIVE-8',
+        'The 2023 minimum-link requirement for statically determinate beams with effective depth greater than 500 mm needs the structural system. The section model does not define that system.',
+    ),
+    'enter the maximum transverse distance between legs or define at least two effective legs': EngineerMessage(
+        'TRANSVERSE-NATIVE-9',
+        'Enter the maximum transverse distance between link legs or define at least two effective legs.',
+    ),
+    'invalid fck': EngineerMessage(
+        'TRANSVERSE-INPUTS-FCK',
+        'Enter finite positive values for: concrete compressive strength.',
+    ),
+    'invalid fywk': EngineerMessage(
+        'TRANSVERSE-INPUTS-FYWK',
+        'Enter finite positive values for: link characteristic yield strength.',
+    ),
+    'invalid diameter': EngineerMessage(
+        'TRANSVERSE-INPUTS-DIAMETER',
+        'Enter finite positive values for: link diameter.',
+    ),
+    'invalid spacing': EngineerMessage(
+        'TRANSVERSE-INPUTS-SPACING',
+        'Enter finite positive values for: link spacing.',
+    ),
+    'invalid fck, fywk': EngineerMessage(
+        'TRANSVERSE-INPUTS-FCK-FYWK',
+        'Enter finite positive values for: concrete compressive strength, link characteristic yield strength.',
+    ),
+    'invalid fck, diameter': EngineerMessage(
+        'TRANSVERSE-INPUTS-FCK-DIAMETER',
+        'Enter finite positive values for: concrete compressive strength, link diameter.',
+    ),
+    'invalid fck, spacing': EngineerMessage(
+        'TRANSVERSE-INPUTS-FCK-SPACING',
+        'Enter finite positive values for: concrete compressive strength, link spacing.',
+    ),
+    'invalid fywk, diameter': EngineerMessage(
+        'TRANSVERSE-INPUTS-FYWK-DIAMETER',
+        'Enter finite positive values for: link characteristic yield strength, link diameter.',
+    ),
+    'invalid fywk, spacing': EngineerMessage(
+        'TRANSVERSE-INPUTS-FYWK-SPACING',
+        'Enter finite positive values for: link characteristic yield strength, link spacing.',
+    ),
+    'invalid diameter, spacing': EngineerMessage(
+        'TRANSVERSE-INPUTS-DIAMETER-SPACING',
+        'Enter finite positive values for: link diameter, link spacing.',
+    ),
+    'invalid fck, fywk, diameter': EngineerMessage(
+        'TRANSVERSE-INPUTS-FCK-FYWK-DIAMETER',
+        'Enter finite positive values for: concrete compressive strength, link characteristic yield strength, link diameter.',
+    ),
+    'invalid fck, fywk, spacing': EngineerMessage(
+        'TRANSVERSE-INPUTS-FCK-FYWK-SPACING',
+        'Enter finite positive values for: concrete compressive strength, link characteristic yield strength, link spacing.',
+    ),
+    'invalid fck, diameter, spacing': EngineerMessage(
+        'TRANSVERSE-INPUTS-FCK-DIAMETER-SPACING',
+        'Enter finite positive values for: concrete compressive strength, link diameter, link spacing.',
+    ),
+    'invalid fywk, diameter, spacing': EngineerMessage(
+        'TRANSVERSE-INPUTS-FYWK-DIAMETER-SPACING',
+        'Enter finite positive values for: link characteristic yield strength, link diameter, link spacing.',
+    ),
+    'invalid fck, fywk, diameter, spacing': EngineerMessage(
+        'TRANSVERSE-INPUTS-FCK-FYWK-DIAMETER-SPACING',
+        'Enter finite positive values for: concrete compressive strength, link characteristic yield strength, link diameter, link spacing.',
+    ),
     "minimum shear reinforcement is required for this beam": EngineerMessage(
         "TRANSVERSE-MINIMUM-LINKS",
         "Provide the minimum shear reinforcement required for this beam",
@@ -309,6 +470,12 @@ _TRANSVERSE_REASON_MESSAGES = {
     ),
 }
 _SHEAR_REASON_MESSAGES = {
+    'longitudinal chord evidence is unavailable': EngineerMessage(
+        'SHEAR-LONGITUDINAL-EVIDENCE', 'The longitudinal chord evidence is unavailable.',
+    ),
+    'shear resistance is unavailable': EngineerMessage(
+        'SHEAR-RESISTANCE-UNAVAILABLE', 'The shear resistance is unavailable.',
+    ),
     "Enter a positive finite number of effective link legs for each active "
     "shear direction": EngineerMessage(
         "SHEAR-LINK-LEGS",
@@ -446,6 +613,10 @@ _SHEAR_REASON_MESSAGES = {
     ),
 }
 _TORSION_REASON_MESSAGES = {
+    'torsion result evidence is unavailable': EngineerMessage(
+        'TORSION-CURRENT-EVIDENCE',
+        'The torsion result evidence is unavailable. Calculate the current inputs again.',
+    ),
     "torsion design basis not established": EngineerMessage(
         "TORSION-BASIS-NOT-ESTABLISHED",
         "Select whether the entered torsion is equilibrium torsion or a deliberately retained compatibility-torsion design action",
@@ -604,6 +775,10 @@ _TORSION_WALL_APPLICABILITY_REASONS = frozenset(
     "open or warping-sensitive torsion requires member analysis",
 })
 _COMBINED_REASON_MESSAGES = {
+    'combined component evidence is unavailable': EngineerMessage(
+        'COMBINED-CURRENT-EVIDENCE',
+        'The combined component evidence is unavailable. Calculate the current inputs again.',
+    ),
     "selected strut-angle range is outside the permitted method range": EngineerMessage(
         "COMBINED-STRUT-ANGLE-RANGE",
         "The entered compression-strut range is outside the common permitted "
@@ -644,6 +819,9 @@ _COMBINED_REASON_MESSAGES = {
     ),
 }
 _CRACK_REASON_MESSAGES = {
+    'The Elastic calculation is invalid; crack width is not assessed.': EngineerMessage(
+        'CRACK-ELASTIC-INVALID', 'The Elastic calculation is invalid. Crack width is not assessed.',
+    ),
     'At least one reinforcement element lies outside the validated direct-tension effective perimeter area.': EngineerMessage(
         "CRACK-NATIVE-SCOPE-01",
         'At least one reinforcement element lies outside the validated direct-tension effective perimeter area.',
@@ -859,7 +1037,16 @@ _FATIGUE_REASON_MESSAGES = {
         "DS/EN 1992-1-1:2023 10.4 does not assign this preset a simplified limit",
     ),
 }
+_GENERIC_REASON_MESSAGES = {
+    "missing or invalid reinforcement geometry": EngineerMessage(
+        "CLEAR-SPACING-GEOMETRY", "The reinforcement geometry is missing or invalid.",
+    ),
+    "fewer than two included reinforcement elements": EngineerMessage(
+        "CLEAR-SPACING-ELEMENTS", "The clear-spacing check needs at least two included reinforcement elements.",
+    ),
+}
 _RESULT_REASON_MESSAGES = {
+    "generic": _GENERIC_REASON_MESSAGES,
     "plastic": _PLASTIC_REASON_MESSAGES,
     "minimum_reinforcement": _MINIMUM_REINFORCEMENT_REASON_MESSAGES,
     "transverse_reinforcement": _TRANSVERSE_REASON_MESSAGES,

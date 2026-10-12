@@ -63,7 +63,7 @@ def test_report_torsion_labels_preserve_native_geometry_and_default_labels():
     expected["data"][2]["name"] = "wall center-line (A<sub>k</sub> = 140,000 mm<sup>2</sup>)"
     assert updated.to_plotly_json() == expected
     assert native.to_plotly_json() == before
-    assert before["data"][1]["name"] == "inner wall face (tef = 40 mm)"
+    assert before["data"][1]["name"] == "inner wall face (t<sub>ef</sub> = 40 mm)"
 
 
 def test_crack_area_annotation_has_clearance_above_native_geometry():

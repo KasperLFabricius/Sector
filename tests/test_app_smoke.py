@@ -227,52 +227,41 @@ def _select_view(at, value):
     return at
 
 
+def _section_field_spec(at):
+    """Locate the single selected contour by its explicit outer boundary."""
+    matches = []
+    for chart in at.get("plotly_chart"):
+        spec = json.loads(chart.proto.spec)
+        if any(t.get("name") == "Concrete outline" for t in spec.get("data", [])):
+            matches.append(spec)
+    assert len(matches) == 1, "Expected exactly one selected section contour"
+    assert matches[0]["layout"]["xaxis"]["title"]["text"] == "x (mm)"
+    return matches[0]
+
+
 def _section_outline_from_result_view(at):
-    """Return the retained section diagram's complete concrete outline."""
+    """Return the selected contour's complete retained concrete outline."""
+    trace = next(t for t in _section_field_spec(at)["data"]
+                 if t.get("name") == "Concrete outline")
+    return trace["x"], trace["y"]
 
+
+def _quick_section_preview_outline(at):
+    """Return the input preview boundary, independently of result contours."""
+    matches = []
     for chart in at.get("plotly_chart"):
         spec = json.loads(chart.proto.spec)
-        x_title = (
-            spec.get("layout", {})
-            .get("xaxis", {})
-            .get("title", {})
-            .get("text")
-        )
-        data = spec.get("data", [])
-        if (
-            x_title == "x (mm)"
-            and data
-            and data[0].get("fill") == "toself"
-            and data[0].get("name") is None
-        ):
-            return data[0]["x"], data[0]["y"]
-    raise AssertionError("No section-state Plotly figure was rendered")
-
-
-def _section_hover_from_result_view(at):
-    """Return response hover from the retained section diagram."""
-
-    for chart in at.get("plotly_chart"):
-        spec = json.loads(chart.proto.spec)
-        x_title = (
-            spec.get("layout", {})
-            .get("xaxis", {})
-            .get("title", {})
-            .get("text")
-        )
-        data = spec.get("data", [])
-        if (
-            x_title == "x (mm)"
-            and data
-            and data[0].get("fill") == "toself"
-            and data[0].get("name") is None
-        ):
-            return [
-                str(value)
-                for trace in data
-                for value in (trace.get("customdata") or [])
-            ]
-    raise AssertionError("No section-state Plotly figure was rendered")
+        if spec.get("layout", {}).get("title", {}).get("text") == "Preview":
+            matches.append(spec)
+    assert len(matches) == 1, "Expected exactly one Quick Section preview"
+    spec = matches[0]
+    assert spec["layout"]["xaxis"]["title"]["text"] == "x (mm)"
+    outline = spec["data"][0]
+    assert outline.get("fill") == "toself"
+    assert outline.get("name") is None
+    assert outline["x"][0] == outline["x"][-1]
+    assert outline["y"][0] == outline["y"][-1]
+    return outline["x"], outline["y"]
 
 
 def _replace_base_table(at, base_key, value):
@@ -1760,7 +1749,7 @@ def test_plastic_selected_state_lists_retained_compression_zone_depth():
             .get("xaxis", {})
             .get("title", {})
             .get("text")
-            == "My - about the y-axis (kNm)"
+            == "M<sub>y</sub> - about the y-axis (kNm)"
         )
     )
     capacity = next(
@@ -1880,43 +1869,48 @@ def test_plastic_hover_formats_retained_stress_and_strain_without_a_material_law
     assert _elastic_corner_hover([]) is None
 
 
-def test_plastic_and_elastic_result_views_route_response_only_section_hover():
+def test_plastic_and_elastic_result_views_route_retained_contour_hover():
+    from html import unescape
+
     at = _fresh_qs()
-    _set_and_click(
-        at, "qs_apply", ("number_input", "tnd_n", 4)
-    )
+    _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 4))
     _set_and_click(at, "calculate", ("radio", "mode", "Both"))
-
-    _select_view(at, "Plastic Results")
-    plastic_hover = _section_hover_from_result_view(at)
-    plastic_bar = next(value for value in plastic_hover if value.startswith("Bar "))
-    plastic_tendon = next(
-        value for value in plastic_hover if value.startswith("Tendon ")
-    )
-    for value in (plastic_bar, plastic_tendon):
-        assert "MPa" in value and "%" in value
-        assert "material" in value
-        assert "x =" not in value and "y =" not in value
-        assert "area =" not in value
-    assert "material P1" in plastic_tendon
-
-    _select_view(at, "Elastic Results")
-    elastic_hover = _section_hover_from_result_view(at)
-    elastic_bar = next(value for value in elastic_hover if value.startswith("Bar "))
-    elastic_tendon = next(
-        value for value in elastic_hover if value.startswith("Tendon ")
-    )
-    elastic_corner = next(
-        value for value in elastic_hover if value.startswith("Corner ")
-    )
-    for value in (elastic_bar, elastic_tendon, elastic_corner):
-        assert "MPa" in value and chr(0x2030) in value
-        assert "x =" not in value and "y =" not in value
-        assert "area =" not in value
-    for value in (elastic_bar, elastic_tendon):
-        assert "total" in value and "material" in value
-    assert "material = P1" in elastic_tendon
-    assert "Outer point" in elastic_corner
+    for family in ("Plastic", "Elastic"):
+        _select_view(at, family + " Results")
+        result = at.session_state["results"][family.lower()]
+        if family == "Plastic":
+            retained = result["points"][at.session_state["pl_state"]]
+            rows = retained["reinforcement_states"]
+        else:
+            rows = result["elements"]
+        spec = _section_field_spec(at)
+        for kind in ("Bar", "Tendon"):
+            trace = next(t for t in spec["data"] if t.get("name") == kind + "s")
+            expected = [r for r in rows if r["element_type"] == kind]
+            assert len(trace["customdata"]) == len(expected)
+            hover = trace["hovertemplate"]
+            for label in ("Stress", "Material strain", "Compatible section strain", "Initial strain", "Material"):
+                assert label in hover
+            assert "MPa" in hover and chr(0x2030) in hover
+            assert "area" not in hover.lower()
+            assert "x %{x:.2f} mm; y %{y:.2f} mm" in hover
+            for i, (shown, row) in enumerate(zip(trace["customdata"], expected, strict=True)):
+                assert unescape(trace["text"][i]) == row["element_id"]
+                assert trace["x"][i] == pytest.approx(row["x_mm"])
+                assert trace["y"][i] == pytest.approx(row["y_mm"])
+                assert shown[0] == row["stress_mpa" if family == "Plastic" else "total_mpa"]
+                assert shown[1] == pytest.approx(row["strain_permille"])
+                material = " - ".join(str(row.get(k) or "") for k in ("material_id", "material_name") if row.get(k))
+                assert unescape(shown[4]) == (material or "Not recorded")
+            if kind == "Tendon":
+                assert any("P1" in unescape(r[4]) for r in trace["customdata"])
+        corner = next(t for t in spec["data"] if t.get("name") == "Concrete boundary")
+        assert corner["text"][0] == "Outer boundary, point 1"
+        assert "Stress" in corner["hovertemplate"]
+        assert "Compatible section strain" in corner["hovertemplate"]
+        if family == "Elastic":
+            assert "Concrete reference strain (without creep)" in corner["hovertemplate"]
+            assert "TOTAL" in spec["layout"]["title"]["text"]
 
 
 def test_both_mode_runs_elastic_and_plastic():
@@ -2262,9 +2256,9 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
     for expected in (
         "external N/M",
         "prestress remains fixed",
-        "above fctm",
-        "lambda_cr < 1 is cracked",
-        "lambda_cr >= 1 is uncracked",
+        r"above $f_{ctm}$",
+        r"$\lambda_{cr}<1$ is cracked",
+        r"$\lambda_{cr}\geq1$ is uncracked",
     ):
         assert expected in metric.help
     assert not any("UNCRACKED" in str(item.value) for item in at.success)
@@ -2422,7 +2416,7 @@ def test_expanded_quick_section_catalogue_previews_and_applies():
     for index, (shape, corners, hole_corners, has_auto_rebar) in enumerate(cases):
         at.selectbox(key="shape").set_value(shape).run()
         assert not at.exception, shape
-        xs, _ys = _section_outline_from_result_view(at)
+        xs, _ys = _quick_section_preview_outline(at)
         assert len(xs) == corners + 1, shape  # Plotly closes the filled outer ring
         if not has_auto_rebar:
             assert any(
@@ -5754,14 +5748,14 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert not at.exception
     action_table = next(
         frame.value for frame in at.dataframe
-        if {"Bin", "Nlong,Ed [kN]", "Mx,short,Ed [kNm]"}.issubset(
+        if {"Bin", "Sustained axial force [kN]", "Additional moment about x [kN\u00b7m]"}.issubset(
             frame.value.columns
         )
     )
     assert action_table.iloc[0]["Bin"] == "FAT-01"
     solver_table = next(
         frame.value for frame in at.dataframe
-        if {"Bin", "gamma_Ff", "Bond method", "Status"}.issubset(
+        if {"Bin", "Fatigue action factor", "Bond method", "Status"}.issubset(
             frame.value.columns
         )
     )
@@ -5777,7 +5771,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     assert {
         "Design basis",
         "Method scope",
-        "gamma_Ff",
+        "Fatigue action factor",
     }.issubset(basis_items)
     basis_values = dict(zip(basis_table["Item"], basis_table["Value"]))
     assert basis_values["Design basis"] == expected_basis.label
@@ -5819,11 +5813,11 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     ).run()
     stale_actions = next(
         frame.value for frame in at.dataframe
-        if {"Bin", "Nlong,Ed [kN]", "Mx,short,Ed [kNm]"}.issubset(
+        if {"Bin", "Sustained axial force [kN]", "Additional moment about x [kN\u00b7m]"}.issubset(
             frame.value.columns
         )
     )
-    assert stale_actions.iloc[0]["Nlong,Ed [kN]"] == pytest.approx(-100.0)
+    assert stale_actions.iloc[0]["Sustained axial force [kN]"] == pytest.approx(-100.0)
     assert any("inputs changed" in warning.value.lower() for warning in at.warning)
 
     # A session can survive a code hot reload from a build that did not yet store
@@ -5836,7 +5830,7 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
         for error in at.error
     )
     assert not any(
-        {"Bin", "Nlong,Ed [kN]", "Mx,short,Ed [kNm]"}.issubset(
+        {"Bin", "Sustained axial force [kN]", "Additional moment about x [kN\u00b7m]"}.issubset(
             frame.value.columns
         )
         for frame in at.dataframe
@@ -6231,12 +6225,12 @@ def test_fresh_session_project_captures_default_section():
     assert len(tables["corners_base"]) >= 3   # default rectangle, not blank
 
 
-def test_autosave_defaults_on_with_five_minutes(tmp_path, monkeypatch):
+def test_autosave_defaults_on_with_two_minutes(tmp_path, monkeypatch):
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path))
     at = _fresh()
     at.run()
     assert at.session_state["autosave_on"] is True
-    assert at.session_state["autosave_min"] == 5
+    assert at.session_state["autosave_min"] == 2
 
 
 def test_autosave_preferences_fall_back_to_durable_hidden_widget_values():
@@ -9536,7 +9530,7 @@ def test_detailing_controls_run_selected_case_and_section_wide_spacing():
     _select_view(at, "Detailing")
     minimum = next(
         frame.value for frame in at.dataframe
-        if "As,min [mm2]" in frame.value.columns
+        if "Minimum reinforcement area [mm\u00b2]" in frame.value.columns
     )
     spacing = next(
         frame.value for frame in at.dataframe
@@ -9684,7 +9678,7 @@ def test_core_m02_review_case_renders_refined_engineering_verdict():
     details = next(
         frame.value
         for frame in at.dataframe
-        if "MR,nom [kNm]" in frame.value.columns
+        if "Nominal moment resistance [kN\u00b7m]" in frame.value.columns
     )
     assert details.iloc[0]["Status"] == "FAIL"
     assert details.iloc[0]["Utilisation [%]"] == pytest.approx(100.0591, rel=1.0e-5)
@@ -9857,12 +9851,12 @@ def test_multi_case_overview_and_result_picker_show_selected_actions():
     actions = next(
         frame.value for frame in at.dataframe
         if list(frame.value.columns) == [
-            "N_Ed [kN]", "Mx_Ed [kNm]", "My_Ed [kNm]",
-            "Vx_Ed [kN]", "Vy_Ed [kN]", "Vx face", "Vy face",
-            "T_Ed [kNm]", "Minimum reinforcement",
+            "Axial force (kN)", "Moment about x (kN\u00b7m)", "Moment about y (kN\u00b7m)",
+            "Shear in x (kN)", "Shear in y (kN)", "Vx face", "Vy face",
+            "Torque (kN\u00b7m)", "Minimum reinforcement",
         ]
     )
-    assert actions.iloc[0]["Mx_Ed [kNm]"] == pytest.approx(80.0)
+    assert actions.iloc[0]["Moment about x (kN\u00b7m)"] == pytest.approx(80.0)
     assert not at.exception
 
 
@@ -9895,6 +9889,7 @@ def test_results_overview_uses_scrollable_table_with_pinned_action(monkeypatch):
 
         def __init__(self):
             self.tables = []
+            self.session_state = {}
 
         def info(self, *_args, **_kwargs):
             return None
@@ -9943,6 +9938,7 @@ def test_results_overview_uses_scrollable_table_with_pinned_action(monkeypatch):
 
     sector_app.results_overview_view({}, {})
 
+    assert fake.session_state["_overview_result_detail"] == 0
     assert len(fake.tables) == 1
     styled, options = fake.tables[0]
     assert len(styled.data) == 20
@@ -9950,8 +9946,8 @@ def test_results_overview_uses_scrollable_table_with_pinned_action(monkeypatch):
     assert options["column_config"]["Governing action"]["pinned"] is True
     assert options["column_config"]["Governing action"]["width"] == 130
     assert options["width"] == "stretch"
-    assert styled.data.iloc[0]["Governing action"] == chr(0x2014)
-    assert styled.data.iloc[0]["Result"] == chr(0x2014)
+    assert styled.data.iloc[0]["Governing action"] == "-"
+    assert styled.data.iloc[0]["Result"] == "-"
     assert styled.data.iloc[0]["Criterion"] == f"{chr(0x2265)} 21.0 mm"
     assert rows[0]["case"] == rows[0]["result"] == "-"
 
@@ -9988,7 +9984,7 @@ def test_elastic_case_picker_shows_action_parts_and_crack_choice():
         if "Action part" in frame.value.columns
     )
     assert actions["Action part"].tolist() == ["Long-term", "Short-term"]
-    assert actions["Mx_Ed [kNm]"].tolist() == pytest.approx([120.0, 30.0])
+    assert actions["Moment about x (kN\u00b7m)"].tolist() == pytest.approx([120.0, 30.0])
     assert any(
         "Stresses are reported for this action. Crack width: calculated" in caption.value
         for caption in at.caption
@@ -10590,7 +10586,7 @@ def test_elastic_fully_tensile_case_renders_without_phantom_zone():
     _select_view(at, "Elastic Results")
     assert not at.exception
     assert at.session_state["results"]["elastic"]["max_conc"] == pytest.approx(0.0)
-    assert any("no compression" in c.value for c in at.caption)
+    assert any("concrete carries zero compressive stress" in c.value for c in at.caption)
 
 
 def test_elastic_results_show_neutral_axis_and_max_steel():
@@ -11093,7 +11089,7 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
     heightened_summary = overview.loc[
         overview["Check"] == "DK heightened crack-control minimum"
     ]
-    assert heightened_summary["Governing action"].tolist() == [chr(0x2014)]
+    assert heightened_summary["Governing action"].tolist() == ["-"]
 
     _select_view(at, "Elastic Results")
     assert sum(

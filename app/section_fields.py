@@ -93,6 +93,7 @@ class SectionField:
     elements: tuple
     caption: str
     density: bool = False
+    reference_strain_plane: tuple | None = None
 
     def strain(self, x, y):
         return at(self.strain_plane, x, y)
@@ -119,6 +120,7 @@ def build_field(inp, result, *, family, duration="TOTAL"):
                       for ring in inp.get("holes", ()))
         Section.from_polygon(outer, [], holes=holes).require_valid_geometry()
         density = bool(inp.get("slab_density"))
+        reference_strain_plane = None
         if family == "Plastic":
             if result.get("axial_reachable") is not True:
                 raise FieldUnavailable("The selected capacity state has no verified axial equilibrium.")
@@ -148,9 +150,11 @@ def build_field(inp, result, *, family, duration="TOTAL"):
                 strain_plane = tuple((short_value + phi * long_value) / (ec * 1000.0)
                                      for short_value, long_value in zip(instant, long))
                 stress_plane = tuple(v / 1000.0 for v in instant)
+                reference_strain_plane = tuple(v / (ec * 1000.0) for v in instant)
             elif duration == "LONG":
                 strain_plane = tuple(v * (1.0 + phi) / (ec * 1000.0) for v in long)
                 stress_plane = tuple(v / 1000.0 for v in long)
+                reference_strain_plane = tuple(v / (ec * 1000.0) for v in long)
             else:
                 raise FieldUnavailable("Select TOTAL or LONG for the elastic field.")
             concrete = None
@@ -187,9 +191,11 @@ def build_field(inp, result, *, family, duration="TOTAL"):
                 initial = _number(row["initial_strain_permille"]) / 1000.0
             _close(strain, at(strain_plane, x, y) + initial)
             elements.append(dict(id=str(row["element_id"]), kind=kind, x=x, y=y,
-                                 area=area, strain=strain, stress=stress, initial=initial))
+                                 area=area, strain=strain, stress=stress, initial=initial,
+                                 material_id=str(row.get("material_id") or ""),
+                                 material_name=str(row.get("material_name") or "")))
         field = SectionField(family, state, outer, holes, strain_plane, stress_plane,
-                             concrete, tuple(elements), caption, density)
+                             concrete, tuple(elements), caption, density, reference_strain_plane)
         corner_rows = result["concrete_corner_states" if family == "Plastic" else "concrete_corners"]
         if len(corner_rows) != len(field.corners()):
             raise FieldUnavailable("The concrete boundary evidence is incomplete.")
@@ -319,6 +325,13 @@ def _convex_boundary(points):
     return not (any(v > 0 for v in turns) and any(v < 0 for v in turns))
 
 
+def _response_symbol(kind, value):
+    """Encode exact response sign independently of color and element type."""
+    value = _number(value)
+    shape = {"Bar": "circle", "Tendon": "diamond"}[kind]
+    return shape + ("-x" if value < 0.0 else "-dot" if value == 0.0 else "")
+
+
 def section_field_figure(field, quantity, *, scale_limits=None, title=None):
     """Draw clipped display bands and discrete material markers on equal axes."""
     if quantity not in {"strain", "stress"}:
@@ -377,7 +390,7 @@ def section_field_figure(field, quantity, *, scale_limits=None, title=None):
                                     line=dict(color="#475569", width=1.2),
                                     showlegend=False, hoverinfo="skip"))
     fig.add_trace(_polygon_trace(field.outer, line=dict(color="#334155", width=1.5),
-                                showlegend=False, hoverinfo="skip"))
+                                name="Concrete outline", showlegend=False, hoverinfo="skip"))
     intersections = _level_points(field, plane)
     shown_zero = False
     for first, second in zip(intersections, intersections[1:]):
@@ -391,13 +404,27 @@ def section_field_figure(field, quantity, *, scale_limits=None, title=None):
                                     showlegend=not shown_zero, hoverinfo="skip"))
             shown_zero = True
     corners = field.corners()
+    corner_labels = []
+    for ring_index, ring in enumerate((field.outer, *field.holes)):
+        ring_label = "Outer boundary" if ring_index == 0 else f"Void {ring_index}"
+        corner_labels.extend(f"{ring_label}, point {index + 1}" for index in range(len(ring)))
+    corner_data = [[function(x, y) * factor, field.stress(x, y),
+                    field.strain(x, y) * 1000.0,
+                    (at(field.reference_strain_plane, x, y) * 1000.0
+                     if field.reference_strain_plane is not None else field.strain(x, y) * 1000.0)]
+                   for x, y in corners]
+    reference_hover = (f"<br>Concrete reference strain (without creep) %{{customdata[3]:.5g}} {PERMILLE}"
+                       if field.reference_strain_plane is not None else "")
     fig.add_trace(go.Scatter(x=[x * 1000 for x, y in corners],
                             y=[y * 1000 for x, y in corners], mode="markers",
                             marker=dict(size=5, color=[function(x, y) * factor for x, y in corners],
                                         coloraxis="coloraxis", line=dict(color="#334155", width=0.5)),
                             showlegend=False, name="Concrete boundary",
-                            customdata=[function(x, y) * factor for x, y in corners],
-                            hovertemplate=f"Concrete<br>x %{{x:.2f}} mm; y %{{y:.2f}} mm<br>%{{customdata:.5g}} {unit}<extra></extra>"))
+                            text=corner_labels, customdata=corner_data,
+                            hovertemplate=("Concrete: %{text}<br>x %{x:.2f} mm; y %{y:.2f} mm"
+                                           "<br>Stress %{customdata[1]:.5g} MPa"
+                                           f"<br>Compatible section strain %{{customdata[2]:.5g}} {PERMILLE}"
+                                           + reference_hover + "<extra></extra>")))
     for kind, symbol in (("Bar", "circle"), ("Tendon", "diamond")):
         rows = [r for r in field.elements if r["kind"] == kind]
         if not rows:
@@ -405,20 +432,28 @@ def section_field_figure(field, quantity, *, scale_limits=None, title=None):
         fig.add_trace(go.Scatter(
             x=[r["x"] * 1000 for r in rows], y=[r["y"] * 1000 for r in rows], mode="markers",
             name=kind + "s",
-            marker=dict(symbol=symbol, size=12, color=[r[quantity] * factor for r in rows],
+            marker=dict(symbol=[_response_symbol(kind, r[quantity]) for r in rows],
+                        size=12, color=[r[quantity] * factor for r in rows],
                         coloraxis="coloraxis" if quantity == "strain" else "coloraxis2",
                         line=dict(color="#17212b", width=1.2)),
             text=[escape(r["id"]) for r in rows],
-            customdata=[[r["stress"], r["strain"] * 1000, r["initial"] * 1000] for r in rows],
+            customdata=[[r["stress"], r["strain"] * 1000, r["initial"] * 1000,
+                         field.strain(r["x"], r["y"]) * 1000,
+                         escape(" - ".join(value for value in
+                                (r.get("material_id"), r.get("material_name")) if value)
+                                or "Not recorded")]
+                        for r in rows],
             hovertemplate=(f"%{{text}}<br>x %{{x:.2f}} mm; y %{{y:.2f}} mm"
                            f"<br>Stress %{{customdata[0]:.4g}} MPa<br>Material strain %{{customdata[1]:.5g}} {PERMILLE}"
-                           f"<br>Initial strain %{{customdata[2]:.5g}} {PERMILLE}<extra></extra>")))
+                           f"<br>Compatible section strain %{{customdata[3]:.5g}} {PERMILLE}"
+                           f"<br>Initial strain %{{customdata[2]:.5g}} {PERMILLE}"
+                           "<br>Material %{customdata[4]}<extra></extra>")))
     extent = max(max(p[0] for p in field.outer) - min(p[0] for p in field.outer),
                  max(p[1] for p in field.outer) - min(p[1] for p in field.outer)) * 1000
     xs, ys = [p[0] * 1000 for p in field.outer], [p[1] * 1000 for p in field.outer]
-    def coloraxis(maximum, label, position):
+    def coloraxis(maximum, label, offset):
         return dict(colorscale=PALETTE, cmin=-maximum, cmax=maximum,
-                    colorbar=dict(title=dict(text=label, side="top"), x=position,
+                    colorbar=dict(title=dict(text=label, side="top"), x=1.0, xanchor="left", xpad=offset,
                                   len=0.72, thickness=14, tickformat=".4~g", outlinewidth=0))
     heading = title or f"{field.family}: {quantity.capitalize()}"
     subtitle = field.state
@@ -442,15 +477,19 @@ def section_field_figure(field, quantity, *, scale_limits=None, title=None):
     fig.update_layout(
         title=dict(text=title_html + f"<br><sup>{subtitle_html}</sup>", font_size=18, x=0.06),
         template="plotly_white", paper_bgcolor="white", plot_bgcolor="white",
-        height=610 + title_extra, width=760,
-        margin=dict(l=65, r=225, t=95 + title_extra, b=120, autoexpand=False),
+        height=665 + title_extra, width=760,
+        margin=dict(l=65, r=225, t=95 + title_extra, b=175, autoexpand=False),
         xaxis=dict(title="x (mm)", range=[min(xs) - extent * .08, max(xs) + extent * .08], showgrid=False, zeroline=False, constrain="domain"),
         yaxis=dict(title="y (mm)", range=[min(ys) - extent * .08, max(ys) + extent * .08], showgrid=False, zeroline=False, scaleanchor="x", scaleratio=1),
-        coloraxis=coloraxis(cmax, f"{'Section / steel<br>strain' if quantity == 'strain' else 'Concrete<br>stress'}<br>{unit}", 1.02),
-        coloraxis2=coloraxis(smax, f"Bars and<br>tendons<br>{unit}", 1.24),
-        legend=dict(orientation="h", y=-.16, x=0, font_size=12),
-        annotations=[dict(text="Tension +; compression -" + uniform,
+        coloraxis=coloraxis(cmax, f"{'Section / steel<br>strain' if quantity == 'strain' else 'Concrete<br>stress'}<br>{unit}", 10),
+        coloraxis2=coloraxis(smax, f"Bars and<br>tendons<br>{unit}", 115),
+        legend=dict(orientation="v", y=.12, yanchor="top", x=1.0,
+                    xanchor="left", font_size=12),
+        annotations=[dict(text=("Tension +; compression -<br>"
+                                "Markers: plain +; x -; dot zero"
+                                + ("<br>" + uniform.removeprefix("; ") if uniform else "")),
                           x=0, y=-.28, xref="paper", yref="paper", xanchor="left",
+                          yanchor="top", align="left",
                           showarrow=False, font_size=11)],
         font=dict(family="Arial", size=14),
     )

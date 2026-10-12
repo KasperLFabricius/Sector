@@ -411,11 +411,28 @@ def inventory_file(path: Path) -> list[dict[str, Any]]:
                     )
                 ):
                     continue
-                append(
-                    node.lineno,
-                    f"assigned_{target.id}",
-                    node.value,
+                # A literal label map selects independent labels. Inventory
+                # every value separately, as for module-level label registries.
+                literal_label_map = (
+                    target.id.casefold().endswith("labels")
+                    and isinstance(node.value, ast.Dict)
+                    and bool(node.value.keys)
+                    and all(
+                        isinstance(item, ast.Constant)
+                        and isinstance(item.value, str)
+                        for item in (*node.value.keys, *node.value.values)
+                    )
                 )
+                if literal_label_map:
+                    append_registry(
+                        node.lineno, f"assigned_{target.id}", node.value
+                    )
+                else:
+                    append(
+                        node.lineno,
+                        f"assigned_{target.id}",
+                        node.value,
+                    )
         elif isinstance(node, ast.Dict):
             for key, value in zip(node.keys, node.values):
                 if (

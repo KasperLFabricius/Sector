@@ -65,9 +65,9 @@ _MANUAL_CROPS = (
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # The reviewed 0.96.7 footer has the current version and 148-page count;
+        # The reviewed 0.96.8 footer has the current version and 148-page count;
         # the crop geometry is unchanged.
-        "a23232e12b4e41e0fa32c3927178ae86795b6244cc918eab3083cdd52ec31f21",
+        "40e777a9eb66e112278f81b5175777e2346998606c287a266230a747d2fb6a03",
     ),
 )
 
