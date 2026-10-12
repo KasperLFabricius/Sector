@@ -428,13 +428,15 @@ def test_map_groups_keep_each_figure_with_extrema_and_local_signs(chapter, monke
     builder._fig = figure
     builder._table = lambda rows, widths, **kwargs: paragraph("Extrema " + rows[1][0])
     field = SimpleNamespace(state="TOTAL", caption="Accepted state", density=True)
+    native_figure = SimpleNamespace(layout=SimpleNamespace(width=760, height=665))
     monkeypatch.setattr(sector_report.section_fields, "field_pair",
-                        lambda *a, **kw: (field, [("stress", object()), ("strain", object())]))
+                        lambda *a, **kw: (field, [("stress", native_figure), ("strain", native_figure)]))
     monkeypatch.setattr(sector_report.section_fields, "extrema",
                         lambda value, quantity: [(quantity + " minimum", -1., 0., 0.)])
     builder._section_field_maps({}, family="Elastic")
-    assert sizes == [(170, 140), (170, 140)]
-    first, second, *common = builder.flow
+    assert sizes == [(170, 148.75), (170, 148.75)]
+    # Definitions precede the complete map groups; the chapter heading stays first.
+    common, (first, second) = builder.flow[:-2], builder.flow[-2:]
     assert isinstance(first, KeepTogether) and isinstance(second, KeepTogether)
     text1 = [item.getPlainText() for item in first._content if isinstance(item, Paragraph)]
     text2 = [item.getPlainText() for item in second._content if isinstance(item, Paragraph)]
@@ -443,8 +445,11 @@ def test_map_groups_keep_each_figure_with_extrema_and_local_signs(chapter, monke
     assert text2[0] == "Extrema strain minimum"
     assert "Tension is positive" in text2[-1] and "Strain values" in text2[-1]
     assert "Section stress and strain maps" in text1
+    assert "TOTAL. Accepted state" in text1
     if chapter:
-        assert first._content[0] is heading
+        assert common[0] is heading
+        assert common.count(heading) == 1
     assert all(isinstance(item, Paragraph) for item in common)
-    assert any("Color limits" in item.getPlainText() for item in common)
+    assert any("color limits stay fixed" in item.getPlainText() for item in common)
+    assert any("Display bands" in item.getPlainText() for item in common)
     assert any("Slab-density" in item.getPlainText() for item in common)

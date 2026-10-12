@@ -245,7 +245,8 @@ def fig_beam_envelope():
     mx = [p.Mx for p in pts]
     my = [p.My for p in pts]
     figure = viz.interaction_figure(mx, my, applied=(ex["Mx"], ex["My"]))
-    _manual_native_plot(figure, height=610)
+    _manual_native_plot(figure, height=650)
+    figure.update_layout(margin_t=120, title=dict(y=0.98, yanchor="top"))
     figure.update_xaxes(title_text="M<sub>y</sub> about the y-axis (kNm)")
     figure.update_yaxes(title_text="M<sub>x</sub> about the x-axis (kNm)")
     for annotation in figure.layout.annotations:
@@ -942,8 +943,9 @@ def manual_blocks() -> list:
     md('**Loaded-project messages.** **Saved-file input record: matches** means that the file agrees with its stored input record. **Inputs match the recorded calculation** means that those inputs also agree with the recorded calculation inputs. The two messages check different records. If the records are different, examine the loaded inputs and calculate again.')
     md('Sector shows the recorded saving version and calculation time when these are available. If Sector rejects a new file, it keeps the current project unchanged. Select a different compatible project file with no damage. If invalid current inputs disable the project download, correct the displayed input issue before you save.')
     md('Open **Inputs > Project**. Expand **Save / Load**. To save the inputs, select **Download project**. To restore inputs, select a saved file under **Load project**.\n\nA downloaded project file stores the section, materials, settings, named load cases and saving information. When you load a project, Sector restores its inputs and clears earlier results.\n\nExamine the restored inputs. Before you use or report the results, open **Analysis**. Select **Calculate**.')
-    md('Open **Inputs > Project**. Expand **Save / Load**. Use **Autosave** for local recovery.\n\nThe default interval is five minutes. Set **Autosave interval (min)** from 1 to 120 minutes. A due save runs on the next interaction if the inputs are different from the last saved inputs. The panel shows the last save time.')
+    md('Open **Inputs > Project**. Expand **Save / Load**. Use **Autosave** for local recovery.\n\nAutosave is enabled by default with a two-minute interval. Set **Autosave interval (min)** from 1 to 120 minutes. Existing saved preferences keep their selected values. Sector checks for due saves while the session is open. It saves changed, completed inputs after pending input changes, project loading and report generation have finished. The panel shows the last save time.')
     md('Sector restores the recovery file on the next launch. An explicitly loaded project takes precedence. Examine the restored inputs. Open **Analysis**. Select **Calculate**. Save the project file used for each issued report.')
+    md("Autosave preserves an unreadable recovery file. If another session changes the recovery file, autosave pauses for the current session. The Save / Load panel shows the reason. Use **Download project** to keep the current inputs before closing the session.")
     md('The Windows executable usually stores recovery data in **%LOCALAPPDATA%/Sector/autosave.json**. A source installation uses **%USERPROFILE%/.sector/autosave.json**. An installation can specify a different recovery folder. If automatic recovery fails, load a saved project file with no damage through **Inputs > Project**.')
     h1("Defining the section")
     md('A section is a set of points in millimeters: concrete corners, voids, bars and tendons. Sector calculates from these point tables. Quick Section updates these tables when you apply its geometry.')
@@ -1214,11 +1216,11 @@ def manual_blocks() -> list:
     md('The overview shows one governing row for each engineering check. Each row identifies its action set, direction or scope, result, criterion and status. A calculated result takes precedence over an inactive state. For equal states, the largest valid utilization governs. An exact tie keeps the first listed case.\n\nFor a check with different directions, the most unfavorable direction governs. Its label identifies that direction. **Not run**, **Not calculated**, **Not applicable** and **Not requested** identify the calculation scope and state. Headline counts summarize the rows on the screen. Each row keeps its own status.')
     md('In analysis figures, hover text reports the plotted capacity or material response represented by the selected point. Section-result markers show stress and strain. Section maps also show coordinates. The full result tables give reinforcement areas and coordinates.\n\n**Plot controls**\n\nThe plot toolbar gives these controls:\n\n- **Download plot as a PNG:** save the plot shown as an image.\n- **Zoom:** select a region to make it larger.\n- **Pan:** move the region shown.\n- **Zoom in** and **Zoom out:** change the scale.\n- **Autoscale:** change the axis ranges to include all plotted data.\n- **Reset axes:** use the initial axis ranges.\n- **Fullscreen:** show the plot on the full screen.\n\nSelect the required control in the plot toolbar. For Zoom or Pan, drag within the plot.')
     h2("Plastic results")
-    md("**Section stress and strain maps** show the selected ultimate-capacity state. "
-       "Select its angle with **Neutral-axis state**. Read the strain map and stress map together. "
-       "Both use the section coordinates, with tension positive and compression negative.")
+    md("**Section field** shows one contour for the selected ultimate-capacity state. "
+       "Select its angle with **Neutral-axis state**. Use **Contour quantity** to select **Stress** or **Strain**. "
+       "Both quantities use section coordinates, with tension positive and compression negative.")
     md("The concrete fill shows values from the accepted strain plane and selected design material law. "
-       "Circles identify bars. Diamonds identify tendons. Tendon material strain includes initial prestress strain. "
+       "Circles identify bars. Diamonds identify tendons. A plain marker shows a positive value. An x marks a negative value. A dot marks zero. The sign refers to the displayed quantity. Tendon material strain includes initial prestress strain. "
        "A tendon can remain in tension inside the concrete compression region.")
     md("Strain uses one common color scale. Concrete and reinforcement have different stress scales. Each scale has a material label. "
        "Color limits stay fixed across valid angles of the selected action. Other actions can have different limits. "
@@ -1249,17 +1251,17 @@ def manual_blocks() -> list:
        "trace. Use the full fixed-$N$ biaxial envelope to assess the concurrent "
        "applied moment pair. A nonconverged boundary is identified as diagnostic output.")
     h2("Elastic results")
-    md("Use **Map action duration** to select **Combined actions (TOTAL)** or **Sustained actions (LONG)**. "
-       "The maps use the same section geometry and fixed color limits for these two states. "
+    md("Use **Contour quantity** to select **Stress** or **Strain**. Use **Map action duration** to select **Combined actions (TOTAL)** or **Sustained actions (LONG)**. "
+       "One contour is shown at a time. The quantities use the same section geometry and fixed color limits for these two states. "
        "The captions identify the selected action and duration.")
     md("The strain fill shows compatible section deformation. TOTAL includes retained long-term deformation and the instantaneous response. "
        "LONG uses the effective concrete modulus for sustained actions. Reinforcement markers show material strain. Tendon markers also include initial strain.")
     md("The concrete stress map uses the retained cracked elastic state. Tensile concrete stress is zero, while tensile section strain can remain positive. "
        "Under creep, the zero section-strain line can differ from the concrete stress boundary. Each map identifies its own dashed line.")
-    md("The depth profile and concrete-corner table show instantaneous concrete stress-plane strain. "
-       "The depth-profile markers and reinforcement table show TOTAL material strain. These component labels explain their difference from the compatible section-strain map.")
+    md("The concrete-corner table shows instantaneous concrete stress-plane strain. "
+       "The reinforcement table shows TOTAL material strain and its retained components. Map hover text identifies compatible section strain, material strain and initial strain. Concrete hover text also gives the reference strain without creep. These labels distinguish the retained strain definitions.")
     md("Marker size identifies an element and has no physical diameter scale. For slab-density input, markers identify retained integration points or nominal axes. "
-       "Read their tributary areas in the element table. A missing or inconsistent retained state gives **Section maps unavailable**. Calculate again before you use the maps.")
+       "Read their tributary areas in the element table. A missing or inconsistent retained state gives **Section map unavailable**. Calculate again before you use the maps.")
     fig(fig_elastic_strain_map,
         "Rectangular example: TOTAL compatible strain for sustained moment 100 kNm, additional moment 50 kNm, concrete modulus 35 GPa and creep coefficient 2. Axial force is zero.",
         "A vertical compatible strain gradient crosses the rectangular section. The bar strains lie on that plane. A dashed line marks zero section strain.")

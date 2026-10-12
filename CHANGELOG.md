@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.96.8 - 2026-10-12
+
+Result views show one selected section contour with quantity and elastic
+load-duration controls. Marker signs and explicit strain definitions retain
+the useful information from earlier figures. Result notation and explanations
+are clearer, including known calculation limitations.
+
+Autosave starts enabled at two-minute intervals, with idle save opportunities
+and guards for incomplete inputs and concurrent recovery-file changes.
+Explicit autosave preferences remain in effect.
+
+The existing solvers, material laws, numerical results and project schema 27
+retain their behavior.
+
 ## 0.96.7 - 2026-10-11
 
 Reports use larger text, shorter explanations, linked governing-result notes

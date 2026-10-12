@@ -75,8 +75,10 @@ fatigue_presentation = deferred_module("fatigue_presentation")
 load_cases = deferred_module("load_cases")
 mat_catalog = deferred_module("material_catalog")
 project_io = deferred_module("project_io")
+recovery_store = deferred_module("recovery_store")
 rebar_table = deferred_module("reinforcement_table")
 presentation = deferred_module("result_presentation")
+summary_notation = deferred_module("report_summary_notation")
 heightened_adapter = deferred_module("heightened_crack_adapter")
 session_state_migrations = deferred_module("session_state_migrations")
 table_fields = deferred_module("app.table_field_definitions")
@@ -3507,7 +3509,7 @@ def _gather_project() -> str:
     )
 
 
-_AUTOSAVE_DEFAULT_MIN = 5     # default autosave interval (minutes), BriCoS-style
+_AUTOSAVE_DEFAULT_MIN = 2     # default autosave interval (minutes)
 
 
 def _autosave_path() -> pathlib.Path:
@@ -3546,6 +3548,8 @@ def _perform_autosave() -> bool:
     Skips a section with no usable outline (fewer than three complete corners) and a
     project unchanged since the last autosave, so the recovery file is never
     overwritten with nothing or rewritten needlessly."""
+    if st.session_state.get("_autosave_recovery_blocked"):
+        return False
     corners = _pts_from_df(_current_table("corners_base", "ed_corners", _CORNER_COLS),
                            _CORNER_COLS)
     if len(corners) < 3:
@@ -3560,7 +3564,30 @@ def _perform_autosave() -> bool:
         data = _gather_project()
     except ValueError:
         return False
-    if _write_autosave(data, _autosave_path()):
+    outcome, saved_file_hash = recovery_store.write_if_current(
+        data, _autosave_path(), st.session_state.get("_autosave_file_hash"),
+        _write_autosave,
+    )
+    if outcome == "conflict":
+        notice = (
+            "Autosave paused because another Sector session changed the recovery file. "
+            "Use Download project to keep your current inputs. Close other sessions "
+            "and restart Sector to restore the latest recovery file."
+        )
+        st.session_state["_autosave_recovery_blocked"] = notice
+        st.toast(notice)
+    if outcome in {"busy", "failed"}:
+        st.session_state["_autosave_retry"] = True
+    if outcome == "failed" and not st.session_state.get("_autosave_write_notice"):
+        notice = (
+            "Autosave could not write the recovery file. Check folder access "
+            "or use Download project to keep your current inputs."
+        )
+        st.session_state["_autosave_write_notice"] = notice
+        st.toast(notice)
+    if outcome == "saved":
+        st.session_state.pop("_autosave_write_notice", None)
+        st.session_state["_autosave_file_hash"] = saved_file_hash
         st.session_state["_autosave_hash"] = digest
         st.session_state["_autosave_last"] = datetime.now().strftime("%H:%M:%S")
         return True
@@ -3584,9 +3611,10 @@ def _autosave_preferences(state) -> tuple[bool, int]:
 
 
 def _maybe_autosave() -> None:
-    """Autosave on user interaction once the interval has elapsed (the BriCoS model:
-    the save rides the reruns that interaction triggers, so the app never reruns or
-    saves while idle). Call from the main flow after the inputs are built."""
+    """Save completed inputs when the selected interval has elapsed.
+
+    Completed workspace interactions and the idle fragment service this clock.
+    """
     # Off-Inputs pages retain the last completed engineering payload. A pending
     # callback or interrupted Inputs build means live widget state can be only a
     # partial newer draft, so no off-page rerun may serialize that hybrid state.
@@ -3606,9 +3634,14 @@ def _maybe_autosave() -> None:
     interval = autosave_min * 60
     if time.time() - st.session_state.get("_autosave_t", 0.0) < interval:
         return
-    st.session_state["_autosave_t"] = time.time()    # reset whether or not it writes
+    previous_due_time = st.session_state.get("_autosave_t", 0.0)
+    st.session_state["_autosave_t"] = time.time()
+    st.session_state.pop("_autosave_retry", None)
     if _perform_autosave():
         st.toast("Autosaved.")
+    elif st.session_state.pop("_autosave_retry", False):
+        # A busy lock or temporary write failure remains due at the next tick.
+        st.session_state["_autosave_t"] = previous_due_time
 
 
 def _measured_autosave() -> None:
@@ -3619,6 +3652,19 @@ def _measured_autosave() -> None:
         _maybe_autosave()
     finally:
         app_run_probe.stop_phase(st.session_state, token)
+
+
+@st.fragment(run_every=5)
+def _idle_autosave() -> None:
+    """Service due saves while the session is active, without a workspace rerun."""
+    if (
+        _has_uncommitted_inputs()
+        or st.session_state.get(_REPORT_BUILD_KEY, False)
+        or st.session_state.get(_PENDING_REPORT_EVENTS_KEY)
+        or "_pending_project" in st.session_state
+    ):
+        return
+    _maybe_autosave()
 
 
 def _autosave_startup() -> None:
@@ -3639,15 +3685,23 @@ def _autosave_startup() -> None:
         return
     st.session_state["_autosave_init"] = True
     st.session_state["_autosave_t"] = time.time()
-    if "_pending_project" in st.session_state:
-        return                                       # an upload is already pending
     path = _autosave_path()
+    st.session_state["_autosave_file_hash"] = None
     try:
-        if not path.exists():
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
             return
-        text = path.read_text(encoding="utf-8")
+        st.session_state["_autosave_file_hash"] = recovery_store.digest_bytes(raw)
+        text = raw.decode("utf-8")
         tables, scalars = project_io.parse_project(text)
+        if "_pending_project" in st.session_state:
+            return                               # a valid upload takes precedence
     except ValueError as exc:
+        st.session_state["_autosave_recovery_blocked"] = (
+            "Autosave paused to preserve an unreadable recovery file. "
+            "Use Download project to keep your current inputs."
+        )
         st.session_state["_project_msg"] = (
             "error",
             "Autosave not restored: "
@@ -3656,6 +3710,10 @@ def _autosave_startup() -> None:
         )
         return
     except (OSError, UnicodeError):
+        st.session_state["_autosave_recovery_blocked"] = (
+            "Autosave paused to preserve an unreadable recovery file. "
+            "Use Download project to keep your current inputs."
+        )
         st.session_state["_project_msg"] = (
             "error", "An autosave file was found but could not be read; "
                      "starting with the default section.")
@@ -3671,13 +3729,17 @@ def _autosave_panel(box) -> None:
     """Autosave toggle, interval and status inside the Save / Load panel."""
     enabled = _seeded_checkbox(
         box, "Autosave", True, "autosave_on",
-        help="Save inputs locally and restore them on the next launch. A due save "
-             "runs on the next interaction.")
+        help="Save completed inputs locally and restore them on the next launch. "
+             "Due saves run while this session remains open.")
     _seeded_number(
         box, "Autosave interval (min)", 1, 120, _AUTOSAVE_DEFAULT_MIN, 1,
         "autosave_min",
         disabled=not enabled, on_change=_reset_autosave_clock,
         help="Minutes between automatic saves.")
+    if st.session_state.get("_autosave_recovery_blocked"):
+        _manual_warning(box, "autosave-recovery", st.session_state["_autosave_recovery_blocked"])
+    elif st.session_state.get("_autosave_write_notice"):
+        _manual_warning(box, "autosave-recovery", st.session_state["_autosave_write_notice"])
     last = st.session_state.get("_autosave_last")
     box.caption(f"Autosaved at {last}." if last
                 else "Local recovery is restored on the next launch.")
@@ -12000,6 +12062,41 @@ def _open_overview_result(row, inp, results):
             st.session_state["_fatigue_result_spectrum"] = matches[0]
 
 
+def _ui_summary_quantity(row, name):
+    """Name only validated authored symbols in a plain overview cell."""
+    value = row.get(name, "")
+    metadata = row.get("report_fields")
+    fragments = metadata.get(name) if isinstance(metadata, dict) else None
+    if not summary_notation.valid_fragments(value, fragments):
+        return value
+    labels = {
+        "fyk": "characteristic reinforcement yield strength", "fywk": "characteristic link yield strength",
+        "u_k": "tube centerline perimeter", "z_x": "lever arm in x", "z_y": "lever arm in y",
+        "As,req": "required reinforcement area", "As,prov": "provided reinforcement area",
+        "As,min": "minimum reinforcement area", "Rnom": "nominal resistance",
+        "Rcr": "cracking action", "MR,nom": "nominal moment resistance",
+        "Mcr": "cracking moment", "sprov": "provided spacing", "smax": "maximum spacing",
+        "\u03c1w,prov": "provided link ratio", "\u03c1w,min": "minimum link ratio",
+        "VRd,c": "concrete shear resistance", "V_Rd,c": "concrete shear resistance",
+        "VRd,s": "link shear resistance", "V_Rd,s": "link shear resistance",
+        "VRd,max": "concrete-strut shear resistance", "V_Rd,max": "concrete-strut shear resistance",
+        "Asw": "link area", "bw": "web width", "VEd": "applied shear",
+        "Vx,Ed": "applied shear in x", "Vy,Ed": "applied shear in y",
+        "TEd": "applied torsion", "N_Ed": "applied axial force", "M_Ed": "applied moment",
+        "T_Rd,c": "concrete torsion resistance", "TRd,c": "concrete torsion resistance",
+        "TRd,s": "transverse-steel torsion resistance", "TRd,max": "concrete-strut torsion resistance",
+        "w_k": "crack width", "w_k,criterion": "crack-width limit",
+        "lambda_cr": "cracking factor", "f_ck": "characteristic concrete strength",
+        "f_yk": "characteristic reinforcement yield strength",
+        "f_pk": "characteristic tendon tensile strength",
+        "f_p0.1k": "characteristic tendon 0.1% proof strength",
+        "mm2": "mm\u00b2", "mm3": "mm\u00b3", "m2": "m\u00b2",
+        "m3": "m\u00b3", "m4": "m\u2074",
+    }
+    return "".join(labels.get(plain, plain) if kind == "catalogue" else plain
+                   for kind, plain in fragments)
+
+
 def results_overview_view(inp, results, *, stale=False):
     """One-screen result register without a global calculation verdict."""
     all_rows = presentation.multi_case_summary_rows(inp, results, stale=stale)
@@ -12067,10 +12164,10 @@ def results_overview_view(inp, results, *, stale=False):
     for row in rows:
         display.append({
             "Check": row["check"],
-            "Governing action": (chr(0x2014) if row["case"] == "-" else row["case"]),
+            "Governing action": ("-" if row["case"] == "-" else row["case"]),
             "Status": row["status"],
-            "Result": (chr(0x2014) if row["result"] == "-" else row["result"]),
-            "Criterion": (chr(0x2014) if row["criterion"] == "-" else row["criterion"]),
+            "Result": _ui_summary_quantity(row, "result"),
+            "Criterion": _ui_summary_quantity(row, "criterion"),
             "View": row["view"],
         })
     summary = pd.DataFrame(
@@ -12155,9 +12252,12 @@ def results_overview_view(inp, results, *, stale=False):
             f"{warning_count} review / stale \u00b7 {len(information_rows)} scope / availability. "
             "Scroll tables horizontally to read every result and criterion."
         )
+        detail_key = "_overview_result_detail"
+        if st.session_state.get(detail_key) not in range(len(rows)):
+            st.session_state[detail_key] = 0
         detail_index = st.selectbox(
-            "Result details", range(len(rows)),
-            format_func=lambda index: f"{rows[index]['check']} \u2014 {rows[index]['case']}",
+            "Result details", range(len(rows)), key=detail_key, persist_state="session",
+            format_func=lambda index: f"{rows[index]['check']} - {rows[index]['case']}",
         )
         st.button(
             "Open selected result", key="overview_open_result",
@@ -12170,7 +12270,7 @@ def results_overview_view(inp, results, *, stale=False):
             "torsion:minimum_reinforcement"
         ):
             st.caption(
-                f"{row['check']} - {row['status']}: {row.get('note') or '-'}"
+                f"{row['check']} - {row['status']}: {_ui_summary_quantity(row, 'note') or '-'}"
             )
         elif (
             str(row.get("view") or "") == "Shear"
@@ -12178,7 +12278,7 @@ def results_overview_view(inp, results, *, stale=False):
             and row.get("note")
         ):
             st.caption(
-                f"{row['check']} - NOT ASSESSED: {row['note']}"
+                f"{row['check']} - NOT ASSESSED: {_ui_summary_quantity(row, 'note')}"
             )
 
     if information_rows:
@@ -12186,7 +12286,7 @@ def results_overview_view(inp, results, *, stale=False):
         st.dataframe(
             pd.DataFrame([
                 {"Check": row["check"], "Action": row["case"],
-                 "Status": row["status"], "Availability / scope": row["result"],
+                 "Status": row["status"], "Availability / scope": _ui_summary_quantity(row, "result"),
                  "View": row["view"]}
                 for row in information_rows
             ]),
@@ -12410,49 +12510,49 @@ def detailing_view(inp, results, *, global_results=None):
                     else f"M{check.get('axis', '-')}"
                 ),
                 "Tension face": check.get("face", "-"),
-                "As,provided [mm2]": check.get("as_provided_mm2"),
-                "As,min [mm2]": check.get("as_min_mm2"),
+                "Provided reinforcement area [mm\u00b2]": check.get("as_provided_mm2"),
+                "Minimum reinforcement area [mm\u00b2]": check.get("as_min_mm2"),
                 "Utilisation [%]": (
                     100.0 * float(check["utilisation"])
                     if check.get("utilisation") is not None else None
                 ),
-                "bt [mm]": check.get("bt_mm"),
-                "d [mm]": check.get("d_mm"),
-                "fctm [MPa]": check.get("fctm_mpa"),
-                "fyk [MPa]": check.get("fyk_mpa"),
+                "Tension-zone width [mm]": check.get("bt_mm"),
+                "Effective depth [mm]": check.get("d_mm"),
+                "Mean concrete tensile strength [MPa]": check.get("fctm_mpa"),
+                "Characteristic reinforcement yield strength [MPa]": check.get("fyk_mpa"),
                 "Bars": ", ".join(check.get("bar_ids") or []),
                 "Status": check.get("status"),
             } for check in checks]
         elif checks and checks[0].get("type") == "pure tension":
             rows = [{
                 "Check": "Pure tension",
-                "Rcr [kN]": check.get("demand_kn"),
-                "Rnom [kN]": check.get("resistance_kn"),
+                "Cracking axial force [kN]": check.get("demand_kn"),
+                "Nominal axial resistance [kN]": check.get("resistance_kn"),
                 "Utilisation [%]": (
                     100.0 * float(check["utilisation"])
                     if check.get("utilisation") is not None else None
                 ),
-                "As,provided [mm2]": check.get("as_provided_mm2"),
+                "Provided reinforcement area [mm\u00b2]": check.get("as_provided_mm2"),
                 "Bars": ", ".join(check.get("bar_ids") or []),
                 "Status": check.get("status"),
             } for check in checks]
         else:
             rows = [{
                 "Check": "Bending with axial force",
-                "Mcr [kNm]": check.get("m_cr_knm"),
-                "MR,nom [kNm]": check.get("mr_nom_knm"),
+                "Cracking moment [kN\u00b7m]": check.get("m_cr_knm"),
+                "Nominal moment resistance [kN\u00b7m]": check.get("mr_nom_knm"),
                 "Utilisation [%]": (
                     100.0 * float(check["utilisation"])
                     if check.get("utilisation") is not None else None
                 ),
                 "Model": check.get("model"),
-                "Nnom,tension [kN]": check.get("nominal_axial_resistance_kn"),
+                "Nominal tensile axial resistance [kN]": check.get("nominal_axial_resistance_kn"),
                 "Axial equilibrium": (
                     "Yes" if check.get("axial_feasible") is True
                     else "No" if check.get("axial_feasible") is False
                     else "-"
                 ),
-                "As,provided [mm2]": check.get("as_provided_mm2"),
+                "Provided reinforcement area [mm\u00b2]": check.get("as_provided_mm2"),
                 "Bars": ", ".join(check.get("bar_ids") or []),
                 "Status": check.get("status"),
             } for check in checks]
@@ -12746,103 +12846,56 @@ def plastic_view(inp, results):
                        format_func=lambda i: (
                            f"{i + 1}: NA angle = {pts[i]['V']:.0f}{_DEG}"
                        ),
-                       key="pl_state",
+                       persist_state="session", key="pl_state",
                        help="Inspect the section state at one swept neutral-axis angle.")
     pt = pts[sel]
     _section_field_panel(inp, p, family="Plastic", point_index=sel)
     retained_state = presentation.plastic_state_rows(pt)
-    hp = retained_state["halfplane"]
-    na = viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"],
-                        bbox=_outline_bbox(inp["outer"]))
-    cL, cR = st.columns([3, 2])
-    with cL:
-        bar_xy = [(b[0], b[1], b[2]) for b in inp["bars"]]
-        tendon_xy = [(t[0], t[1], t[2]) for t in inp["tendons"]]
-        # Colour and hover text use the accepted material states retained by the
-        # plastic solver. A tendon on the compression side may therefore remain
-        # tensile because its locked-in prestrain is already included.
-        bar_states = [
-            row for row in retained_state["elements"]
-            if row.get("element_type") == "Bar"
-        ]
-        tendon_states = [
-            row for row in retained_state["elements"]
-            if row.get("element_type") == "Tendon"
-        ]
-        state_colour = lambda row: (
-            viz.BAR_TENSION
-            if row.get("strain_permille", 0.0) >= 0.0
-            else viz.BAR_COMPRESSION
-        )
-        bar_colors = [state_colour(row) for row in bar_states]
-        tendon_colors = [state_colour(row) for row in tendon_states]
-        bar_hover = _plastic_state_hover(bar_states)
-        tendon_hover = _plastic_state_hover(tendon_states)
-        st.plotly_chart(
-            viz.section_figure(inp["outer"], inp["holes"], bar_xy, na_line=na,
-                               bar_colors=bar_colors, tendons=tendon_xy,
-                               tendon_colors=tendon_colors,
-                               zones=viz.compression_zones(inp["outer"], hp),
-                               title=f"Section at NA angle = {pt['V']:.0f}{_DEG} "
-                                     "(tension + / compression -)",
-                               show_labels=False, scale=_MM, unit="mm",
-                               bar_hover=bar_hover, tendon_hover=tendon_hover,
-                               bar_ids=[item["id"] for item in inp.get("bar_elements", [])],
-                               tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])],
-                               geometry_hover=False),
-            width="stretch")
-        st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
-                   "compression (-). Bar circles and tendon diamonds identify the "
-                   "element type. Hover an element for its ID, design stress and "
-                   "strain; complete values are tabulated beside the figure.")
-    with cR:
-        # Split the bar strain into its tensile and compression extreme only when
-        # there are mild bars that are active in compression (a tendon-only section has
-        # no mild bar to compress). Also guard on the field being present so a pre-v0.40
-        # reused payload (which lacks eps_s_comp) degrades to the single strain.
-        active_comp = (any(material.active_in_compression
-                           for material in (inp.get("bar_materials")
-                                            or [inp["steel"]]))
-                       and bool(inp["bars"])
-                       and "eps_s_comp" in pt)
-        compression_depth_mm = presentation.plastic_compression_depth_mm(pt)
-        compression_depth_text = (
-            "-"
-            if compression_depth_mm is None
-            else f"{compression_depth_mm:.3f} mm"
-        )
-        lines = [
-            f"- **Source state**: {presentation.action_set_text(inp, 'plastic', include_source=False)}; "
-            f"$N_{{Ed}} = {inp['P_pl']:.3f}$ kN; "
-            f"NA angle = {pt['V']:.0f}{_DEG} (sweep point {sel + 1})",
-            f"- **$M_x$ / $M_y$**: {pt['Mx']:.3f} / {pt['My']:.3f} kNm",
-            f"- **Curvature $\\kappa$**: {pt['kappa']:.4g} 1/m",
-            f"- **Compression resultant $F_{{comp}}$**: "
-            f"{pt['comp_force']:.3f} kN",
-            f"- **Compression-zone depth $c$**: {compression_depth_text}",
-            f"- **Internal lever arm $z$**: {pt['lever'] * _MM:.3f} mm",
-            *[f"- **Effective depth $d$ ({face})**: "
-              + ("Unavailable" if depth is None else f"{depth:.3f} mm")
-              for face, depth in presentation.plastic_face_depth_summary(p)],
-            f"- **Lever-arm components $z_x$ / $z_y$**: "
-            f"{pt['dx'] * _MM:.3f} / {pt['dy'] * _MM:.3f} mm",
-            f"- **Concrete strain $\\varepsilon_c$**: {pt['eps_c']:.3f} %",
-        ]
-        if active_comp:
-            lines.append(f"- **Steel strain, tension $\\varepsilon_{{s,t}}$**: "
-                         f"{pt['eps_s']:.3f} %")
-            lines.append(f"- **Steel strain, compression $\\varepsilon_{{s,c}}$**: "
-                         f"{pt['eps_s_comp']:.3f} %")
-        else:
-            lines.append(f"- **Steel strain $\\varepsilon_s$**: {pt['eps_s']:.3f} %")
-        if inp["tendons"]:
-            lines.append(f"- **Tendon strain $\\varepsilon_p$**: {pt['eps_cable']:.3f} %")
-        lines.append(f"- **NA intercepts**: x {_fmt(pt['na_x'] * _MM)}, "
-                     f"y {_fmt(pt['na_y'] * _MM)} mm")
-        st.markdown("\n".join(lines))
-        st.caption("Strains are tension-positive (compression negative), agreeing "
-                   "with N and the stresses -- so a crushing concrete strain reads "
-                   "negative.")
+    # Split the bar strain into its tensile and compression extreme only when
+    # there are mild bars that are active in compression (a tendon-only section has
+    # no mild bar to compress). Also guard on the field being present so a pre-v0.40
+    # reused payload (which lacks eps_s_comp) degrades to the single strain.
+    active_comp = (any(material.active_in_compression
+                       for material in (inp.get("bar_materials")
+                                        or [inp["steel"]]))
+                   and bool(inp["bars"])
+                   and "eps_s_comp" in pt)
+    compression_depth_mm = presentation.plastic_compression_depth_mm(pt)
+    compression_depth_text = (
+        "-"
+        if compression_depth_mm is None
+        else f"{compression_depth_mm:.3f} mm"
+    )
+    lines = [
+        f"- **Source state**: {presentation.action_set_text(inp, 'plastic', include_source=False)}; "
+        f"$N_{{Ed}} = {inp['P_pl']:.3f}$ kN; "
+        f"NA angle = {pt['V']:.0f}{_DEG} (sweep point {sel + 1})",
+        f"- **$M_x$ / $M_y$**: {pt['Mx']:.3f} / {pt['My']:.3f} kNm",
+        f"- **Curvature $\\kappa$**: {pt['kappa']:.4g} 1/m",
+        f"- **Compression resultant $F_{{comp}}$**: "
+        f"{pt['comp_force']:.3f} kN",
+        f"- **Compression-zone depth $c$**: {compression_depth_text}",
+        f"- **Internal lever arm $z$**: {pt['lever'] * _MM:.3f} mm",
+        *[f"- **Effective depth $d$ ({face})**: "
+          + ("Unavailable" if depth is None else f"{depth:.3f} mm")
+          for face, depth in presentation.plastic_face_depth_summary(p)],
+        f"- **Lever-arm components $z_x$ / $z_y$**: "
+        f"{pt['dx'] * _MM:.3f} / {pt['dy'] * _MM:.3f} mm",
+        f"- **Concrete strain $\\varepsilon_c$**: {pt['eps_c']:.3f} %",
+    ]
+    if active_comp:
+        lines.append(f"- **Steel strain, tension $\\varepsilon_{{s,t}}$**: "
+                     f"{pt['eps_s']:.3f} %")
+        lines.append(f"- **Steel strain, compression $\\varepsilon_{{s,c}}$**: "
+                     f"{pt['eps_s_comp']:.3f} %")
+    else:
+        lines.append(f"- **Steel strain $\\varepsilon_s$**: {pt['eps_s']:.3f} %")
+    if inp["tendons"]:
+        lines.append(f"- **Tendon strain $\\varepsilon_p$**: {pt['eps_cable']:.3f} %")
+    lines.append(f"- **NA intercepts**: x {_fmt(pt['na_x'] * _MM)}, "
+                 f"y {_fmt(pt['na_y'] * _MM)} mm")
+    st.markdown("\n".join(lines))
+    st.caption("Strain is positive in tension and negative in compression, consistent with axial force and stress. Concrete crushing strain is negative.")
 
     effective_depths = p.get("effective_depths") or ()
     st.markdown("#### Face-specific effective depth")
@@ -12853,9 +12906,10 @@ def plastic_view(inp, results):
         )
     else:
         st.caption(
-            "Each d is measured from the opposite extreme concrete fibre to the "
-            "centroid of the listed mild bars. Four face-aligned values show the "
-            "available depth for either bending direction, including off-axis states."
+            "Each effective depth $d$ extends from the opposite extreme concrete fiber "
+            "to the centroid of the listed reinforcing bars. Four values align "
+            "with the section faces. They show the available depth for either "
+            "bending direction, including off-axis states."
         )
         st.dataframe(
             {
@@ -12873,10 +12927,10 @@ def plastic_view(inp, results):
                     or "none"
                     for row in effective_depths
                 ],
-                "Asl (mm2)": [
+                "Longitudinal reinforcement area (mm\u00b2)": [
                     round(row["asl_mm2"], 3) for row in effective_depths
                 ],
-                "Asl centroid": [
+                "Longitudinal reinforcement centroid": [
                     (
                         f"{row['coordinate']} = "
                         f"{row['asl_cg_m'] * _MM:.3f} mm"
@@ -12893,7 +12947,7 @@ def plastic_view(inp, results):
             width="stretch",
             column_config={
                 "d (mm)": st.column_config.NumberColumn(format="%.3f"),
-                "Asl (mm2)": st.column_config.NumberColumn(format="%.3f"),
+                "Longitudinal reinforcement area (mm\u00b2)": st.column_config.NumberColumn(format="%.3f"),
             },
         )
 
@@ -12938,7 +12992,7 @@ def plastic_view(inp, results):
                     "State": [row["state"] for row in element_rows],
                     "x (mm)": [round(row["x_mm"], 2) for row in element_rows],
                     "y (mm)": [round(row["y_mm"], 2) for row in element_rows],
-                    "Area (mm2)": [round(row["area_mm2"], 2) for row in element_rows],
+                    "Area (mm\u00b2)": [round(row["area_mm2"], 2) for row in element_rows],
                     f"Strain ({_EPS}, {_PERMILLE})": [
                         round(row["strain_permille"], 5) for row in element_rows],
                     f"Design stress ({_SIGMA}, MPa)": [
@@ -13000,8 +13054,8 @@ def interaction_view(inp, results):
             title="N-My interaction"), width="stretch")
     st.caption(
         "Each curve traces capacity from pure tension to squash load. The marked "
-        "point is the applied plastic action; points inside the boundary are within "
-        "capacity. Hover for $N$ and $M$."
+        "point shows the corresponding components of the applied action. "
+        "Use the Plastic result for the biaxial moment check. Hover for $N$ and $M$."
     )
     with st.expander("Numerical N-M boundary (all points)", expanded=False):
         rows = presentation.nm_boundary_rows(d)
@@ -13035,34 +13089,57 @@ def interaction_view(inp, results):
 
 
 def _section_field_panel(inp, result, *, family, point_index=None):
-    """Show the shared retained-state maps and exact static extrema."""
-    st.markdown("### Section stress and strain maps")
+    """Show one retained-state map with its exact extrema."""
+    st.markdown("### Section field")
+    quantity = st.segmented_control(
+        "Contour quantity", ("stress", "strain"), default="stress",
+        required=True, format_func=str.capitalize,
+        key=f"{family.lower()}_field_quantity", persist_state="session")
     duration = "TOTAL"
     if family == "Elastic":
-        duration = st.selectbox("Map action duration", ("TOTAL", "LONG"),
-                                key="elastic_field_duration",
-                                format_func=lambda value: "Combined actions (TOTAL)" if value == "TOTAL" else "Sustained actions (LONG)")
+        duration = st.segmented_control(
+            "Map action duration", ("TOTAL", "LONG"), default="TOTAL",
+            required=True, key="elastic_field_duration", persist_state="session",
+            format_func=lambda value: (
+                "Combined actions (TOTAL)" if value == "TOTAL"
+                else "Sustained actions (LONG)"))
     try:
         field, figures = section_fields.field_pair(
             inp, result, family=family, point_index=point_index, duration=duration)
     except section_fields.FieldUnavailable as exc:
-        st.info("Section maps unavailable. " + str(exc))
+        st.info("Section map unavailable. " + str(exc))
         return
     st.caption(field.state + ". " + field.caption)
-    for quantity, figure in figures:
-        st.plotly_chart(figure, width="stretch")
-        unit = _PERMILLE if quantity == "strain" else "MPa"
-        st.dataframe([
-            {"Extremum": label, f"Value ({unit})": value,
-             "x (mm)": x * _MM, "y (mm)": y * _MM}
-            for label, value, x, y in section_fields.extrema(field, quantity)
-        ], hide_index=True, width="stretch")
+    figure = dict(figures)[quantity]
+    case = inp.get("plastic_case" if family == "Plastic" else "elastic_case") or {}
+    case_name = _safe_filename_part(case.get("id"), "Unnamed-action")
+    state_name = _safe_filename_part(field.state, "State")
+    export = {
+        "format": "png",
+        "filename": f"Sector_{case_name}_{family}_{quantity}_{state_name}",
+    }
+    # Preserve the responsive canvas and its equal-aspect axis ranges on export.
+    export.update(width=None, height=None)
+    st.plotly_chart(figure, width="stretch", config={"toImageButtonOptions": export})
+    unit = _PERMILLE if quantity == "strain" else "MPa"
+    st.markdown(f"**{quantity.capitalize()} extrema ({unit})**")
+    st.dataframe([
+        {"Extremum": label, f"Value ({unit})": value,
+         "x (mm)": x * _MM, "y (mm)": y * _MM}
+        for label, value, x, y in section_fields.extrema(field, quantity)
+    ], hide_index=True, width="stretch")
+    st.caption("Tension is positive. Compression is negative.")
+    if quantity == "stress":
+        st.caption("Concrete and reinforcement have separate stress scales. "
+                   "The current concrete law gives zero tensile stress.")
+    else:
+        st.caption("The concrete contour shows compatible section strain, including tensile strain. "
+                   "Reinforcement markers show material strain, including initial tendon strain.")
     st.caption(
-        "Tension is positive. Compression is negative. Concrete and reinforcement have different stress scales. "
         "Color limits stay fixed across valid states of this action. Other actions can have different limits."
     )
     st.caption(
-        "Filled bands show values from the accepted field. The tables give exact extrema. "
+        "Filled bands show values from the accepted field. The table gives exact extrema. "
         "Marker sizes identify elements. They do not represent bar diameter."
     )
     if field.density:
@@ -13079,6 +13156,35 @@ def _calculation_output_metric(box, label, output):
     governing = output.get("governing")
     note = state if not governing else f"{state}; governing {governing}"
     box.caption(note)
+
+
+
+def _ui_strength_label(label, *, math_label=False):
+    """Name only the four controlled characteristic-strength references."""
+    labels = {
+        "f_ck": ("Characteristic concrete strength", r"$f_{ck}$"),
+        "f_yk": ("Characteristic reinforcing-steel yield strength", r"$f_{yk}$"),
+        "f_pk": ("Characteristic tendon tensile strength", r"$f_{pk}$"),
+        "f_p0.1k": ("Characteristic tendon 0.1% proof strength", r"$f_{p0.1k}$"),
+    }
+    if label in labels:
+        return labels[label][1 if math_label else 0]
+    literal = str(label)
+    if math_label:
+        return "".join("\\" + char if char in r"\\`*_{}[]()#+-.!$<>|~" else char
+                       for char in literal)
+    return literal
+
+
+def _ui_strength_comparison(stress, references, *, math_labels=False):
+    """Format the existing characteristic-strength ratios for the UI."""
+    parts = []
+    for label, strength in references.items():
+        ratio = elastic_display.percentage(stress, strength)
+        reference = _ui_strength_label(label, math_label=math_labels)
+        parts.append(f"{reference}: unavailable" if ratio is None
+                     else f"{ratio:.1f}% of {reference}")
+    return "; ".join(parts)
 
 
 def elastic_view(inp, results, *, global_results=None):
@@ -13112,7 +13218,9 @@ def elastic_view(inp, results, *, global_results=None):
     metric_cols = st.columns(len(enabled))
     for col, (label, key, output) in zip(metric_cols, enabled):
         _calculation_output_metric(col, label, output)
-        col.caption(elastic_display.output_comparison(inp, e, key, output))
+        col.caption(_ui_strength_comparison(
+            output.get("value"), elastic_display.output_references(inp, e, key, output),
+            math_labels=True))
     st.caption(
         "Concrete compression and longitudinal reinforcement/tendon tension are "
         "reported for the actual named Elastic action. Strength percentages are "
@@ -13153,61 +13261,13 @@ def elastic_view(inp, results, *, global_results=None):
     # concrete actually carries compression; a fully tensile case has none.
     has_comp = e["max_conc"] > 0.0
     if has_comp:
-        st.caption(f"Neutral-axis intercepts (for concrete stress): "
+        st.caption(f"Combined-action concrete stress boundary intercepts: "
                    f"x {_fmt(e['na_x'] * _MM)} mm,  y {_fmt(e['na_y'] * _MM)} mm")
     else:
-        st.caption("The concrete carries no compression (the section is fully "
-                   "cracked in tension); no neutral axis is shown.")
+        st.caption("Under the combined actions, concrete carries zero compressive stress. "
+                   "The combined-action concrete stress boundary is unavailable.")
 
-    hp = viz.elastic_halfplane(e["na_x"], e["na_y"], e["max_conc_xy"]) if has_comp else None
-    na = (viz.na_line_at(hp[0], hp[1], hp[2], inp["extent"],
-                         bbox=_outline_bbox(inp["outer"])) if hp else None)
-    zones = viz.compression_zones(inp["outer"], hp) if hp else None
-    # Tendons fold into the bar set for the solve, but are drawn as diamonds (bars
-    # as circles), each coloured by its stress sign -- consistent with the other
-    # views. The stress list runs bars first, then tendons.
-    nb = len(inp["bars"])
-    bar_xy = [(b[0], b[1], b[2]) for b in inp["bars"]]
-    tendon_xy = [(t[0], t[1], t[2]) for t in inp["tendons"]]
-    sign = lambda s: viz.BAR_TENSION if s >= 0 else viz.BAR_COMPRESSION
-    bar_colors = [sign(s) for s in e["total"][:nb]]
-    tendon_colors = [sign(s) for s in e["total"][nb:]]
     element_rows = e.get("elements", [])
-    bar_states = [
-        row for row in element_rows if row.get("element_type") == "Bar"
-    ]
-    tendon_states = [
-        row for row in element_rows if row.get("element_type") == "Tendon"
-    ]
-    section_col, strain_col = st.columns([3, 2])
-    with section_col:
-        st.plotly_chart(
-            viz.section_figure(inp["outer"], inp["holes"], bar_xy,
-                               bar_colors=bar_colors,
-                               tendons=tendon_xy, tendon_colors=tendon_colors,
-                               na_line=na, zones=zones, show_labels=False,
-                               scale=_MM, unit="mm",
-                               title="Elastic state (tension + / compression -)",
-                               bar_ids=[item["id"] for item in inp.get("bar_elements", [])],
-                               tendon_ids=[item["id"] for item in inp.get("tendon_elements", [])],
-                               bar_hover=_elastic_state_hover(bar_states),
-                               tendon_hover=_elastic_state_hover(tendon_states),
-                               corner_hover=_elastic_corner_hover(
-                                   e.get("concrete_corners", [])
-                               ),
-                               geometry_hover=False),
-            width="stretch")
-        st.caption("Blue/plain markers are tension (+); vermillion/x markers are "
-                   "compression (-). Bar circles and tendon diamonds identify the "
-                   "element type. Hover for material, stress and strain; "
-                   "geometry remains in the complete table below.")
-    with strain_col:
-        st.plotly_chart(
-            viz.elastic_strain_figure(
-                e.get("concrete_corners"), e.get("elements"),
-                e.get("stress_plane"), ec_mpa=inp["conc_Ec"] * 1000.0),
-            width="stretch")
-        st.caption("Concrete profile: instantaneous stress-plane strain. Markers: TOTAL material strain, including retained long-term deformation and tendon initial strain.")
 
     # Complete, explicitly typed element evidence: no tendon is called a bar, and
     # geometry/area/strain stay beside every stress component for direct QA.
@@ -13235,17 +13295,18 @@ def elastic_view(inp, results, *, global_results=None):
             hide_index=True, width="stretch",
             height=min(35 * (len(element_rows) + 1) + 3, 560))
     st.caption(
-        "**Total** = long + short; **long-term** = long-term alone.  \n"
-        "**Short-term increment** = total - long.  \n"
-        "**Instantaneous response (RST1)** = response with the long-term concrete stresses "
-        "neutralised.")
+        "**TOTAL** = LONG + DIF. **LONG** is the sustained-action response.  \n"
+        "**Short-term increment (DIF)** = TOTAL - LONG.  \n"
+        "**Instantaneous response (RST1)** is the adjusted instantaneous response. "
+        "The calculation neutralizes the long-term concrete stresses.")
 
     if element_rows:
         st.markdown("**Stress as percentage of characteristic strength**")
         comparisons = elastic_display.element_comparison_rows(inp, element_rows)
         st.dataframe([
             {key: ("Unavailable" if value is None else f"{value:.1f}%")
-             if key in dict(elastic_display.COMPONENTS).values() else value
+             if key in dict(elastic_display.COMPONENTS).values()
+             else _ui_strength_label(value) if key == "Reference" else value
              for key, value in row.items()}
             for row in comparisons
         ], hide_index=True, width="stretch")
@@ -13265,10 +13326,10 @@ def elastic_view(inp, results, *, global_results=None):
                     "y (mm)": [round(r["y_mm"], 2) for r in corner_rows],
                     f"Instantaneous strain ({_EPS}, {_PERMILLE})": [
                         round(r["strain_permille"], 5) for r in corner_rows],
-                    f"Concrete stress ({_SIGMA}c, MPa)": [
+                    "Concrete stress (MPa)": [
                         round(r["stress_mpa"], 3) for r in corner_rows],
-                    "Stress / f_ck": [
-                        elastic_display.comparison_text(
+                    "Stress / characteristic concrete strength": [
+                        _ui_strength_comparison(
                             r["stress_mpa"], {"f_ck": getattr(inp.get("concrete"), "fck", None)}
                         ) for r in corner_rows],
                 },
@@ -13319,16 +13380,16 @@ def _elastic_sls_section(inp, e):
     if inp.get("tendons"):
         threshold_help = (
             "Factor on the external N/M actions to first cracking. Locked-in "
-            "prestress remains fixed; prestress alone above fctm gives "
-            "lambda_cr = 0. Otherwise lambda_cr < 1 is cracked and "
-            "lambda_cr >= 1 is uncracked."
+            r"prestress remains fixed. Prestress alone above $f_{ctm}$ gives "
+            r"$\lambda_{cr}=0$. A value $\lambda_{cr}<1$ is cracked; "
+            r"$\lambda_{cr}\geq1$ is uncracked."
         )
     else:
         threshold_help = (
             r"Proportional load factor to first cracking, "
             r"$f_{ctm}/\sigma_{ct,I}$ ($=M_{cr}/M$ in pure bending), taken as "
             "the governing (smaller) of the long-term and total actions. "
-            "lambda_cr < 1 is cracked; lambda_cr >= 1 is uncracked."
+            r"$\lambda_{cr}<1$ is cracked; $\lambda_{cr}\geq1$ is uncracked."
         )
     st.metric(r"Cracking factor $\lambda_{cr}$",
               "inf" if math.isinf(e["lambda_cr"]) else f"{e['lambda_cr']:.3f}",
@@ -13339,8 +13400,8 @@ def _elastic_sls_section(inp, e):
         st.markdown(r"**Transformed section properties (at $n_l$)**")
         un = e["props_un"]
         cr = e.get("props_cr")
-        rows = ["Area A (m2)", "Centroid x (m)", "Centroid y (m)",
-                "Ix about x-axis (m4)", "Iy about y-axis (m4)", "Ixy (m4)"]
+        rows = ["Transformed area (m\u00b2)", "Centroid x (m)", "Centroid y (m)",
+                "Second moment about x (m\u2074)", "Second moment about y (m\u2074)", "Product of inertia (m\u2074)"]
         keys = ["area", "cx", "cy", "Ix", "Iy", "Ixy"]
         data = {"Property": rows, "Uncracked": [f"{un[k]:.4g}" for k in keys]}
         if cr is not None:
@@ -13348,7 +13409,7 @@ def _elastic_sls_section(inp, e):
         st.dataframe(data, hide_index=True, width="stretch")
         st.caption("Transformed ($n_l$-weighted) properties about the section "
                    "centroid; the cracked column drops the concrete in tension. "
-                   "Ix resists Mx (bending about the x-axis).")
+                   r"$I_x$ resists $M_x$ (bending about the x-axis).")
     with pR:
         if show_cw:
             _crack_width_panel(e)
@@ -13370,11 +13431,11 @@ def _heightened_crack_control_panel(result):
     h1, h2, h3 = st.columns(3)
     h1.metric(
         "Calculated required area",
-        "-" if required is None else f"{required:.1f} mm2",
+        "-" if required is None else f"{required:.1f} mm\u00b2",
     )
     h2.metric(
-        "Auto-derived provided area",
-        "-" if provided is None else f"{provided:.1f} mm2",
+        "Calculated provided area",
+        "-" if provided is None else f"{provided:.1f} mm\u00b2",
     )
     h3.metric(
         "Required / provided",
@@ -13393,11 +13454,11 @@ def _heightened_crack_control_panel(result):
         [
             {
                 "System": str(branch.get("crack_system") or "-").title(),
-                "Ac,eff (mm2)": branch.get("effective_tension_area_mm2"),
-                "As,req (mm2)": branch.get(
+                "Effective concrete tension area (mm\u00b2)": branch.get("effective_tension_area_mm2"),
+                "Required reinforcement area (mm\u00b2)": branch.get(
                     "required_reinforcement_area_mm2"
                 ),
-                "As,req / As,prov": branch.get("comparison_ratio"),
+                "Required / provided area": branch.get("comparison_ratio"),
                 "Status": branch.get("status"),
                 "Governing": (
                     branch.get("crack_system")
@@ -13430,10 +13491,10 @@ def _heightened_crack_control_panel(result):
                     {
                         "Element": row.get("element_id"),
                         "Material": row.get("material_id"),
-                        "Area (mm2)": row.get("area_mm2"),
+                        "Area (mm\u00b2)": row.get("area_mm2"),
                         "Diameter (mm)": row.get("diameter_mm"),
                         "Diameter source": row.get("diameter_source"),
-                        "Es (MPa)": row.get("reinforcement_modulus_mpa"),
+                        "Reinforcement modulus (MPa)": row.get("reinforcement_modulus_mpa"),
                     }
                     for row in contributions
                 ],
@@ -13487,14 +13548,16 @@ def _crack_width_panel(e):
             "-" if value is None else f"{value:.3f} mm",
         )
         identity = f"governing crack calculation: {case}; reinforcement element {governing}"
-        if criterion in (None, 0.0):
+        if criterion is None:
+            comparison = "User limit unavailable; no comparison is available."
+        elif criterion == 0.0:
             comparison = "User limit: 0 mm; no comparison requested."
         else:
             comparison = (
                 f"User limit: {criterion:.3f} mm"
                 + (f" ({criterion_source})" if criterion_source else "")
                 + (
-                    f"; wk / limit = {ratio:.3f}."
+                    f"; $w_k$ / limit = {ratio:.3f}."
                     if ratio is not None
                     else "."
                 )
@@ -13513,9 +13576,9 @@ def _crack_width_panel(e):
                 "inputs and calculation state."
             )
         return
-    quants = ["wk (mm)", "sr,max (mm)", f"{_EPS}sm - {_EPS}cm",
-              f"{_SIGMA}s (MPa)", f"{_RHO}p,eff", "hc,ef (m)", "cover c (mm)",
-              f"element dia {_PHI} (mm)", "governing element"]
+    quants = ["Crack width (mm)", "Maximum crack spacing (mm)", "Mean strain difference (steel - concrete)",
+              "Reinforcement stress (MPa)", "Effective reinforcement ratio", "Effective tension height (m)", "Cover (mm)",
+              "Element diameter (mm)", "Governing element"]
     keys = ["wk", "sr_max", "esm_ecm", "sigma_s", "rho_p_eff", "hc_ef", "cover",
             "phi", "element_id"]
     fmts = ["{:.3f}", "{:.3f}", "{:.3e}", "{:.3f}", "{:.4f}", "{:.3f}", "{:.3f}",
@@ -13565,14 +13628,14 @@ def _crack_width_panel(e):
                 "Element": row["element_id"],
                 "x (mm)": round(row["x_mm"], 2),
                 "y (mm)": round(row["y_mm"], 2),
-                "Area (mm2)": round(row["area_mm2"], 2),
+                "Area (mm\u00b2)": round(row["area_mm2"], 2),
                 "Cover (mm)": round(row["cover"], 2),
-                f"{_PHI} (mm)": round(row["phi"], 2),
-                f"{_SIGMA}s (MPa)": round(row["sigma_s"], 3),
-                "Ac,eff (m2)": round(row["ac_eff"], 6),
-                f"{_EPS}sm-{_EPS}cm": round(row["esm_ecm"], 7),
-                "sr,max (mm)": round(row["sr_max"], 2),
-                "wk (mm)": round(wk, 3),
+                "Element diameter (mm)": round(row["phi"], 2),
+                "Reinforcement stress (MPa)": round(row["sigma_s"], 3),
+                "Effective tension area (m\u00b2)": round(row["ac_eff"], 6),
+                "Mean strain difference (steel - concrete)": round(row["esm_ecm"], 7),
+                "Maximum crack spacing (mm)": round(row["sr_max"], 2),
+                "Crack width (mm)": round(wk, 3),
             })
     if candidate_rows:
         with st.expander("All crack-width candidates", expanded=False):
@@ -13732,6 +13795,14 @@ def _fatigue_map_signature(inp, spectrum):
     )
 
 
+
+def _ui_material_kind(value):
+    """Name the two controlled reinforcement material kinds."""
+    return {"mild": "Reinforcing steel", "prestress": "Prestressing steel"}.get(
+        value, "" if value is None else str(value)
+    )
+
+
 def _fatigue_reinforcement_panel(payload, spectrum):
     rows = fatigue_presentation.reinforcement_rows(spectrum)
     if not rows:
@@ -13740,7 +13811,7 @@ def _fatigue_reinforcement_panel(payload, spectrum):
     _fatigue_result_table([
         {
             "Element": row["element_id"],
-            "Type": row["kind"].capitalize(),
+            "Type": _ui_material_kind(row["kind"]),
             "Detail": row["detail_id"],
             "Diameter [mm]": row["diameter_mm"],
             "Simplified screen": row["screen_status"],
@@ -13776,7 +13847,7 @@ def _fatigue_reinforcement_panel(payload, spectrum):
     selected = st.selectbox(
         "Reinforcement element",
         options,
-        key=key,
+        persist_state="session", key=key,
         help="Select an element for its S-N curve and bin results.",
     )
     result = fatigue_presentation.result_by_element(spectrum, selected)
@@ -13855,13 +13926,13 @@ def _fatigue_reinforcement_panel(payload, spectrum):
     _fatigue_result_table([{
         "Element": selected,
         "Detail": fatigue_presentation.value(properties, "detail_id", "-"),
-        "N*": fatigue_presentation.value(properties, "n_star"),
-        "k1": fatigue_presentation.value(properties, "k1"),
-        "k2": fatigue_presentation.value(properties, "k2"),
-        f"{_DELTA}{_SIGMA}Rsk [MPa]": fatigue_presentation.value(
+        "S-N reference cycles": fatigue_presentation.value(properties, "n_star"),
+        "First S-N slope": fatigue_presentation.value(properties, "k1"),
+        "Second S-N slope": fatigue_presentation.value(properties, "k2"),
+        "Characteristic reference stress range [MPa]": fatigue_presentation.value(
             properties, "delta_sigma_rsk_mpa"
         ),
-        "fyk / proof [MPa]": fatigue_presentation.value(
+        "Characteristic yield / proof strength [MPa]": fatigue_presentation.value(
             properties, "fytk_mpa"
         ),
         "Bond factor": (
@@ -13960,7 +14031,7 @@ def _fatigue_concrete_panel(spectrum):
     selected = st.selectbox(
         "Concrete fibre",
         options,
-        key=key,
+        persist_state="session", key=key,
         format_func=lambda index: next(
             (
                 f"C{index} - {row['source']} "
@@ -14084,12 +14155,12 @@ def _fatigue_spectrum_panel(inp, spectrum):
             "Bin": record[fatigue_inputs.NAME],
             "Description": record[fatigue_inputs.DESCRIPTION],
             "Cycles": record[fatigue_inputs.CYCLES],
-            "Nlong,Ed [kN]": record["n_long_ed_kn"],
-            "Mx,long,Ed [kNm]": record["mx_long_ed_knm"],
-            "My,long,Ed [kNm]": record["my_long_ed_knm"],
-            "Nshort,Ed [kN]": record["n_short_ed_kn"],
-            "Mx,short,Ed [kNm]": record["mx_short_ed_knm"],
-            "My,short,Ed [kNm]": record["my_short_ed_knm"],
+            "Sustained axial force [kN]": record["n_long_ed_kn"],
+            "Sustained moment about x [kN\u00b7m]": record["mx_long_ed_knm"],
+            "Sustained moment about y [kN\u00b7m]": record["my_long_ed_knm"],
+            "Additional axial force [kN]": record["n_short_ed_kn"],
+            "Additional moment about x [kN\u00b7m]": record["mx_short_ed_knm"],
+            "Additional moment about y [kN\u00b7m]": record["my_short_ed_knm"],
         }
         for record in records
     ], height=520)
@@ -14101,7 +14172,7 @@ def _fatigue_spectrum_panel(inp, spectrum):
             "Cycles": row["cycles"],
             "Status": row["status"],
             "Cyclic action": row["cyclic_action"],
-            "gamma_Ff": row["gamma_ff"],
+            "Fatigue action factor": row["gamma_ff"],
             "Bond method": row["bond_method"],
         }
         for row in fatigue_presentation.spectrum_bin_rows(spectrum)
@@ -14132,12 +14203,12 @@ def _fatigue_result_basis_panel(payload):
         ),
         ("Method", basis.get("method") or "-"),
         ("Method reference", payload.get("method_reference") or "-"),
-        ("gamma_Ff", factors.get("gamma_ff")),
-        ("gamma_s", factors.get("gamma_s")),
-        ("gamma_c,fat", factors.get("gamma_c")),
-        ("t0 [days]", payload.get("t0_days")),
-        ("beta_cc(t0)", parameters.get("beta_cc_t0")),
-        ("fck [MPa]", parameters.get("fck_mpa")),
+        ("Fatigue action factor", factors.get("gamma_ff")),
+        ("Reinforcement resistance factor", factors.get("gamma_s")),
+        ("Concrete fatigue resistance factor", factors.get("gamma_c")),
+        ("Age at first loading [days]", payload.get("t0_days")),
+        ("Concrete strength development factor", parameters.get("beta_cc_t0")),
+        ("Characteristic concrete strength [MPa]", parameters.get("fck_mpa")),
         ("Notes", basis.get("notes") or "-"),
     ]
     _fatigue_result_table([
@@ -14176,12 +14247,12 @@ def _fatigue_result_basis_panel(payload):
             {
                 "ID": item.get("id"),
                 "Name": item.get("name"),
-                "Type": str(item.get("kind") or "").capitalize(),
+                "Type": _ui_material_kind(item.get("kind")),
                 "Preset": item.get("preset"),
-                "N*": item.get("n_star"),
-                "k1": item.get("k1"),
-                "k2": item.get("k2"),
-                f"{_DELTA}{_SIGMA}Rsk [MPa]": (
+                "S-N reference cycles": item.get("n_star"),
+                "First S-N slope": item.get("k1"),
+                "Second S-N slope": item.get("k2"),
+                "Characteristic reference stress range [MPa]": (
                     item.get("delta_sigma_rsk_mpa")
                 ),
                 "Source": item.get("source") or "-",
@@ -14280,7 +14351,7 @@ def fatigue_view(inp, results, *, stale=False):
     selected_name = st.selectbox(
         "Spectrum",
         options,
-        key=key,
+        persist_state="session", key=key,
         help="Select a grouped spectrum for detailed results.",
     )
     spectrum = fatigue_presentation.spectrum_by_name(payload, selected_name)
@@ -14334,7 +14405,7 @@ def fatigue_view(inp, results, *, stale=False):
     detail = st.segmented_control(
         "Detail",
         detail_options,
-        key=detail_key,
+        persist_state="session", key=detail_key,
         required=True,
     )
     if detail == "Reinforcement":
@@ -14585,7 +14656,7 @@ def shear_view(inp, results, *, global_results=None):
                 "Directional result",
                 options,
                 format_func=lambda value: "Vx,Ed" if value == "vx" else "Vy,Ed",
-                key="shear_direction_view",
+                persist_state="session", key="shear_direction_view",
                 required=True,
             )
         else:
@@ -15327,13 +15398,13 @@ def shear_view(inp, results, *, global_results=None):
             if links.get("model_2023"):
                 st.caption(
                     f"Governing chord: {face_desc}. The signed face bending term "
-                    rf"is {ch.get('face_m_ed_signed', 0.0):.1f} kNm; "
+                    f"is {ch.get('face_m_ed_signed', 0.0):.1f} kN\u00b7m; "
                     rf"$M_{{Ed,total}}=\max(M_{{face}}+N_{{Vd}}z,0)"
                     rf"+F_{{td,T}}z/2=\max({ch.get('face_m_ed_signed', 0.0):.1f}"
                     rf"+{ch['mv']:.1f},0)+{ch['mt']:.1f}="
-                    f"{ch['m_total']:.1f} kNm versus $M_{{Rd}} = "
-                    f"{ch['m_rd']:.1f}$ kNm "
-                    + viz.chord_mrd_label(
+                    f"{ch['m_total']:.1f}$ kN\u00b7m. Resistance: $M_{{Rd}} = "
+                    f"{ch['m_rd']:.1f}$ kN\u00b7m "
+                    + _ui_chord_mrd_label(
                         ch["axis"], ch.get("m_off", 0.0),
                         ch.get("conditional", True)
                     )
@@ -15346,12 +15417,12 @@ def shear_view(inp, results, *, global_results=None):
             else:
                 st.caption(
                     f"Governing chord: {face_desc}. "
-                    rf"$M_{{Ed,total}}$ includes {shear_term} and half the perimeter "
+                    rf"$M_{{Ed,total}}$ includes ${shear_term}$ and half the perimeter "
                     r"torsion share: "
-                    f"{ch['m_ed']:.1f} + {ch['mv']:.1f} + {ch['mt']:.1f} = "
-                    f"{ch['m_total']:.1f} kNm versus $M_{{Rd}} = "
-                    f"{ch['m_rd']:.1f}$ kNm "
-                    + viz.chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),
+                    f"${ch['m_ed']:.1f} + {ch['mv']:.1f} + {ch['mt']:.1f} = "
+                    f"{ch['m_total']:.1f}$ kN\u00b7m. Resistance: $M_{{Rd}} = "
+                    f"{ch['m_rd']:.1f}$ kN\u00b7m "
+                    + _ui_chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),
                                           ch.get("conditional", True))
                     + f"; $z = {ch['z']:.3f}$ m." + obj_note
                 )
@@ -15407,6 +15478,31 @@ def shear_view(inp, results, *, global_results=None):
                                          links["dia"], links["s"]), width="stretch")
 
 
+
+def _ui_chord_mrd_label(axis, m_off, conditional):
+    """Describe the retained chord resistance on a Markdown surface."""
+    axis_text = str(axis)
+    safe_axis = "".join("\\" + char if char in r"\\`*_{}[]()#+-.!$<>|~" else char
+                        for char in axis_text)
+    if axis in ("x", "y"):
+        off = "$M_y$" if axis == "x" else "$M_x$"
+    else:
+        off = "the other-axis moment"
+    if conditional and abs(m_off) > 1e-9:
+        return (
+            f"(capacity about {safe_axis} at the applied $N$, conditional on "
+            f"{off} = {m_off:.1f} kN\u00b7m. The biaxial moment-envelope point "
+            "carries both moments at once)"
+        )
+    if conditional:
+        return f"(bending about {safe_axis} at the applied $N$)"
+    return (
+        f"(pure-axis bending about {safe_axis} at the applied $N$. "
+        "The conditional biaxial solve did not converge. "
+        "This fallback can overstate the chord capacity)"
+    )
+
+
 def _render_chord_off(och, *, assessment_complete=True):
     """Off-axis chord check block, shared by the Shear and Combined views.
 
@@ -15446,9 +15542,9 @@ def _render_chord_off(och, *, assessment_complete=True):
     st.caption(
         f"Governing chord: {face_lbl} face about the {och['axis']}-axis. "
         r"$M_{Ed,total}$ includes bending and half the perimeter torsion share: "
-        f"{och['m_ed']:.1f} + {och['mt']:.1f} = {och['m_total']:.1f}$ kNm vs "
-        f"$M_{{Rd}} = {och['m_rd']:.1f}$ kNm "
-        + viz.chord_mrd_label(och["axis"], och.get("m_off", 0.0), True)
+        f"${och['m_ed']:.1f} + {och['mt']:.1f} = {och['m_total']:.1f}$ kN\u00b7m. Resistance: "
+        f"$M_{{Rd}} = {och['m_rd']:.1f}$ kN\u00b7m "
+        + _ui_chord_mrd_label(och["axis"], och.get("m_off", 0.0), True)
         + f"; $z = {och['z']:.3f}$ m "
         + "("
         + presentation.shear_link_arm_source_label(och.get("z_src"))
@@ -15720,7 +15816,7 @@ def torsion_view(inp, results, *, global_results=None):
                       delta=("low-action condition satisfied" if ok_mr
                              else "low-action condition not satisfied"),
                       delta_color=("normal" if ok_mr else "inverse"))
-            st.caption("TEd/TRd,c + VEd/VRd,c <= 1 (6.3.2(5), Eq 6.31): if satisfied, "
+            st.caption(r"$T_{Ed}/T_{Rd,c}+V_{Ed}/V_{Rd,c}\leq1$ (6.3.2(5), Eq 6.31): if satisfied, "
                        "designed shear-and-torsion reinforcement beyond the minimum "
                        "is not required. This condition does not verify minimum "
                        "ratio, spacing, arrangement or anchorage. "
@@ -15821,14 +15917,14 @@ def torsion_view(inp, results, *, global_results=None):
                         "web" if i == 0 else f"part {i + 1}"
                         for i in range(len(subs))
                     ],
-                    "TEd,i (kNm)": [f"{item['t_ed']:.3f}" for item in subs],
-                    "TRd,max cap (kNm)": [
+                    "Applied sub-tube torque (kN\u00b7m)": [f"{item['t_ed']:.3f}" for item in subs],
+                    "Concrete-strut torque limit (kN\u00b7m)": [
                         f"{item['trd_max']:.3f}" for item in subs
                     ],
-                    "TRd,c (kNm)": [
+                    "Cracking torque (kN\u00b7m)": [
                         f"{item['trd_c']:.3f}" for item in subs
                     ],
-                    "Required Asl (mm2)": [
+                    "Required longitudinal area (mm\u00b2)": [
                         f"{item['asl_req']:.0f}" for item in subs
                     ],
                 },
@@ -15845,22 +15941,22 @@ def torsion_view(inp, results, *, global_results=None):
             st.dataframe(
                 {
                     "Quantity": [
-                        "Gross area A",
-                        "Base thickness A/u",
-                        "Wall thickness tef",
+                        "Gross concrete area",
+                        "Base wall thickness (area / perimeter)",
+                        "Effective wall thickness",
                         "Selection source",
-                        "Enclosed area Ak",
-                        "Centre-line perimeter uk",
-                        "Required longitudinal steel Asl",
+                        "Tube enclosed area",
+                        "Tube centerline perimeter",
+                        "Required longitudinal reinforcement area",
                     ],
                     "Value": [
-                        f"{tube['A'] * 1e6:.0f} mm2",
+                        f"{tube['A'] * 1e6:.0f} mm\u00b2",
                         f"{tube['tef_auto']:.1f} mm",
                         f"{tube['tef']:.1f} mm",
                         str(tube.get("tef_selection") or "-"),
-                        f"{tube['Ak'] * 1e6:.0f} mm2",
+                        f"{tube['Ak'] * 1e6:.0f} mm\u00b2",
                         f"{tube['uk'] * 1e3:.0f} mm",
-                        f"{t['asl_req']:.0f} mm2",
+                        f"{t['asl_req']:.0f} mm\u00b2",
                     ],
                 },
                 hide_index=True,
@@ -16045,15 +16141,15 @@ def torsion_view(inp, results, *, global_results=None):
     longitudinal = presentation.torsion_longitudinal_assessment(t, input_payload=inp)
     if isinstance(retained_longitudinal, dict):
         def _area_text(value):
-            return "-" if value is None else f"{float(value):.0f} mm2"
+            return "-" if value is None else f"{float(value):.0f} mm\u00b2"
 
         st.markdown("**Longitudinal torsion reinforcement (Formula 6.28)**")
         st.dataframe(
             {
                 "Quantity": [
                     "Required longitudinal area",
-                    "All modelled passive bars - gross area",
-                    "All modelled passive bars - equivalent area at selected fyd",
+                    "All modeled passive bars - gross area",
+                    "All modeled passive bars - equivalent area at selected design yield strength",
                     "Longitudinal assessment",
                 ],
                 "Value": [
@@ -16067,17 +16163,17 @@ def torsion_view(inp, results, *, global_results=None):
             width="stretch",
         )
         st.caption(
-            "The modelled passive-bar total is an upper bound. Sector does not "
-            "credit it as usable torsion reinforcement unless reserve beyond "
-            "bending, distribution around every torsion-tube side and member "
-            "anchorage are established."
+            "The modeled passive-bar total is an upper bound. Usable torsion "
+            "reinforcement needs a verified reserve beyond bending demand. "
+            "Its distribution around every torsion-tube side and its member "
+            "anchorage must also be established."
         )
 
     st.caption(
         "Torsional cracking inputs: "
         f"$f_{{ctd}} = f_{{ctk,0.05}}/\\gamma_{{ct}} = "
         f"{t['fctk_005']:.3f}/{t['gamma_ct']:.3f} = "
-        f"{t['fctd']:.3f}$ MPa. The actual direct gamma_ct input is used."
+        f"{t['fctd']:.3f}$ MPa. The entered $\\gamma_{{ct}}$ value is used."
     )
 
     if t.get("subdivided"):
@@ -16089,10 +16185,9 @@ def torsion_view(inp, results, *, global_results=None):
                 + presentation.torsion_angle_selection_note(t).rstrip(".")
             )
         else:
-            angle_clause = ("each sub-tube is at its OWN resistance-optimum strut angle "
-                            "(no single member angle applies -- see the cot column)")
-        st.caption(f"Compound section (6.3.1(3)): the TRd component is "
-                   f"{chr(0x03A3)} of the sub-tube resistance components; TEd is "
+            angle_clause = ("Each sub-tube uses its own resistance-optimum strut angle. No single member angle applies. See the cotangent column")
+        st.caption(f"Compound section (6.3.1(3)): the $T_{{Rd}}$ component is "
+                   f"{chr(0x03A3)} of the sub-tube resistance components; $T_{{Ed}}$ is "
                    "split by uncracked torsional stiffness "
                    r"$C = \beta\,h\,b^3$ (6.3.1(4)). The first row (web) carries the "
                    f"shear in the combined V+T checks; {angle_clause}. "
@@ -16101,22 +16196,22 @@ def torsion_view(inp, results, *, global_results=None):
         st.dataframe(
             {"Sub-tube": [("web" if i == 0 else f"part {i + 1}")
                           for i in range(len(subs))],
-             "centre x, y (mm)": [
+             "Center x, y (mm)": [
                  f"{s['x_mm']:.0f}, {s['y_mm']:.0f}" for s in subs
              ],
              "b x h (mm)": [f"{s['b_mm']:.0f} x {s['h_mm']:.0f}" for s in subs],
-             "Base A/u (mm)": [f"{s['tube']['tef_auto']:.1f}" for s in subs],
-             "tef (mm)": [f"{s['tube']['tef']:.1f}" for s in subs],
+             "Base wall thickness (mm)": [f"{s['tube']['tef_auto']:.1f}" for s in subs],
+             "Effective wall thickness (mm)": [f"{s['tube']['tef']:.1f}" for s in subs],
              "Selection source": [
                  str(s["tube"].get("tef_selection") or "-") for s in subs
              ],
-             "Ak (mm2)": [f"{s['tube']['Ak'] * 1e6:.0f}" for s in subs],
+             "Tube enclosed area (mm\u00b2)": [f"{s['tube']['Ak'] * 1e6:.0f}" for s in subs],
              f"cot {_THETA}": [f"{s['cot']:.3f}" for s in subs],
              "Stiffness": [f"{s['stiffness'] / c_tot * 100:.1f} %" for s in subs],
-             "TEd,i (kNm)": [f"{s['t_ed']:.3f}" for s in subs],
-             "TRd,i (kNm)": [f"{s['trd']:.3f}" for s in subs],
-             "TEd/TRd,i": [_pct(s["util"]) for s in subs],
-             "Asl,req,i (mm2)": [f"{s['asl_req']:.0f}" for s in subs],
+             "Applied sub-tube torque (kN\u00b7m)": [f"{s['t_ed']:.3f}" for s in subs],
+             "Sub-tube resistance (kN\u00b7m)": [f"{s['trd']:.3f}" for s in subs],
+             "Applied torque / resistance": [_pct(s["util"]) for s in subs],
+             "Required longitudinal area (mm\u00b2)": [f"{s['asl_req']:.0f}" for s in subs],
              "Governs": [s["governs"] for s in subs]},
             hide_index=True, width="stretch")
         subtube_wall_rows = [
@@ -16162,11 +16257,11 @@ def torsion_view(inp, results, *, global_results=None):
         g = t.get("governing_sub")
         gov_lbl = (("web" if g == 0 else f"part {g + 1}") if g is not None else "-")
         st.caption(f"Governing sub-tube resistance component: {gov_lbl}; "
-                   f"max(TEd,i/TRd,i) = {util_txt}, so every sub-tube resistance "
+                   f"$\\max(T_{{Ed,i}}/T_{{Rd,i}})$ = {util_txt}, so every sub-tube resistance "
                    "component must pass.")
         st.caption("Applied torque is distributed by uncracked torsional stiffness. "
-                   f"Required longitudinal steel {chr(0x03A3)}Asl = "
-                   f"{t['asl_req']:.0f} mm2 is the sum for all sub-tubes. Its "
+                   f"Required longitudinal steel ${chr(0x03A3)}A_{{sl}} = "
+                   f"{t['asl_req']:.0f}$ mm\u00b2 is the sum for all sub-tubes. Its "
                    "allocation around every sub-tube and reserve beyond bending "
                    "must be verified. The figure shows the validated partition "
                    "used by the calculation.")
@@ -16183,19 +16278,19 @@ def torsion_view(inp, results, *, global_results=None):
         tef_note = str(tube.get("tef_selection") or "wall limits")
         st.markdown("**Tube idealisation and torsion quantities**")
         st.dataframe(
-            {"Quantity": ["Gross area A", "Outer perimeter u", "Base thickness A/u",
-                          "Wall thickness tef",
-                          "Enclosed area Ak", "Centre-line perimeter uk",
-                          f"Strut factor {_NU}", f"Chord factor {_ALPHA}cw",
-                          "Concrete tensile factor gamma_ct",
-                          "Required long. steel " + chr(0x03A3) + "Asl"],
-             "Value": [f"{tube['A'] * 1e6:.0f} mm2", f"{tube['u'] * 1e3:.0f} mm",
+            {"Quantity": ["Gross concrete area", "Outer perimeter", "Base wall thickness (area / perimeter)",
+                          "Effective wall thickness",
+                          "Tube enclosed area", "Tube centerline perimeter",
+                          "Concrete strut factor", "Chord factor",
+                          "Concrete tensile strength factor",
+                          "Total required longitudinal reinforcement area"],
+             "Value": [f"{tube['A'] * 1e6:.0f} mm\u00b2", f"{tube['u'] * 1e3:.0f} mm",
                        f"{tube['tef_auto']:.1f} mm",
                        f"{tube['tef']:.1f} mm ({tef_note})",
-                       f"{tube['Ak'] * 1e6:.0f} mm2",
+                       f"{tube['Ak'] * 1e6:.0f} mm\u00b2",
                        f"{tube['uk'] * 1e3:.0f} mm", f"{t['nu']:.3f}",
                        f"{t['alpha_cw']:.3f}", f"{t['gamma_ct']:.3f}",
-                       f"{t['asl_req']:.0f} mm2"]},
+                       f"{t['asl_req']:.0f} mm\u00b2"]},
             hide_index=True, width="stretch")
         st.caption(
             r"$T_{Rd,s}$ follows the torsional wall shear flow (6.27) and "
@@ -16324,9 +16419,9 @@ def _render_base_en_combined(c):
                 concrete["status"] == "PASS",
             )
             st.caption(
-                f"Common member angle: cot {_THETA} = {float(cr['cot']):.3f}; "
-                f"T_Rd,max = {float(cr['trd_max']):.3f} kNm and "
-                f"V_Rd,max = {float(cr['vrd_max']):.3f} kN."
+                f"Common member angle: $\\cot\\theta={float(cr['cot']):.3f}$. "
+                f"$T_{{Rd,max}}={float(cr['trd_max']):.3f}$ kN\u00b7m and "
+                f"$V_{{Rd,max}}={float(cr['vrd_max']):.3f}$ kN."
             )
         else:
             _manual_warning(
@@ -16401,10 +16496,10 @@ def _render_base_en_combined(c):
             )
             boxes[2].caption(chord_status)
         st.caption(
-            f"M_Ed,total = {float(lg['m_ed']):.3f} + "
+            f"$M_{{Ed,total}}= {float(lg['m_ed']):.3f} + "
             f"{float(lg['mv']):.3f} + {float(lg['mt']):.3f} = "
-            f"{float(lg['m_total']):.3f} kNm; "
-            f"M_Rd = {float(lg['m_rd']):.3f} kNm. "
+            f"{float(lg['m_total']):.3f}$ kN\u00b7m; "
+            f"$M_{{Rd}}={float(lg['m_rd']):.3f}$ kN\u00b7m. "
             + viz.chord_angle_note(
                 lg.get("theta_mode"),
                 angle_valid=concrete.get("angle_valid") is True,
@@ -16538,7 +16633,7 @@ def combined_view(inp, results):
             "Directional combined result",
             options,
             format_func=lambda value: "Vx,Ed + TEd" if value == "vx" else "Vy,Ed + TEd",
-            key="combined_direction_view",
+            persist_state="session", key="combined_direction_view",
             required=True,
         )
         c = directions[selected or options[0]]
@@ -16845,7 +16940,7 @@ def combined_view(inp, results):
         _manual_warning(st, "calculation-warning", _no_common_angle_msg(cr))
     else:
         st.caption("The shear+torsion crushing interaction (6.29) needs shear links "
-                   "(for VRd,max); enable them in the shear block.")
+                   "(for $V_{Rd,max}$); enable them in the shear block.")
 
     tr = c.get("transverse")
     if tr is not None and not tr.get("valid"):
@@ -16877,13 +16972,12 @@ def combined_view(inp, results):
             )
         if tr["shear_credited"]:
             st.caption(
-                f"Concrete carries the shear (VEd = {tr['v_ed']:.1f} kN <= "
-                f"VRd,c = {tr['vrd_c']:.1f} kN, 6.2.1). Stirrup allocation to "
+                rf"Concrete carries the shear ($V_{{Ed}} = {tr['v_ed']:.1f}$ kN $\leq$ "
+                f"$V_{{Rd,c}} = {tr['vrd_c']:.1f}$ kN, 6.2.1). Stirrup allocation to "
                 "shear is zero, so the closed stirrup serves torsion."
             )
         else:
-            st.caption("VEd > VRd,c, so the stirrup carries both: shear and torsion "
-                       "demands add on the shared closed stirrup.")
+            st.caption(r"$V_{Ed}>V_{Rd,c}$, so shear and torsion demands add on the shared closed stirrup.")
         if stirrup["status"] in {"PASS", "FAIL"}:
             st.caption(
                 "At the member strut angle "
@@ -16939,9 +17033,9 @@ def combined_view(inp, results):
             f"Governing chord: {face_desc} about the {ax_lbl}-axis. "
             r"$M_{Ed,total}$ includes bending, shear shift and half the perimeter "
             "torsion share: "
-            f"{lg['m_ed']:.1f} + {lg['mv']:.1f} + {lg['mt']:.1f} = {lg['m_total']:.1f}$ "
-            f"kNm versus $M_{{Rd}} = {lg['m_rd']:.1f}$ kNm "
-            + viz.chord_mrd_label(ax_lbl, lg.get("m_off", 0.0),
+            f"${lg['m_ed']:.1f} + {lg['mv']:.1f} + {lg['mt']:.1f} = {lg['m_total']:.1f}$ "
+            f"kN\u00b7m versus $M_{{Rd}} = {lg['m_rd']:.1f}$ kN\u00b7m "
+            + _ui_chord_mrd_label(ax_lbl, lg.get("m_off", 0.0),
                                   lg.get("conditional", True))
             + f"; $z = {lg['z']:.3f}$ m. "
             + viz.chord_angle_note(
@@ -16958,7 +17052,7 @@ def combined_view(inp, results):
         )
         if lg["capped"]:
             st.caption(
-                "Shear shift is capped at section MRd under 6.2.3(7), used here "
+                "Shear shift is capped at section $M_{Rd}$ under 6.2.3(7), used here "
                 "because a cross-section calculation has no member peak moment."
             )
         if fell_back:
@@ -17054,19 +17148,32 @@ def _case_entries_for_view(inp, results, family):
     ]
 
 
+def _ui_action_face(value, axis):
+    """Name the closed face choices without changing literal unknown values."""
+    if not isinstance(value, str) or axis not in ("x", "y"):
+        return value
+    if value == "auto":
+        return "Automatic selection"
+    if value in ("negative", "low"):
+        return "Left (-x)" if axis == "x" else "Bottom (-y)"
+    if value in ("positive", "high"):
+        return "Right (+x)" if axis == "x" else "Top (+y)"
+    return value
+
+
 def _render_selected_case_actions(family, actions, inp=None):
     """Compact, consistently named action evidence for the selected case."""
     if family == "plastic":
         st.dataframe(
             [{
-                "N_Ed [kN]": actions.get("n_ed_kn", 0.0),
-                "Mx_Ed [kNm]": actions.get("mx_ed_knm", 0.0),
-                "My_Ed [kNm]": actions.get("my_ed_knm", 0.0),
-                "Vx_Ed [kN]": actions.get("vx_ed_kn", 0.0),
-                "Vy_Ed [kN]": actions.get("vy_ed_kn", 0.0),
-                "Vx face": actions.get("vx_face", "auto"),
-                "Vy face": actions.get("vy_face", "auto"),
-                "T_Ed [kNm]": actions.get("t_ed_knm", 0.0),
+                "Axial force (kN)": actions.get("n_ed_kn", 0.0),
+                "Moment about x (kN\u00b7m)": actions.get("mx_ed_knm", 0.0),
+                "Moment about y (kN\u00b7m)": actions.get("my_ed_knm", 0.0),
+                "Shear in x (kN)": actions.get("vx_ed_kn", 0.0),
+                "Shear in y (kN)": actions.get("vy_ed_kn", 0.0),
+                "Vx face": _ui_action_face(actions.get("vx_face", "auto"), "x"),
+                "Vy face": _ui_action_face(actions.get("vy_face", "auto"), "y"),
+                "Torque (kN\u00b7m)": actions.get("t_ed_knm", 0.0),
                 "Minimum reinforcement": (
                     "Yes" if actions.get("check_minimum_reinforcement") else ""
                 ),
@@ -17079,15 +17186,15 @@ def _render_selected_case_actions(family, actions, inp=None):
         [
             {
                 "Action part": "Long-term",
-                "N_Ed [kN]": actions.get("n_long_ed_kn", 0.0),
-                "Mx_Ed [kNm]": actions.get("mx_long_ed_knm", 0.0),
-                "My_Ed [kNm]": actions.get("my_long_ed_knm", 0.0),
+                "Axial force (kN)": actions.get("n_long_ed_kn", 0.0),
+                "Moment about x (kN\u00b7m)": actions.get("mx_long_ed_knm", 0.0),
+                "Moment about y (kN\u00b7m)": actions.get("my_long_ed_knm", 0.0),
             },
             {
                 "Action part": "Short-term",
-                "N_Ed [kN]": actions.get("n_short_ed_kn", 0.0),
-                "Mx_Ed [kNm]": actions.get("mx_short_ed_knm", 0.0),
-                "My_Ed [kNm]": actions.get("my_short_ed_knm", 0.0),
+                "Axial force (kN)": actions.get("n_short_ed_kn", 0.0),
+                "Moment about x (kN\u00b7m)": actions.get("mx_short_ed_knm", 0.0),
+                "Moment about y (kN\u00b7m)": actions.get("my_short_ed_knm", 0.0),
             },
         ],
         hide_index=True,
@@ -17639,6 +17746,9 @@ elif main_page == "Analysis":
 else:
     reset_input_stage_mounts(st.session_state)
     _report_workspace(st.session_state.get("_latest_inputs"))
+
+# This timer reruns only the persistence service, including while the user is idle.
+_idle_autosave()
 
 # Keep the current workspace visible behind the manual. The
 # dialog is imported and built only while open, so its figures stay off the normal

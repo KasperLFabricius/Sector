@@ -499,7 +499,7 @@ def test_pub_m01_provided_links_publish_their_own_pass_in_native_views(
     overview = overview_table(pub_m01_example)
     by_check = {row["Check"]: row for _, row in overview.iterrows()}
     assert by_check["Shear without links"]["Status"] == "PASS"
-    assert by_check["Shear without links"]["Result"] == "63.0 % (VEd / VRd,c)"
+    assert by_check["Shear without links"]["Result"] == "63.0 % (applied shear / concrete shear resistance)"
     assert by_check["Shear with links"]["Status"] == "PASS"
     assert by_check["Shear with links"]["Result"] == "23.5 % (non-governing)"
     assert by_check["Shear/torsion link detailing"]["Status"] == "FAIL"
@@ -669,7 +669,7 @@ def test_pub_m01_unrelated_primary_is_withheld_in_native_views(pub_m01_example):
         combined = overview.loc[overview["Check"].str.startswith("Combined")]
         assert not combined.empty
         assert set(combined["Status"]) == {"NOT ASSESSED"}
-        assert set(combined["Result"]) == {chr(0x2014)}
+        assert set(combined["Result"]) == {"-"}
         assert "plastic" not in out["plastic_cases"][0]["results"]
     finally:
         at.session_state["results"] = baseline
@@ -780,10 +780,10 @@ def test_pub_m01_native_required_authority_and_incomplete_child_fail_closed(
         by_check = {row["Check"]: row for _, row in overview.iterrows()}
         assert by_check["Shear without links"]["Status"] == "PASS"
         assert by_check["Shear without links"]["Result"] == (
-            "63.0 % (VEd / VRd,c)"
+            "63.0 % (applied shear / concrete shear resistance)"
         )
         assert by_check["Shear with links"]["Status"] == "NOT ASSESSED"
-        assert by_check["Shear with links"]["Result"] == chr(0x2014)
+        assert by_check["Shear with links"]["Result"] == "-"
         assert by_check["Shear/torsion link detailing"]["Status"] == "FAIL"
     finally:
         pub_m01_example.session_state["results"] = baseline
@@ -830,10 +830,10 @@ def test_pub_m01_native_hostile_chord_status_fails_closed_without_raw_copy(
         assert "Shear longitudinal chords" not in by_check
         assert by_check["Shear without links"]["Status"] == "PASS"
         assert by_check["Shear without links"]["Result"] == (
-            "63.0 % (VEd / VRd,c)"
+            "63.0 % (applied shear / concrete shear resistance)"
         )
         assert by_check["Shear with links"]["Status"] == "NOT ASSESSED"
-        assert by_check["Shear with links"]["Result"] == chr(0x2014)
+        assert by_check["Shear with links"]["Result"] == "-"
         assert "[]" not in overview.to_string(index=False)
         assert by_check["Shear/torsion link detailing"]["Status"] == "FAIL"
     finally:
@@ -894,9 +894,9 @@ def test_pub_m01_native_stale_concrete_input_is_value_free_in_shear_and_overview
         overview = overview_table(pub_m01_example)
         by_check = {row["Check"]: row for _, row in overview.iterrows()}
         assert by_check["Shear without links"]["Status"] == "STALE"
-        assert by_check["Shear without links"]["Result"] == chr(0x2014)
+        assert by_check["Shear without links"]["Result"] == "-"
         assert by_check["Shear with links"]["Status"] == "STALE"
-        assert by_check["Shear with links"]["Result"] == chr(0x2014)
+        assert by_check["Shear with links"]["Result"] == "-"
 
         pub_m01_example.session_state["results"] = copy.deepcopy(baseline_results)
         _poison_selected_link_child(
@@ -966,7 +966,7 @@ def test_pub_m01_selected_link_nominal_route_rejects_stale_child_in_native_views
         by_check = {row["Check"]: row for _, row in overview.iterrows()}
         assert "Shear without links" not in by_check
         assert by_check["Shear with links"]["Status"] == "NOT ASSESSED"
-        assert by_check["Shear with links"]["Result"] == chr(0x2014)
+        assert by_check["Shear with links"]["Result"] == "-"
         assert by_check["Shear/torsion link detailing"]["Status"] == "FAIL"
     finally:
         pub_m01_example.session_state["results"] = baseline

@@ -2,8 +2,8 @@
 
 **Reinforced-concrete cross-section analysis for structural engineering.**
 
-Current internal version: **Sector 0.96.7**. See [CHANGELOG.md](CHANGELOG.md) and
-the [v0.96.7 release notes](docs/v0967_release_notes.md).
+Current internal version: **Sector 0.96.8**. See [CHANGELOG.md](CHANGELOG.md) and
+the [v0.96.8 release notes](docs/v0968_release_notes.md).
 
 Sector is a transparent structural calculation tool, not a compliance,
 certification, sign-off or code-completeness system. The engineer controls
@@ -178,7 +178,7 @@ does not grant a personal or public licence. See [LICENSE](LICENSE). Windows bui
 include a generated third-party notice bundle beside `Sector.exe`; the source
 process is documented in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-`BUILD.bat` creates `Sector-v0.96.7-windows-portable.zip` and a SHA-256 sidecar.
+`BUILD.bat` creates `Sector-v0.96.8-windows-portable.zip` and a SHA-256 sidecar.
 The archive is unsigned and is not an installer. The checksum detects transfer
 damage; it is not a publisher certificate. Internal distribution remains
 subject to the Sector licence and organisational security policy.

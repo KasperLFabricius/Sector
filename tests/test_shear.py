@@ -1544,7 +1544,7 @@ def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately()
         overview["Check"].str.contains("minimum ratio", case=False)
     ].iloc[0]
     assert concrete_row["Status"] == "PASS"
-    assert concrete_row["Result"] == "96.7 % (VEd / VRd,c)"
+    assert concrete_row["Result"] == "96.7 % (applied shear / concrete shear resistance)"
     assert detail_row["Status"] == "FAIL"
     links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert links_row["Status"] == "FAIL"
@@ -1630,7 +1630,7 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
     overview = overview_table(at)
     links_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert links_row["Status"] == "NOT ASSESSED"
-    assert links_row["Result"] == chr(0x2014)
+    assert links_row["Result"] == "-"
 
     _set_and_click(
         at,
@@ -1855,7 +1855,7 @@ def test_app_unknown_2023_duct_geometry_blocks_no_links_kernel_and_recovers(
     overview = overview_table(at)
     row = overview.loc[overview["Check"] == "Shear without links"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == chr(0x2014)
+    assert row["Result"] == "-"
 
     _set_and_click(
         at,
@@ -2938,7 +2938,7 @@ def test_app_shear_links_outside_permitted_bounds_are_not_assessed():
     link_row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert concrete_row["Status"] == "PASS"
     assert link_row["Status"] == "NOT ASSESSED"
-    assert link_row["Result"] == chr(0x2014)
+    assert link_row["Result"] == "-"
 
 
 def test_app_invalid_strut_angle_caption_omits_hostile_optional_operands():
@@ -3208,7 +3208,7 @@ def test_app_shear_2023_links_with_axial_compression_fail_closed(monkeypatch):
     overview = overview_table(at)
     row = overview.loc[overview["Check"] == "Shear with links"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == chr(0x2014)
+    assert row["Result"] == "-"
     import result_presentation as _presentation
 
     retained_rows = _presentation.governing_result_rows(
@@ -3407,7 +3407,7 @@ def test_2023_ductility_class_mismatch_is_fail_closed_but_concrete_stays_current
         row["Check"]: row for _, row in overview.iterrows()
     }
     assert overview_by_check["Shear with links"]["Status"] == "STALE"
-    assert overview_by_check["Shear with links"]["Result"] == chr(0x2014)
+    assert overview_by_check["Shear with links"]["Result"] == "-"
     assert overview_by_check["Shear without links"]["Status"] == "STALE"
     assert overview_by_check["Shear without links"]["Result"] not in {"-", chr(0x2014)}
 

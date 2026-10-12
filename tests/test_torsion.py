@@ -1475,6 +1475,31 @@ def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
         assert_poisoned_torsion_is_withheld()
 
 
+def _expected_overview_result(row):
+    """Preserve each operand and literal while expanding controlled UI symbols."""
+    value = row["result"]
+    fragments = (row.get("report_fields") or {}).get("result")
+    if fragments is None:
+        return value
+    assert "".join(text for _kind, text in fragments) == value
+    labels = {
+        "mm2": "mm\u00b2",
+        "mm3": "mm\u00b3",
+        "VEd": "applied shear",
+        "Vx,Ed": "applied shear in x",
+        "Vy,Ed": "applied shear in y",
+        "VRd,c": "concrete shear resistance",
+        "VRd,s": "link shear resistance",
+        "VRd,max": "concrete-strut shear resistance",
+        "TEd": "applied torsion",
+        "TRd,c": "concrete torsion resistance",
+        "TRd,s": "transverse-steel torsion resistance",
+        "TRd,max": "concrete-strut torsion resistance",
+    }
+    return "".join(labels.get(text, text) if kind == "catalogue" else text
+                   for kind, text in fragments)
+
+
 def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle():
     rows = [
         {
@@ -1559,9 +1584,9 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
     )) == [
         (
             row["check"],
-            chr(0x2014) if row["case"] == "-" else row["case"],
+            row["case"],
             row["status"],
-            chr(0x2014) if row["result"] == "-" else row["result"],
+            _expected_overview_result(row),
         )
         for row in expected
     ]
@@ -1573,8 +1598,8 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
         assert not at.exception
         picker = at.selectbox(key="_plastic_result_case_index")
         assert picker.options[index].startswith(name)
-        actions = next(item.value for item in at.dataframe if "T_Ed [kNm]" in item.value)
-        assert actions.iloc[0]["T_Ed [kNm]"] == torque
+        actions = next(item.value for item in at.dataframe if "Torque (kN\u00b7m)" in item.value)
+        assert actions.iloc[0]["Torque (kN\u00b7m)"] == torque
         metric_values = {str(item.value) for item in at.metric}
         if index == 0:
             assert f"{eq_torsion['trd']:.3f} kNm" in metric_values
@@ -2032,10 +2057,10 @@ def test_app_stale_formula_628_pass_is_not_published_in_torsion_views(tmp_path):
     )
     formula_values = dict(zip(formula_table["Quantity"], formula_table["Value"]))
     assert formula_values["Required longitudinal area"] == "-"
-    assert formula_values["All modelled passive bars - gross area"] == "-"
+    assert formula_values["All modeled passive bars - gross area"] == "-"
     assert (
         formula_values[
-            "All modelled passive bars - equivalent area at selected fyd"
+            "All modeled passive bars - equivalent area at selected design yield strength"
         ]
         == "-"
     )
@@ -2049,7 +2074,7 @@ def test_app_stale_formula_628_pass_is_not_published_in_torsion_views(tmp_path):
         overview["Check"] == "Torsion longitudinal reinforcement"
     ].iloc[0]
     assert longitudinal_row["Status"] == "NOT ASSESSED"
-    assert longitudinal_row["Result"] == chr(0x2014)
+    assert longitudinal_row["Result"] == "-"
 
 
 def test_app_combined_without_links_withholds_torsion_dependent_verdicts(tmp_path):
@@ -2302,7 +2327,7 @@ def test_app_torsion_view_renders():
         for item in at.warning
     )
     captions = " ".join(item.value for item in at.caption)
-    assert "actual direct gamma_ct input is used" in captions
+    assert r"The entered $\gamma_{ct}$ value is used." in captions
     assert "1.700" in captions
 
 
@@ -3238,15 +3263,15 @@ def test_app_torsion_subdivided_view_renders():
     assert any("T_{Rd" in lbl for lbl in labels)
     table = next(
         frame.value for frame in at.dataframe
-        if "Asl,req,i (mm2)" in frame.value.columns
+        if "Required longitudinal area (mm\u00b2)" in frame.value.columns
     )
     required = [
         f"{item['asl_req']:.0f}"
         for item in at.session_state["results"]["torsion"]["subtubes"]
     ]
-    assert list(table["Asl,req,i (mm2)"]) == required
-    assert list(table["Base A/u (mm)"]) == ["100.0", "83.3"]
-    assert list(table["tef (mm)"]) == ["100.0", "100.0"]
+    assert list(table["Required longitudinal area (mm\u00b2)"]) == required
+    assert list(table["Base wall thickness (mm)"]) == ["100.0", "83.3"]
+    assert list(table["Effective wall thickness (mm)"]) == ["100.0", "100.0"]
     assert list(table["Selection source"]) == [
         "A/u and reinforcement lower bound",
         "reinforcement lower bound",
@@ -4263,7 +4288,7 @@ def test_app_torsion_outside_permitted_range_withholds_verdict(tmp_path):
     overview = overview_table(at)
     row = overview.loc[overview["Check"] == "Torsion"].iloc[0]
     assert row["Status"] == "NOT ASSESSED"
-    assert row["Result"] == chr(0x2014)
+    assert row["Result"] == "-"
     detailing_rows = overview.loc[
         overview["Check"].str.startswith("Torsion Tube")
     ]

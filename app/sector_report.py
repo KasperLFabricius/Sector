@@ -2684,7 +2684,7 @@ class ReportBuilder:
             self._keep_from(table_start)
         return table_item
 
-    def _fig(self, fig, w_mm=150, h_mm=95, caption=None):
+    def _fig(self, fig, w_mm=150, h_mm=95, caption=None, *, export_size=None):
         if not self.figures:
             return
         # Once an export has wedged the browser (a full-timeout hang), stop trying:
@@ -2693,7 +2693,8 @@ class ReportBuilder:
             raise ReportFigureError(
                 "Engineering-figure export previously timed out; report not created."
             )
-        png, timed_out = _fig_png(fig, int(w_mm * 3.78), int(h_mm * 3.78))
+        export_width, export_height = export_size or (int(w_mm * 3.78), int(h_mm * 3.78))
+        png, timed_out = _fig_png(fig, export_width, export_height)
         if timed_out:
             self._export_hung = True
         if png is None:
@@ -6670,23 +6671,35 @@ class ReportBuilder:
     def _section_field_maps(self, result, *, family, point_index=None):
         if not self.figures:
             return
-        intro_start = len(self.flow)
-        if self.flow and isinstance(self.flow[-1], Paragraph) and getattr(self.flow[-1], "_sector_outline_level", None) == 0:
-            intro_start -= 1
-        self._h2("Section stress and strain maps", reserve=0)
         try:
             field, figures = section_fields.field_pair(
                 self.inp, result, family=family, point_index=point_index)
         except section_fields.FieldUnavailable as exc:
+            self._h2("Section stress and strain maps", reserve=0)
             self._small("Section maps unavailable. " + _html_escape(str(exc)))
             return
-        self._p(_html_escape(field.state + ". " + field.caption))
         case = self.inp.get("plastic_case" if family == "Plastic" else "elastic_case") or {}
         case_label = str(case.get("id") or "Unnamed action")
+        self._small("For the section maps, color limits stay fixed across valid states of this action. Other actions can have different limits.")
+        self._small("Display bands show values from the accepted field. Marker sizes identify elements; the element schedule gives their areas.")
+        if field.density:
+            self._small("Slab-density markers identify retained integration points or nominal axes with tabulated tributary areas.")
         for index, (quantity, figure) in enumerate(figures):
-            block_start = intro_start if index == 0 else len(self.flow)
-            self._fig(figure, 170, 140,
-                      caption=f"{case_label}: {family.lower()} {quantity}. {field.state}.")
+            # Definitions can flow in the preceding space. The map heading and
+            # selected state stay with the first figure and its extrema.
+            block_start = len(self.flow)
+            if index == 0:
+                self._h2("Section stress and strain maps", reserve=0)
+                self._p(_html_escape(field.state + ". " + field.caption))
+            heading_content = list(self.flow[block_start:])
+            canvas_width, canvas_height = float(figure.layout.width), float(figure.layout.height)
+            if not (math.isfinite(canvas_width) and math.isfinite(canvas_height)
+                    and canvas_width > 0.0 and canvas_height > 0.0):
+                raise ReportFigureError("Section map dimensions are invalid.")
+            scale = min(170.0 / canvas_width, 160.0 / canvas_height)
+            self._fig(figure, canvas_width * scale, canvas_height * scale,
+                      caption=f"{case_label}: {family.lower()} {quantity}. {field.state}.",
+                      export_size=(int(canvas_width), int(canvas_height)))
             unit = "&#8240;" if quantity == "strain" else "MPa"
             rows = [["Extremum", f"Value ({unit})", "x (mm)", "y (mm)"]]
             rows.extend([_html_escape(label), _fmt(value, 5), _fmt(x * _MM, 2), _fmt(y * _MM, 2)]
@@ -6696,10 +6709,17 @@ class ReportBuilder:
                 "Concrete and reinforcement use separate stress scales."
                 if quantity == "stress" else "Strain values are in &#8240;."))
             self._keep_from(block_start)
-        self._small("Color limits stay fixed across valid states of this action. Other actions can have different limits.")
-        self._small("Display bands show values from the accepted field. Marker sizes identify elements; the element schedule gives their areas.")
-        if field.density:
-            self._small("Slab-density markers identify retained integration points or nominal axes with tabulated tributary areas.")
+            if heading_content:
+                group = self.flow[-1]
+                measure_canvas = canvas.Canvas(io.BytesIO())
+                group.wrapOn(measure_canvas, _A4_CONTENT_WIDTH - 2 * _REPORT_FRAME_PADDING,
+                             _A4_FRAME_USABLE_HEIGHT)
+                if group._H + group.getSpaceBefore() > _A4_FRAME_USABLE_HEIGHT:
+                    # Preserve the complete map block when a long identity or
+                    # extra extrema leave no room for its preceding heading.
+                    count = len(heading_content)
+                    assert all(a is b for a, b in zip(group._content[:count], heading_content))
+                    self.flow[-1:] = [*heading_content, KeepTogether(group._content[count:])]
 
     def _plastic_nm_boundary(self, nm):
         self._h2("Numerical N-M boundary")

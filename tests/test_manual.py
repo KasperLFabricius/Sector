@@ -435,7 +435,7 @@ def test_manual_documents_project_recovery_and_ownership():
     text = "\n".join(str(block) for block in manual.manual_blocks())
     for expected in (
         "Project files and autosave",
-        'default interval is five minutes',
+        'enabled by default with a two-minute interval',
         'for local recovery',
     ):
         assert expected in text
@@ -1270,3 +1270,24 @@ def test_manual_explains_displaced_concrete_and_plastic_only_compression_switch(
                               fctm=fctm(ex["concrete"].fck), bar_diameter=25)
     # Keep the printed worked cracking factor aligned with the calculation.
     assert f"lambda_{{cr}}={result.lambda_cr:.2f}<1" in text
+
+
+def test_manual_documents_field_selection_and_guarded_recovery():
+    text = "\n".join(str(block) for block in manual.manual_blocks())
+    for expected in (
+        "**Contour quantity**", "**Stress** or **Strain**",
+        "**Map action duration**", "**Combined actions (TOTAL)**",
+        "**Sustained actions (LONG)**", "One contour is shown at a time",
+        "A plain marker shows a positive value", "An x marks a negative value",
+        "A dot marks zero", "The sign refers to the displayed quantity",
+        "Existing saved preferences keep their selected values",
+        "after pending input changes, project loading and report generation have finished",
+        "Autosave preserves an unreadable recovery file",
+        "another session changes the recovery file",
+        "Use **Download project** to keep the current inputs",
+        "**Section map unavailable**",
+    ):
+        assert expected in text, expected
+    assert "A due save runs on the next interaction" not in text
+    assert "**Save project**" not in text
+    assert "**Section maps unavailable**" not in text

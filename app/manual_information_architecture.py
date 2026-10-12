@@ -178,6 +178,16 @@ METHODS: Final[tuple[ManualDestination, ...]] = (
 
 WARNINGS: Final[tuple[WarningReference, ...]] = (
     WarningReference(
+        "autosave-recovery",
+        "Autosave is paused, or it cannot write the recovery file.",
+        "Another Sector session changed the recovery file, the file cannot be read, "
+        "or the recovery file cannot be written.",
+        "Select Download project to keep the current inputs. Read the warning. "
+        "For a session conflict, close other sessions and restart Sector. "
+        "For a write failure, check folder access. "
+        "Keep an unreadable recovery file until you have an intact saved project.",
+    ),
+    WarningReference(
         "startup-incomplete",
         "Sector.exe stops before the browser opens.",
         "The extracted package is incomplete, a dependency is blocked, or the console reports a startup error.",

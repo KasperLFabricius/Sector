@@ -190,7 +190,7 @@ def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,
     fig.add_vline(x=0.0, line_dash="dash", line_color="#111827", line_width=1)
     fig.update_layout(
         title=title,
-        xaxis_title=f"Strain epsilon ({_PERMILLE}, tension +)",
+        xaxis_title=f"Strain \u03b5 ({_PERMILLE}, tension +)",
         yaxis_title="Projected depth (mm)<br>from compression face",
         yaxis=dict(autorange="reversed"),
         template="plotly_white",
@@ -720,13 +720,11 @@ _ARROW_RIGHT = chr(0x2192)   # rightwards arrow
 def _direction_note(fig, lines):
     """Corner note stating the positive sign convention (with arrow glyphs).
 
-    Pinned to the top-left of the plot area on a translucent backing, so the
-    reader never has to leave the figure to know which PHYSICAL bending a
-    positive axis value means. The interaction envelopes are centred, so the
-    corner is reliably free under the equal-aspect autoscale.
+    Place the sign convention in the reserved top margin. The note remains
+    separate from envelope landmarks at narrow display widths.
     """
-    fig.add_annotation(x=0.01, y=0.99, xref="paper", yref="paper",
-                       xanchor="left", yanchor="top", showarrow=False,
+    fig.add_annotation(x=0.01, y=1.0, xref="paper", yref="paper", yshift=8,
+                       xanchor="left", yanchor="bottom", showarrow=False,
                        align="left", text="<br>".join(lines),
                        font=dict(size=11, color=SCHEMATIC_INK),
                        bgcolor="rgba(255,255,255,0.75)")
@@ -2733,14 +2731,14 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
     # Which PHYSICAL bending each positive axis half means (the solver's V = 90 /
     # V = 0 convention): +Mx tensions the bottom face, +My the left face.
     _direction_note(fig, [
-        _ARROW_UP + " +Mx: tension at the bottom face",
-        _ARROW_RIGHT + " +My: tension at the left face"])
+        _ARROW_UP + " +M<sub>x</sub>: tension at the bottom face",
+        _ARROW_RIGHT + " +M<sub>y</sub>: tension at the left face"])
     fig.update_layout(
-        title=title, template=_TEMPLATE, height=440,
-        margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
-        xaxis=dict(title=dict(text="My - about the y-axis (kNm)", standoff=10),
+        title=title, template=_TEMPLATE, height=485,
+        margin=dict(l=10, r=10, t=_LEGEND_TOP_M + 45, b=_LEGEND_BOT_M),
+        xaxis=dict(title=dict(text="M<sub>y</sub> - about the y-axis (kNm)", standoff=10),
                    zeroline=True),
-        yaxis=dict(title="Mx - about the x-axis (kNm)", zeroline=True,
+        yaxis=dict(title="M<sub>x</sub> - about the x-axis (kNm)", zeroline=True,
                    scaleanchor="x", scaleratio=1),
         # Below the plot and below the x-axis title, clear of the plotly modebar.
         # Forced on: with a single trace (a capacity-only run, or a partial arc)
@@ -2760,7 +2758,7 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     capacity boundary -- the ``+M`` branch from pure tension to the squash load then
     the ``-M`` branch back. ``applied`` is ``(N, M)`` and marked on the diagram.
     """
-    mlabel = "M_x" if axis == "x" else "M_y"
+    mlabel = "M<sub>x</sub>" if axis == "x" else "M<sub>y</sub>"
     scale = max((abs(v) for v in list(N) + list(M)), default=1.0) or 1.0
     snap = lambda v: 0.0 if abs(v) <= scale * 1e-4 else v
     Ms = [snap(v) for v in M]
@@ -2810,8 +2808,8 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
                            yshift=-11, yanchor="top", font=dict(size=11, color=ENVELOPE))
         fig.add_annotation(x=Ms[i_te], y=Ns[i_te], text="tension", showarrow=False,
                            yshift=11, yanchor="bottom", font=dict(size=11, color=ENVELOPE))
-        fig.add_annotation(x=Ms[i_mm], y=Ns[i_mm], text="max " + mlabel.replace("_", ""),
-                           showarrow=False, xshift=-8, xanchor="right",
+        fig.add_annotation(x=Ms[i_mm], y=Ns[i_mm], text="max " + mlabel,
+                           showarrow=False, xshift=-8, xanchor="right", yshift=11, yanchor="bottom",
                            font=dict(size=11, color=ENVELOPE))
     if applied is not None:
         fig.add_trace(go.Scatter(x=[snap(applied[1])], y=[applied[0]], mode="markers",
@@ -2822,12 +2820,12 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
     # axial tension.
     face = "bottom" if axis == "x" else "left"
     _direction_note(fig, [
-        _ARROW_RIGHT + f" +{mlabel.replace('_', '')}: tension at the {face} face",
+        _ARROW_RIGHT + f" +{mlabel}: tension at the {face} face",
         _ARROW_UP + " +N: axial tension"])
     fig.update_layout(
-        title=title, template=_TEMPLATE, height=460,
-        margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
-        xaxis=dict(title=dict(text=f"{mlabel.replace('_', '')} (kNm)", standoff=10),
+        title=title, template=_TEMPLATE, height=505,
+        margin=dict(l=10, r=10, t=_LEGEND_TOP_M + 45, b=_LEGEND_BOT_M),
+        xaxis=dict(title=dict(text=f"{mlabel} (kNm)", standoff=10),
                    zeroline=True),
         yaxis=dict(title="N (kN, tension +)", zeroline=True),
         legend=dict(orientation="h", yanchor="top", y=_legend_y(460), x=0.5,
@@ -2929,14 +2927,13 @@ def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
         ix, iy = _ring_xy([(p[0] * scale, p[1] * scale) for p in inner])
         fig.add_trace(go.Scatter(x=ix, y=iy, mode="lines",
                                  line=dict(color=CONCRETE_LINE, width=1, dash="dot"),
-                                 name=(f"inner wall face (t<sub>ef</sub> = {tef_mm:.0f} mm)"
-                                       if report_labels else f"inner wall face (tef = {tef_mm:.0f} mm)")))
+                                 name=f"inner wall face (t<sub>ef</sub> = {tef_mm:.0f} mm)"))
     if centre:
         cx, cy = _ring_xy([(p[0] * scale, p[1] * scale) for p in centre])
-        ak_label = "A<sub>k</sub>" if report_labels else "Ak"
-        area_unit = "mm<sup>2</sup>" if report_labels else "mm2"
+        ak_label = "A<sub>k</sub>"
+        area_unit = "mm<sup>2</sup>"
         ak_txt = f" ({ak_label} = {ak_m2 * 1.0e6:,.0f} {area_unit})" if ak_m2 else ""
-        center_label = "wall center-line" if report_labels else "wall centre-line"
+        center_label = "wall center-line"
         fig.add_trace(go.Scatter(x=cx, y=cy, mode="lines",
                                  line=dict(color=ENVELOPE, width=2, dash="dash"),
                                  name=center_label + ak_txt))
@@ -2992,8 +2989,8 @@ def subtube_figure(subtubes, title="Torsion sub-tubes (6.3.1(3))"):
                 f"<b>{role}</b><br>"
                 "centre (%{customdata[0]:.0f}, %{customdata[1]:.0f}) mm<br>"
                 "b x h %{customdata[2]:.0f} x %{customdata[3]:.0f} mm<br>"
-                "TEd %{customdata[4]:.2f} kNm<br>"
-                "TRd %{customdata[5]}<br>"
+                "T<sub>Ed</sub> %{customdata[4]:.2f} kNm<br>"
+                "T<sub>Rd</sub> %{customdata[5]}<br>"
                 "util %{customdata[6]}<extra></extra>"
             ),
             showlegend=False))
