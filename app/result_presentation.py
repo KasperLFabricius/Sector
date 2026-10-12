@@ -26,6 +26,7 @@ import viz
 
 from app import engineer_messages
 from app import elastic_display
+from app import report_summary_notation as report_notation
 from app import modelled_direction
 from sector import capacity, codes, combined as combined_core
 from sector import geometry as section_geometry
@@ -643,6 +644,114 @@ _COMBINED_REASON_MESSAGES = {
     ),
 }
 _CRACK_REASON_MESSAGES = {
+    'At least one reinforcement element lies outside the validated direct-tension effective perimeter area.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-01",
+        'At least one reinforcement element lies outside the validated direct-tension effective perimeter area.',
+    ),
+    'Calculated direct-tension effective band is not positive.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-02",
+        'Calculated direct-tension effective band is not positive.',
+    ),
+    'Every crack-control reinforcement modulus must be finite and positive.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-03",
+        'Every crack-control reinforcement modulus must be finite and positive.',
+    ),
+    'Every crack-width bond-condition coefficient must be finite and positive.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-04",
+        'Every crack-width bond-condition coefficient must be finite and positive.',
+    ),
+    'No reinforcement lies inside the 2005 effective tension area.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-05",
+        'No reinforcement lies inside the 2005 effective tension area.',
+    ),
+    'No tension reinforcement candidate remains in the 2023 effective area.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-06",
+        'No tension reinforcement candidate remains in the 2023 effective area.',
+    ),
+    'No tension reinforcement candidate remains in the direct-tension effective area.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-07",
+        'No tension reinforcement candidate remains in the direct-tension effective area.',
+    ),
+    'No tension reinforcement candidate remains in the effective area.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-08",
+        'No tension reinforcement candidate remains in the effective area.',
+    ),
+    'No tension reinforcement lies below the cracked neutral axis.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-09",
+        'No tension reinforcement lies below the cracked neutral axis.',
+    ),
+    'No usable bending gradient is available for the 2005 crack-width method.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-10",
+        'No usable bending gradient is available for the 2005 crack-width method.',
+    ),
+    'No usable strain-gradient direction is available for crack width.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-11",
+        'No usable strain-gradient direction is available for crack width.',
+    ),
+    'Physical reinforcement spacing could not be related to the calculated tension zone.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-12",
+        'Physical reinforcement spacing could not be related to the calculated tension zone.',
+    ),
+    'Physical reinforcement spacing values are invalid.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-13",
+        'Physical reinforcement spacing values are invalid.',
+    ),
+    'Reinforcement lies outside the validated direct-tension rectangle.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-14",
+        'Reinforcement lies outside the validated direct-tension rectangle.',
+    ),
+    'The 2005 effective tension area is not positive.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-15",
+        'The 2005 effective tension area is not positive.',
+    ),
+    'The 2023 bending effective tension area is not positive.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-16",
+        'The 2023 bending effective tension area is not positive.',
+    ),
+    'The 2023 bending effective tension height is not positive.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-17",
+        'The 2023 bending effective tension height is not positive.',
+    ),
+    'The 2023 bending tension-zone depth (h - x) is not positive.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-18",
+        'The 2023 bending tension-zone depth (h - x) is not positive.',
+    ),
+    'The cracked section has no reinforcement; crack width is not assessed.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-19",
+        'The cracked section has no reinforcement; crack width is not assessed.',
+    ),
+    'The cracked-state reinforcement stress array is invalid.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-20",
+        'The cracked-state reinforcement stress array is invalid.',
+    ),
+    'The entire section is in tension but the strain gradient is not uniform. The validated direct-tension branch does not cover this combined tension-and-bending state.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-21",
+        'The entire section is in tension but the strain gradient is not uniform. The validated direct-tension branch does not cover this combined tension-and-bending state.',
+    ),
+    'The near-zero strain gradient is a transition state that is neither validated uniform direct tension nor a stable bending effective area.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-22",
+        'The near-zero strain gradient is a transition state that is neither validated uniform direct tension nor a stable bending effective area.',
+    ),
+    'The strain gradient is too small to establish the 2005 bending effective area, but the section is not in validated uniform tension.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-23",
+        'The strain gradient is too small to establish the 2005 bending effective area, but the section is not in validated uniform tension.',
+    ),
+    'Uniform direct tension is validated only for a solid rectangular section; this geometry is outside that scope.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-24",
+        'Uniform direct tension is validated only for a solid rectangular section; this geometry is outside that scope.',
+    ),
+    'Uniform direct tension requires reinforcement assigned to distinct opposed faces of the rectangular section.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-25",
+        'Uniform direct tension requires reinforcement assigned to distinct opposed faces of the rectangular section.',
+    ),
+    'Uniform direct-tension reinforcement assigned to one face must form a single validated layer.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-26",
+        'Uniform direct-tension reinforcement assigned to one face must form a single validated layer.',
+    ),
+    'Uniform/direct tension is outside the validated 2005 crack-width branch; select the 2023 direct-tension method or another applicable numerical method.': EngineerMessage(
+        "CRACK-NATIVE-SCOPE-27",
+        'Uniform/direct tension is outside the validated 2005 crack-width branch; select the 2023 direct-tension method or another applicable numerical method.',
+    ),
     "Crack-width calculation was not requested for this Elastic case.": EngineerMessage(
         "CRACK-NOT-REQUESTED",
         "Crack-width calculation was not requested for this Elastic case",
@@ -766,12 +875,18 @@ def result_reason(value, family: str, *, context: str | None = None) -> str:
     """Publish one retained result reason only through positive provenance."""
 
     selected_family = family if family in _RESULT_REASON_FALLBACKS else "generic"
-    return engineer_messages.resolve_state(
+    catalogue = _RESULT_REASON_MESSAGES.get(selected_family, {})
+    message = engineer_messages.resolve_state(
         value,
-        authored=_RESULT_REASON_MESSAGES.get(selected_family, {}),
+        authored=catalogue,
         fallback=_RESULT_REASON_FALLBACKS[selected_family],
         context=context or f"{selected_family} retained result reason",
-    ).text
+    )
+    # Only an exact catalogue-owned object permits authored mathematical tokens.
+    # Typed messages from other callers retain their original literal behavior.
+    if any(message is item for item in catalogue.values()):
+        return report_notation.authored(message.text)
+    return message.text
 
 GOVERNING_OVERVIEW_STATUS_PRECEDENCE = (
     "INVALID",
@@ -6030,9 +6145,12 @@ def shear_geometry_basis(inp, shear_result, *, torsion_result=None):
             "d_note": d_note,
             "z_note": None,
             "statement": (
-                f"Effective depth d = {d_text} is used in V_Rd,c. "
-                "The reinforced-shear geometry is not assessed; recalculate the "
-                "shear check before using a links resistance."
+                report_notation.text(
+                    'Effective depth d = {} is used in V_Rd,c. The reinforced-shear '
+                    'geometry is not assessed; recalculate the shear check before '
+                    'using a links resistance.',
+                    d_text,
+                )
             ),
         }
     if links:
@@ -6054,8 +6172,12 @@ def shear_geometry_basis(inp, shear_result, *, torsion_result=None):
                 "d_note": d_note,
                 "z_note": None,
                 "statement": (
-                    f"Effective depth d = {d_text} is used in V_Rd,c. "
-                    f"The links resistance is not assessed: {reason}."
+                    report_notation.text(
+                        'Effective depth d = {} is used in V_Rd,c. The links resistance is '
+                        'not assessed: {}.',
+                        d_text,
+                        reason,
+                    )
                 ),
             }
         if circular_fitted is not None:
@@ -6079,9 +6201,12 @@ def shear_geometry_basis(inp, shear_result, *, torsion_result=None):
                 "d_note": d_note,
                 "z_note": None,
                 "statement": (
-                    f"Effective depth d = {d_text} is used in V_Rd,c. "
-                    "The calculated links arm is not assessed; recalculate the "
-                    "Plastic action set and shear check."
+                    report_notation.text(
+                        'Effective depth d = {} is used in V_Rd,c. The calculated links '
+                        'arm is not assessed; recalculate the Plastic action set and shear '
+                        'check.',
+                        d_text,
+                    )
                 ),
             }
         component = provenance["component"]
@@ -6102,9 +6227,15 @@ def shear_geometry_basis(inp, shear_result, *, torsion_result=None):
                 "used in V<sub>Rd,s</sub> and V<sub>Rd,max</sub>"
             ),
             "statement": (
-                f"Calculated arm z = {z_mm:.3f} mm = |{component}| from "
-                f"{case_id}, {state}; used in V_Rd,s and V_Rd,max. "
-                f"Effective depth d = {d_text} is used in V_Rd,c."
+                report_notation.text(
+                    'Calculated arm z = {:.3f} mm = |{}| from {}, {}; used in V_Rd,s '
+                    'and V_Rd,max. Effective depth d = {} is used in V_Rd,c.',
+                    z_mm,
+                    report_notation.symbol(component),
+                    case_id,
+                    state,
+                    d_text,
+                )
             ),
         }
 
@@ -6118,8 +6249,11 @@ def shear_geometry_basis(inp, shear_result, *, torsion_result=None):
                 "used in V<sub>Rd,c</sub>"
             ),
             "statement": (
-                f"Standard-defined arm z = {z_mm:.3f} mm = 0.9d per "
-                "DS/EN 1992-1-1:2023 8.2.1(3); used in V_Rd,c."
+                report_notation.text(
+                    'Standard-defined arm z = {:.3f} mm = 0.9d per DS/EN 1992-1-1:2023 '
+                    '8.2.1(3); used in V_Rd,c.',
+                    z_mm,
+                )
             ),
         }
     return {
@@ -6127,8 +6261,11 @@ def shear_geometry_basis(inp, shear_result, *, torsion_result=None):
         "d_note": d_note,
         "z_note": None,
         "statement": (
-            f"Effective depth d = {d_text} is used in V_Rd,c; the selected "
-            "2005 no-links resistance has no z operand."
+            report_notation.text(
+                'Effective depth d = {} is used in V_Rd,c; the selected 2005 '
+                'no-links resistance has no z operand.',
+                d_text,
+            )
         ),
     }
 
@@ -6181,6 +6318,7 @@ def _summary_row(
         "view": view,
         "note": note,
     }
+    report_notation.attach(row)
     if overview_key is not None:
         row["overview_key"] = str(overview_key)
     if overview_parent is not None:
@@ -6206,11 +6344,18 @@ def _ordinary_crack_summary_row(inp, output):
     else:
         criterion_text = f"User-specified limit {criterion:.3f} mm"
     note_parts = [
-        str(output.get(key) or "").strip()
-        for key in ("reason", "case", "governing", "criterion_source")
+        result_reason(output.get("reason"), "crack")
+        if output.get("reason") else "",
+        *[
+            str(output.get(key) or "").strip()
+            for key in ("case", "governing", "criterion_source")
+        ],
     ]
     if ratio is not None:
-        note_parts.append(f"w_k / w_k,criterion = {ratio:.3f}")
+        note_parts.append(report_notation.text(
+            'w_k / w_k,criterion = {:.3f}',
+            ratio,
+        ))
     duration = str(output.get("duration") or "").strip()
     duration_label = {
         "long_term": "Long-term",
@@ -6224,7 +6369,9 @@ def _ordinary_crack_summary_row(inp, output):
         criterion_text,
         None,
         "Elastic Results",
-        "; ".join(part for part in note_parts if part),
+        report_notation.join(
+            "; ", ((part for part in note_parts if part)),
+        ),
         inp,
         overview_key=f"crack_width:{duration or 'unspecified'}",
         overview_parent="crack_width",
@@ -6248,21 +6395,33 @@ def _heightened_crack_summary_row(result):
     provided = _publication_metric(result.get("provided_reinforcement_area_mm2"))
     ratio = _publication_metric(result.get("governing_comparison_ratio"))
     result_text = (
-        f"Fine As,req {fine_required:.1f} mm2; coarse As,req "
-        f"{coarse_required:.1f} mm2; As,prov {provided:.1f} mm2"
+        report_notation.text(
+            'Fine As,req {:.1f} mm2; coarse As,req {:.1f} mm2; As,prov {:.1f} '
+            'mm2',
+            fine_required,
+            coarse_required,
+            provided,
+        )
         if fine_required is not None
         and coarse_required is not None
         and provided is not None
         else "-"
     )
     note = (
-        f"Reference {result.get('reference_case_id') or '-'} / "
-        f"{result.get('ordinary_crack_branch') or '-'}; governing "
-        f"{result.get('governing_crack_system') or '-'}; "
+        report_notation.text(
+            "Reference {} / {}; governing {}; ",
+            result.get('reference_case_id') or '-',
+            result.get('ordinary_crack_branch') or '-',
+            result.get('governing_crack_system') or '-',
+        )
         + str(result.get("disclosure") or result.get("source") or "")
     )
     if ratio is not None:
-        note = f"As,req / As,prov = {ratio:.3f}; {note}".rstrip("; ")
+        note = report_notation.text(
+            'As,req / As,prov = {:.3f}; {}',
+            ratio,
+            note,
+        ).rstrip("; ")
     return _summary_row(
         "DK heightened crack-control minimum",
         "elastic",
@@ -6392,17 +6551,23 @@ def torsion_applicability_note(torsion):
         basis = applicability.get("design_basis")
         if basis == capacity.TORSION_DESIGN_EQUILIBRIUM:
             return (
-                "Equilibrium torsion is selected; the entered TEd must be resisted "
-                "by the section"
+                report_notation.authored(
+                    'Equilibrium torsion is selected; the entered TEd must be resisted '
+                    'by the section',
+                )
             )
         if basis == capacity.TORSION_DESIGN_COMPATIBILITY_RESIDUAL:
             return (
-                "Compatibility torsion is retained as a deliberately entered "
-                "residual design action; Sector checks that TEd in full but does "
-                "not establish redistribution or member/system conditions"
+                report_notation.authored(
+                    'Compatibility torsion is retained as a deliberately entered '
+                    'residual design action; Sector checks that TEd in full but does '
+                    'not establish redistribution or member/system conditions',
+                )
             )
     if status == "NOT APPLICABLE":
-        return "No torsion resistance assessment is required for TEd = 0"
+        return report_notation.authored(
+            'No torsion resistance assessment is required for TEd = 0',
+        )
     if applicability.get("status") != "NOT ASSESSED":
         return (
             "The torsion design basis, member scope and full-resistance route "
@@ -6481,8 +6646,10 @@ def torsion_applicability_publication_status(torsion):
 
 _MINIMUM_REINFORCEMENT_SCREEN_NOTES = {
     "applicable_first_generation_rectangle": (
-        "Formula (6.31) uses the first-generation V_Rd,c result for this "
-        "approximately solid rectangular section"
+        report_notation.authored(
+            'Formula (6.31) uses the first-generation V_Rd,c result for this '
+            'approximately solid rectangular section',
+        )
     ),
     "selected_2023_route": (
         "Formula (6.31) is unavailable for the selected 2023 shear method. "
@@ -6500,13 +6667,18 @@ _MINIMUM_REINFORCEMENT_SCREEN_NOTES = {
         "sections"
     ),
     "shear_resistance_unavailable": (
-        "Calculate the first-generation V_Rd,c shear result to evaluate "
-        "Formula (6.31) for this rectangular section"
+        report_notation.authored(
+            'Calculate the first-generation V_Rd,c shear result to evaluate '
+            'Formula (6.31) for this rectangular section',
+        )
     ),
     "positive_resistance_unavailable": (
-        "A positive T_Rd,c and V_Rd,c are required to evaluate Formula (6.31)"
+        report_notation.authored(
+            'A positive T_Rd,c and V_Rd,c are required to evaluate Formula '
+            '(6.31)',
+        )
     ),
-    "dkna_combined_normal_or_moment": (
+    "dkna_combined_normal_or_moment": report_notation.authored(
         "With acting N_Ed or M_Ed under the Danish National Annex, use the "
         "DK NA 6.3.2(6) combined N-M-V-T check; Formula (6.31) is not used as "
         "the combined verdict"
@@ -6556,8 +6728,10 @@ def minimum_reinforcement_screen_note(check):
     return _MINIMUM_REINFORCEMENT_SCREEN_NOTES.get(
         reason,
         (
-            "Formula (6.31) requires an approximately solid rectangular section "
-            "and a first-generation V_Rd,c shear result"
+            report_notation.authored(
+                'Formula (6.31) requires an approximately solid rectangular '
+                'section and a first-generation V_Rd,c shear result',
+            )
         ),
     )
 
@@ -6929,7 +7103,7 @@ def combined_physical_components(combined):
         "status": overall_status,
         "util": overall_util,
         "valid": overall_status in {"PASS", "FAIL"},
-        "note": "; ".join(notes),
+        "note": report_notation.join("; ", notes),
         "assessment": assessment,
         "governing_source": assessment.get("governing_source"),
         "governing_mechanism": assessment.get("governing_mechanism"),
@@ -6992,7 +7166,7 @@ def fatigue_summary_rows(inp, results, *, stale=False):
             fatigue, stale=stale
         )
         note = fatigue_presentation.overall_note(fatigue, stale=stale)
-    return [{
+    return [report_notation.attach({
         "check": "Fatigue",
         "family": "fatigue",
         "case": case,
@@ -7007,7 +7181,7 @@ def fatigue_summary_rows(inp, results, *, stale=False):
         "view": "Fatigue Results",
         "note": note,
         "overview_key": "fatigue",
-    }]
+    })]
 
 
 def non_governing_fatigue_spectrum_rows(inp, results, *, stale=False):
@@ -7116,7 +7290,7 @@ def _base_en_combined_summary_rows(inp, combined):
             ]
             note = "Missing prerequisite: " + ", ".join(missing)
             if item.get("reason"):
-                note += "; " + result_reason(
+                note += report_notation.authored("; ") + result_reason(
                     item["reason"],
                     "combined",
                     context="Base EN combined prerequisite reason",
@@ -7284,8 +7458,12 @@ def _torsion_component_summary_rows(inp, results, torsion):
             required = longitudinal.get("required_asl_mm2")
             provided = longitudinal.get("provided_equivalent_area_mm2")
             result_text = (
-                f"Required {required:.0f} mm2; modelled upper bound "
-                f"{provided:.0f} mm2; provision unverified"
+                report_notation.text(
+                    'Required {:.0f} mm2; modelled upper bound {:.0f} mm2; provision '
+                    'unverified',
+                    required,
+                    provided,
+                )
                 if required is not None and provided is not None
                 else "-"
             )
@@ -7485,7 +7663,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 )
                 value = output.get("value")
                 result = "-" if value is None else f"{value:.3f} MPa"
-                result += "; " + elastic_display.output_comparison(
+                result += report_notation.authored("; ") + elastic_display.output_comparison(
                     inp, elastic, key, output
                 )
                 rows.append(_summary_row(
@@ -7515,7 +7693,11 @@ def result_summary_rows(inp, results, *, stale=False):
             cracking_state = (
                 "cracked" if elastic.get("cracked") else "uncracked"
             )
-            cracking_result = f"lambda_cr {lambda_cr:.3f}; {cracking_state}"
+            cracking_result = report_notation.text(
+                'lambda_cr {:.3f}; {}',
+                lambda_cr,
+                cracking_state,
+            )
             cracking_note = "Stage-I cracking threshold/state"
         rows.append(_summary_row(
             "Cracking threshold/state", "elastic", cracking_status,
@@ -7588,33 +7770,38 @@ def result_summary_rows(inp, results, *, stale=False):
             if minimum_area_check(minimum, check):
                 required = check.get("as_min_mm2")
                 result_text = (
-                    f"As,prov {check.get('as_provided_mm2', 0.0):.1f} mm2; "
-                    "As,min "
-                    + ("-" if required is None else f"{float(required):.1f} mm2")
+                    report_notation.text(
+                        'As,prov {:.1f} mm2; As,min ',
+                        check.get('as_provided_mm2', 0.0),
+                    )
+                    + ("-" if required is None else report_notation.text(
+                        '{:.1f} mm2',
+                        float(required),
+                    ))
                 )
-                criterion = "As,prov >= As,min"
+                criterion = report_notation.authored("As,prov >= As,min")
             elif check.get("type") == "pure tension":
                 resistance = check.get("resistance_kn")
                 demand = check.get("demand_kn")
                 result_text = (
-                    "Rnom "
+                    report_notation.authored("Rnom ")
                     + ("-" if resistance is None else f"{float(resistance):.1f}")
-                    + " kN; Rcr "
+                    + report_notation.authored(" kN; Rcr ")
                     + ("-" if demand is None else f"{float(demand):.1f}")
                     + " kN"
                 )
-                criterion = "Rnom >= Rcr"
+                criterion = report_notation.authored("Rnom >= Rcr")
             else:
                 resistance = check.get("mr_nom_knm")
                 demand = check.get("m_cr_knm")
                 result_text = (
-                    "MR,nom "
+                    report_notation.authored("MR,nom ")
                     + ("-" if resistance is None else f"{float(resistance):.1f}")
-                    + " kNm; Mcr "
+                    + report_notation.authored(" kNm; Mcr ")
                     + ("-" if demand is None else f"{float(demand):.1f}")
                     + " kNm"
                 )
-                criterion = "MR,nom >= Mcr"
+                criterion = report_notation.authored("MR,nom >= Mcr")
             note_parts = [str(minimum.get("clause") or "")]
             if check.get("axial_feasible") is not None:
                 note_parts.append(
@@ -7636,7 +7823,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 criterion,
                 util,
                 "Detailing",
-                "; ".join(part for part in note_parts if part),
+                report_notation.join("; ", (part for part in note_parts if part)),
                 inp,
                 overview_key="minimum_reinforcement",
             ))
@@ -7711,25 +7898,37 @@ def result_summary_rows(inp, results, *, stale=False):
                 result_text = (
                     "-"
                     if provided is None
-                    else f"{_RHO}w,prov = {float(provided):.5f}"
+                    else report_notation.text(
+                        '\u03c1w,prov = {:.5f}',
+                        float(provided),
+                    )
                 )
                 criterion = (
                     "-"
                     if limit is None
-                    else f"{_RHO}w,prov >= {_RHO}w,min = {float(limit):.5f}"
+                    else report_notation.text(
+                        '\u03c1w,prov >= \u03c1w,min = {:.5f}',
+                        float(limit),
+                    )
                 )
             else:
                 result_text = (
                     "-"
                     if provided is None
-                    else f"sprov = {float(provided):.1f} mm"
+                    else report_notation.text(
+                        'sprov = {:.1f} mm',
+                        float(provided),
+                    )
                 )
                 criterion = (
                     "-"
                     if limit is None
-                    else f"sprov <= smax = {float(limit):.1f} mm"
+                    else report_notation.text(
+                        'sprov <= smax = {:.1f} mm',
+                        float(limit),
+                    )
                 )
-            note = "; ".join(
+            note = report_notation.join("; ", (
                 part for part in (
                     str(check.get("clause") or ""),
                     (
@@ -7747,7 +7946,7 @@ def result_summary_rows(inp, results, *, stale=False):
                     ),
                 )
                 if part
-            )
+            ))
             rows.append(_summary_row(
                 f"{check.get('scope', 'Shear/torsion links')} "
                 f"{check_label}",
@@ -7821,7 +8020,10 @@ def result_summary_rows(inp, results, *, stale=False):
 
         def append_direction(component, direction):
             suffix = {"vx": " Vx", "vy": " Vy"}.get(component, "")
-            action_label = {"vx": "Vx,Ed", "vy": "Vy,Ed"}.get(component, "VEd")
+            action_label = {
+                "vx": report_notation.authored("Vx,Ed"),
+                "vy": report_notation.authored("Vy,Ed"),
+            }.get(component, report_notation.authored("VEd"))
             if shear_direction_publication_input_is_current(
                 inp, direction, plastic_result=results.get("plastic"),
                 torsion_result=shear_torsion,
@@ -7888,8 +8090,11 @@ def result_summary_rows(inp, results, *, stale=False):
                 and concrete_utilisation is not None
             )
             result = (
-                f"{_percent(direction.get('util'))} "
-                f"({action_label} / VRd,c)"
+                report_notation.text(
+                    '{} ({} / VRd,c)',
+                    _percent(direction.get('util')),
+                    action_label,
+                )
                 if resistance is not None else "-"
             )
             result_criterion = "<= 100 %"
@@ -7925,7 +8130,10 @@ def result_summary_rows(inp, results, *, stale=False):
             elif selected_route == "links":
                 without_links_status = "NOT APPLICABLE"
                 without_links_note = (
-                    "The action exceeds VRd,c; the designed-link resistance route applies"
+                    report_notation.authored(
+                        'The action exceeds VRd,c; the designed-link resistance route '
+                        'applies',
+                    )
                 )
             elif direction_state == "NOT ASSESSED":
                 without_links_status = "NOT ASSESSED"
@@ -7947,13 +8155,13 @@ def result_summary_rows(inp, results, *, stale=False):
                         if links_selected
                         else ""
                     )
-                    + "; section form: "
+                    + report_notation.authored("; section form: ")
                     + str(
                         geometry_record.get("resolved_form")
                         or geometry_record.get("section_form")
                         or "-"
                     )
-                    + "; web duct condition: "
+                    + report_notation.authored("; web duct condition: ")
                     + str(geometry_record.get("duct_case") or "-")
                 )
             rows.append(_summary_row(
@@ -8089,11 +8297,12 @@ def result_summary_rows(inp, results, *, stale=False):
                         "angle_applicability"
                     ) or links.get("angle_applicability")
                     link_note = (
-                        "The concrete route is applicable because the action does "
-                        "not exceed VRd,c. The provided-link resistance is an "
-                        "independent non-governing resistance subcheck; "
-                        "minimum reinforcement and link detailing are assessed "
-                        "separately."
+                        report_notation.authored(
+                            'The concrete route is applicable because the action does not '
+                            'exceed VRd,c. The provided-link resistance is an independent '
+                            'non-governing resistance subcheck; minimum reinforcement and link '
+                            'detailing are assessed separately.',
+                        )
                     )
                     if link_result.get("valid"):
                         link_factor = _publication_metric(
@@ -8102,15 +8311,17 @@ def result_summary_rows(inp, results, *, stale=False):
                         if link_factor is None:
                             link_factor = 1.0
                         link_note += (
-                            "; section form: "
+                            report_notation.authored("; section form: ")
                             + str(
                                 link_geometry.get("resolved_form")
                                 or link_geometry.get("section_form")
                                 or "-"
                             )
-                            + f"; effective Asw factor "
-                            f"{link_factor:.5f}"
-                            + "; "
+                            + report_notation.text(
+                                '; effective Asw factor {:.5f}',
+                                link_factor,
+                            )
+                            + report_notation.authored("; ")
                             + result_reason(
                                 link_result.get("governs"),
                                 "shear",
@@ -8122,7 +8333,7 @@ def result_summary_rows(inp, results, *, stale=False):
                         and angle_applicability.get("active", True) is True
                         and angle_applicability.get("applicable") is False
                     ):
-                        link_note += "; " + result_reason(
+                        link_note += report_notation.authored("; ") + result_reason(
                             link_result.get("reason"),
                             "shear",
                             context="inactive out-of-range provided-link result",
@@ -8156,7 +8367,7 @@ def result_summary_rows(inp, results, *, stale=False):
                     )
                     overall_util = provided_link.utilisation
                     if chord_active:
-                        link_note += "; " + result_reason(
+                        link_note += report_notation.authored("; ") + result_reason(
                             chord_assessment.get("reason"),
                             "shear",
                             context="dependent longitudinal chord assessment",
@@ -8209,17 +8420,21 @@ def result_summary_rows(inp, results, *, stale=False):
                 if link_result.get("valid"):
                     link_geometry = links.get("shear_geometry") or geometry_record
                     link_geometry_note = (
-                        "; section form: "
+                        report_notation.authored("; section form: ")
                         + str(
                             link_geometry.get("resolved_form")
                             or link_geometry.get("section_form")
                             or "-"
                         )
-                        + f"; effective Asw factor "
-                        f"{float(links.get('asw_factor', 1.0)):.5f}"
-                        + f"; compression-field bw "
-                        f"{float(link_result.get('bw', direction.get('bw', 0.0))):.1f} mm"
-                        + "; web duct condition: "
+                        + report_notation.text(
+                            '; effective Asw factor {:.5f}',
+                            float(links.get('asw_factor', 1.0)),
+                        )
+                        + report_notation.text(
+                            '; compression-field bw {:.1f} mm',
+                            float(link_result.get('bw', direction.get('bw', 0.0))),
+                        )
+                        + report_notation.authored("; web duct condition: ")
                         + str(link_geometry.get("duct_case") or "-")
                     )
                 if isinstance(chord_assessment, dict):
@@ -8421,7 +8636,7 @@ def result_summary_rows(inp, results, *, stale=False):
                     direction_note = (
                         "DK NA screen: "
                         + combined_dkna_screen_label(direction)
-                        + "; "
+                        + report_notation.authored("; ")
                         + str(
                             direction.get("dkna_reason")
                             or "Action-alone resistance unavailable"
@@ -8429,11 +8644,11 @@ def result_summary_rows(inp, results, *, stale=False):
                     )
                 else:
                     method = str(direction.get("method") or "")
-                    direction_note = ((method + "; ") if method else "")
+                    direction_note = ((method + report_notation.authored("; ")) if method else "")
                     direction_note += (
                         "DK NA screen: "
                         + combined_dkna_screen_label(direction)
-                        + "; "
+                        + report_notation.authored("; ")
                     )
                     assumption_note = combined_dkna_assumption_note(direction)
                     if assumption_note:
@@ -8501,9 +8716,9 @@ def result_summary_rows(inp, results, *, stale=False):
         ]
         if valid and dkna_valid:
             method_note = str(combined.get("method") or "")
-            combined_note = ((method_note + "; ") if method_note else "")
+            combined_note = ((method_note + report_notation.authored("; ")) if method_note else "")
             combined_note += (
-                "DK NA screen: " + combined_dkna_screen_label(combined) + "; "
+                "DK NA screen: " + combined_dkna_screen_label(combined) + report_notation.authored("; ")
             )
             assumption_note = combined_dkna_assumption_note(combined)
             if assumption_note:
@@ -8516,7 +8731,7 @@ def result_summary_rows(inp, results, *, stale=False):
             combined_note = (
                 "DK NA screen: "
                 + combined_dkna_screen_label(combined)
-                + "; "
+                + report_notation.authored("; ")
                 + result_reason(
                     combined.get("dkna_reason")
                     or "An action-alone resistance could not be determined",
@@ -8532,7 +8747,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 + ", ".join(missing)
             )
             if combined.get("reason"):
-                combined_note += "; " + result_reason(
+                combined_note += report_notation.authored("; ") + result_reason(
                     combined["reason"],
                     "combined",
                     context="combined summary missing-prerequisite reason",
@@ -8541,7 +8756,7 @@ def result_summary_rows(inp, results, *, stale=False):
             combined_note = (
                 "DK NA screen: "
                 + combined_dkna_screen_label(combined)
-                + "; "
+                + report_notation.authored("; ")
                 + result_reason(
                     combined.get("reason") or "Combined calculation is invalid",
                     "combined",
@@ -8723,7 +8938,8 @@ def multi_case_summary_rows(inp, results, *, stale=False):
                     if is_zero:
                         rows.append(_summary_row(
                             f"Shear {component}", "plastic", "NOT APPLICABLE",
-                            result=f"{component},Ed = 0", view="Shear",
+                            result=report_notation.concat(
+                                report_notation.symbol(component + ",Ed"), " = 0"), view="Shear",
                             note="Zero component; not evaluated", inp=case_inp,
                             overview_key="shear:scope",
                             overview_parent="shear",
@@ -8732,15 +8948,16 @@ def multi_case_summary_rows(inp, results, *, stale=False):
             if inp.get("torsion_on") and t_zero:
                 rows.append(_summary_row(
                     "Torsion", "plastic", "NOT APPLICABLE",
-                    result="TEd = 0", view="Torsion",
+                    result=report_notation.authored("TEd = 0"), view="Torsion",
                     note="Zero action; not evaluated", inp=case_inp,
                     overview_key="torsion",
                 ))
             if inp.get("combined_on") and (v_zero or t_zero):
                 zero = (
-                    "Vx,Ed = Vy,Ed = TEd = 0"
+                    report_notation.authored("Vx,Ed = Vy,Ed = TEd = 0")
                     if v_zero and t_zero
-                    else "Vx,Ed = Vy,Ed = 0" if v_zero else "TEd = 0"
+                    else report_notation.authored("Vx,Ed = Vy,Ed = 0")
+                    if v_zero else report_notation.authored("TEd = 0")
                 )
                 rows.append(_summary_row(
                     "Combined M-V-T", "plastic", "NOT APPLICABLE",
@@ -8756,7 +8973,7 @@ def multi_case_summary_rows(inp, results, *, stale=False):
                     "Shear/torsion link detailing",
                     "plastic",
                     "NOT APPLICABLE",
-                    result="No active non-zero VEd or TEd",
+                    result=report_notation.authored("No active non-zero VEd or TEd"),
                     view="Detailing",
                     note="Zero relevant action; not evaluated",
                     inp=case_inp,

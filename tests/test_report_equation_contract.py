@@ -357,7 +357,7 @@ def test_review_regressions_have_distinct_roles_and_complete_result_identity():
     ordinary = contracts.equation_contract("cracking.threshold", "ordinary")
     prestress = contracts.equation_contract("cracking.threshold", "prestress")
     assert ordinary.substitution_role == "numerical"
-    assert not ordinary.applicability_note_required
+    assert ordinary.applicability_note_required
     assert prestress.substitution_role == "none"
     assert prestress.publication_role == "theory"
     assert not prestress.applicability_note_required
@@ -441,6 +441,25 @@ def test_incompatible_missing_and_sibling_evidence_fail_atomically(
     assert builder._equation_number == number_before
 
 
+def _equations_in_group(item):
+    if isinstance(item, sector_report._EquationFlowable):
+        return [item]
+    retained = getattr(item, "_sector_equations", ())
+    if retained:
+        assert all(isinstance(eq, sector_report._EquationFlowable) for eq in retained)
+        return list(retained)
+    found = []
+    for child in getattr(item, "_content", ()):
+        found.extend(_equations_in_group(child))
+    return found
+
+
+def _last_equation(builder):
+    equations = _equations_in_group(builder.flow[-1])
+    assert len(equations) == 1
+    return equations[0]
+
+
 def test_contract_metadata_reaches_the_equation_flowable_unchanged():
     builder = _builder(profile="Audit")
     builder._h1("Materials")
@@ -452,7 +471,7 @@ def test_contract_metadata_reaches_the_equation_flowable_unchanged():
         subst="0.9 x 0.85 x 40 / 1.5",
         result="f<sub>cd</sub> = 20.4 MPa",
     )
-    equation = builder.flow[-1]
+    equation = _last_equation(builder)
     contract = contracts.equation_contract("materials.concrete.fcd", "2023")
     assert equation._sector_equation_variant == "2023"
     assert equation._sector_equation_symbols == contract.symbols
@@ -470,7 +489,7 @@ def test_contract_metadata_reaches_the_equation_flowable_unchanged():
         note="M and V are checked separately.",
         result="sum(S<sub>Ed</sub>/S<sub>Rd</sub>) = 0.70",
     )
-    note_equation = builder.flow[-1]
+    note_equation = _last_equation(builder)
     assert note_equation._sector_equation_substitution_role == "numerical"
     assert note_equation._sector_equation_applicability_note_required
     assert "M and V are checked separately." in note_equation.getPlainText()
@@ -498,7 +517,7 @@ def test_numerical_substitution_and_applicability_note_are_independent():
         note="This branch applies because the declared condition is true.",
         result="y = 6 kN",
     )
-    equation = builder.flow[-1]
+    equation = _last_equation(builder)
     assert equation._sector_equation_substitution_role == "numerical"
     assert equation._sector_equation_applicability_note_required
     roles = equation._sector_equation_roles

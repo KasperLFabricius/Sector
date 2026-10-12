@@ -44,7 +44,9 @@ _REQUIRED_CURRENT_FRAGMENTS = (
     "long-term limit $w_{k,long}$ (mm; 0 = no comparison)",
     "short-term limit $w_{k,short}$ (mm; 0 = no comparison)",
     "formula 7.100 na is a separate section-level calculation",
-    "duration-matched user comparisons; zero means no comparison",
+    "it compares a calculated width with the positive user limit for the matching duration.",
+    "long-term and short-term limits are independent.",
+    "a 0 mm limit gives the calculated width without a limit comparison.",
 )
 
 _RETIRED_REFERENCE_PASSAGES = (

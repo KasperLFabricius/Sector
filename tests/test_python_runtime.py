@@ -25,7 +25,12 @@ def test_ci_uses_the_exact_source_pin():
         for step in job["steps"]
         if step.get("uses", "").startswith("actions/setup-python@")
     ]
-    assert len(selectors) == 3
+    assert len(selectors) == 4
+    assert {
+        name for name, job in workflow["jobs"].items()
+        if any(step.get("uses", "").startswith("actions/setup-python@")
+               for step in job["steps"])
+    } == {"preflight", "core", "test", "portable"}
     assert all(item["python-version-file"] == ".python-version" for item in selectors)
 
 

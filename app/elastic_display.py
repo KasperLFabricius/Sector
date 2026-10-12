@@ -8,6 +8,8 @@ from collections.abc import Mapping
 import math
 from numbers import Real
 
+from app import report_summary_notation as report_notation
+
 
 COMPONENTS = (
     ("total_mpa", "Total"),
@@ -88,9 +90,11 @@ def comparison_text(stress, references):
     parts = []
     for label, strength in references.items():
         ratio = percentage(stress, strength)
-        parts.append(f"{label}: unavailable" if ratio is None
-                     else f"{ratio:.1f}% of {label}")
-    return "; ".join(parts)
+        reference = report_notation.symbol(label)
+        parts.append(report_notation.concat(reference, ": unavailable")
+                     if ratio is None else report_notation.concat(
+                         f"{ratio:.1f}% of ", reference))
+    return report_notation.join("; ", parts)
 
 
 def output_comparison(inp, elastic, key, output):

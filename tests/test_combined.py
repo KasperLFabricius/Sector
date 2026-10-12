@@ -1711,8 +1711,8 @@ def test_app_base_en_keeps_physical_interactions_without_dkna_artifacts():
     )
     assert "Base EN reports its supported V+T concrete" in visible
     assert "No additional aggregate interaction verdict" in visible
-    assert "ONE member strut angle shared" in visible
-    assert "selected to minimise the governing utilisation" in visible
+    assert "member strut angle shared by the participating shear and torsion checks (6.3.2(2))." in visible
+    assert "This angle minimizes the governing utilization." in visible
     assert "DK NA" not in visible
     assert "action-alone" not in visible
 
@@ -1724,7 +1724,7 @@ def test_app_base_en_keeps_physical_interactions_without_dkna_artifacts():
         for item in family
     )
     assert "does not identify how the member strut angle was selected" in visible
-    assert "No shear or torsion is acting" not in visible
+    assert "No active shear-shift or torsion term controls the strut-angle selection." not in visible
 
     _select_view(at, "Results Overview")
     overview = overview_table(at)

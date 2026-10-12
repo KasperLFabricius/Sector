@@ -173,6 +173,27 @@ def test_missing_duplicated_or_corrupt_execution_evidence_cannot_pass(evidence, 
         shards.merge_shards(evidence.inputs, evidence.output)
 
 
+def test_balanced_module_assignments_preserve_complete_other_selection():
+    assert shards.MODULES == {
+        "report": (
+            "tests/test_report.py", "tests/test_report_real_route_matrix.py",
+            "tests/test_result_presentation.py",
+        ),
+        "combined": ("tests/test_combined.py", "tests/test_shear.py"),
+        "native": (
+            "tests/test_torsion.py", "tests/test_reproducible_example.py",
+            "tests/test_report_profile_integration.py",
+        ),
+    }
+    modules = [path for paths in shards.MODULES.values() for path in paths]
+    assert len(modules) == len(set(modules))
+    for owner, paths in shards.MODULES.items():
+        assert shards.selection(owner) == list(paths)
+        assert all(shards.shard_for_node(path + "::test_example") == owner for path in paths)
+    assert shards.shard_for_node("tests/test_app_smoke.py::test_example") == "other"
+    assert shards.selection("other") == ["tests", *(f"--ignore={path}" for path in modules)]
+
+
 def test_reference_collects_the_whole_core_and_rejects_cross_shard_groups(tmp_path, monkeypatch):
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "temporary"))
     expected = [

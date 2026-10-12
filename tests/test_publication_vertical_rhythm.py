@@ -63,8 +63,8 @@ def test_report_formula_and_reference_geometry_is_explicit():
     assert formula.spaceBefore == pytest.approx(2)
     assert formula.spaceAfter == pytest.approx(3)
 
-    assert reference.fontSize == pytest.approx(8)
-    assert reference.leading == pytest.approx(11)
+    assert reference.fontSize == pytest.approx(9.5)
+    assert reference.leading == pytest.approx(12)
     assert reference.leftIndent == pytest.approx(12)
     assert reference.rightIndent == pytest.approx(6)
     assert reference.spaceAfter == pytest.approx(6)
@@ -74,9 +74,7 @@ def test_assessment_banner_owns_spacing_and_retains_plain_table_palette():
     builder = _builder()
     builder._status_block("PASS - complete", "PASS")
 
-    wrapper, = builder.flow
-    assert isinstance(wrapper, KeepTogether)
-    table, = wrapper._content
+    table, = builder.flow
     assert type(table) is Table
     assert table._sector_status_banner is True
     assert table.spaceBefore == pytest.approx(2)
@@ -96,7 +94,15 @@ def test_loads_start_on_a_fresh_page_and_settings_follow_with_heading_keep(monke
     builder._geometry_tables = lambda: builder._p("GEOMETRY BODY")
     builder._concrete_block = lambda: builder._p("CONCRETE BODY")
     builder._loads_block = lambda: builder._p("LOADS BODY")
-    builder._settings_block = lambda: builder._p("SETTINGS BODY")
+    # The shared settings producer now owns its heading. Exercise it, while
+    # replacing only table construction with a short visible stand-in.
+    settings_tables = []
+
+    def settings_table(data, widths, **kwargs):
+        settings_tables.append((data, widths, kwargs))
+        builder._p("SETTINGS BODY")
+
+    builder._table = settings_table
 
     builder._inputs()
     loads_index = next(
@@ -169,8 +175,12 @@ def test_main_and_grouped_fatigue_settings_tables_are_splittable():
     builder._table = capture
     builder._settings_block()
 
-    assert len(calls) == 2
-    assert all(data[0] == ["Setting", "Value"] for data, _widths, _kwargs in calls)
+    assert len(calls) == 3
+    assert [data[0] for data, _widths, _kwargs in calls] == [
+        ["Setting", "Value"], ["Setting", "Value"],
+        ["Retained quantity", "Value"],
+    ]
+    assert calls[-1][0][1:] == [["Fatigue n<sub>l</sub> / n<sub>s</sub>", "- / -"]]
     assert all(kwargs.get("keep") is False for _data, _widths, kwargs in calls)
 
 

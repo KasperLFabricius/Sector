@@ -2532,8 +2532,8 @@ def test_pub_m01_signed_2023_reports_keep_current_face_operands(
             rows[1] == ["0.000", f"{90.0 * sign:.3f}", "0.000", "0.000", "150.000", "40.000"]
             for rows in action_tables
         )
-        assert "The selected nominal resistance is the compression-field" in text
-        assert "The concrete route remains the selected nominal resistance" not in text
+        assert "The selected nominal resistance uses the compression-field model" in text
+        assert "The concrete route supplies the selected nominal resistance because:" not in text
         assert "no longitudinal shear force is applied in the nominal check" not in text
         face_tables = [
             rows for rows in tables

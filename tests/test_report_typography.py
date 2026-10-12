@@ -13,7 +13,7 @@ import pytest
 from PIL import Image
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Table
+from reportlab.platypus import KeepTogether, SimpleDocTemplate, Table
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
@@ -25,8 +25,17 @@ from tools.publication_preflight import crop_sha256  # noqa: E402
 
 _TYPOGRAPHY_CROP = (0.08, 0.05, 0.92, 0.62)
 _TYPOGRAPHY_CROP_SHA256 = (
-    "20988aff3678d74361c215f356d33afa95ff3a8f43e3a69871f560ba8ba7ac20"
+    "fadf737fb9f1e984769dbf84a6748d699b02c01f88e099bfa115873ea68707f3"
 )
+
+
+def _fixture_tables(items):
+    """Find the same table inside its heading/table pagination group."""
+    for item in items:
+        if isinstance(item, Table):
+            yield item
+        elif isinstance(item, KeepTogether):
+            yield from _fixture_tables(item._content)
 
 
 def _fixture() -> tuple[bytes, Table, dict[str, float]]:
@@ -75,7 +84,7 @@ def _fixture() -> tuple[bytes, Table, dict[str, float]]:
         [60 * mm, 35 * mm, 50 * mm],
         keep=False,
     )
-    table = next(item for item in builder.flow if isinstance(item, Table))
+    table, = _fixture_tables(builder.flow)
     proof_symbol = table._cellvalues[5][1]
     proof_script = next(
         fragment for fragment in proof_symbol.frags if fragment.text == "p0.1k"

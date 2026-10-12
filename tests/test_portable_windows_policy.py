@@ -23,7 +23,8 @@ def _step(job, name: str):
 
 def test_workflow_has_only_engineering_qa_and_one_real_portable_build():
     workflow = _workflow()
-    assert set(workflow["jobs"]) == {"core", "test", "portable"}
+    assert set(workflow["jobs"]) == {"preflight", "core", "test", "portable"}
+    assert workflow["jobs"]["core"]["needs"] == "preflight"
     portable = workflow["jobs"]["portable"]
     assert portable["needs"] == ["core", "test"]
     assert portable["name"] == "Build and run portable Sector"
@@ -46,7 +47,7 @@ def test_portable_upload_is_only_the_zip_and_checksum():
     portable = _workflow()["jobs"]["portable"]
     upload = _step(portable, "Upload portable ZIP")
     assert upload["uses"].split()[0] == UPLOAD_ACTION
-    assert upload["with"]["name"].startswith("Sector-v0.96.6-windows-portable-")
+    assert upload["with"]["name"].startswith("Sector-v0.96.7-windows-portable-")
     paths = upload["with"]["path"].splitlines()
     assert paths == [
         "${{ env.SECTOR_PORTABLE_OUTPUT }}/*.zip",

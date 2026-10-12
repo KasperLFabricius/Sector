@@ -72,12 +72,43 @@ __all__ = (
 _AUDIT_SPARSE_BODY_BOX = (0.08, 0.10, 0.92, 0.92)
 _AUDIT_SPARSE_BODY_THRESHOLD = 0.35
 
-# Geometry, concrete law, two steel laws, clear-spacing and minimum-reinforcement
-# geometry, derived shear geometry, shear truss, torsion tube, two V-T interaction
-# figures, one plastic interaction and state, one elastic state and strain profile,
-# four grouped-fatigue figures, and eight section maps for two Plastic and two
-# Elastic cases. An intentional fixture change must update this explicit contract.
-_EXPECTED_FIGURE_COUNT = 27
+# Reviewed Audit figure identities, in publication order. The coordinate/action
+# inset replaces the prior geometry figure. Two chord and two crack-control
+# diagrams add four figures to the previous 27-image fixture.
+_EXPECTED_FIGURES = (
+    ('input-geometry-and-actions', 'Input coordinates and element IDs\\. Concurrent Plastic actions: PL-QA-2\\..*'),
+    ('concrete-law', 'Concrete'),
+    ('steel-law-M1', 'M1 - New B500 reinforcement'),
+    ('steel-law-M2', 'M2 - Existing reinforcement'),
+    ('clear-spacing', 'Governing clear-spacing pair'),
+    ('minimum-reinforcement', 'Minimum-reinforcement geometry'),
+    ('PL-QA-1-strain', 'PL-QA-1: plastic strain\\. Ultimate capacity at NA angle 90 deg\\.'),
+    ('PL-QA-1-stress', 'PL-QA-1: plastic stress\\. Ultimate capacity at NA angle 90 deg\\.'),
+    ('plastic-interaction', 'M-M interaction'),
+    ('PL-QA-2-strain', 'PL-QA-2: plastic strain\\. Ultimate capacity at NA angle 90 deg\\.'),
+    ('PL-QA-2-stress', 'PL-QA-2: plastic stress\\. Ultimate capacity at NA angle 90 deg\\.'),
+    ('plastic-state', 'Plastic state at NA angle = 90.*'),
+    ('shear-geometry', 'Vy,Ed geometry - bottom \\(-y\\) tension'),
+    ('shear-truss', 'Variable-strut truss'),
+    ('shear-chords', 'Concurrent longitudinal chord demand and conditional bending capacity.*'),
+    ('torsion-tube', 'Torsion tube'),
+    ('VT-interaction', 'V-T interaction \\(crushing\\)'),
+    ('combined-VT-interaction', 'V-T interaction \\(crushing\\)'),
+    ('combined-chords', 'Case PL-QA-1; shear component Vy; member strut angle 45\\.00 degrees\\..*'),
+    ('EL-QA-1-strain', 'EL-QA-1: elastic strain\\. Combined actions \\(TOTAL\\)\\.'),
+    ('EL-QA-1-stress', 'EL-QA-1: elastic stress\\. Combined actions \\(TOTAL\\)\\.'),
+    ('EL-QA-2-strain', 'EL-QA-2: elastic strain\\. Combined actions \\(TOTAL\\)\\.'),
+    ('EL-QA-2-stress', 'EL-QA-2: elastic stress\\. Combined actions \\(TOTAL\\)\\.'),
+    ('elastic-state', 'Elastic state \\(tension \\+ / compression -\\)'),
+    ('elastic-profile', 'Elastic strain profile'),
+    ('crack-fine', 'Effective concrete area and reinforcement included in the crack-width calculation\\..*'),
+    ('crack-coarse', 'Effective concrete area and reinforcement included in the crack-width calculation\\..*'),
+    ('fatigue-overview', 'Fatigue utilization - Road traffic\\. Stars identify adaptive concrete search points\\.'),
+    ('fatigue-SN', 'S-N assessment - R1'),
+    ('fatigue-steel-damage', 'Miner damage - R1'),
+    ('fatigue-concrete-damage', 'Miner damage - concrete fiber 3'),
+)
+_EXPECTED_FIGURE_COUNT = 31
 _EXPECTED_PLASTIC_WORKED_HEADING = (
     "Worked plastic calculation (utilisation direction)"
 )
@@ -86,13 +117,13 @@ _REPORT_CROPS = (
         "report contents",
         2,
         (0.10, 0.08, 0.92, 0.90),
-        "32a0d0c1e731962bdefdb2f57c62c4cfbeefa41c7c194be7284124dbaaf69071",
+        "559a2b0ac8630a1e4b6512cb907a847bd7eb999e1e67a01e7a24a336df712ca7",
     ),
     RasterCrop(
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "f4f17027f859b41db1f4b9385aea6cff1f87d5612517f5579527062b3d1cd32a",
+        "00b2737bfeb4f09f963e94c6a154b8baeffa3f41904ec40083e8206919d23977",
     ),
 )
 
@@ -982,7 +1013,7 @@ def validate_worked_example_text(text: str) -> None:
         "Converged strain plane",
         "Ultimate-curvature candidates",
         "Step 1 - converged long-term state",
-        "Step 2 - neutralise the long-term concrete stress",
+        "Step 2 - neutralize the long-term concrete stress",
         "Step 3 - converged instantaneous combined state",
         "Crack width worked - governing case",
         "Formula (7.11) selected",
@@ -1020,6 +1051,167 @@ def validate_equation_source_colocation(
             f"expected {expected_equation_count} governed equations, "
             f"found {equation_count}"
         )
+
+
+def _fixture_positioned_captions(page):
+    """Read complete caption paragraphs without absorbing adjacent body text."""
+    fragments = []
+
+    def collect(text, cm, tm, font, size):
+        if text.strip():
+            fragments.append((
+                text, tuple(float(v) for v in cm), tuple(float(v) for v in tm),
+                str((font or {}).get("/BaseFont", "")), float(size),
+            ))
+
+    page.extract_text(visitor_text=collect)
+    captions = []
+    for index, (text, cm, tm, font, size) in enumerate(fragments):
+        label = re.fullmatch(r"Figure \d+\.\d+\.", text.strip())
+        if label is None:
+            continue
+        family = font.rsplit("+", 1)[-1]
+        if not family.endswith("-Bold") or not math.isclose(size, 9.5, abs_tol=1e-6):
+            raise AssertionError("the figure caption label has an unexpected font")
+        regular = family.removesuffix("-Bold")
+        baseline = tm[4] * cm[1] + tm[5] * cm[3] + cm[5]
+        x = tm[4] * cm[0] + tm[5] * cm[2] + cm[4]
+        parts = []
+        for following in fragments[index + 1:]:
+            content, next_cm, next_tm, next_font, next_size = following
+            # ReportLab gives each Paragraph its own translation. A later body
+            # paragraph is a different object even if it has the same font.
+            if next_cm != cm:
+                break
+            if (next_font.rsplit("+", 1)[-1] != regular
+                    or not math.isclose(next_size, size, abs_tol=1e-6)):
+                raise AssertionError("a figure caption continuation has an unexpected font")
+            next_y = next_tm[4] * cm[1] + next_tm[5] * cm[3] + cm[5]
+            next_x = next_tm[4] * cm[0] + next_tm[5] * cm[2] + cm[4]
+            drop = baseline - next_y
+            if not (math.isclose(drop, 0.0, abs_tol=.1)
+                    or math.isclose(drop, 12.0, abs_tol=.1)):
+                raise AssertionError("a figure caption continuation is not adjacent")
+            if abs(next_x - x) > .1:
+                raise AssertionError("a figure caption continuation changes its text origin")
+            parts.append(content.strip())
+            baseline = next_y
+        if not parts:
+            raise AssertionError("the figure caption has no body text")
+        captions.append((label.group(), " ".join(" ".join(parts).split())))
+    return captions
+
+
+def validate_fixture_figure_inventory(reader, page_texts):
+    """Bind each reviewed caption to an exported image on the same page."""
+    expected = iter(_EXPECTED_FIGURES)
+    seen = []
+    for page_number, (page, text) in enumerate(zip(reader.pages, page_texts), 1):
+        first_lines = re.findall(r"(?m)^(Figure \d+\.\d+\.) (.*)$", text)
+        positioned = _fixture_positioned_captions(page)
+        if len(first_lines) != len(positioned):
+            raise AssertionError(f"figure caption positions disagree on page {page_number}")
+        captions = []
+        for (label, first_line), (positioned_label, full_caption) in zip(first_lines, positioned):
+            if label != positioned_label or not full_caption.startswith(" ".join(first_line.split())):
+                raise AssertionError(f"figure caption text disagrees on page {page_number}")
+            captions.append(full_caption)
+        resources = page.get("/Resources")
+        objects = resources.get_object().get("/XObject") if resources else None
+        images = sum(
+            ref.get_object().get("/Subtype") == "/Image"
+            for ref in objects.get_object().values()
+        ) if objects else 0
+        if images != len(captions):
+            raise AssertionError(f"figure/caption page split on page {page_number}")
+        for caption in captions:
+            item = next(expected, None)
+            if item is None or not re.fullmatch(item[1], caption):
+                raise AssertionError(
+                    f"fixture figure identity/order mismatch on page {page_number}: {caption}"
+                )
+            seen.append(item[0])
+    if next(expected, None) is not None:
+        raise AssertionError("fixture figure inventory is incomplete")
+    return tuple(seen)
+
+
+def _fixture_text_positions(page, target):
+    positions = []
+
+    def collect(text, cm, tm, _font, size):
+        if " ".join(text.split()) == target:
+            positions.append((
+                tm[4] * cm[0] + tm[5] * cm[2] + cm[4],
+                tm[4] * cm[1] + tm[5] * cm[3] + cm[5],
+                float(size),
+            ))
+
+    page.extract_text(visitor_text=collect)
+    return positions
+
+
+def validate_fixture_fatigue_note_link(reader, page_texts):
+    """Require the final overview link to reach its exact fatigue note heading."""
+    overview = validate_results_overview_pagination(page_texts)
+    source = reader.pages[overview[-1] - 1]
+    cells = _fixture_text_positions(source, "Note 28")
+    if len(cells) != 1:
+        raise AssertionError("expected one fatigue overview Note 28 link label")
+    x, y, _size = cells[0]
+    links = []
+    for ref in source.get("/Annots", ()):
+        annotation = ref.get_object()
+        if annotation.get("/Subtype") != "/Link":
+            continue
+        left, bottom, right, top = map(float, annotation["/Rect"])
+        if left - 0.1 <= x <= right + 0.1 and bottom - 0.1 <= y <= top + 0.1:
+            links.append(annotation)
+    if len(links) != 1:
+        raise AssertionError("fatigue overview must have one link at Note 28")
+    dest = links[0].get("/Dest")
+    if not isinstance(dest, (list, tuple)) or len(dest) != 5 or dest[1] != "/XYZ":
+        raise AssertionError("fatigue note destination must locate its heading")
+    heading = "Note 28. Fatigue: Road traffic."
+    targets = [
+        (index, pos)
+        for index, page in enumerate(reader.pages)
+        for pos in _fixture_text_positions(page, heading)
+    ]
+    if len(targets) != 1:
+        raise AssertionError("expected exactly one fatigue Note 28 heading")
+    target_index, (hx, hy, _size) = targets[0]
+    if dest[0] != reader.pages[target_index].indirect_reference:
+        raise AssertionError("fatigue overview link reaches the wrong note page")
+    if (dest[2] is None or dest[3] is None
+            or abs(float(dest[2]) - hx) > 1.0
+            or not 0 <= float(dest[3]) - hy <= 20.0):
+        raise AssertionError("fatigue overview link misses the Note 28 heading")
+
+
+def validate_fixture_settings_heading(reader):
+    """Keep the unique settings heading with its first numerical input rows."""
+    pages = []
+    for page in reader.pages:
+        headings = []
+
+        def collect(text, _cm, _tm, _font, size, *, found=headings):
+            value = " ".join(text.split())
+            if (re.fullmatch(r"(?:\d+\.\d+ )?Analysis settings", value)
+                    and math.isclose(float(size), 11.5, abs_tol=1.0e-6)):
+                found.append(value)
+
+        text = page.extract_text(visitor_text=collect) or ""
+        pages.extend([text] * len(headings))
+    if len(pages) != 1:
+        raise AssertionError("expected exactly one Analysis settings level-2 heading")
+    text = " ".join(pages[0].split())
+    for required in (
+        "General numerical analysis settings", "Setting Value",
+        "Analysis mode Both", "Neutral-axis sweep start 0.000",
+    ):
+        if required not in text:
+            raise AssertionError("the analysis-settings heading is separated from its table")
 
 
 def validate_pdf_content(
@@ -1067,6 +1259,9 @@ def validate_pdf_content(
             f"found {images}"
         )
 
+    if expected_figure_count == _EXPECTED_FIGURE_COUNT:
+        validate_fixture_figure_inventory(reader, page_texts)
+
     outlines = validate_outline_destinations(reader)
     if len(outlines) < 6:
         raise AssertionError(
@@ -1111,33 +1306,7 @@ def validate_pdf_content(
             "a material heading/provenance is separated from its definition"
         )
 
-    settings_pages = []
-    for page in reader.pages:
-        has_settings_h2 = False
-
-        def collect_settings_h2(text, _cm, _tm, _font, font_size):
-            nonlocal has_settings_h2
-            value = " ".join(text.split())
-            if (
-                (
-                    value == "Analysis settings"
-                    or re.fullmatch(r"\d+\.\d+ Analysis settings", value)
-                )
-                and math.isclose(float(font_size), 11.5, abs_tol=1.0e-6)
-            ):
-                has_settings_h2 = True
-
-        page_text = page.extract_text(visitor_text=collect_settings_h2) or ""
-        if has_settings_h2:
-            settings_pages.append(page_text)
-    if len(settings_pages) != 1:
-        raise AssertionError(
-            "expected exactly one Analysis settings level-2 heading, "
-            f"found {len(settings_pages)}"
-        )
-    settings_page = settings_pages[0]
-    if "Sweep start" not in settings_page:
-        raise AssertionError("the analysis-settings heading is separated from its table")
+    validate_fixture_settings_heading(reader)
     for heading, first_case in (
         ("Plastic / capacity cases", "PL-QA-1"),
         ("Elastic cases", "EL-QA-1"),
@@ -1181,7 +1350,7 @@ def validate_pdf_content(
         "R1 - R2",
         "Elastic section response and stresses - EL-QA-2",
         "Step 1 - converged long-term state",
-        "Step 2 - neutralise the long-term concrete stress",
+        "Step 2 - neutralize the long-term concrete stress",
         "Step 3 - converged instantaneous combined state",
         "Governing crack width - EL-QA-1",
         "Cracking threshold - EL-QA-2",
@@ -1197,7 +1366,7 @@ def validate_pdf_content(
         "Concrete fatigue",
         "Worked calculation - governing reinforcement fatigue",
         "Worked calculation - governing concrete fatigue",
-        "Bounded governing-fibre search",
+        "Bounded governing-fiber search",
         "DS/EN 1992-2:2005/AC:2008",
         "6.106",
         "shear and torsion fatigue remain separate checks",
@@ -1236,6 +1405,7 @@ def validate_pdf_content(
 
     validate_report_page_semantics(page_texts)
     validate_results_overview_pagination(page_texts)
+    validate_fixture_fatigue_note_link(reader, page_texts)
     return text
 
 
@@ -1249,7 +1419,7 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         "The table shows one governing row per engineering check type.",
         "The table shows one governing row for each engineering check type.",
     )
-    final_row_tokens = ("Fatigue", "Road traffic", "20.8 %")
+    final_row = "Fatigue Road traffic PASS 46.2 % <= 100 % Note 28"
     normalized_pages = [" ".join(page_text.split()) for page_text in page_texts]
     overview_indexes = [
         index
@@ -1284,21 +1454,30 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         for note in notes
         if note in final_page_text
     )
-    missing_final_row_tokens = [
-        token for token in final_row_tokens if token not in final_page_text
-    ]
-    if missing_final_row_tokens:
-        raise AssertionError(
-            "the results-overview final row left its continuation page: "
-            + ", ".join(missing_final_row_tokens)
-        )
-    final_row_position = max(
-        final_page_text.index(token) for token in final_row_tokens
-    )
+    if final_page_text.count(final_row) != 1:
+        raise AssertionError("the exact fatigue overview row is missing or duplicated")
+    final_row_position = final_page_text.index(final_row)
     if not final_page_text.index(caption) < final_row_position < note_position:
         raise AssertionError(
             "the results-overview final row and governing note are out of reading order"
         )
+
+    note_heading = "Note 28. Fatigue: Road traffic."
+    full_text = "\n".join(page_texts)
+    if full_text.count(note_heading) != 1:
+        raise AssertionError("expected exactly one fatigue Note 28 heading")
+    note_page = next(text for text in page_texts if note_heading in text)
+    note_tail = note_page.split(note_heading, 1)[1]
+    note_body = re.split(r"(?m)^(?:Note \d+\.|Project: QA-REFERENCE)", note_tail, maxsplit=1)[0]
+    note_body = " ".join(note_body.split())
+    for expected in (
+        "Source: Grouped action spectrum",
+        "governing: R1 - simplified stress-range screen",
+        "max Miner D 1.7475 \u00d7 10-7",
+        "max yield/proof utilisation 20.8 %",
+    ):
+        if expected not in note_body:
+            raise AssertionError("fatigue Note 28 is missing its independent criterion evidence")
 
     overview_text = " ".join(
         " ".join(page_texts[index].split()) for index in overview_indexes
@@ -1319,6 +1498,12 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
             raise AssertionError(
                 f"results-overview content is missing: {expected}"
             )
+    for index in overview_indexes:
+        if not re.search(
+            r"Check Action set Status Result Criterion Source / note",
+            normalized_pages[index],
+        ):
+            raise AssertionError("results-overview repeated column header is missing")
     for continuation_index in overview_indexes[1:]:
         if "(continued)" not in normalized_pages[continuation_index]:
             raise AssertionError(

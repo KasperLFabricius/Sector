@@ -727,9 +727,13 @@ def test_unassessed_global_crack_width_suppresses_noncritical_comparison():
         ("EXCEEDS USER-SPECIFIED LIMIT", 0.10, "User-specified limit 0.100 mm"),
     ],
 )
+@pytest.mark.parametrize("typed_reason", [False, True])
 def test_crack_summary_preserves_exact_bounded_state(
-    state, criterion, expected_criterion,
+    state, criterion, expected_criterion, typed_reason,
 ):
+    from sector.engineer_message import EngineerMessage
+
+    reason = "Retained assessment reason"
     output = {
         "duration": "long_term",
         "calculation_state": state,
@@ -741,7 +745,8 @@ def test_crack_summary_preserves_exact_bounded_state(
             else None
         ),
         "criterion_source": "User input - Analysis settings" if criterion else None,
-        "reason": "Retained assessment reason",
+        "reason": (EngineerMessage("QA-RETAINED-CRACK", reason)
+                   if typed_reason else reason),
     }
     rows = presentation.result_summary_rows(
         _inp(mode="Elastic"),
@@ -759,7 +764,11 @@ def test_crack_summary_preserves_exact_bounded_state(
     assert crack["status"] == state
     assert crack["criterion"] == expected_criterion
     assert crack["util"] is None
-    assert "Retained assessment reason" in crack["note"]
+    if typed_reason:
+        assert reason in crack["note"]
+    else:
+        assert reason not in crack["note"]
+        assert "Review the crack-width inputs and calculation status" in crack["note"]
 
 
 def test_dual_heightened_crack_summary_is_singleton_and_not_global_utilisation():

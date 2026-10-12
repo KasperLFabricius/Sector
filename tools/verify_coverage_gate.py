@@ -493,6 +493,7 @@ CORE_DOWNLOAD_SETTINGS = {
 def expected_core_job() -> dict[str, Any]:
     return {
         "name": "Primary pytest (${{ matrix.shard }})",
+        "needs": "preflight",
         "runs-on": "windows-latest",
         "timeout-minutes": 240,
         "strategy": {"fail-fast": False, "matrix": {"shard": list(CORE_SHARDS)}},
@@ -511,6 +512,18 @@ def expected_core_job() -> dict[str, Any]:
              "with": {"name": "sector-core-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}",
                       "path": "qa-shard/", "include-hidden-files": True, "if-no-files-found": "error", "retention-days": 7}},
         ],
+    }
+
+
+def expected_preflight_job() -> dict[str, Any]:
+    return {
+        "name": "Fast source preflight",
+        "runs-on": "windows-latest",
+        "timeout-minutes": 15,
+        "steps": [*expected_core_job()["steps"][:4], {
+            "name": "Run fast source contracts",
+            "run": "python -m pytest tests/test_ascii_only.py tests/test_real_image_export_policy.py -n 0 -q",
+        }],
     }
 
 
@@ -712,6 +725,8 @@ def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
         raise CoverageGateContractError(
             "test job must retain an unconditional failure-propagating context"
         )
+    if jobs.get("preflight") != expected_preflight_job():
+        raise CoverageGateContractError("fast preflight execution contract differs")
     if jobs.get("core") != expected_core_job():
         raise CoverageGateContractError("core shard execution or evidence contract differs")
     portable = jobs.get("portable")

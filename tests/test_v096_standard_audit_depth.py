@@ -161,10 +161,10 @@ def test_standard_omits_plastic_populations_but_keeps_selected_state():
     ):
         assert heading not in standard_headings
         assert heading in audit_headings
-    assert ["Candidate", "Element", "Strain limit", "Distance to NA",
-            "Curvature", "Selected"] not in standard_headers
-    assert ["Candidate", "Element", "Strain limit", "Distance to NA",
-            "Curvature", "Selected"] in audit_headers
+    assert ["Candidate", "Element", "Strain limit (&#8240;)", "Distance to NA (mm)",
+            "Curvature (1/m)", "Selected"] not in standard_headers
+    assert ["Candidate", "Element", "Strain limit (&#8240;)", "Distance to NA (mm)",
+            "Curvature (1/m)", "Selected"] in audit_headers
     for key in (
         "plastic.worked.curvature-candidate",
         "plastic.worked.curvature-selection",
@@ -299,7 +299,7 @@ def test_standard_fatigue_population_tables_keep_only_governing_element_and_fibr
         )
         concrete = next(
             rows for rows in tables
-            if rows and rows[0][:4] == ["Fibre", "Source", "x", "y"]
+            if rows and rows[0][:4] == ["Fiber", "Source", "x", "y"]
         )
         published[profile] = (reinforcement, screens, concrete)
         assert _snapshot(builder._base_out) == before
@@ -423,7 +423,7 @@ def test_existing_audit_only_solver_and_crack_candidate_ledgers_remain_separate(
     for profile, text in texts.items():
         assert "Governing reinforcement element - R1" in text
         selected_fibres[profile] = {
-            int(value) for value in re.findall(r"Governing concrete fibre - (\d+)", text)
+            int(value) for value in re.findall(r"Governing concrete fiber - (\d+)", text)
         }
         assert len(selected_fibres[profile]) == 1
         assert selected_fibres[profile] <= expected_fibres
@@ -439,33 +439,51 @@ def test_brief_separates_fatigue_results_and_keeps_conflicting_detail_records():
     before = _snapshot(builder._base_out)
     _headings, tables, _equations = _capture(builder)
     builder._brief_settings_summary()
-    input_rows = [row[offset:offset + 2] for table in tables for row in table
-                  for offset in (0, 2)]
-    details = [row for row in input_rows if str(row[0]).startswith("Fatigue detail ")]
-    assert len(details) == 2
-    assert original["source"] in details[0][1]
-    assert "Different retained detail source" in details[1][1]
-    assert not any("Simplified stress-range screen" in str(row) for row in input_rows)
+    detail_tables = [rows for rows in tables
+                     if rows[0] == ["Property", "Value"]
+                     and any(row[0] == "Detail ID" for row in rows[1:])]
+    assert len(detail_tables) == 2
+    details = [dict(rows[1:]) for rows in detail_tables]
+    assert details[0]["Detail ID"] == details[1]["Detail ID"] == original["id"]
+    assert details[0]["Source"] == original["source"]
+    assert details[1]["Source"] == "Different retained detail source"
+    assert {k: v for k, v in details[0].items() if k != "Source"} == {
+        k: v for k, v in details[1].items() if k != "Source"
+    }
+    assert not any("Simplified stress-range screen" in str(row)
+                   for table in tables for row in table)
 
     tables.clear()
+    notes = []
+    builder._small = notes.append
     builder._brief_fatigue_screen_results()
-    assert tables[0][0] == ["Screen", "Result, criterion and source"]
-    screen_rows = [row for table in tables for row in table
-                   if str(row[0]).startswith("Simplified stress-range screen")]
-    expected = [
-        (spectrum, row)
-        for spectrum in fatigue_presentation.items(payload, "spectra")
-        for row in fatigue_presentation.reinforcement_rows(spectrum)
+    spectra = fatigue_presentation.items(payload, "spectra")
+    assert len(spectra) == 1
+    spectrum = spectra[0]
+    assert "Fatigue stress-range results: " + fatigue_presentation.value(
+        spectrum, "spectrum_name"
+    ) in _headings
+    assert tables[0][0] == [
+        "Element", "Screen status", "Range (MPa)", "Limit (MPa)",
+        "Utilization", "Governing bin",
     ]
-    assert len(screen_rows) == len(expected)
-    for published, (spectrum, row) in zip(screen_rows, expected):
-        assert row["element_id"] in published[0]
-        assert fatigue_presentation.value(spectrum, "spectrum_name") in published[0]
-        assert row["screen_status"] in published[1]
-        assert sector_report._fmt(row["screen_range_mpa"], 3) in published[1]
-        assert sector_report._fmt(row["screen_threshold_mpa"], 3) in published[1]
-        assert row["screen_governing_bin"] in published[1]
-        assert row["screen_source"] in published[1]
+    expected = fatigue_presentation.reinforcement_rows(spectrum)
+    assert len(tables) == 2
+    assert len(tables[0][1:]) == len(tables[1][1:]) == len(expected)
+    for published, detail, row in zip(tables[0][1:], tables[1][1:], expected):
+        assert published == [
+            row["element_id"], row["screen_status"],
+            sector_report._fmt(row["screen_range_mpa"], 3),
+            sector_report._fmt(row["screen_threshold_mpa"], 3),
+            sector_report._pct(row["screen_utilisation"]),
+            row["screen_governing_bin"],
+        ]
+        assert detail[0] == row["element_id"]
+        note = next(text for text in notes if text.startswith(
+            f"<b>Note {detail[-1]}: {row['element_id']}.</b> "
+        ))
+        source_number = re.search(r" Source ([1-9][0-9]*)\.$", note).group(1)
+        assert f"<b>Source {source_number}:</b> " + row["screen_source"] in notes
     assert _snapshot(builder._base_out) == before
 
 

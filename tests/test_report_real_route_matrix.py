@@ -18,6 +18,8 @@ sys.path.insert(0, str(ROOT / "tests"))
 import pytest
 
 import material_catalog
+import case_analysis
+import load_cases
 import report_equation_contract as contracts
 import result_presentation
 import sector_report
@@ -27,7 +29,7 @@ from native_member_report_fixtures import (
     native_member_report_cases, native_subdivided_report_case,
 )
 from test_shear import pub_m01_signed_2023_cases
-from sector import detailing
+from sector import detailing, design_standards
 from sector.section import Section
 from tools import report_render_fixture
 
@@ -326,17 +328,7 @@ def _scenario_3() -> tuple[dict, dict]:
     out = report_data._out()
     out.update(fatigue_out)
     crack = report_data._crack_2023()
-    width = 0.2
-    height = 0.3
-    inner_width = 0.18
-    crack["effective_area_operands"] = {
-        "record_kind": "CrackEffectiveArea2023Direct",
-        "width": width,
-        "height": height,
-        "inner_width": inner_width,
-        "inner_height": (width * height - crack["ac_eff"]) / inner_width,
-        "ac_eff": crack["ac_eff"],
-    }
+    # Keep this retained bending record coherent; native direct tension is S8.
     out["elastic"]["crack"] = crack
     out["elastic"]["crack_short"] = copy.deepcopy(crack)
     _set_transverse(
@@ -345,6 +337,70 @@ def _scenario_3() -> tuple[dict, dict]:
         lambda check: check["kind"] == "longitudinal_spacing",
     )
     _set_governing_concrete_life(out, "zero compression")
+    return _complete(inp, out)
+
+
+def _native_direct_tension_scenario() -> tuple[dict, dict]:
+    """Calculate a complete native 2023 uniform-tension report case."""
+    inp = report_render_fixture._inputs()
+    inp.update(
+        mode="Elastic", sls_heightened_on=False, fatigue_on=False,
+        shear_on=False, torsion_on=False, combined_on=False,
+        minimum_reinforcement_on=False, transverse_detailing_on=False,
+        clear_spacing_on=False,
+        sls_code=design_standards.DesignBasisKey.PUBLISHED_2023.value,
+    )
+    # A symmetric cage with one modulus gives uniform strain under pure tension.
+    inp["bars"] = [(x, y, 250.0) for x, y, _area in inp["bars"]]
+    for bar in inp["bar_elements"]:
+        bar.update(area_mm2=250.0, diameter_mm=math.sqrt(4.0 * 250.0 / math.pi),
+                   material_id="M1")
+    inp["section"] = Section.from_polygon(inp["outer"], inp["bars"])
+    inp["bar_materials"] = [inp["mild_materials"]["M1"]] * 4
+    inp["steel"] = inp["mild_materials"]["M1"]
+    inp["capacity_steel_material_id"] = "M1"
+    inp["plastic_cases"] = []
+    case = dict(inp["elastic_cases"][0])
+    case.update(
+        name="EL-DIRECT", description="Uniform tension | Source: QA route matrix",
+        n_long_ed_kn=300.0, mx_long_ed_knm=0.0, my_long_ed_knm=0.0,
+        n_short_ed_kn=0.0, mx_short_ed_knm=0.0, my_short_ed_knm=0.0,
+        calculate_crack_width=True,
+    )
+    inp["elastic_cases"] = [case]
+    before = pickle.dumps(inp)
+    out = report_render_fixture._results(inp)
+    assert pickle.dumps(inp) == before
+    entry, = out["elastic_cases"]
+    assert entry["actions"] == case
+    assert entry["signature"] == case_analysis.case_signature(
+        entry["actions"], load_cases.ELASTIC_TABLE_KEY, inp,
+    )
+    elastic = entry["results"]["elastic"]
+    assert elastic["converged"] is True and elastic["cracked"] is True
+    assert elastic["crack_basis_key"] == inp["sls_code"]
+    assert elastic["crack_edition"] == "2023"
+    assert elastic["crack_code"] == design_standards.get_design_basis(inp["sls_code"]).label
+    for key in ("crack", "crack_short"):
+        crack = elastic[key]
+        area = crack["effective_area_operands"]
+        spacing = crack["governing_candidate"]["spacing_operands"]
+        assert crack["edition"] == "2023"
+        assert area["record_kind"] == "CrackEffectiveArea2023Direct"
+        assert spacing["flexural_factor_method"] == "formula-9.20-direct-tension"
+        assert spacing["selected_candidate"] == "formula-9.15"
+        assert spacing["cap_tension_depth"] is None and spacing["cap_spacing"] is None
+        assert sector_report.ReportBuilder._crack_worked_missing_operands(crack) == ()
+        assert area["ac_eff"] == pytest.approx(
+            area["width"] * area["height"] - area["inner_width"] * area["inner_height"],
+            rel=1e-12, abs=1e-12,
+        )
+        assert spacing["selected_spacing"] == pytest.approx(
+            spacing["cover_coefficient"] * spacing["cover"]
+            + spacing["flexural_factor"] * spacing["bond_factor_kb"]
+            / spacing["diameter_ratio_divisor"] * spacing["diameter"] / spacing["rho_p_eff"],
+            rel=1e-12, abs=1e-12,
+        )
     return _complete(inp, out)
 
 
@@ -414,6 +470,8 @@ def test_normal_report_routes_cover_the_complete_equation_catalogue(
         if name.startswith(("S5-", "S6-", "S7-")):
             _verify_native_members(inp, out, combined=name.startswith("S5-"))
 
+    scenarios["S8-native-direct-tension"] = _native_direct_tension_scenario()
+
     raw = {}
     actual = {}
     for name, (inp, out) in scenarios.items():
@@ -456,5 +514,6 @@ def test_normal_report_routes_cover_the_complete_equation_catalogue(
         "governing-utilisation", "stiffness-share", "torque-share",
     )} <= actual["S7-native-subdivided"]
     assert not covered & deferred
+    assert ("crack.effective-area.2023", "direct-tension") in actual["S8-native-direct-tension"]
     assert covered == supported, {"missing": sorted(supported - covered, key=repr),
                                   "extra": sorted(covered - supported, key=repr)}

@@ -55,8 +55,9 @@ def test_unknown_chord_angle_mode_uses_neutral_engineering_note(theta_mode):
     note = viz.chord_angle_note(theta_mode)
 
     assert "does not identify how the member strut angle was selected" in note
-    assert "No shear or torsion is acting" not in note
-    assert "resistance-optimum" not in note
+    assert "No active shear-shift or torsion term controls the strut-angle selection." not in note
+    assert "Each action uses the angle that gives its greatest resistance." not in note
+    assert "This angle minimizes the governing utilization." not in note
 
 
 def test_known_chord_angle_modes_keep_their_specific_engineering_notes():
@@ -69,13 +70,16 @@ def test_known_chord_angle_modes_keep_their_specific_engineering_notes():
         "resistance", angle_valid=False
     )
 
-    assert "selected to minimise the governing utilisation" in utilisation
-    assert "No shear or torsion is acting" in resistance
-    assert "resistance-optimum" in resistance
+    assert "This angle minimizes the governing utilization." in utilisation
+    assert "Each action uses the angle that gives its greatest resistance." not in utilisation
+    assert "No active shear-shift or torsion term controls the strut-angle selection." in resistance
+    assert "Each action uses the angle that gives its greatest resistance." in resistance
+    assert "This angle minimizes the governing utilization." not in resistance
+    assert "These terms are zero in this chord check." in resistance
     assert "does not identify how the member strut angle was selected" in (
         invalid_utilisation
     )
-    assert "No shear or torsion is acting" in resistance_without_live_angle
+    assert "No active shear-shift or torsion term controls the strut-angle selection." in resistance_without_live_angle
     assert viz.utilisation_value(math.inf, allow_positive_infinity=True) == math.inf
     assert viz.pct(1.0) == "100.0 %"
     assert viz.util_ok(1.0) is True

@@ -109,16 +109,16 @@ def chord_angle_note(theta_mode, *, angle_valid=True):
     reconciled retained angle evidence.
     """
     if theta_mode == "utilisation" and angle_valid is True:
-        return ("Both contributions are at the ONE member strut angle shared by the "
-                "shear and torsion checks (6.3.2(2)), selected to minimise the "
-                "governing utilisation.")
+        return ("Both contributions use the member strut angle shared by the "
+                "participating shear and torsion checks (6.3.2(2)). This angle "
+                "minimizes the governing utilization.")
     if theta_mode == "resistance":
-        return ("No shear or torsion is acting, so there is no strut-angle objective; "
-                "the shear-shift and torsion terms are zero and the angle is each "
-                "action's resistance-optimum.")
-    return ("The result does not identify how the member strut angle was selected; "
-            "review the shear and torsion inputs before using the angle-dependent "
-            "longitudinal chord evidence.")
+        return ("No active shear-shift or torsion term controls the strut-angle selection. "
+                "These terms are zero in this chord check. "
+                "Each action uses the angle that gives its greatest resistance.")
+    return ("The result does not identify how the member strut angle was selected. "
+            "Review the shear and torsion inputs before you use the longitudinal "
+            "chord evidence that depends on this angle.")
 
 
 def elastic_strain_figure(corners, elements, stress_plane, *, ec_mpa,
@@ -2897,7 +2897,7 @@ def vt_interaction_figure(vrd_max, trd_max, v_ed, t_ed,
 
 
 def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
-                title="Torsion tube", scale=1000.0, unit="mm"):
+                title="Torsion tube", scale=1000.0, unit="mm", *, report_labels=False):
     """Thin-walled torsion tube (EN 1992-1-1 6.3.2): the concrete outline, the
     effective wall of thickness ``tef`` and the wall centre-line that encloses the
     torsion area ``Ak``. Geometry in metres; ``scale`` / ``unit`` draw it in mm by
@@ -2929,13 +2929,17 @@ def tube_figure(outer, holes=None, tef_mm=0.0, ak_m2=None,
         ix, iy = _ring_xy([(p[0] * scale, p[1] * scale) for p in inner])
         fig.add_trace(go.Scatter(x=ix, y=iy, mode="lines",
                                  line=dict(color=CONCRETE_LINE, width=1, dash="dot"),
-                                 name=f"inner wall face (tef = {tef_mm:.0f} mm)"))
+                                 name=(f"inner wall face (t<sub>ef</sub> = {tef_mm:.0f} mm)"
+                                       if report_labels else f"inner wall face (tef = {tef_mm:.0f} mm)")))
     if centre:
         cx, cy = _ring_xy([(p[0] * scale, p[1] * scale) for p in centre])
-        ak_txt = f" (Ak = {ak_m2 * 1.0e6:,.0f} mm2)" if ak_m2 else ""
+        ak_label = "A<sub>k</sub>" if report_labels else "Ak"
+        area_unit = "mm<sup>2</sup>" if report_labels else "mm2"
+        ak_txt = f" ({ak_label} = {ak_m2 * 1.0e6:,.0f} {area_unit})" if ak_m2 else ""
+        center_label = "wall center-line" if report_labels else "wall centre-line"
         fig.add_trace(go.Scatter(x=cx, y=cy, mode="lines",
                                  line=dict(color=ENVELOPE, width=2, dash="dash"),
-                                 name="wall centre-line" + ak_txt))
+                                 name=center_label + ak_txt))
     fig.update_layout(
         title=title, template=_TEMPLATE, height=440,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),

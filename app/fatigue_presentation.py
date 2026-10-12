@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 import math
 
+from app import report_summary_notation as report_notation
+
 
 _CAPABILITY_LABELS = {
     "reinforcement_fatigue": "Reinforcement fatigue",
@@ -101,7 +103,7 @@ def overall_note(payload, *, stale=False):
     if status == "FAIL":
         breakdown = criterion_breakdown(payload)
         return "Governing grouped spectrum" + (
-            f"; {breakdown}" if breakdown else ""
+            "; " + breakdown if breakdown else ""
         )
     warnings = items(payload, "warnings")
     if warnings:
@@ -110,7 +112,7 @@ def overall_note(payload, *, stale=False):
             f"{len(warnings)} fatigue-basis warning{suffix}; review Inputs"
         )
         breakdown = criterion_breakdown(payload)
-        return warning_note + (f"; {breakdown}" if breakdown else "")
+        return warning_note + ("; " + breakdown if breakdown else "")
     return criterion_breakdown(payload) or "Governing grouped spectrum"
 
 
@@ -164,7 +166,9 @@ def criterion_breakdown(spectrum):
         parts.append(f"governing: {governing}")
     miner = evidence_number(value(spectrum, "miner_damage"))
     if miner is not None:
-        parts.append(f"max Miner D {compact_number(miner)}")
+        parts.append(report_notation.concat(
+            "max Miner D ", report_notation.number(compact_number(miner)),
+        ))
     yield_util = evidence_number(value(spectrum, "yield_utilisation"))
     if yield_util is not None:
         parts.append(
@@ -175,7 +179,7 @@ def criterion_breakdown(spectrum):
                 else f"{100.0 * yield_util:.1f} %"
             )
         )
-    return "; ".join(parts)
+    return report_notation.join("; ", parts)
 
 
 def spectrum_rows(payload):
