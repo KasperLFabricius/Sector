@@ -6680,10 +6680,18 @@ class ReportBuilder:
             return
         case = self.inp.get("plastic_case" if family == "Plastic" else "elastic_case") or {}
         case_label = str(case.get("id") or "Unnamed action")
-        self._small("For the section maps, color limits stay fixed across valid states of this action. Other actions can have different limits.")
-        self._small("Display bands show values from the accepted field. Marker sizes identify elements; the element schedule gives their areas.")
+        definition_start = len(self.flow)
+        follows_heading = self._preceding_headings(definition_start) < definition_start
+        definitions = [
+            "For the section maps, color limits stay fixed across valid states of this action. Other actions can have different limits.",
+            "Display bands show values from the accepted field. Marker sizes identify elements; the element schedule gives their areas.",
+        ]
         if field.density:
-            self._small("Slab-density markers identify retained integration points or nominal axes with tabulated tributary areas.")
+            definitions.append("Slab-density markers identify retained integration points or nominal axes with tabulated tributary areas.")
+        # Preserve the existing opening paragraphs after a dedicated chapter.
+        # Other introductions can accompany a map instead of forming a notes page.
+        for paragraph in definitions if follows_heading else [" ".join(definitions)]:
+            self._small(paragraph)
         for index, (quantity, figure) in enumerate(figures):
             # Definitions can flow in the preceding space. The map heading and
             # selected state stay with the first figure and its extrema.
@@ -6720,6 +6728,33 @@ class ReportBuilder:
                     count = len(heading_content)
                     assert all(a is b for a, b in zip(group._content[:count], heading_content))
                     self.flow[-1:] = [*heading_content, KeepTogether(group._content[count:])]
+            if index == 0 and not follows_heading:
+                # Measure before replacing flow, without consuming a preceding
+                # chapter heading. Definitions may accompany either map.
+                definitions_content = list(self.flow[definition_start:block_start])
+                first_content = []
+                for item in self.flow[block_start:]:
+                    first_content.extend(item._content if isinstance(item, KeepTogether) else [item])
+                complete = KeepTogether([*definitions_content, *first_content])
+                complete.wrapOn(canvas.Canvas(io.BytesIO()),
+                                _A4_CONTENT_WIDTH - 2 * _REPORT_FRAME_PADDING,
+                                _A4_FRAME_USABLE_HEIGHT)
+                if complete._H + complete.getSpaceBefore() <= _A4_FRAME_USABLE_HEIGHT:
+                    self.flow[definition_start:] = [complete]
+                    definitions_content = []
+                elif len(figures) > 1:
+                    del self.flow[definition_start:block_start]
+            elif index == 1 and not follows_heading and definitions_content:
+                second_map = self.flow[-1]
+                defined_map = KeepTogether([*definitions_content, *second_map._content])
+                defined_map.wrapOn(canvas.Canvas(io.BytesIO()),
+                                   _A4_CONTENT_WIDTH - 2 * _REPORT_FRAME_PADDING,
+                                   _A4_FRAME_USABLE_HEIGHT)
+                if defined_map._H + defined_map.getSpaceBefore() <= _A4_FRAME_USABLE_HEIGHT:
+                    self.flow[-1] = defined_map
+                else:
+                    # An oversized map retains the prior flowing introduction.
+                    self.flow[definition_start:definition_start] = definitions_content
 
     def _plastic_nm_boundary(self, nm):
         self._h2("Numerical N-M boundary")
