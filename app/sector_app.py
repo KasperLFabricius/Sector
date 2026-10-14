@@ -3126,7 +3126,11 @@ def _record_input_event(
     if key == project_io.REPORT_PROFILE_KEY:
         st.session_state.pop("_report_profile_error", None)
     workspace = st.session_state.get("_main_page", "Inputs")
-    if workspace == "Inputs" and key in st.session_state:
+    from input_event_journal import repeats_requested_input
+    if (
+        workspace == "Inputs" and key in st.session_state
+        and not repeats_requested_input(st.session_state, key, callback=callback)
+    ):
         pending = dict(st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}))
         pending[key] = copy.deepcopy(st.session_state[key])
         st.session_state[_PENDING_INPUT_EVENTS_KEY] = pending
