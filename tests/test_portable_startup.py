@@ -14,6 +14,14 @@ from tools import verify_portable_startup as startup
 APP = Path(__file__).resolve().parents[1] / "app" / "sector_app.py"
 
 
+def _native_navigation(path):
+    pages = tuple(
+        startup._NavigationPageEvidence(f"{index + 1:032x}", label, name, name == "")
+        for index, (name, label) in enumerate(startup._PUBLIC_PAGES.items())
+    )
+    return startup._NavigationEvidence(pages, next(page.page_hash for page in pages if page.path == path))
+
+
 def _varint(value: int) -> bytes:
     encoded = bytearray()
     while value >= 0x80:
@@ -260,12 +268,6 @@ def test_page_protocol_extracts_document_controls_and_editable_grid():
 def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
     monkeypatch, scenario, alert
 ):
-    workspace = startup._ButtonGroupEvidence(
-        "workspace-id",
-        "Workspace",
-        ("Inputs", "Analysis", "Report"),
-        ("Inputs",),
-    )
     report_profile = startup._ButtonGroupEvidence(
         "profile-id",
         "Report profile",
@@ -273,14 +275,16 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
         ("Standard",),
     )
     first_surface = startup._PageSurfaceEvidence(
-        button_groups={"Workspace": workspace},
+        button_groups={},
         alerts=(),
-        tab_containers={"input-tabs-id": 0},
+        tab_containers={},
+        navigation=_native_navigation(""),
     )
     section_surface = startup._PageSurfaceEvidence(
-        button_groups={"Workspace": workspace},
+        button_groups={},
         alerts=(),
-        tab_containers={"input-tabs-id": 1},
+        tab_containers={},
+        navigation=_native_navigation(""),
         bidi_components={
             "grid-id": startup._BidiComponentEvidence(
                 "grid-id", "sector.point_grid_rich_v1", True
@@ -288,9 +292,10 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
         },
     )
     project_surface = startup._PageSurfaceEvidence(
-        button_groups={"Workspace": workspace},
+        button_groups={},
         alerts=(alert,),
-        tab_containers={"input-tabs-id": 4},
+        tab_containers={},
+        navigation=_native_navigation("project"),
         downloads={
             startup._PROJECT_DOWNLOAD_LABEL: startup._DownloadEvidence(
                 "project-download-id",
@@ -302,11 +307,11 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
     )
     report_surface = startup._PageSurfaceEvidence(
         button_groups={
-            "Workspace": workspace,
             "Report profile": report_profile,
         },
         alerts=(),
         tab_containers={},
+        navigation=_native_navigation("report"),
     )
     runs = iter(
         (
@@ -387,13 +392,9 @@ def test_page_session_requires_pre_widget_autosave_notice_and_standard_profile(
     )
     assert backmsgs == [
         startup._PAGE_RERUN_BACKMSG,
-        startup._string_widget_rerun_backmsg(
-            (("input-tabs-id", startup._SECTION_TAB_LABEL),)
-        ),
-        startup._string_widget_rerun_backmsg(
-            (("input-tabs-id", "Project"),)
-        ),
-        startup._widget_rerun_backmsg((("workspace-id", "Report"),)),
+        startup._with_page_hash(startup._PAGE_RERUN_BACKMSG, _native_navigation("").current_page_hash),
+        startup._with_page_hash(startup._PAGE_RERUN_BACKMSG, _native_navigation("project").current_page_hash),
+        startup._with_page_hash(startup._PAGE_RERUN_BACKMSG, _native_navigation("report").current_page_hash),
     ]
 
 
