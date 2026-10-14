@@ -7809,7 +7809,7 @@ def build_inputs(host=st):
     torsion_subrects = []
     if torsion_subdivide and _tors:
         n_sub = int(_seeded_number(
-            mvt_torsion, "Number of sub-rectangles", 2.0, 4.0, 2.0, 1.0, "torsion_nsub",
+            mvt_torsion, "Number of sub-rectangles", 2, 4, 2, 1, "torsion_nsub",
             help="Component rectangles: a T = web + flange (2), a double console = web "
                  "+ 2 consoles (3). The first is the web."))
         defaults = (
