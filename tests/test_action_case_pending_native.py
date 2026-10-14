@@ -5,6 +5,11 @@ import pandas as pd
 import pytest
 from streamlit.proto.WidgetStates_pb2 import WidgetState
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+
 import load_cases
 from app_workflow_navigation import goto_page
 from test_actions_tabs_native import (

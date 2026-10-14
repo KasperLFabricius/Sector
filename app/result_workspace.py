@@ -45,6 +45,8 @@ def table_key(rows, choice):
 
 def input_destination(row):
     """Map an authored result family to a visible related input group."""
+    if row.get("overview_key") == "cracking_threshold":
+        return "actions", None, None
     view = row.get("view")
     if view in {"Shear", "Torsion", "M-V-T Combined"}:
         return "settings", "Shear / torsion / M-V-T", {

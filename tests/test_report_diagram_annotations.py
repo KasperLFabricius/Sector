@@ -5,6 +5,11 @@ import dataclasses
 import math
 
 import pytest
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+
 import report_diagrams as diagrams
 from test_report_diagrams import _beam, _retained
 

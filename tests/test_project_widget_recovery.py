@@ -4,6 +4,11 @@ import copy
 import pandas as pd
 import pytest
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+
 import project_widget_state as recovery
 import load_cases
 import fatigue_inputs
