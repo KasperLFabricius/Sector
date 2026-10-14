@@ -455,14 +455,15 @@ def test_probe_encloses_every_top_level_streamlit_message():
     source = pathlib.Path(APP).read_text(encoding="utf-8")
     opened = source.index("app_run_probe.open_run(st.session_state)")
     page_config = source.index("st.set_page_config(")
-    logo = source.index("st.image(str(_logo)")
-    title = source.index("st.title(")
-    caption = source.index("st.caption(")
+    sidebar_logo = source.index("st.logo(str(_logo)")
+    logo = source.index("brand_logo.image(str(_logo)")
+    title = source.index("brand_title.subheader(")
+    caption = source.index("brand_title.caption(")
     closed = source.rindex("app_run_probe.close_run(st.session_state)")
 
     assert source.count("app_run_probe.open_run") == 1
     assert source.count("app_run_probe.close_run") == 1
-    assert opened < page_config < logo < title < caption < closed
+    assert opened < page_config < sidebar_logo < logo < title < caption < closed
     assert not source[closed:].strip().removeprefix(
         "app_run_probe.close_run(st.session_state)"
     ).strip()
@@ -473,11 +474,11 @@ def test_all_fragment_owners_are_explicit_and_bounded():
     tree = ast.parse(source)
     expected = {
         "_save_load_panel": ("save_load", 3),
-        "_report_workspace": ("report", 1),
+        "_report_workspace": ("report", 2),
         "_quick_section_viewport": ("quick_section", 3),
-        "_input_workspace": ("inputs", 1),
+        "_input_workspace": ("inputs", 2),
         # Missing input snapshots and stale capacity contracts both return early.
-        "_analysis_workspace": ("analysis", 3),
+        "_analysis_workspace": ("analysis", 4),
     }
     assert set(app_run_probe.FRAGMENT_NAMES) == {
         name for name, _count in expected.values()
@@ -552,9 +553,9 @@ def test_phase_labels_and_structural_placement_are_frozen():
     assert source.index('start_phase(st.session_state, "startup")') < source.index(
         "st.set_page_config("
     )
-    assert source.index(
+    assert source.index("public_page = _workflow_navigation()") < source.index(
         "app_run_probe.stop_phase(st.session_state, _startup_probe)"
-    ) < source.index("main_page = st.segmented_control(")
+    ) < source.index("\n_workflow_context()")
     assert "_measured_autosave()" in source
 
 
@@ -576,20 +577,28 @@ def test_enabled_live_app_seals_complete_active_stage_records(monkeypatch):
 
     assert not app.exception
     stages = (
-        "1 " + chr(0x00B7) + " Analysis settings",
         "2 " + chr(0x00B7) + " Section",
         "3 " + chr(0x00B7) + " Material parameters",
         "4 " + chr(0x00B7) + " Loads",
+        "1 " + chr(0x00B7) + " Analysis settings",
         "Project",
     )
     for index, stage in enumerate(stages):
         if index:
             app.session_state["_input_tab"] = stage
+            app.session_state["_next_workflow_page"] = ("section", "materials", "actions", "settings", "project")[index]
             app.run(timeout=30)
             assert not app.exception
 
         history = app.session_state[app_run_probe.state_keys()[2]]
-        assert len(history) == index + 1
+        # Native page navigation records one interrupted route-transition run
+        # before the completed destination. Every completed stage is retained.
+        assert len(history) == 2 * index + 1
+        assert sum(not item["interrupted"] for item in history) == index + 1
+        for transition in history[1:-1:2]:
+            assert transition["interrupted"] is True
+            assert transition["kind"] == "app"
+            assert transition["phases"] == {}
         record = history[-1]
         assert record["kind"] == "app"
         assert record["workspace"] == "Inputs"
@@ -616,7 +625,8 @@ def test_enabled_live_app_seals_complete_active_stage_records(monkeypatch):
             assert pane[field] >= 0.0
 
     assert app_run_probe.WORKSPACE_NAMES == ("Inputs", "Analysis", "Report")
-    app.segmented_control(key="_main_page").set_value("Report").run(timeout=30)
+    app.session_state["_next_workflow_page"] = "report"
+    app.run(timeout=30)
     assert not app.exception
     report_record = app.session_state[app_run_probe.state_keys()[2]][-1]
     assert report_record["workspace"] == "Report"

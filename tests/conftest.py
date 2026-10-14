@@ -16,3 +16,16 @@ def _isolate_autosave(tmp_path, monkeypatch):
     own ``monkeypatch.setenv``.
     """
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path / "_autosave"))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _retain_callable_page_client():
+    """Match browser page identity in module fixtures and native test bodies."""
+    from native_callable_page_client import install_callable_page_client
+
+    patch = pytest.MonkeyPatch()
+    try:
+        install_callable_page_client(patch)
+        yield
+    finally:
+        patch.undo()

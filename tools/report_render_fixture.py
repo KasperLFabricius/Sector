@@ -1102,10 +1102,71 @@ def _fixture_positioned_captions(page):
     return captions
 
 
+def _engineering_image_counts(reader):
+    """Count engineering images, with one exact, visibly drawn cover logo."""
+    from PIL import Image
+    import publication_branding
+
+    with Image.open(io.BytesIO(publication_branding.logo_bytes())) as logo:
+        size = logo.size
+        pixels = logo.convert("RGB").tobytes()
+    counts = []
+    brands = 0
+    for page_index, page in enumerate(reader.pages):
+        resources = page.get("/Resources")
+        objects = resources.get_object().get("/XObject") if resources else None
+        figures = 0
+        names = set()
+        for name, ref in objects.get_object().items() if objects else ():
+            image = ref.get_object()
+            if image.get("/Subtype") != "/Image":
+                continue
+            is_logo = (
+                (image.get("/Width"), image.get("/Height")) == size
+                and image.get("/ColorSpace") == "/DeviceRGB"
+                and image.get_data() == pixels
+            )
+            if is_logo:
+                if page_index != 0:
+                    raise AssertionError("report Sweco logo must be on the cover")
+                brands += 1
+                names.add(name)
+            else:
+                figures += 1
+        if names:
+            draws = []
+
+            def collect(op, operands, cm, _tm):
+                if op == b"Do" and operands[0] in names:
+                    draws.append(tuple(float(value) for value in cm))
+
+            page.extract_text(visitor_operand_before=collect)
+            if len(draws) != 1:
+                raise AssertionError("report cover logo must be drawn exactly once")
+            a, b, c, d, x, y = draws[0]
+            width = 45 * 72 / 25.4
+            height = width * size[1] / size[0]
+            if not (
+                math.isclose(a, width, abs_tol=.01)
+                and math.isclose(d, height, abs_tol=.01)
+                and abs(b) < .01 and abs(c) < .01
+                and float(page.mediabox.left) <= x
+                and x + a <= float(page.mediabox.right)
+                and float(page.mediabox.bottom) <= y
+                and y + d <= float(page.mediabox.top)
+            ):
+                raise AssertionError("report cover logo has invalid size or placement")
+        counts.append(figures)
+    if brands != 1:
+        raise AssertionError("report PDF must contain one original Sweco logo")
+    return tuple(counts)
+
+
 def validate_fixture_figure_inventory(reader, page_texts):
     """Bind each reviewed caption to an exported image on the same page."""
     expected = iter(_EXPECTED_FIGURES)
     seen = []
+    image_counts = _engineering_image_counts(reader)
     for page_number, (page, text) in enumerate(zip(reader.pages, page_texts), 1):
         first_lines = re.findall(r"(?m)^(Figure \d+\.\d+\.) (.*)$", text)
         positioned = _fixture_positioned_captions(page)
@@ -1116,12 +1177,7 @@ def validate_fixture_figure_inventory(reader, page_texts):
             if label != positioned_label or not full_caption.startswith(" ".join(first_line.split())):
                 raise AssertionError(f"figure caption text disagrees on page {page_number}")
             captions.append(full_caption)
-        resources = page.get("/Resources")
-        objects = resources.get_object().get("/XObject") if resources else None
-        images = sum(
-            ref.get_object().get("/Subtype") == "/Image"
-            for ref in objects.get_object().values()
-        ) if objects else 0
+        images = image_counts[page_number - 1]
         if images != len(captions):
             raise AssertionError(f"figure/caption page split on page {page_number}")
         for caption in captions:
@@ -1242,17 +1298,7 @@ def validate_pdf_content(
                 f"the report is missing rendered mathematics symbol U+{ord(symbol):04X}"
             )
 
-    images = 0
-    for page in reader.pages:
-        resources = page.get("/Resources")
-        if resources is None:
-            continue
-        xobjects = resources.get_object().get("/XObject")
-        if xobjects is None:
-            continue
-        for reference in xobjects.get_object().values():
-            if reference.get_object().get("/Subtype") == "/Image":
-                images += 1
+    images = sum(_engineering_image_counts(reader))
     if images != expected_figure_count:
         raise AssertionError(
             f"expected {expected_figure_count} exported engineering figures, "

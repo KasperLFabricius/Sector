@@ -48,7 +48,7 @@ import material_catalog
 from app import modelled_direction
 from app import elastic_display
 from app import publication_equation_layout as publication_equations
-from app import report_profiles, report_sources
+from app import report_profiles, report_sources, publication_branding
 from app import table_field_definitions as table_fields
 import publication_image_export
 from publication_items import PublicationCounter
@@ -4386,6 +4386,8 @@ class ReportBuilder:
 
     def _cover(self):
         m = self.meta
+        self.flow.append(publication_branding.logo_flowable(45 * mm))
+        self.flow.append(Spacer(1, 4 * mm))
         self.flow.append(Paragraph("Cross-section analysis report", self.s["title"]))
         self.flow.append(Paragraph("Reinforced-concrete / prestressed section "
                                    "(Sector)", self.s["subtitle"]))

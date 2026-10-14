@@ -104,7 +104,7 @@ class PublishedManualBlock:
 # These identities bind captions to the authored object, not merely to an index.
 # A same-cardinality reorder therefore fails before any incorrect caption is shown.
 MANUAL_FIGURE_SPECS = (
-    ManualFigureSpec(part='Part A - Get started', section='Quick start', factory='fig_workspace_overview', caption='Workspace overview (schematic): prepare inputs, calculate and examine named results, then publish.', alternative='Three linked panels show the workspaces. Inputs has a stage selector. Analysis has Calculate and result details. Report has document details, references, profile selection and PDF generation.'),
+    ManualFigureSpec(part='Part A - Get started', section='Quick start', factory='fig_workspace_overview', caption='Workspace overview (schematic): prepare inputs, calculate and examine named results, then publish.', alternative='Three linked panels group the navigation pages. Prepare contains Section, Materials, Actions and Analysis settings. Review and issue contains Results and Report. Project and help contains Project and recovery and Help and manual.'),
     ManualFigureSpec(part='Part A - Get started', section='The worked examples', factory='fig_beam_section', caption='Rectangular beam: 3 x 25 mm bottom, 2 x 16 mm top.', alternative='A 300 by 600 mm concrete rectangle with three bottom bars and two top bars arranged symmetrically about the vertical centerline.'),
     ManualFigureSpec(part='Part A - Get started', section='The worked examples', factory='fig_circular_section', caption='Circular hollow section: a central void, a mild-bar ring and a tendon ring.', alternative='An annular concrete section with concentric outer and void boundaries. Mild reinforcement and prestressing tendons form two circular rings.'),
     ManualFigureSpec(part='Part B - Features & options', section='Defining the section', factory='fig_slab_spacing_cover', caption='Nominal bars in a one-meter strip with an interleaved series. Each series has its own row. The dashed outer lines mark strip cuts. Short dotted lines mark tributary boundaries. Each boundary bar has a 16 mm diameter and half-area weight. The two cover details use the same scale and full physical bar diameters.', alternative='The 20 mm bar row has five axes at 200 mm spacing. The 16 mm bar row has six axes offset by 100 mm, with a half-area axis at each strip cut. Below, equal-scale details compare 20 mm edge cover with 30 mm center cover for the two bar sizes.'),
@@ -158,7 +158,7 @@ MANUAL_TABLE_SPECS = (
     ManualTableSpec(part='Part A - Get started', section='Quick start', headers=('Result', 'Expected value', 'Comparison tolerance'), caption='Tutorial expected results and comparison tolerances'),
     ManualTableSpec(part='Part A - Get started', section='Task workflows', headers=('Task', 'Outcome'), caption='Task index and intended outcomes'),
     ManualTableSpec(part='Part A - Get started', section='The worked examples', headers=('Named variant / calculation', 'Section and materials', 'Actions / changed assumptions'), caption='Named worked examples and changed assumptions'),
-    ManualTableSpec(part='Part B - Features & options', section='Input reference', headers=('Application stage', 'Manual destination'), caption='Application input stages and manual destinations'),
+    ManualTableSpec(part='Part B - Features & options', section='Input reference', headers=('Application page', 'Manual destination'), caption='Application input pages and manual destinations'),
     ManualTableSpec(part='Part B - Features & options', section='The workspace', headers=('View', 'Shows'), caption='Analysis result views and their reported information'),
     ManualTableSpec(part='Part B - Features & options', section='Defining the section', headers=('Size basis', 'Entered', 'Calculated'), caption='Reinforcement size input bases'),
     ManualTableSpec(part='Part B - Features & options', section='Defining the section', headers=('Shape', 'Produces'), caption='Quick Section builder shapes'),
@@ -242,7 +242,7 @@ MANUAL_TABLE_CONTENT_SHA256 = (
     'fad2f762ec2658c1b3c7c0652acbc9ec299875ce06dde54d621a529394b20195',
     '10612ff33aa10df119f3a469ea023e26fadf1a23467644b25a490f7ab25ae400',
     '8d62fef08f523f1042196737a926ebbc28e2a73e6de2f21cbaa497242fea01b9',
-    'c57b1f9833250de5684b679bcfc052f15bad2be7ba78bcfbf218a880eace69a2',
+    '386fc936b83e9b6d58e68a551375ad32e6e9dddd0d1af701602e6d2ecc253d40',
     '11f87a277cb8911ebdf33e6882b6576f406f1b343aec073bb5a345ccccfa2692',
     'b972bfbfeb72f66d02898862d2af8e0ec6837629130b1fd333213cbd26ece414',
     '6ba5c8d2fe359f1dcfba739e9f53f3eacab1d645b22c07fdea93269098e8c613',
@@ -307,7 +307,7 @@ MANUAL_TABLE_CONTENT_SHA256 = (
     'b0919739011fc721e05442937a51dc81f0ffcf216c81e48f0f24cec673aab06f',
     '77131906691ca0705d0261d5adb868e34e7257dae1a5253d2ee75b9e5b6fffc9',
     '9c6455917c0f03e81660c2cbb9c9c81f64c7f07cad85c31eb55e7974ee2fd913',
-    '0882dd8112d0aa8a2a00b7a1661400ee1cc878d5b428a123aa27364e97bc51bb',
+    '25d7f4e26b94d1dd6e35d86055f7f8ee85894311c5646f7b7d2d074111c71bf6',
     'e226fe65aca5e258ca33d5f6171064476547f6c0b8805a1978179aba60d32db7',
 )
 

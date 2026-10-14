@@ -190,7 +190,8 @@ for pkg in ("streamlit", "numpy", "plotly", "pandas", "pyarrow", "altair", "kale
 # repo root / bundle base), so ship that too or the packaged UI drops the logo.
 datas += [(os.path.join(ROOT, "app"), "app"),
           (os.path.join(ROOT, "sector"), "sector"),
-          (os.path.join(ROOT, "assets"), "assets")]
+          (os.path.join(ROOT, "assets"), "assets"),
+          (os.path.join(ROOT, ".streamlit", "config.toml"), ".streamlit")]
 
 hiddenimports += [
     "sector",

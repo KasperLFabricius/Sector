@@ -73,6 +73,7 @@ def _rendered_upload_key(at: AppTest) -> str:
 def _fresh_with_upload(content: bytes) -> AppTest:
     at = AppTest.from_file(APP, default_timeout=90)
     at.session_state["_input_tab"] = "Project"
+    at.session_state["_next_workflow_page"] = "project"
     at.run()
     return _upload(at, content)
 
@@ -89,47 +90,19 @@ def _upload(at: AppTest, content: bytes) -> AppTest:
     return at
 
 
-def _goto_page(at: AppTest, page: str) -> AppTest:
-    current = (
-        at.session_state["_main_page"]
-        if "_main_page" in at.session_state
-        else None
-    )
-    if current != page:
-        at.segmented_control(key="_main_page").set_value(page).run()
-    return at
+def _goto_page(at, page):
+    from app_workflow_navigation import goto_page
+    return goto_page(at, page)
 
 
-def _goto_project(at: AppTest) -> AppTest:
-    _goto_page(at, "Inputs")
-    if at.session_state["_input_tab"] != "Project":
-        at.session_state["_input_tab"] = "Project"
-        at.run()
-    return at
+def _goto_project(at):
+    from app_workflow_navigation import goto_input_stage
+    return goto_input_stage(at, "Project")
 
 
-def _goto_concrete(at: AppTest) -> AppTest:
-    _goto_page(at, "Inputs")
-    material_stage = f"3 {chr(0x00B7)} Material parameters"
-    current_stage = (
-        at.session_state["_input_tab"]
-        if "_input_tab" in at.session_state
-        else None
-    )
-    current_material = (
-        at.session_state["_material_tab"]
-        if "_material_tab" in at.session_state
-        else None
-    )
-    if (
-        current_stage != material_stage
-        or current_material != "Concrete"
-    ):
-        at.session_state["_input_tab"] = material_stage
-        at.session_state["_material_tab"] = "Concrete"
-        at.session_state["_material_tab_preference"] = "Concrete"
-        at.run()
-    return at
+def _goto_concrete(at):
+    from app_workflow_navigation import goto_widget_owner
+    return goto_widget_owner(at, "conc_fck")
 
 
 def _calculate(at: AppTest) -> AppTest:
@@ -292,6 +265,8 @@ def test_real_streamlit_same_file_reload_restores_edited_project() -> None:
 
     before_results = _completed_result_evidence(at)
     _goto_concrete(at)
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(55.0).run()
     assert at.session_state["conc_fck"] == pytest.approx(55.0)
     _assert_result_evidence(at, before_results)

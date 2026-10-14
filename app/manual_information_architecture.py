@@ -115,6 +115,19 @@ WORKSPACES: Final[tuple[ManualDestination, ...]] = (
     ),
 )
 
+# Public navigation labels are separate from the retained stage and anchor
+# identities used by saved UI state and existing manual links.
+PUBLIC_PAGE_LABELS: Final = MappingProxyType({
+    "section": "Section",
+    "material-parameters": "Materials",
+    "loads": "Actions",
+    "analysis-settings": "Analysis settings",
+    "results-overview": "Results",
+    "report-workspace": "Report",
+    "project": "Project and recovery",
+    "start-here": "Help and manual",
+})
+
 
 PUBLICATION_REFERENCES: Final[tuple[ManualDestination, ...]] = (
     _destination("status-reference", "Result statuses", "Result status reference", "result-view"),
@@ -209,57 +222,57 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
         "input-invalid",
         'Sector rejects or adjusts an entered value, or that value prevents a requested check.',
         'The value is outside its declared range, conflicts with a different input, or leaves an assignment incomplete.',
-        'Open the Inputs stage named in the warning. Correct the identified value or assignment. Open Analysis. Select Calculate.',
+        'Open the input page named in the warning. Correct the identified value or assignment. Open Results. Select Calculate.',
     ),
     WarningReference(
         "method-applicability",
         "A selected coefficient or method reports an applicability warning.",
         "The selected option has conditions that Sector cannot infer from the "
         "section geometry or action row.",
-        'Open Inputs > Analysis settings. Make sure that the stated project condition is satisfied. Make sure that the selected design basis is correct. Open Analysis. Select Calculate.',
+        'Open Analysis settings. Make sure that the stated project condition is satisfied. Make sure that the selected design basis is correct. Open Results. Select Calculate.',
     ),
     WarningReference(
         "geometry-invalid",
         'Sector rejects the section or gives no result.',
         "The outer ring, a void, bar, tendon, or material assignment is malformed.",
-        'Open Inputs > Section. Correct the identified geometry. For an assignment error, open Inputs > Material parameters. Correct the assignment. Open Analysis. Select Calculate.',
+        'Open Section. Correct the identified geometry. For an assignment error, open Materials. Correct the assignment. Open Results. Select Calculate.',
     ),
     WarningReference(
         "loads-invalid",
         'Sector rejects an action row or gives no requested result for it.',
         'A required action value is missing or invalid, or a row name is empty or duplicates a different action name across the action tables.',
-        'Open Inputs > Loads. Find the row named in the warning. Correct the identified value or name. Use unique action and bin names across all action tables.\n\nOpen Analysis. Select Calculate. Examine the requested result in Results Overview.',
+        'Open Actions. Find the row named in the warning. Correct the identified value or name. Use unique action and bin names across all action tables.\n\nOpen Results. Select Calculate. Examine the requested result in Results Overview.',
     ),
     WarningReference(
         "crack-not-requested",
         'Sector calculates no crack width for an Elastic row.',
         "Calculate crack width is off for that named row.",
-        'Open Inputs > Loads. If crack-width output is required, enable Calculate crack width on the named Elastic row.',
+        'Open Actions. If crack-width output is required, enable Calculate crack width on the named Elastic row.',
     ),
     WarningReference(
         "crack-criterion-missing",
         'Sector calculates crack width without a limit comparison.',
         "The matching long-term or short-term permitted width in Analysis "
         "settings is 0 mm.",
-        'Open Inputs > Analysis settings. For a limit comparison, enter a positive permitted width for the required duration. To calculate the width without comparison, keep 0 mm.',
+        'Open Analysis settings. For a limit comparison, enter a positive permitted width for the required duration. To calculate the width without comparison, keep 0 mm.',
     ),
     WarningReference(
         "results-stale",
         "Analysis results are marked stale after an input edit.",
         "A calculation input changed after the last calculation.",
-        'After the last input edit, open Analysis. Select Calculate. Open the named result view. Make sure that you cannot see the stale marker.',
+        'After the last input edit, open Results. Select Calculate. Open the named result view. Make sure that you cannot see the stale marker.',
     ),
     WarningReference(
         "report-stale",
         "A report cannot be downloaded because its inputs or project details changed.",
         'The existing PDF has different calculation inputs or Report details from the current project.',
-        'If calculation inputs changed, complete the input edit. Open Analysis. Select Calculate. If only report details changed, keep the current results.\n\nOpen Report. Select Generate report. Download the new PDF.',
+        'If calculation inputs changed, complete the input edit. Open Results. Select Calculate. If only report details changed, keep the current results.\n\nOpen Report. Select Generate report. Download the new PDF.',
     ),
     WarningReference(
         "results-review",
         "Results Overview shows one or more governing results requiring review.",
         'One requested calculation failed, is invalid, is not assessed, or has a calculation warning.',
-        'Open Analysis > Results Overview. Select the check in Result details. Select Open selected result. Read its criterion and warning. Correct the identified Inputs stage where applicable. Examine the full requested-check register before you accept the calculation.',
+        'Open Results > Results Overview. Select the check row in an Overview table. Select Open selected result. Read its criterion and warning. Correct the identified input page where applicable. Examine the full requested-check register before you accept the calculation.',
     ),
     WarningReference(
         "calculation-warning",
@@ -267,26 +280,26 @@ WARNINGS: Final[tuple[WarningReference, ...]] = (
         "or requires review.",
         "A required action, geometry component, reinforcement item, convergence "
         "state, or method-domain condition is missing or invalid.",
-        'Open the named Analysis result view. Read the warning. Correct the identified Inputs stage where applicable. Keep NOT ASSESSED or INVALID when the method is outside its scope.',
+        'Open Results and select the named result view. Read the warning. Correct the identified input page where applicable. Keep NOT ASSESSED or INVALID when the method is outside its scope.',
     ),
     WarningReference(
         "confirmation-required",
         "Sector asks for confirmation before clearing section point tables.",
         "The action replaces authored geometry and reinforcement rows.",
-        'Return to Inputs > Section. To keep the rows, select Cancel. Before confirmation, save the project state that you must keep for recovery.',
+        'Return to Section. To keep the rows, select Cancel. Before confirmation, save the project state that you must keep for recovery.',
     ),
     WarningReference(
         "project-file",
         'Sector rejects a project file when you load it.',
         "The selected file is malformed, is not a Sector project, or contains "
         "unsupported project data.",
-        'Open Inputs > Project. Expand Save / Load. Under Load project, select a project file with no damage that the current version supports. If no applicable file is available, enter the inputs manually.',
+        'Open Project and recovery. Expand Save / Load. Under Load project, select a project file with no damage that the current version supports. If no applicable file is available, enter the inputs manually.',
     ),
     WarningReference(
         "report-generation",
         "PDF or HTML manual/report generation is unavailable.",
         "Required calculation results or a report component are unavailable.",
-        'Read the displayed message. If results are stale or missing, open Analysis. Select Calculate. If the results are current, correct the identified Report input or missing report component. Try generation again.',
+        'Read the displayed message. If results are stale or missing, open Results. Select Calculate. If the results are current, correct the identified Report input or missing report component. Try generation again.',
     ),
     WarningReference(
         "report-source-unmatched",
@@ -302,76 +315,76 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "section-creation", "Create a section", "A valid concrete section with reinforcement",
         "section", "Member geometry and coordinate convention", "Section preview is valid",
         "geometry-invalid",
-        'Open Inputs > Section. Enter or generate the concrete outline. If the section has voids, enter them. Add the reinforcement geometry. Examine the section preview.',
+        'Open Section. Enter or generate the concrete outline. If the section has voids, enter them. Add the reinforcement geometry. Examine the section preview.',
     ),
     Workflow(
         "materials-reinforcement", "Define materials and reinforcement",
         "Assigned concrete, mild-steel and prestress laws", "material-parameters",
         "Material grades and reinforcement layout", 'Each used material ID resolves',
         "geometry-invalid",
-        'Open Inputs > Material parameters. Define the required material laws. Open Inputs > Section. Assign each reinforcement material ID. Make sure that each assigned ID identifies a defined material.',
+        'Open Materials. Define the required material laws. Open Section. Assign each reinforcement material ID. Make sure that each assigned ID identifies a defined material.',
     ),
     Workflow(
         "action-tables", "Enter actions", "Named Plastic, Elastic and fatigue actions",
         "loads", "Design action sets", "Rows are valid and uniquely named",
         "loads-invalid",
-        'Open Inputs > Loads. Enter the required Plastic/capacity, Elastic and grouped-fatigue rows. Give each action row a unique name. Correct each displayed row error.',
+        'Open Actions. Enter the required Plastic/capacity, Elastic and grouped-fatigue rows. Give each action row a unique name. Correct each displayed row error.',
     ),
     Workflow(
         "elastic-crack", "Calculate elastic response and crack width",
         "Calculated stresses, cracking state and optional crack width", "elastic-results",
         "Valid section, materials and Elastic row", 'Calculated results or an assessment-status message',
         "crack-not-requested",
-        'Under Inputs > Analysis settings, select Elastic. Select the crack-width method. Enter the required limits. Under Inputs > Loads, define the Elastic row. Select Calculate crack width when required. Open Analysis. Select Calculate. Open Elastic Results. Examine the named case.',
+        'Under Analysis settings > General, select Elastic. Open Crack width. Select the crack-width method and enter the required limits. Under Actions, define the Elastic row. Select Calculate crack width when required. Open Results. Select Calculate. Open Elastic Results. Examine the named case.',
     ),
     Workflow(
         "plastic-capacity", "Calculate plastic capacity",
         'Capacity envelope, utilization and selected critical state', "plastic-results",
         "Valid section, materials and Plastic row", "Calculated capacity result",
         "results-stale",
-        'Under Inputs > Analysis settings, select Plastic. Enable N-M interaction diagrams when those additional curves are necessary. Under Inputs > Loads, define the Plastic/capacity row. Open Analysis. Select Calculate. Open Plastic Results. Examine the named case.',
+        'Under Analysis settings > General, select Plastic. Enable N-M interaction diagrams when those additional curves are necessary. Under Actions, define the Plastic/capacity row. Open Results. Select Calculate. Open Plastic Results. Examine the named case.',
     ),
     Workflow(
         "fatigue", "Calculate grouped fatigue", "Spectrum and governing element results",
         "fatigue-results", "Valid fatigue spectra and material details",
         'Calculated results or an assessment-status message', "results-stale",
-        'Under Inputs > Analysis settings, enable Fatigue. Select the fatigue edition. Select Reinforcement, Concrete or the two options. Under Inputs > Material parameters, define the fatigue details. Under Inputs > Section, assign each required detail ID. Under Inputs > Loads, enter the grouped spectra. Open Analysis. Select Calculate. Open Fatigue Results. Select the spectrum. Examine each status and warning.',
+        'Under Analysis settings > Fatigue, enable Fatigue. Select the fatigue edition. Select Reinforcement, Concrete or the two options. Under Materials, define the fatigue details. Under Section, assign each required detail ID. Under Actions, enter the grouped spectra. Open Results. Select Calculate. Open Fatigue Results. Select the spectrum. Examine each status and warning.',
     ),
     Workflow(
         "detailing", 'Examine detailing', "Minimum reinforcement, links and spacing results",
         "detailing", 'Calculated applicable action rows', 'Each requested check has a status and related assessment message',
         "results-stale",
-        'Under Inputs > Analysis settings, enable each required detailing check. Complete its link and member inputs. Under Inputs > Loads, select Check minimum reinforcement on each required Plastic/capacity row. Open Analysis. Select Calculate. Open Detailing. Examine each requested status.',
+        'Under Analysis settings > Detailing, enable each required detailing check. Complete its link and member inputs. Under Actions, select Check minimum reinforcement on each required Plastic/capacity row. Open Results. Select Calculate. Open Detailing. Examine each requested status.',
     ),
     Workflow(
         "shear-check", "Calculate shear resistance", "Directional shear resistance and governing face",
         "shear", "Valid capacity row and directional shear geometry", 'Each active direction has a result or a message that identifies the assessment condition',
         "calculation-warning",
-        'Under Inputs > Analysis settings, enable Check shear capacity. Select the method. Select the section form. Complete the web, duct and link inputs. Under Inputs > Loads, enter the signed shear components. Open Analysis. Select Calculate. Open Shear. Examine each active direction.',
+        'Open Analysis settings > Shear / torsion / M-V-T > Checks and methods. Enable Check shear capacity and select the method. In Shear, select the section form and complete the web and duct inputs. In Shared reinforcement, complete the link inputs. Under Actions, enter the signed shear components. Open Results. Select Calculate. Open Shear. Examine each active direction.',
     ),
     Workflow(
         "torsion-check", "Calculate torsion resistance", "Tube geometry, transverse resistance and longitudinal requirement",
         "torsion", "Applicable member scope, closed links and nonzero torsion action", 'An assessment for transverse reinforcement and an assessment for longitudinal reinforcement',
         "method-applicability",
-        'Under Inputs > Analysis settings, enable Check torsion capacity. Select the design basis. Select the applicable member scope for each case. Complete the tube and closed-stirrup inputs. Under Inputs > Loads, enter torsion. Open Analysis. Select Calculate. Open Torsion. Examine the tube and the two reinforcement assessments.',
+        'Open Analysis settings > Shear / torsion / M-V-T > Checks and methods. Enable Check torsion capacity and select the design basis. Open Torsion. Select the applicable member scope for each case and complete the tube inputs. In Shared reinforcement, complete the closed-stirrup inputs. Under Actions, enter torsion. Open Results. Select Calculate. Open Torsion. Examine the tube and the two reinforcement assessments.',
     ),
     Workflow(
         "combined-check", "Calculate combined resistance", "Concurrent bending, shear and torsion assessments",
         "combined", 'Valid capacity row, enabled component checks and all necessary shared-link inputs',
         "Governing strut, stirrup and longitudinal component results", "calculation-warning",
-        'Under Inputs > Analysis settings, enable Check combined M-V-T. Make sure that the linked component methods are correct. Make sure that the common strut-angle range is correct. Under Inputs > Loads, enter concurrent actions in one capacity row. Open Analysis. Select Calculate. Open M-V-T Combined. Examine each component and the overall status.',
+        'Open Analysis settings > Shear / torsion / M-V-T > Checks and methods. Enable Check combined M-V-T. Make sure that the linked component methods are correct. In Shared reinforcement, make sure that the common strut-angle range is correct. Open Combined M-V-T and examine its prerequisites and assumptions. Under Actions, enter concurrent actions in one capacity row. Open Results. Select Calculate. Open M-V-T Combined. Examine each component and the overall status.',
     ),
     Workflow(
         "review-results", 'Examine results', 'A full requested-calculation register',
         "results-overview", "Current calculation results", 'Sector shows the warnings and governing rows',
         "results-review",
-        'Open Analysis > Results Overview. Select a check in Result details. Select Open selected result. Examine each warning and each not-assessed state.',
+        'Open Results > Results Overview. Select a check row in an Overview table. Select Open selected result. Examine each warning and each not-assessed state.',
     ),
     Workflow(
         "save-load", "Save or load a project", "A reproducible current project",
         "project", "Current inputs or a supported project file",
         'Calculate again after you load inputs', "project-file",
-        'Open Inputs > Project. Expand Save / Load. To save the inputs, select Download project. To load inputs, select a saved file under Load project. After loading, examine the restored inputs. Open Analysis. Select Calculate. Examine the new results in Results Overview.',
+        'Open Project and recovery. Expand Save / Load. To save the inputs, select Download project. To load inputs, select a saved file under Load project. After loading, examine the restored inputs. Open Results. Select Calculate. Examine the new results in Results Overview.',
     ),
     Workflow(
         "report-profile", "Choose a report profile", "Brief, Standard or Audit publication",
@@ -436,6 +449,7 @@ __all__ = [
     "DESTINATIONS",
     "INPUT_STAGES",
     "METHODS",
+    "PUBLIC_PAGE_LABELS",
     "READING_PATHS",
     "RESULT_VIEWS",
     "WARNING_REFERENCES",

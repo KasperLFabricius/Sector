@@ -1026,33 +1026,19 @@ def _fresh() -> AppTest:
     return AppTest.from_file(APP, default_timeout=90).run()
 
 
-def _goto_page(at: AppTest, page: str) -> AppTest:
-    current = (
-        at.session_state["_main_page"]
-        if "_main_page" in at.session_state
-        else None
-    )
-    if current != page:
-        at.segmented_control(key="_main_page").set_value(page).run()
-    return at
+def _goto_page(at, page):
+    from app_workflow_navigation import goto_page
+    return goto_page(at, page)
 
 
-def _goto_project(at: AppTest) -> AppTest:
-    _goto_page(at, "Inputs")
-    if at.session_state["_input_tab"] != "Project":
-        at.session_state["_input_tab"] = "Project"
-        at.run()
-    return at
+def _goto_project(at):
+    from app_workflow_navigation import goto_input_stage
+    return goto_input_stage(at, "Project")
 
 
-def _goto_concrete(at: AppTest) -> AppTest:
-    _goto_page(at, "Inputs")
-    material_stage = f"3 {chr(0x00B7)} Material parameters"
-    at.session_state["_input_tab"] = material_stage
-    at.session_state["_material_tab"] = "Concrete"
-    at.session_state["_material_tab_preference"] = "Concrete"
-    at.run()
-    return at
+def _goto_concrete(at):
+    from app_workflow_navigation import goto_widget_owner
+    return goto_widget_owner(at, "conc_fck")
 
 
 def _upload(at: AppTest, content: bytes) -> AppTest:
@@ -1316,6 +1302,7 @@ def test_real_inputs_upload_rejects_hostile_types_transactionally() -> None:
 
 
 def test_real_upload_without_case_authority_ignores_permissive_global_aliases():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     at = _fresh()
     source = _replacement_bytes(at, 41.0)
 
@@ -1345,11 +1332,12 @@ def test_real_upload_without_case_authority_ignores_permissive_global_aliases():
     }
     _goto_page(at, "Inputs")
     at.session_state["_input_tab"] = f"1 {chr(0x00B7)} Analysis settings"
+    at.session_state["_next_workflow_page"] = "settings"
     at.run()
-    assert at.selectbox(key="_torsion_case_design_basis::0::PL-01").value == (
+    assert _mounted_widget(at, 'selectbox', key="_torsion_case_design_basis::0::PL-01").value == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
-    assert at.selectbox(key="_torsion_case_member_scope::0::PL-01").value == (
+    assert _mounted_widget(at, 'selectbox', key="_torsion_case_member_scope::0::PL-01").value == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
 
@@ -1367,7 +1355,9 @@ def test_real_upload_without_case_authority_ignores_permissive_global_aliases():
             del at.session_state[key]
         except KeyError:
             pass
-    at.checkbox(key="torsion_on").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
+    _mounted_widget(at, 'checkbox', key="torsion_on").set_value(True).run()
     _calculate(at)
     result = at.session_state["results"]["plastic_cases"][0]["results"][
         "torsion"

@@ -1,9 +1,9 @@
 {
-  "version": "0.96.8",
+  "version": "0.96.9",
   "figures": {
     "fig_workspace_overview": {
-      "figure_sha256": "6115a2e1ff2470ef67084ab75048c0bc74d4966f07b8eacd3c18fc79c5a19336",
-      "png_sha256": "6fb6443a16d753b805b25bbdd12c9b62f204a0b288e8128cbbadf67e7605b1d8"
+      "figure_sha256": "ca22595b21c5e67fcff837d0e4ec898de6bebcdc68e1241e06c94e082082e8df",
+      "png_sha256": "72a0107f360ee96cb4af4cb5e7c3da70a5b2aa13d10c99e1330366630da9f880"
     },
     "fig_beam_section": {
       "figure_sha256": "0e8cd118c98f5903d41d983672e78b5ba773d8a890cfaf5c76cc388b35297df7",

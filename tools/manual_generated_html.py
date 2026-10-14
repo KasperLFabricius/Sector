@@ -176,10 +176,12 @@ class _GeneratedManualHTMLParser(HTMLParser):
         if tag == "img":
             source = attributes.get("src") or ""
             prefix = "data:image/png;base64,"
+            is_brand = attributes.get("class") == "publication-logo"
+            expected_alt = "Sweco" if is_brand else ""
             if (
                 set(attributes) != {"alt", "class", "src"}
-                or attributes["alt"] != ""
-                or attributes["class"] != "manual-figure"
+                or attributes["alt"] != expected_alt
+                or attributes["class"] not in {"manual-figure", "publication-logo"}
                 or not source.startswith(prefix)
             ):
                 raise AssertionError("issued manual HTML has a non-generator image")
@@ -189,6 +191,10 @@ class _GeneratedManualHTMLParser(HTMLParser):
                 raise AssertionError("issued manual HTML has invalid image data") from exc
             if not image.startswith(b"\x89PNG\r\n\x1a\n"):
                 raise AssertionError("issued manual HTML has invalid PNG data")
+            if is_brand and hashlib.sha256(image).hexdigest() != (
+                "46abdd46c2d6e2675109b31590936fb45963bb88e8962c838a35ba8dac7ed436"
+            ):
+                raise AssertionError("issued manual HTML has altered Sweco artwork")
         if tag == "html":
             if self.html_seen or self.stack:
                 raise AssertionError(_STRUCTURE_ERROR)
@@ -221,8 +227,10 @@ class _GeneratedManualHTMLParser(HTMLParser):
         elif tag in _BODY_TAGS:
             if not self.in_body:
                 raise AssertionError(_STRUCTURE_ERROR)
-            if tag == "img" and self.current_tag != "figure":
-                raise AssertionError(_STRUCTURE_ERROR)
+            if tag == "img":
+                image_parent = "header" if attributes["class"] == "publication-logo" else "figure"
+                if self.current_tag != image_parent:
+                    raise AssertionError(_STRUCTURE_ERROR)
             open_body_tags = set(self.stack[2:])
             if tag in _BODY_BLOCK_TAGS and (
                 "p" in open_body_tags or open_body_tags.intersection(_BODY_INLINE_TAGS)

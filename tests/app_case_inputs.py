@@ -187,12 +187,8 @@ def first_case_value(at, legacy_key):
 
 
 def _goto_page(at, page):
-    try:
-        current = at.session_state["_main_page"]
-    except KeyError:
-        current = None
-    if current != page:
-        at.segmented_control(key="_main_page").set_value(page).run()
+    from app_workflow_navigation import goto_page
+    return goto_page(at, page)
 
 
 def _goto_inputs(at):
@@ -200,51 +196,18 @@ def _goto_inputs(at):
 
 
 def goto_input_stage(at, short_name):
-    _goto_inputs(at)
-    labels = {
-        label.split(" ", 2)[-1] if label[0].isdigit() else label: label
-        for label in _INPUT_STAGE_LABELS
-    }
-    target = labels[short_name]
-    try:
-        current = at.session_state["_input_tab"]
-    except KeyError:
-        current = None
-    if current != target:
-        at.session_state["_input_tab"] = target
-        at.run()
+    from app_workflow_navigation import goto_input_stage as native_stage
+    return native_stage(at, short_name)
 
 
 def _goto_material(at, family):
-    goto_input_stage(at, "Material parameters")
-    try:
-        current = at.session_state["_material_tab"]
-    except KeyError:
-        current = None
-    if current != family:
-        at.session_state["_material_tab"] = family
-        at.session_state["_material_tab_preference"] = family
-        at.run()
+    from app_workflow_navigation import goto_material
+    return goto_material(at, family)
 
 
 def _goto_widget_owner(at, key):
-    if key.startswith("conc_") or key == "sls_fctm":
-        return _goto_material(at, "Concrete")
-    if key.startswith(("mild_", "mildcat_")):
-        return _goto_material(at, "Mild steel")
-    if key.startswith(("pre_", "precat_")):
-        return _goto_material(at, "Prestressing steel")
-    if key.startswith("fatiguecat_"):
-        return _goto_material(at, "Fatigue details")
-    if key == "el_phi":
-        return goto_input_stage(at, "Loads")
-    if key.startswith("rep_"):
-        return _goto_page(at, "Report")
-    if key.startswith(("autosave_", "project_")):
-        return goto_input_stage(at, "Project")
-    if key.startswith(("section_", "label_")):
-        return goto_input_stage(at, "Section")
-    return goto_input_stage(at, "Analysis settings")
+    from app_workflow_navigation import goto_widget_owner
+    return goto_widget_owner(at, key)
 
 
 def apply_widget_changes(at, changes):
@@ -260,7 +223,7 @@ def apply_widget_changes(at, changes):
             widget = getattr(at, widget_type)(key=key)
         except KeyError:
             if key == "view":
-                at.segmented_control(key="_main_page").set_value("Analysis").run()
+                _goto_page(at, "Analysis")
             else:
                 _goto_widget_owner(at, key)
             widget = getattr(at, widget_type)(key=key)

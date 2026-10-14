@@ -163,56 +163,56 @@ def test_crack_comparison_guidance_uses_independent_zero_value_contract():
 
 def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
     required_routes = {
-        "section-creation": ("Inputs > Section", "preview"),
+        "section-creation": ("Section", "preview"),
         "materials-reinforcement": (
-            "Inputs > Material parameters",
-            "Inputs > Section",
+            "Materials",
+            "Section",
             "each assigned ID identifies a defined material",
         ),
-        "action-tables": ("Inputs > Loads", "row error"),
+        "action-tables": ("Actions", "row error"),
         "elastic-crack": (
-            "Inputs > Analysis settings",
-            "Inputs > Loads",
-            "Open Analysis. Select Calculate. Open Elastic Results.",
+            "Analysis settings",
+            "Actions",
+            "Open Results. Select Calculate. Open Elastic Results.",
         ),
         "plastic-capacity": (
-            "Inputs > Analysis settings",
-            "Inputs > Loads",
-            "Open Analysis. Select Calculate. Open Plastic Results.",
+            "Analysis settings",
+            "Actions",
+            "Open Results. Select Calculate. Open Plastic Results.",
             "N-M interaction diagrams",
         ),
         "fatigue": (
-            "Inputs > Analysis settings",
-            "Inputs > Material parameters",
-            "Inputs > Section",
-            "Inputs > Loads",
-            "Open Analysis. Select Calculate. Open Fatigue Results.",
+            "Analysis settings",
+            "Materials",
+            "Section",
+            "Actions",
+            "Open Results. Select Calculate. Open Fatigue Results.",
         ),
         "detailing": (
-            "Inputs > Analysis settings",
-            "Inputs > Loads",
+            "Analysis settings",
+            "Actions",
             "Check minimum reinforcement",
-            "Open Analysis. Select Calculate. Open Detailing.",
+            "Open Results. Select Calculate. Open Detailing.",
         ),
         "shear-check": (
-            "Inputs > Analysis settings", "Check shear capacity",
-            "Inputs > Loads", "Open Analysis. Select Calculate. Open Shear.",
+            "Analysis settings", "Check shear capacity",
+            "Actions", "Open Results. Select Calculate. Open Shear.",
         ),
         "torsion-check": (
-            "Inputs > Analysis settings", "Check torsion capacity",
-            "Inputs > Loads", "Open Analysis. Select Calculate. Open Torsion.",
+            "Analysis settings", "Check torsion capacity",
+            "Actions", "Open Results. Select Calculate. Open Torsion.",
         ),
         "combined-check": (
-            "Inputs > Analysis settings", "Check combined M-V-T",
-            "Inputs > Loads", "Open Analysis. Select Calculate. Open M-V-T Combined.",
+            "Analysis settings", "Check combined M-V-T",
+            "Actions", "Open Results. Select Calculate. Open M-V-T Combined.",
         ),
         "review-results": (
-            "Analysis > Results Overview",
+            "Results > Results Overview",
             "Open selected result",
         ),
         "save-load": (
-            "Inputs > Project",
-            "Open Analysis. Select Calculate.",
+            "Project and recovery",
+            "Open Results. Select Calculate.",
             "Results Overview",
         ),
         "report-profile": ("Report", "Generate report", "Download"),
@@ -232,16 +232,16 @@ def test_workflow_actions_name_the_exact_user_route_and_no_generic_fallback():
     for workflow in ia.WORKFLOWS:
         if "Select Calculate." not in workflow.action:
             continue
-        assert "Open Analysis" in workflow.action
-        assert workflow.action.index("Open Analysis") < workflow.action.index(
+        assert "Open Results" in workflow.action
+        assert workflow.action.index("Open Results") < workflow.action.index(
             "Select Calculate."
         )
 
     for warning in ia.WARNINGS:
         if "Select Calculate." not in warning.correction:
             continue
-        assert "open Analysis" in warning.correction or "Open Analysis" in warning.correction
-        assert warning.correction.lower().index("open analysis") < warning.correction.index(
+        assert "open Results" in warning.correction or "Open Results" in warning.correction
+        assert warning.correction.lower().index("open results") < warning.correction.index(
             "Select Calculate."
         )
 
@@ -256,13 +256,13 @@ def test_results_overview_warning_routes_to_the_shared_review_entry():
     )
     assert workflow.warning_key == "results-review"
     warning = ia.warning_reference("results-review")
-    assert "Analysis > Results Overview" in warning.correction
+    assert "Results > Results Overview" in warning.correction
     assert "full requested-check register before you accept the calculation" in warning.correction
 
     source = (ROOT / "app" / "sector_app.py").read_text("utf-8")
     assert '"results-review"' in source
 
-    assert "Inputs > Loads" in ia.warning_reference("loads-invalid").correction
+    assert "Actions" in ia.warning_reference("loads-invalid").correction
     assert "report" not in ia.warning_reference(
         "results-stale"
     ).correction.casefold()

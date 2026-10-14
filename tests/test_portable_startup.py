@@ -415,11 +415,20 @@ def test_exact_entrypoint_recovers_legacy_or_hostile_profile_on_startup(
 
     app = AppTest.from_file(str(APP), default_timeout=90)
     app.session_state["_input_tab"] = "Project"
+    app.session_state["_next_workflow_page"] = "project"
 
     app.run()
 
     assert not app.exception
     if persisted_profile == startup._LEGACY_REPORT_PROFILE:
+        # Project replacement cancels stale navigation. Check the restored
+        # data immediately, then mount the owner of its retained notification.
+        assert app.session_state["rep_report_content"] == "Standard"
+        assert app.session_state["_durable_report_scalars"]["rep_report_content"] == "Standard"
+        assert app.session_state["_project_msg"] == ("success", startup._AUTOSAVE_RESTORED_TEXT)
+        app.session_state["_next_workflow_page"] = "project"
+        app.run()
+        assert not app.exception
         assert startup._AUTOSAVE_RESTORED_TEXT in [
             item.value for item in app.success
         ]
@@ -434,7 +443,8 @@ def test_exact_entrypoint_recovers_legacy_or_hostile_profile_on_startup(
             for message in visible_errors
         )
 
-    app.segmented_control(key="_main_page").set_value("Report").run()
+    app.session_state["_next_workflow_page"] = "report"
+    app.run()
 
     assert not app.exception
     assert app.segmented_control(key="rep_report_content").value == "Standard"

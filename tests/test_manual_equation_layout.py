@@ -182,9 +182,26 @@ def test_manual_pdf_is_searchable_vector_math_without_image_equations(
 ) -> None:
     text = " ".join(page_texts)
     assert text.count(SEMANTIC_MARKER) == 33
-    for page in pdf_reader.pages:
+    from app import publication_branding
+    with Image.open(io.BytesIO(publication_branding.logo_bytes())) as logo:
+        expected_pixels = logo.convert("RGB").tobytes()
+    for page_index, page in enumerate(pdf_reader.pages):
         resources = page["/Resources"].get_object()
-        assert not resources.get("/XObject")
+        objects = resources.get("/XObject", {})
+        if page_index == 0:
+            assert len(objects) == 1
+            image = next(iter(objects.values())).get_object()
+            assert image["/Subtype"] == "/Image"
+            assert (image["/Width"], image["/Height"]) == (1280, 373)
+            assert image["/ColorSpace"] == "/DeviceRGB"
+            assert image.get_data() == expected_pixels
+        else:
+            assert not objects
+        content = pypdf.generic.ContentStream(page.get_contents(), pdf_reader)
+        draws = [args for args, op in content.operations if op == b"Do"]
+        assert len(draws) == (1 if page_index == 0 else 0)
+        if draws:
+            assert draws[0][0] in objects
 
     fonts = _font_objects(pdf_reader)
     equation_fonts = [
@@ -199,7 +216,7 @@ def test_manual_pdf_is_searchable_vector_math_without_image_equations(
         operators.extend(operator for _operands, operator in content.operations)
     assert operators.count(b"S") >= 2
     assert b"m" in operators and b"l" in operators
-    assert b"Do" not in operators
+    assert operators.count(b"Do") == 1  # Exact original cover logo only.
 
 
 def test_each_identity_expression_result_and_source_stay_ordered_on_one_page(

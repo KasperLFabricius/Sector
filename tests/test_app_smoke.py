@@ -46,7 +46,10 @@ _LEAKED_MATH_RE = re.compile(
 
 
 def _fresh():
-    return AppTest.from_file(APP, default_timeout=90)
+    """Start legacy engineering smoke scenarios on General settings explicitly."""
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.session_state["_next_workflow_page"] = "settings"
+    return at
 
 
 def _assert_math_text_is_renderable(value):
@@ -138,75 +141,28 @@ def _fresh_qs(**state):
         at.session_state[key] = value
     at.session_state["_qs_open"] = True
     at.session_state["_main_page"] = "Analysis"
+    at.session_state["_next_workflow_page"] = "results"
     return at.run()
 
 
 def _goto_page(at, page):
-    """Navigate only when needed, preserving the page-local AppTest tree."""
-    try:
-        current = at.session_state["_main_page"]
-    except KeyError:
-        current = None
-    if current != page:
-        at.segmented_control(key="_main_page").set_value(page).run()
-    return at
+    from app_workflow_navigation import goto_page
+    return goto_page(at, page)
 
 
 def _goto_input_tab(at, name):
-    """Select one tracked outer input stage by its short engineering name."""
-    _goto_page(at, "Inputs")
-    d = chr(0x00B7)
-    labels = {
-        "Analysis settings": f"1 {d} Analysis settings",
-        "Section": f"2 {d} Section",
-        "Material parameters": f"3 {d} Material parameters",
-        "Loads": f"4 {d} Loads",
-        "Project": "Project",
-    }
-    label = labels[name]
-    try:
-        current = at.session_state["_input_tab"]
-    except KeyError:
-        current = None
-    if current != label:
-        at.session_state["_input_tab"] = label
-        at.run()
-    return at
+    from app_workflow_navigation import goto_input_stage
+    return goto_input_stage(at, name)
 
 
 def _goto_material_tab(at, name):
-    """Open Material parameters and select one material family."""
-    _goto_input_tab(at, "Material parameters")
-    try:
-        current = at.session_state["_material_tab"]
-    except KeyError:
-        current = None
-    if current != name:
-        at.session_state["_material_tab"] = name
-        at.session_state["_material_tab_preference"] = name
-        at.run()
-    return at
+    from app_workflow_navigation import goto_material
+    return goto_material(at, name)
 
 
 def _goto_widget_owner(at, key):
-    """Mount the outer stage that owns a requested test widget."""
-    if key.startswith("conc_") or key == "sls_fctm":
-        return _goto_material_tab(at, "Concrete")
-    if key.startswith(("mild_", "mildcat_")):
-        return _goto_material_tab(at, "Mild steel")
-    if key.startswith(("pre_", "precat_")):
-        return _goto_material_tab(at, "Prestressing steel")
-    if key.startswith("fatiguecat_"):
-        return _goto_material_tab(at, "Fatigue details")
-    if key == "el_phi":
-        return _goto_input_tab(at, "Loads")
-    if key.startswith("rep_"):
-        return _goto_page(at, "Report")
-    if key.startswith(("autosave_", "project_")):
-        return _goto_input_tab(at, "Project")
-    if key.startswith(("section_", "label_")):
-        return _goto_input_tab(at, "Section")
-    return _goto_input_tab(at, "Analysis settings")
+    from app_workflow_navigation import goto_widget_owner
+    return goto_widget_owner(at, key)
 
 
 def _calculate(at):
@@ -409,6 +365,7 @@ def _open_qs(at):
     """Open the full-width Quick Section builder so its widgets render."""
     at.session_state["_qs_open"] = True
     at.session_state["_main_page"] = "Analysis"
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     return at
 
@@ -552,20 +509,29 @@ def test_ui_hot_paths_are_isolated_streamlit_fragments():
         sector_app._analysis_workspace,
         sector_app._quick_section_viewport,
         sector_app._report_workspace,
-        sector_app._save_load_panel,
     ):
         assert hasattr(func, "__wrapped__"), func.__name__
 
+    # Save/Load is a nested owner inside the input fragment and mounts only on Project.
+    assert not hasattr(sector_app._save_load_panel, "__wrapped__")
+    input_owner = inspect.getsource(sector_app._input_workspace.__wrapped__)
+    assert "inp = build_inputs(st)" in input_owner
+    inputs = inspect.getsource(sector_app.build_inputs)
+    assert inputs.index("if project.open:") < inputs.index("_save_load_panel()")
     workspace = inspect.getsource(sector_app._analysis_workspace.__wrapped__)
-    assert workspace.index('c_calc.button(') < workspace.index('c_view.selectbox(')
+    assert workspace.index("workflow_navigation.take_calculate_request(") < workspace.index("c_view.selectbox(")
+    context_source = inspect.getsource(sector_app._workflow_context)
+    assert 'key="calculate"' in context_source
+    assert "_request_workflow_calculation()" in context_source
     assert "_switch_view" not in workspace
     report_source = inspect.getsource(sector_app._report_workspace.__wrapped__)
-    assert "st.container(border=True)" in report_source
+    assert "metadata_box = details_column.container(border=True)" in report_source
+    assert "publication_box = publication_column.container(border=True)" in report_source
     assert "_generate_report(inp)" in report_source
     assert report_source.index("_restore_report_state") < report_source.index(
         "_normalise_report_profile_session_state()"
     ) < report_source.index("_seeded_segmented_control")
-    save_source = inspect.getsource(sector_app._save_load_panel.__wrapped__)
+    save_source = inspect.getsource(sector_app._save_load_panel)
     assert "st.expander(" in save_source
     assert "parent." not in save_source
 
@@ -654,6 +620,7 @@ def test_interrupted_input_fragment_batches_latest_cross_pane_events():
         "_material_tab": "Mild steel",
     }
     at.session_state["_input_tab"] = material_stage
+    at.session_state["_next_workflow_page"] = "materials"
     at.session_state["_material_tab"] = "Mild steel"
     at.session_state["_material_tab_preference"] = "Mild steel"
     at.run()
@@ -785,6 +752,9 @@ def test_quick_section_dimensions_survive_a_project_restore():
     at2.session_state["_qs_open"] = True
     at2.run()
     assert not at2.exception
+    assert at2.session_state["qsv_shape"] == "Box girder"
+    assert at2.session_state["qsv_b_mm"] == 850.0
+    _open_qs(at2)
     assert at2.session_state["shape"] == "Box girder"
     assert at2.session_state["b_mm"] == 850.0            # restored dimension kept
     # A real shape switch after the restore still re-seeds to the new default.
@@ -819,6 +789,9 @@ def test_expanded_quick_section_dimension_survives_a_project_restore():
     restored.run()
 
     assert not restored.exception
+    assert restored.session_state["qsv_shape"] == "Annulus"
+    assert restored.session_state["qsv_annulus_outer_mm"] == pytest.approx(900.0)
+    _open_qs(restored)
     assert restored.selectbox(key="shape").value == "Annulus"
     assert restored.number_input(key="annulus_outer_mm").value == pytest.approx(900.0)
 
@@ -858,6 +831,15 @@ def test_pre_expansion_project_load_clears_stale_expanded_quick_section_state():
     at.run()
 
     assert not at.exception
+    assert at.session_state["qsv_shape"] == "T-section"
+    assert at.session_state["qsv_bf_mm"] == 1200.0
+    assert at.session_state["qsv_hf_mm"] == 300.0
+    assert at.session_state["qsv_bw_mm"] == 400.0
+    assert at.session_state["qsv_hw_mm"] == 700.0
+    for key in ("annulus_outer_mm", "qsv_annulus_outer_mm", "annulus_inner_mm", "qsv_annulus_inner_mm"):
+        assert key not in at.session_state
+        assert key not in at.session_state["_durable_input_scalars"]
+    _open_qs(at)
     assert at.selectbox(key="shape").value == "T-section"
     assert at.selectbox(key="t_orientation").value == "Flange at top"
     for key in (
@@ -871,6 +853,7 @@ def test_pre_expansion_project_load_clears_stale_expanded_quick_section_state():
 
 
 def test_project_load_without_link_authorities_clears_stale_true_state():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     import project_io
 
     at = _fresh()
@@ -888,8 +871,8 @@ def test_project_load_without_link_authorities_clears_stale_true_state():
     assert at.session_state["torsion_nu_v"] is False
     assert at.session_state["_durable_input_scalars"]["shear_links"] is False
     assert at.session_state["_durable_input_scalars"]["torsion_nu_v"] is False
-    assert at.checkbox(key="shear_links").value is False
-    assert at.checkbox(key="torsion_nu_v").value is False
+    assert _mounted_widget(at, 'checkbox', key="shear_links").value is False
+    assert _mounted_widget(at, 'checkbox', key="torsion_nu_v").value is False
 
 
 def test_current_expanded_quick_section_keys_apply_after_hot_project_load():
@@ -936,6 +919,11 @@ def test_quick_section_dimensions_survive_a_midsession_project_load():
     at2.session_state["_qs_open"] = True
     at2.run()
     assert not at2.exception
+    # Verify replacement state on its first render before opening the public owner.
+    assert at2.session_state["qsv_shape"] == "Box girder"
+    assert at2.session_state["qsv_b_mm"] == 850.0
+    assert "qs_shape_prev" not in at2.session_state
+    _open_qs(at2)
     assert at2.session_state["shape"] == "Box girder"
     assert at2.session_state["b_mm"] == 850.0           # loaded dimension kept
     at2.selectbox(key="shape").set_value("Rectangle").run()
@@ -967,7 +955,7 @@ def test_about_panel_shows_version_author_and_licensee():
     blob = " | ".join(m.value for m in at.markdown) + \
         " | ".join(c.value for c in at.caption)
     from sector import __version__ as version   # single source; no per-bump edit
-    assert version in blob and f"v{version}" in (at.title[0].value if at.title else "")
+    assert version in blob and f"Sector v{version}" in [item.value for item in at.subheader]
     assert "Kasper Lindskov Fabricius" in blob
     assert "Kasper.LindskovFabricius@sweco.dk" in blob
     assert "Sweco Danmark A/S" in blob
@@ -1609,6 +1597,8 @@ def test_assembled_report_payload_retains_interaction_and_bond_selection():
     at.run()
     _goto_input_tab(at, "Analysis settings")
     at.checkbox(key="pl_interaction").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'sls_bond')
     at.selectbox(key="sls_bond").set_value(
         "Plain round (k1 = 1.6)"
     ).run()
@@ -2383,8 +2373,12 @@ def test_load_sets_survive_a_mode_switch():
         ("number_input", "pl_Mx", 175.0),
         ("number_input", "el_long_Mx", 60.0),
     )
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Both").run()
     assert first_case_value(at, "pl_Mx") == pytest.approx(175.0)
     assert first_case_value(at, "el_long_Mx") == pytest.approx(60.0)
@@ -4622,6 +4616,8 @@ def test_incomplete_point_rows_block_calculation_until_corrected():
     import pandas as pd
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     _replace_base_table(at, "bars_base", pd.DataFrame(
         {"x (mm)": [50.0, None, 150.0, "oops"],   # row 2 blank, row 4 non-numeric
@@ -4913,6 +4909,8 @@ def test_high_grade_concrete_auto_strain_calculates():
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(70.0).run()
     at.button(key="conc_strain_auto").click().run()
     assert at.session_state["conc_eps_cu2"] == pytest.approx(2.66, abs=0.05)
@@ -4928,6 +4926,8 @@ def test_invalid_concrete_strain_order_is_recoverable():
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_eps_c2')
     at.number_input(key="conc_eps_c2").set_value(5.0).run()   # peak above eps_cu2 (3.5)
     assert not at.exception
     assert any("must be at least" in w.value and "peak strain" in w.value
@@ -4956,6 +4956,8 @@ def test_save_load_round_trip_through_the_app():
         {k: at.session_state[k] for k in project_io.SCALAR_KEYS if k in at.session_state})
     assert '"format": "sector-project"' in text
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(20.0).run()
     at.session_state["_pending_project"] = text
     at.run()
@@ -5137,6 +5139,7 @@ def test_real_project_upload_hides_invalid_records_and_shows_precise_copy():
 
 
 def test_schema_25_shared_crack_width_migrates_with_visible_warning():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     import load_cases
     import project_io
     from sector import capacity
@@ -5180,12 +5183,15 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
         at.session_state["_project_msg"][1]
     )
     assert "schema" not in at.session_state["_project_msg"][1].casefold()
+    assert at.session_state["sls_long_term_permitted_crack_width_mm"] == pytest.approx(0.20)
+    assert at.session_state["sls_short_term_permitted_crack_width_mm"] == pytest.approx(0.20)
+    assert at.session_state["sls_heightened_permitted_crack_width_mm"] == 0.0
     for key in (
         "sls_long_term_permitted_crack_width_mm",
         "sls_short_term_permitted_crack_width_mm",
     ):
         assert at.session_state[key] == pytest.approx(0.20)
-        assert at.number_input(key=key).value == pytest.approx(0.20)
+        assert _mounted_widget(at, 'number_input', key=key).value == pytest.approx(0.20)
     assert at.session_state[
         "sls_heightened_permitted_crack_width_mm"
     ] == 0.0
@@ -5261,6 +5267,7 @@ def test_current_schema_load_clears_prior_migration_evidence():
 
 
 def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     import project_io
     from sector import capacity, codes
 
@@ -5288,7 +5295,7 @@ def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
     assert not at.exception
     assert at.session_state["shear_links"] is True
     assert at.session_state["shear_gamma_v"] == pytest.approx(1.40)
-    assert at.number_input(key="shear_gamma_v").disabled is False
+    assert _mounted_widget(at, 'number_input', key="shear_gamma_v").disabled is False
     assert any(
         "explicit gamma_V input at 1.40" in warning.value
         for warning in at.warning
@@ -5304,6 +5311,7 @@ def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
 
 
 def test_app_restores_fatigue_inputs_into_the_ui():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     import fatigue_inputs
     import project_io
     from sector import design_standards
@@ -5332,11 +5340,12 @@ def test_app_restores_fatigue_inputs_into_the_ui():
     assert not at.exception
     assert fatigue_inputs.SPECTRUM_TABLE_KEY in at.session_state
     assert at.session_state["fatigue_on"] is True
-    assert at.toggle(key="fatigue_on").value is True
-    assert at.selectbox(key="fatigue_edition").value == (
+    assert _mounted_widget(at, 'toggle', key="fatigue_on").value is True
+    assert _mounted_widget(at, 'selectbox', key="fatigue_edition").value == (
         design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value
     )
-    _goto_input_tab(at, "Loads")
+    from app_workflow_navigation import goto_action_family
+    goto_action_family(at, "Fatigue")
     assert "fatigue_spectrum_editor" in at.session_state
     _goto_material_tab(at, "Fatigue details")
     assert at.selectbox(key="_fatigue_catalog_selected").value == "F1"
@@ -5841,15 +5850,21 @@ def test_calculate_runs_the_ui_configured_grouped_fatigue_spectrum():
     current_fck = float(at.session_state["conc_fck"])
     changed_fck = current_fck + 5.0 if current_fck <= 195.0 else current_fck - 5.0
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(changed_fck).run()
     fck_fatigue_sig = at.session_state["_latest_inputs"]["fatigue_sig"]
     assert fck_fatigue_sig != calculated_fatigue_sig
     current_alpha_cc = float(at.session_state["conc_alpha_cc"])
     changed_alpha_cc = 0.85 if current_alpha_cc != 0.85 else 0.90
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_alpha_cc')
     at.number_input(key="conc_alpha_cc").set_value(changed_alpha_cc).run()
     assert at.session_state["_latest_inputs"]["fatigue_sig"] != fck_fatigue_sig
 
     _goto_input_tab(at, "Analysis settings")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_gamma_s')
     at.number_input(key="fatigue_gamma_s").set_value(1.20).run()
     assert at.session_state["result_sig"] != (
         at.session_state["_latest_inputs"]["signature"]
@@ -5889,6 +5904,8 @@ def test_fatigue_map_signature_distinguishes_bars_from_tendons():
 def test_fatigue_validation_stays_in_the_ui_instead_of_raising():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_on')
     at.toggle(key="fatigue_on").set_value(True).run()
     before = at.session_state["bars_base"].copy(deep=True)
 
@@ -5944,6 +5961,7 @@ def test_catalogue_revisions_preserve_every_live_reinforcement_cell():
 
 
 def test_startup_catalogue_repair_reserves_incomplete_row_assignments():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     import fatigue_inputs
     import material_catalog
     import reinforcement_table as rebar_table
@@ -5992,7 +6010,12 @@ def test_startup_catalogue_repair_reserves_incomplete_row_assignments():
     assert at.session_state[
         "_capacity_steel_unresolved_material_id"
     ] == "M3"
-    assert at.selectbox(key="capacity_steel_material_id").value == "M3"
+    latest_first_render = at.session_state["_latest_inputs"]
+    assert latest_first_render["material_error"].code == "MATERIAL-INPUT-BLOCKER"
+    assert [message.code for message in latest_first_render["material_assignment_errors"]] == [
+        "MEMBER-MATERIAL-ASSIGNMENT",
+    ]
+    assert _mounted_widget(at, 'selectbox', key="capacity_steel_material_id").value == "M3"
     latest = at.session_state["_latest_inputs"]
     assert latest["material_error"].code == "MATERIAL-INPUT-BLOCKER"
     assert [message.code for message in latest["material_assignment_errors"]] == [
@@ -6064,6 +6087,8 @@ def test_fatigue_basis_records_direct_method_and_action_notes():
 
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_on')
     at.toggle(key="fatigue_on").set_value(True).run()
     prefix = (
         f"fatiguebasis_r{at.session_state['_fatigue_basis_revision']}"
@@ -6277,6 +6302,8 @@ def test_alias_only_change_refreshes_the_autosave(tmp_path, monkeypatch):
     saved = tmp_path / "autosave.json"
     before = saved.read_text(encoding="utf-8")
 
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'modelled_direction_alias')
     at.text_input(key="modelled_direction_alias").set_value(
         "span direction"
     ).run()
@@ -6299,6 +6326,8 @@ def test_due_autosave_runs_from_analysis_page(tmp_path, monkeypatch):
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(42.0).run()
     _goto_page(at, "Analysis")
     assert not (tmp_path / "autosave.json").exists()
@@ -6360,6 +6389,8 @@ def test_autosave_restores_last_session_on_next_launch(tmp_path, monkeypatch):
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(42.0).run()
     at.session_state["_autosave_t"] = 0.0          # make a save due
     at.run()
@@ -7575,6 +7606,7 @@ def test_hot_reload_migrates_exact_legacy_report_profile_state():
         "rep_report_content": legacy,
     }
     at.session_state["_main_page"] = "Report"
+    at.session_state["_next_workflow_page"] = "report"
 
     at.run()
 
@@ -7659,8 +7691,14 @@ def test_report_fragment_normalises_hostile_profile_before_strict_mount(
         def segmented_control(self, _label, _options, *, key, **_kwargs):
             return self.state[key]
 
-        def columns(self, count):
-            return tuple(self for _ in range(count))
+        def columns(self, count, **_kwargs):
+            return tuple(self for _ in range(count if isinstance(count, int) else len(count)))
+
+        def container(self, **_kwargs):
+            return self
+
+        def expander(self, *_args, **_kwargs):
+            return self
 
         def button(self, *_args, **_kwargs):
             return False
@@ -7696,7 +7734,16 @@ def test_report_fragment_normalises_hostile_profile_before_strict_mount(
             return self.box
 
         def selectbox(self, _label, _options, *, key, **_kwargs):
-            return self.session_state[key]
+            return self.session_state.setdefault(key, _options[0])
+
+        def columns(self, count, **kwargs):
+            return self.box.columns(count, **kwargs)
+
+        def table(self, *_args, **_kwargs):
+            return None
+
+        def button(self, *_args, **_kwargs):
+            return False
 
         def text_input(self, _label, *, key, **_kwargs):
             return self.session_state[key]
@@ -7752,7 +7799,8 @@ def test_analysis_autosave_waits_for_interrupted_scalar_and_table_edit(
     }
     at.session_state["conc_fck"] = 60.0
 
-    at.segmented_control(key="_main_page").set_value("Analysis").run()
+    at.session_state["_next_workflow_page"] = "results"
+    at.run()
 
     saved = tmp_path / "autosave.json"
     assert not at.exception
@@ -7806,7 +7854,8 @@ def test_interrupted_input_edit_blocks_report_until_payload_is_committed():
     at.session_state["_inputs_build_in_progress"] = True
     at.session_state["_pending_input_events"] = {"conc_fck": 60.0}
     at.session_state["conc_fck"] = 30.0
-    at.segmented_control(key="_main_page").set_value("Report").run()
+    at.session_state["_next_workflow_page"] = "report"
+    at.run()
 
     assert not at.exception
     assert at.session_state["_inputs_build_in_progress"] is True
@@ -7843,21 +7892,28 @@ def test_interrupted_input_edit_blocks_report_until_payload_is_committed():
 
 
 def test_direction_alias_is_visible_before_checks_and_follows_the_cut():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     from sector import detailing
 
     at = _fresh()
     at.run()
-    assert at.text_input(key="modelled_direction_alias").value == ""
+    assert _mounted_widget(at, 'text_input', key="modelled_direction_alias").value == ""
     assert any(
         item.value == "Modelled reinforcement direction: Longitudinal"
         for item in at.info
     )
 
-    at.text_input(key="modelled_direction_alias").set_value(
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'modelled_direction_alias')
+    _mounted_widget(at, 'text_input', key="modelled_direction_alias").set_value(
         "span direction"
     ).run()
-    at.selectbox(key="detailing_member_type").set_value("Slab").run()
-    at.selectbox(key="detailing_cut_direction").set_value(
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'detailing_member_type')
+    _mounted_widget(at, 'selectbox', key="detailing_member_type").set_value("Slab").run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'detailing_cut_direction')
+    _mounted_widget(at, 'selectbox', key="detailing_cut_direction").set_value(
         detailing.CUT_LONGITUDINAL
     ).run()
     expected = (
@@ -7872,6 +7928,7 @@ def test_direction_alias_is_visible_before_checks_and_follows_the_cut():
 
 
 def test_pending_project_rejects_overlong_alias_before_widget_mount():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     import modelled_direction
     import project_io
 
@@ -7890,7 +7947,8 @@ def test_pending_project_rejects_overlong_alias_before_widget_mount():
         "single line of at most 60 characters. Select an intact, compatible "
         "Sector project file and try again.",
     )
-    assert at.text_input(key=modelled_direction.ALIAS_KEY).value == ""
+    assert at.session_state[modelled_direction.ALIAS_KEY] == ""
+    assert _mounted_widget(at, 'text_input', key=modelled_direction.ALIAS_KEY).value == ""
     assert at.session_state[modelled_direction.ALIAS_KEY] == ""
 
 
@@ -8042,8 +8100,14 @@ def test_shear_method_changes_do_not_lock_the_case_table():
     # consumes MEd, while the 2005 method simply ignores that component.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_method')
     at.selectbox(key="shear_method").set_value(codes.EC2_2023.label).run()
     _goto_input_tab(at, "Loads")
     assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
@@ -8057,6 +8121,8 @@ def test_shear_method_changes_do_not_lock_the_case_table():
     # The 2005 method has no action-moment term, but changing method must not imply
     # that the table belongs to a particular limit state or solver.
     _goto_input_tab(at, "Analysis settings")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_method')
     at.selectbox(key="shear_method").set_value(codes.EC2_2005_DKNA.label).run()
     _goto_input_tab(at, "Loads")
     assert any(frame.key == "plastic_cases_editor" for frame in at.dataframe)
@@ -8123,6 +8189,8 @@ def test_auto_material_precision_survives_analysis_inputs_and_autosave(
         assert widget.proto.format % widget.value == "36.08"
         assert "36.08 GPa" in at.button(key="conc_Ec_auto").label
     # Manual values remain editable and are not replaced on an ordinary rerun.
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_Ec')
     at.number_input(key="conc_Ec").set_value(33.123456789).run()
     _goto_input_tab(at, "Loads")
     assert at.session_state["_latest_inputs"]["conc_Ec"] == 33.123456789
@@ -8323,6 +8391,8 @@ def test_2023_concrete_fck_edit_calculates():
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_preset')
     at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
     _set_and_click(
         at, "calculate", ("number_input", "conc_fck", 50.0)
@@ -8338,11 +8408,15 @@ def test_2023_concrete_k_tc_is_explicit_and_updates_fcd():
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_preset')
     at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
     assert at.session_state["conc_k_tc"] == pytest.approx(0.85)
     fcd_general = 0.85 * at.session_state["conc_fck"] / at.session_state["conc_gamma_c"]
     assert at.session_state["conc_alpha_cc"] == pytest.approx(0.85)
 
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_k_tc')
     at.selectbox(key="conc_k_tc").set_value(1.0).run()
     assert not at.exception
     assert at.session_state["conc_alpha_cc"] == pytest.approx(1.0)
@@ -8397,6 +8471,8 @@ def test_es_field_present_and_editable():
     _goto_material_tab(at, "Mild steel")
     keys = {ni.key for ni in at.number_input}
     assert "mild_Es" in keys
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_Es')
     at.number_input(key="mild_Es").set_value(210.0).run()   # GPa
     _goto_material_tab(at, "Prestressing steel")
     assert "pre_Es" in {ni.key for ni in at.number_input}
@@ -8411,6 +8487,8 @@ def test_eut_below_yield_strain_is_retained_and_blocks_calculation():
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Mild steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_eut')
     at.number_input(key="mild_eut").set_value(0.5).run()  # 0.5 permille, below ey ~ 2.5
     assert at.number_input(key="mild_eut").value == pytest.approx(0.5)
     assert at.session_state["mild_material_catalog"]["items"][0]["eut"] == (
@@ -8423,6 +8501,8 @@ def test_eut_below_yield_strain_is_retained_and_blocks_calculation():
     assert "results" not in at.session_state
     assert at.session_state["_latest_inputs"]["steel"] is None
     _goto_material_tab(at, "Mild steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_eut')
     at.number_input(key="mild_eut").set_value(50.0).run()
     _calculate(at)
     assert not at.exception
@@ -8435,7 +8515,11 @@ def test_two_yield_fields_live_under_default_preset():
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Mild steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_k')
     at.number_input(key="mild_k").set_value(0.8).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_ey0t')
     at.number_input(key="mild_ey0t").set_value(3.0).run()  # 3 permille
     assert not at.exception
     _calculate(at)
@@ -8450,6 +8534,8 @@ def test_mild_fyck_zero_is_allowed_and_calculates():
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Mild steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_fyck')
     at.number_input(key="mild_fyck").set_value(0.0).run()
     assert not at.exception
     _calculate(at)
@@ -8488,6 +8574,8 @@ def test_material_fields_are_flat_regardless_of_preset():
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Mild steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_preset')
     at.selectbox(key="mild_preset").set_value(
         "Curve 2 (elastic-perfectly-plastic)").run()
     keys = {ni.key for ni in at.number_input}
@@ -8501,6 +8589,8 @@ def test_material_laws_locked_in_elastic_only_mode():
     # they are disabled -- except fck (feeds fctm) and Es (crack width).
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     _goto_material_tab(at, "Concrete")
     for locked in ("conc_gamma_c", "conc_alpha_cc"):
@@ -8517,6 +8607,8 @@ def test_material_laws_locked_in_elastic_only_mode():
 def test_prestress_law_locked_in_elastic_only_mode():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     _goto_material_tab(at, "Prestressing steel")
     # The stress-strain law parameters are plastic-only, so they lock; but the
@@ -8556,12 +8648,16 @@ def test_material_laws_editable_in_both_and_plastic_modes():
     # Plastic needs the laws, so Both and Plastic keep them editable.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Both").run()
     _goto_material_tab(at, "Mild steel")
     assert at.number_input(key="mild_fytk").disabled is False
     _goto_material_tab(at, "Concrete")
     assert at.number_input(key="conc_gamma_c").disabled is False
     _goto_input_tab(at, "Analysis settings")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Plastic").run()
     _goto_material_tab(at, "Mild steel")
     assert at.number_input(key="mild_fytk").disabled is False
@@ -8576,6 +8672,8 @@ def test_fctm_and_ec_locked_in_plastic_only_mode():
     assert at.number_input(key="sls_fctm").disabled is True
     assert at.number_input(key="conc_Ec").disabled is True
     _goto_input_tab(at, "Analysis settings")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     _goto_material_tab(at, "Concrete")
     assert at.number_input(key="sls_fctm").disabled is False
@@ -8589,6 +8687,8 @@ def test_fatigue_unlocks_the_elastic_material_parameters():
     assert at.number_input(key="conc_Ec").disabled is True
 
     _goto_input_tab(at, "Analysis settings")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_on')
     at.toggle(key="fatigue_on").set_value(True).run()
 
     _goto_material_tab(at, "Concrete")
@@ -8626,16 +8726,24 @@ def test_tension_only_ignores_compression_strength_and_offset_relations():
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Mild steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_preset')
     at.selectbox(key="mild_preset").set_value(
         "Curve 1 (bilinear hardening)"
     ).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_fyck')
     at.number_input(key="mild_fyck").set_value(700.0).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_ey0c')
     at.number_input(key="mild_ey0c").set_value(1000.0).run()
 
     assert at.session_state["_latest_inputs"]["steel"] is None
     visible = " ".join(str(item.value) for item in at.warning)
     assert "not less than every active design yield" in visible
 
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_active_comp')
     at.checkbox(key="mild_active_comp").set_value(False).run()
 
     assert not at.exception
@@ -8673,6 +8781,7 @@ def test_rendered_tension_only_material_omits_compression_labels_and_calculates(
     at = _fresh()
     at.session_state[material_catalog.MILD_CATALOG_KEY] = catalogue
     at.session_state["_input_tab"] = material_stage
+    at.session_state["_next_workflow_page"] = "materials"
     at.session_state["_material_tab"] = "Mild steel"
     at.session_state["_material_tab_preference"] = "Mild steel"
     at.run()
@@ -8713,12 +8822,16 @@ def test_rendered_tension_only_material_omits_compression_labels_and_calculates(
     # Re-enabling compression exposes the active-branch requirements without
     # crashing or sending the invalid law onward. Restoring tension-only makes
     # the same retained finite values usable again.
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_active_comp')
     at.checkbox(key="mild_active_comp").set_value(True).run()
     assert not at.exception
     assert at.session_state["_latest_inputs"]["steel"] is None
     visible = " ".join(str(item.value) for item in at.warning)
     assert "Material unavailable" in visible
     assert "design ultimate strength" in visible
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_active_comp')
     at.checkbox(key="mild_active_comp").set_value(False).run()
     assert at.session_state["_latest_inputs"]["steel"] is not None
 
@@ -8731,6 +8844,8 @@ def test_elastic_calculates_with_locked_materials():
     # Locking the laws must not break the elastic run.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     _calculate(at)
     assert not at.exception
@@ -8742,13 +8857,25 @@ def test_material_factored_ultimate_equality_is_live_and_calculates():
     at.run()
 
     _goto_material_tab(at, "Mild steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_preset')
     at.selectbox(key="mild_preset").set_value(
         "Curve 3 (two yield points)"
     ).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_fytk')
     at.number_input(key="mild_fytk").set_value(500.0).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_fyck')
     at.number_input(key="mild_fyck").set_value(500.0).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_futk')
     at.number_input(key="mild_futk").set_value(550.0).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_gamma_y')
     at.number_input(key="mild_gamma_y").set_value(1.0).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_gamma_u')
     at.number_input(key="mild_gamma_u").set_value(1.1).run()
 
     steel = at.session_state["_latest_inputs"]["steel"]
@@ -8760,20 +8887,34 @@ def test_material_factored_ultimate_equality_is_live_and_calculates():
         steel.fyck / steel.gamma_y
     )
 
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_futk')
     at.number_input(key="mild_futk").set_value(549.999999).run()
     assert at.session_state["_latest_inputs"]["steel"] is None
     visible = " ".join(str(item.value) for item in at.warning)
     assert "design ultimate strength" in visible
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_futk')
     at.number_input(key="mild_futk").set_value(550.0).run()
     assert at.session_state["_latest_inputs"]["steel"] is not None
 
     _goto_material_tab(at, "Prestressing steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'pre_preset')
     at.selectbox(key="pre_preset").set_value(
         "Curve 7 (two yield)"
     ).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'pre_fytk')
     at.number_input(key="pre_fytk").set_value(1600.0).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'pre_gamma_y')
     at.number_input(key="pre_gamma_y").set_value(1.0).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'pre_gamma_u')
     at.number_input(key="pre_gamma_u").set_value(1.1).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'pre_futk')
     at.number_input(key="pre_futk").set_value(1760.0).run()
 
     prestress = at.session_state["_latest_inputs"]["prestress"]
@@ -8782,10 +8923,14 @@ def test_material_factored_ultimate_equality_is_live_and_calculates():
         prestress.fytk / prestress.gamma_y
     )
 
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'pre_futk')
     at.number_input(key="pre_futk").set_value(1759.99999).run()
     assert at.session_state["_latest_inputs"]["prestress"] is None
     visible = " ".join(str(item.value) for item in at.warning)
     assert "design ultimate strength" in visible
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'pre_futk')
     at.number_input(key="pre_futk").set_value(1760.0).run()
     assert at.session_state["_latest_inputs"]["prestress"] is not None
 
@@ -8802,7 +8947,11 @@ def test_invalid_live_material_domain_is_not_coerced_or_sent_to_solvers(
     at = _fresh()
     at.run()
     _goto_material_tab(at, "Mild steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_preset')
     at.selectbox(key="mild_preset").set_value("Curve 1 (bilinear hardening)").run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_futk')
     at.number_input(key="mild_futk").set_value(0.0).run()
 
     assert not at.exception
@@ -8824,7 +8973,11 @@ def test_invalid_live_material_domain_is_not_coerced_or_sent_to_solvers(
     # Correct the strength, then enter a rupture strain below yield. The rendered
     # widget and durable catalogue retain the entered 1.0 per-mille value; no
     # hidden clamp changes the law used for the preview or calculation.
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_futk')
     at.number_input(key="mild_futk").set_value(600.0).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_eut')
     at.number_input(key="mild_eut").set_value(1.0).run()
     assert at.number_input(key="mild_eut").value == pytest.approx(1.0)
     mild_entry = at.session_state["mild_material_catalog"]["items"][0]
@@ -8833,18 +8986,30 @@ def test_invalid_live_material_domain_is_not_coerced_or_sent_to_solvers(
 
     # Restore the mild law and exercise the same rendered boundary for the
     # prestressing proof/ultimate-strength ordering.
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_eut')
     at.number_input(key="mild_eut").set_value(50.0).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_gamma_u')
     at.number_input(key="mild_gamma_u").set_value(2.0).run()
     assert at.session_state["_latest_inputs"]["steel"] is None
     visible = " ".join(str(item.value) for item in at.warning)
     assert "design ultimate strength" in visible
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_gamma_u')
     at.number_input(key="mild_gamma_u").set_value(1.0).run()
     _goto_material_tab(at, "Prestressing steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'pre_gamma_u')
     at.number_input(key="pre_gamma_u").set_value(2.0).run()
     assert at.session_state["_latest_inputs"]["prestress"] is None
     visible = " ".join(str(item.value) for item in at.warning)
     assert "design ultimate strength" in visible
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'pre_gamma_u')
     at.number_input(key="pre_gamma_u").set_value(1.15).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'pre_futk')
     at.number_input(key="pre_futk").set_value(1600.0).run()
     assert at.number_input(key="pre_futk").value == pytest.approx(1600.0)
     prestress_entry = at.session_state["prestress_material_catalog"]["items"][0]
@@ -8875,6 +9040,8 @@ def test_creep_help_follows_concrete_preset_without_changing_phi():
     at = _fresh()
     at.run()
     _goto_input_tab(at, "Loads")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'el_phi')
     at.number_input(key="el_phi").set_value(1.75).run()
     retained_phi = at.number_input(key="el_phi").value
     assert retained_phi == 1.75
@@ -8885,6 +9052,8 @@ def test_creep_help_follows_concrete_preset_without_changing_phi():
     assert "does not infer whether creep is decisive" in dk_help
 
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_preset')
     at.selectbox(key="conc_preset").set_value("EN 1992-1-1:2005").run()
     _goto_input_tab(at, "Loads")
     base_help = at.number_input(key="el_phi").help
@@ -8893,6 +9062,8 @@ def test_creep_help_follows_concrete_preset_without_changing_phi():
     assert at.number_input(key="el_phi").value == retained_phi
 
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_preset')
     at.selectbox(key="conc_preset").set_value("DS/EN 1992-1-1:2023").run()
     _goto_input_tab(at, "Loads")
     published_help = at.number_input(key="el_phi").help
@@ -8902,6 +9073,8 @@ def test_creep_help_follows_concrete_preset_without_changing_phi():
     assert at.number_input(key="el_phi").value == retained_phi
 
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_preset')
     at.selectbox(key="conc_preset").set_value(
         "Curve 2 (parabola-rectangle)"
     ).run()
@@ -8915,12 +9088,13 @@ def test_creep_help_follows_concrete_preset_without_changing_phi():
 
 
 def test_detailing_checkbox_help_follows_selected_edition_only():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     at = _fresh()
     at.run()
 
-    minimum = at.checkbox(key="minimum_reinforcement_on")
-    links = at.checkbox(key="transverse_detailing_on")
-    spacing = at.checkbox(key="clear_spacing_on")
+    minimum = _mounted_widget(at, 'checkbox', key="minimum_reinforcement_on")
+    links = _mounted_widget(at, 'checkbox', key="transverse_detailing_on")
+    spacing = _mounted_widget(at, 'checkbox', key="clear_spacing_on")
     assert "9.2.1.1(1)" in minimum.help
     assert "Formula (9.1N)" in minimum.help
     assert "high-beam-web provision is not included" in minimum.help
@@ -8928,12 +9102,14 @@ def test_detailing_checkbox_help_follows_selected_edition_only():
     assert "DK NA:2024, 8.2(2) unchanged" in spacing.help
 
     minimum.set_value(True).run()
-    at.selectbox(key="detailing_edition").set_value(
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'detailing_edition')
+    _mounted_widget(at, 'selectbox', key="detailing_edition").set_value(
         "EN 1992-1-1:2005"
     ).run()
-    base_minimum_help = at.checkbox(key="minimum_reinforcement_on").help
-    base_links_help = at.checkbox(key="transverse_detailing_on").help
-    base_spacing_help = at.checkbox(key="clear_spacing_on").help
+    base_minimum_help = _mounted_widget(at, 'checkbox', key="minimum_reinforcement_on").help
+    base_links_help = _mounted_widget(at, 'checkbox', key="transverse_detailing_on").help
+    base_spacing_help = _mounted_widget(at, 'checkbox', key="clear_spacing_on").help
     assert "9.2.1.1(1)" in base_minimum_help
     assert "9.3.1.1(1)-(2)" in base_minimum_help
     assert "9.2.2(5)-(8)" in base_links_help
@@ -8942,66 +9118,75 @@ def test_detailing_checkbox_help_follows_selected_edition_only():
     for help_text in (base_minimum_help, base_links_help, base_spacing_help):
         assert "DK NA:2024" not in help_text
 
-    at.selectbox(key="detailing_edition").set_value(
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'detailing_edition')
+    _mounted_widget(at, 'selectbox', key="detailing_edition").set_value(
         "DS/EN 1992-1-1:2023"
     ).run()
-    published_minimum = at.checkbox(key="minimum_reinforcement_on").help
-    published_links = at.checkbox(key="transverse_detailing_on").help
-    published_spacing = at.checkbox(key="clear_spacing_on").help
+    published_minimum = _mounted_widget(at, 'checkbox', key="minimum_reinforcement_on").help
+    published_links = _mounted_widget(at, 'checkbox', key="transverse_detailing_on").help
+    published_spacing = _mounted_widget(at, 'checkbox', key="clear_spacing_on").help
     assert "12.2(2), Formulae (12.1)-(12.2)" in published_minimum
     assert "Tables 12.1 and 12.2, 12.3.3 and 12.4.2" in published_links
     assert "11.2(2)" in published_spacing
     for help_text in (published_minimum, published_links, published_spacing):
         assert "project adoption required" in help_text
         assert "no Danish National Annex" in help_text
-    assert at.checkbox(key="minimum_reinforcement_on").value is True
-    assert at.checkbox(key="transverse_detailing_on").value is False
-    assert at.checkbox(key="clear_spacing_on").value is False
+    assert _mounted_widget(at, 'checkbox', key="minimum_reinforcement_on").value is True
+    assert _mounted_widget(at, 'checkbox', key="transverse_detailing_on").value is False
+    assert _mounted_widget(at, 'checkbox', key="clear_spacing_on").value is False
     assert not at.exception
 
 
 def test_crack_input_tooltips_follow_the_exact_selected_basis():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     at = _fresh()
     at.run()
     _goto_input_tab(at, "Analysis settings")
-    at.radio(key="mode").set_value("Elastic").run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
+    _mounted_widget(at, 'radio', key="mode").set_value("Elastic").run()
 
     assert (
         "DS/EN 1992-1-1:2004 + A1:2014 + AC:2010"
-        in at.number_input(key="sls_phi").help
+        in _mounted_widget(at, 'number_input', key="sls_phi").help
     )
     assert "Formulas (7.8), (7.9), (7.11) and (7.14)" in (
-        at.selectbox(key="sls_bond").help
+        _mounted_widget(at, 'selectbox', key="sls_bond").help
     )
     assert "not used by the selected first-generation" in (
-        at.number_input(key="sls_tendon_xi").help
+        _mounted_widget(at, 'number_input', key="sls_tendon_xi").help
     )
     assert "DK NA fine-system selection" in (
-        at.selectbox(key="sls_member").help
+        _mounted_widget(at, 'selectbox', key="sls_member").help
     )
 
-    at.selectbox(key="sls_code").set_value(_SLS_2023).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'sls_code')
+    _mounted_widget(at, 'selectbox', key="sls_code").set_value(_SLS_2023).run()
     assert "DS/EN 1992-1-1:2023, 9.2.2 and 9.2.3" in (
-        at.number_input(key="sls_phi").help
+        _mounted_widget(at, 'number_input', key="sls_phi").help
     )
     assert "DS/EN 1992-1-1:2023, 9.2.2(3), Formula (9.6)" in (
-        at.number_input(key="sls_tendon_xi").help
+        _mounted_widget(at, 'number_input', key="sls_tendon_xi").help
     )
 
-    at.selectbox(key="sls_code").set_value(_SLS_DK).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'sls_code')
+    _mounted_widget(at, 'selectbox', key="sls_code").set_value(_SLS_DK).run()
     assert "DS/EN 1992-1-1 DK NA:2024, 7.3.4(1)" in (
-        at.selectbox(key="sls_member").help
+        _mounted_widget(at, 'selectbox', key="sls_member").help
     )
     for key in ("sls_heightened_reinforcement_surface",):
-        assert "DK NA:2024" in at.selectbox(key=key).help
-        assert "Formula 7.100 NA" in at.selectbox(key=key).help
+        assert "DK NA:2024" in _mounted_widget(at, 'selectbox', key=key).help
+        assert "Formula 7.100 NA" in _mounted_widget(at, 'selectbox', key=key).help
     for key in (
         "sls_heightened_effective_tensile_strength_mpa",
         "sls_heightened_fine_effective_tension_area_mm2",
         "sls_heightened_coarse_effective_tension_area_mm2",
     ):
-        assert "DK NA:2024" in at.number_input(key=key).help
-        assert "Formula 7.100 NA" in at.number_input(key=key).help
+        assert "DK NA:2024" in _mounted_widget(at, 'number_input', key=key).help
+        assert "Formula 7.100 NA" in _mounted_widget(at, 'number_input', key=key).help
     assert not at.exception
 
 
@@ -9049,6 +9234,8 @@ def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
     at = _fresh()
     at.run()
     _goto_input_tab(at, "Analysis settings")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_on')
     at.toggle(key="fatigue_on").set_value(True).run()
     assert "DS/EN 1992-1-1:2005+A1:2014" in (
         at.selectbox(key="fatigue_concrete_method").help
@@ -9067,6 +9254,8 @@ def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
     for key, source in first_generation_help.items():
         assert source in at.number_input(key=key).help
 
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_edition')
     at.selectbox(key="fatigue_edition").set_value(_SLS_2023).run()
     assert "E.4.3, Formula (E.2)" in (
         at.selectbox(key="fatigue_concrete_method").help
@@ -9087,6 +9276,8 @@ def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
     for key, source in published_2023_help.items():
         assert source in at.number_input(key=key).help
 
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_concrete_method')
     at.selectbox(key="fatigue_concrete_method").set_value(
         "User-defined Miner S-N relation"
     ).run()
@@ -9099,6 +9290,8 @@ def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
         assert "Formulae (E.7)-(E.8)" not in help_text
     assert at.number_input(key="fatigue_concrete_c").disabled is False
 
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_edition')
     at.selectbox(key="fatigue_edition").set_value(_SLS_DK).run()
     for help_text in (
         at.selectbox(key="fatigue_concrete_method").help,
@@ -9108,6 +9301,8 @@ def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
         assert "DS/EN 1992" not in help_text
         assert "Formula 6.106" not in help_text
 
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_edition')
     at.selectbox(key="fatigue_edition").set_value(_SLS_2023).run()
     _goto_material_tab(at, "Fatigue details")
 
@@ -9142,6 +9337,7 @@ def test_fatigue_tooltips_bind_routes_without_citing_custom_detail_values():
     custom_at.session_state["fatigue_edition"] = _SLS_2023
     custom_at.session_state["_main_page"] = "Inputs"
     custom_at.session_state["_input_tab"] = f"3 {chr(0xB7)} Material parameters"
+    custom_at.session_state["_next_workflow_page"] = "materials"
     custom_at.session_state["_material_tab"] = "Fatigue details"
     custom_at.run()
     custom_help = next(
@@ -9170,6 +9366,7 @@ def test_inputs_carry_help_tooltips():
     at.run()
     _goto_input_tab(at, "Loads")
     for key in ("el_phi",):
+        _goto_widget_owner(at, key)
         w = (_widget(at.number_input, key) or _widget(at.selectbox, key)
              or _widget(at.radio, key))
         assert w is not None and w.help, key
@@ -9187,6 +9384,7 @@ def test_inputs_carry_help_tooltips():
         "fatigue_concrete_k1",
         "fatigue_concrete_c",
     ):
+        _goto_widget_owner(at, key)
         w = (
             _widget(at.number_input, key)
             or _widget(at.selectbox, key)
@@ -9219,14 +9417,19 @@ def test_inputs_carry_help_tooltips():
                     value or "",
                 ), (widget.key, value)
     _goto_input_tab(at, "Analysis settings")
+    _goto_widget_owner(at, "v_min")
     assert at.number_input(key="v_min").label == (
         r"Start angle $\varphi_{NA,\min}$ ($^\circ$)"
     )
     assert not any(widget.key == "sls_wk_limit" for widget in at.number_input)
+    _goto_widget_owner(at, "detailing_d_upper")
     assert at.number_input(key="detailing_d_upper").label == (
         r"Maximum aggregate size $D_{\mathrm{upper}}$ (mm)"
     )
+    _goto_widget_owner(at, "sls_bond")
     assert at.selectbox(key="sls_bond").label == r"Mild-steel bond ($k_1$)"
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_on')
     at.toggle(key="fatigue_on").set_value(True).run()
     _goto_material_tab(at, "Fatigue details")
     fatigue_detail_keys = (
@@ -9259,6 +9462,7 @@ def test_inputs_carry_help_tooltips():
     )
     assert n_star.label == r"Reference cycles $N^*$"
     _goto_input_tab(at, "Analysis settings")
+    _goto_widget_owner(at, "mode")
     assert at.radio(key="mode").help
     _goto_page(at, "Analysis")
     assert at.selectbox(key="view").help
@@ -9376,10 +9580,12 @@ def test_results_views_render_after_calculate():
 def test_native_load_case_editors_use_consistent_ed_columns():
     import fatigue_inputs
     import load_cases
+    from app_workflow_navigation import goto_action_family
 
     at = _fresh()
     at.run()
     _goto_input_tab(at, "Loads")
+    goto_action_family(at, "Elastic")
     assert any(
         "Each action reports stresses and can calculate crack width" in item.value
         and "long- and short-term limits apply to their matching branches"
@@ -9388,8 +9594,9 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     )
     assert not any("row criterion" in item.value for item in at.caption)
 
-    plastic = _widget(at.dataframe, "plastic_cases_editor").value
     elastic = _widget(at.dataframe, "elastic_cases_editor").value
+    goto_action_family(at, "Plastic")
+    plastic = _widget(at.dataframe, "plastic_cases_editor").value
     assert list(plastic.columns) == [
         "name", "description", "n_ed_kn", "mx_ed_knm", "my_ed_knm",
         "vx_ed_kn", "vy_ed_kn", "vx_face", "vy_face", "t_ed_knm",
@@ -9405,6 +9612,7 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         ("plastic_cases_editor", load_cases.PLASTIC_NUMERIC),
         ("elastic_cases_editor", load_cases.ELASTIC_ACTION_NUMERIC),
     ):
+        goto_action_family(at, "Plastic" if editor_key == "plastic_cases_editor" else "Elastic")
         column_config = json.loads(
             _widget(at.dataframe, editor_key).proto.columns
         )
@@ -9413,8 +9621,11 @@ def test_native_load_case_editors_use_consistent_ed_columns():
             assert column_config[key]["default"] == "0"
             assert column_config[key]["type_config"]["type"] == "text"
     _goto_input_tab(at, "Analysis settings")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_on')
     at.toggle(key="fatigue_on").set_value(True).run()
-    _goto_input_tab(at, "Loads")
+    from app_workflow_navigation import goto_action_family
+    goto_action_family(at, "Fatigue")
     fatigue = _widget(at.dataframe, "fatigue_spectrum_editor").value
     assert list(fatigue.columns) == [
         "spectrum", "name", "description", "cycles",
@@ -9433,18 +9644,20 @@ def test_native_load_case_editors_use_consistent_ed_columns():
         assert column_config[key]["type_config"]["type"] == "text"
     assert column_config[fatigue_inputs.CYCLES]["required"] is True
     assert column_config[fatigue_inputs.CYCLES]["type_config"]["type"] == "text"
-    load_guide_labels = {item.label for item in at.expander}
+    load_guide_labels = set()
+    guide_tables = []
+    for family in ("Plastic", "Elastic", "Fatigue"):
+        goto_action_family(at, family)
+        load_guide_labels.update(item.label for item in at.expander)
+        for item in at.markdown:
+            if "| Notation / field | Meaning and sign | Input rule / source |" in str(item.value) and item.value not in guide_tables:
+                guide_tables.append(item.value)
     assert {
         "Plastic and capacity cases - field guide",
         "Elastic cases - field guide",
         "Grouped fatigue spectrum - field guide",
     }.issubset(load_guide_labels)
-    guide_tables = [
-        item.value
-        for item in at.markdown
-        if "| Notation / field | Meaning and sign | Input rule / source |"
-        in str(item.value)
-    ]
+    # The three Actions tabs retain the complete field-guide inventory.
     assert len(guide_tables) == 3
     assert all(value.count("$") % 2 == 0 for value in guide_tables)
     rendered_keys = {
@@ -9473,8 +9686,11 @@ def test_fatigue_editor_submits_sparse_new_rows_with_zero_action_defaults():
     at = _fresh()
     at.run()
     _goto_input_tab(at, "Analysis settings")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_on')
     at.toggle(key="fatigue_on").set_value(True).run()
-    _goto_input_tab(at, "Loads")
+    from app_workflow_navigation import goto_action_family
+    goto_action_family(at, "Fatigue")
 
     editor = _widget(at.dataframe, "fatigue_spectrum_editor")
     column_config = json.loads(editor.proto.columns)
@@ -9511,6 +9727,8 @@ def test_detailing_controls_run_selected_case_and_section_wide_spacing():
     at = _fresh()
     at.run()
     alias = ":red[span] [deck](https://example.test) **critical**"
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'modelled_direction_alias')
     at.text_input(key="modelled_direction_alias").set_value(alias).run()
     _replace_case_table(at, load_cases.PLASTIC_TABLE_KEY, [{
         "name": "PL-DETAIL",
@@ -9864,6 +10082,8 @@ def test_results_overview_uses_scrollable_table_with_pinned_action(monkeypatch):
     import result_presentation
     import sector_app
     import streamlit
+    import result_workspace
+    from types import SimpleNamespace
 
     rows = [
         {
@@ -9906,14 +10126,33 @@ def test_results_overview_uses_scrollable_table_with_pinned_action(monkeypatch):
         def caption(self, *_args, **_kwargs):
             return None
 
-        def columns(self, count):
-            return [self] * count
+        def columns(self, count, **_kwargs):
+            return [self] * (count if isinstance(count, int) else len(count))
+
+        def segmented_control(self, _label, _options, *, default, **_kwargs):
+            return default
+
+        def container(self, **_kwargs):
+            return self
+
+        def expander(self, *_args, **_kwargs):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def write(self, *_args, **_kwargs):
+            return None
 
         def metric(self, *_args, **_kwargs):
             return None
 
         def dataframe(self, data, **kwargs):
             self.tables.append((data, kwargs))
+            return SimpleNamespace(selection=SimpleNamespace(rows=[0]))
 
         def markdown(self, *_args, **_kwargs):
             return None
@@ -9938,9 +10177,14 @@ def test_results_overview_uses_scrollable_table_with_pinned_action(monkeypatch):
 
     sector_app.results_overview_view({}, {})
 
-    assert fake.session_state["_overview_result_detail"] == 0
-    assert len(fake.tables) == 1
-    styled, options = fake.tables[0]
+    assert fake.session_state["_overview_selection"] == result_workspace.identity(rows[0])
+    assert len(fake.tables) == 2
+    compact, compact_options = fake.tables[0]
+    assert compact.data.columns.tolist() == ["Check", "Case", "Status"]
+    assert len(compact.data) == 20
+    assert compact_options["on_select"] == "rerun"
+    assert compact_options["selection_default"] == {"selection": {"rows": [0]}}
+    styled, options = fake.tables[1]
     assert len(styled.data) == 20
     assert options["height"] == 460
     assert options["column_config"]["Governing action"]["pinned"] is True
@@ -10057,41 +10301,35 @@ def test_applied_moments_default_to_zero():
 
 
 def test_page_navigation_and_input_stages_follow_the_workflow_order():
-    # Only the selected top-level workspace renders. Inputs stages four engineering
-    # steps plus Project; Report is the peer immediately right of Analysis.
-    at = _fresh()
-    at.run()
-    d = chr(0x00B7)   # the step-number middle dot (v0.63)
-    nav = at.segmented_control(key="_main_page")
-    assert nav.options == ["Inputs", "Analysis", "Report"]
-    assert nav.value == "Inputs"
-    expected_outer = [
-        f"1 {d} Analysis settings",
-        f"2 {d} Section",
-        f"3 {d} Material parameters",
-        f"4 {d} Loads",
-        "Project",
+    import workflow_navigation
+
+    # Native startup selects Section; the retained internal owner remains Inputs.
+    at = AppTest.from_file(APP, default_timeout=90).run()
+    assert [(page.key, page.label) for page in workflow_navigation.PAGES] == [
+        ("section", "Section"), ("materials", "Materials"), ("actions", "Actions"),
+        ("settings", "Analysis settings"), ("results", "Results"),
+        ("report", "Report"), ("project", "Project and recovery"),
+        ("help", "Help and manual"),
     ]
-    assert [tab.label for tab in at.tabs] == expected_outer
-    assert at.session_state["_input_tab"] == expected_outer[0]
-    labels = [ex.label for ex in at.expander]
-    assert labels == [
-        "Elastic crack-width method",
-        "Reinforcement detailing",
-        "Fatigue",
-        "Shear, torsion & combined (Plastic)",
-        "Plastic bending settings",
-    ]
+    assert at.session_state["_workflow_page"] == "section"
+    assert at.session_state["_main_page"] == "Inputs"
+    assert at.session_state["_input_tab"] == f"2 {chr(0x00B7)} Section"
+    assert "_main_page" not in {widget.key for widget in at.segmented_control}
+    _goto_input_tab(at, "Analysis settings")
+    groups = at.segmented_control(key="_analysis_group")
+    assert groups.options == ["General", "Shear / torsion / M-V-T", "Crack width", "Detailing", "Fatigue"]
+    assert groups.value == "General"
+    assert "mode" in {widget.key for widget in at.radio}
+    assert "fatigue_on" not in {widget.key for widget in at.toggle}
     _goto_input_tab(at, "Project")
     labels = [ex.label for ex in at.expander]
     assert labels == ["About", "Save / Load"]
     assert "rep_proj_no" not in {widget.key for widget in at.text_input}
-
     _goto_page(at, "Report")
     assert at.segmented_control(key="rep_report_content").value == "Standard"
     assert "rep_proj_no" in {widget.key for widget in at.text_input}
     assert [item.label for item in at.expander] == [
-        "Project and action references (optional)"
+        "Project and action references (optional)", "Presentation preset", "Report outline and coverage",
     ]
 
 
@@ -10165,16 +10403,17 @@ def test_only_selected_outer_stage_mounts_and_retains_material_edits():
     at.run()
 
     dot = chr(0x00B7)
-    assert [tab.label for tab in at.tabs] == [
-        f"1 {dot} Analysis settings", f"2 {dot} Section",
-        f"3 {dot} Material parameters", f"4 {dot} Loads", "Project",
-    ]
+    assert at.session_state["_workflow_page"] == "settings"
+    assert at.session_state["_input_tab"] == f"1 {dot} Analysis settings"
+    assert not at.tabs
     assert "_input_tab" not in {widget.key for widget in at.selectbox}
     assert "conc_fck" not in {widget.key for widget in at.number_input}
     assert "section_label_scale" not in {widget.key for widget in at.number_input}
     assert not at.get("data_editor")
 
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(55.0).run()
     assert at.session_state["_durable_input_scalars"]["conc_fck"] == 55.0
 
@@ -10207,12 +10446,16 @@ def test_only_selected_material_family_mounts_and_retains_sibling_edits():
     assert "mild_fytk" not in number_keys
     assert "pre_fytk" not in number_keys
 
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(55.0).run()
     _goto_material_tab(at, "Reinforcing steel")
     number_keys = {widget.key for widget in at.number_input}
     assert "conc_fck" not in number_keys
     assert "mild_fytk" in number_keys
     assert "pre_fytk" not in number_keys
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_fytk')
     at.number_input(key="mild_fytk").set_value(525.0).run()
 
     _goto_material_tab(at, "Prestressing steel")
@@ -10230,6 +10473,8 @@ def test_only_selected_material_family_mounts_and_retains_sibling_edits():
 def test_fatigue_material_family_is_conditional_and_cannot_mount_outside_owner():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_on')
     at.toggle(key="fatigue_on").set_value(True).run()
     _goto_input_tab(at, "Material parameters")
 
@@ -10244,6 +10489,8 @@ def test_fatigue_material_family_is_conditional_and_cannot_mount_outside_owner()
 
     _goto_input_tab(at, "Analysis settings")
     assert not any(button.key == "fatigue_catalog_add_mild" for button in at.button)
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'fatigue_on')
     at.toggle(key="fatigue_on").set_value(False).run()
     assert at.session_state["_material_tab"] == "Concrete"
 
@@ -10261,6 +10508,8 @@ def test_fatigue_material_family_is_conditional_and_cannot_mount_outside_owner()
 def test_auto_all_updates_concrete_while_mild_family_is_mounted():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Both").run()
     _goto_material_tab(at, "Concrete")
     for key, value in {
@@ -10321,7 +10570,8 @@ def test_interrupted_inputs_build_cannot_replace_the_last_complete_snapshot():
     # but the build has not reached its commit point.
     at.session_state["_inputs_build_in_progress"] = True
     at.session_state["conc_fck"] = 30.0
-    at.segmented_control(key="_main_page").set_value("Analysis").run()
+    at.session_state["_next_workflow_page"] = "results"
+    at.run()
     assert at.session_state["_durable_input_scalars"]["conc_fck"] == 55.0
 
     _goto_page(at, "Inputs")
@@ -10397,6 +10647,7 @@ def test_interrupted_inputs_recovery_preserves_the_new_tab_selection():
     at.session_state["_inputs_build_in_progress"] = True
     at.session_state["conc_fck"] = 30.0
     at.session_state["_input_tab"] = section_tab
+    at.session_state["_next_workflow_page"] = "section"
     at.run()
 
     assert at.session_state["_input_tab"] == section_tab
@@ -10477,6 +10728,8 @@ def test_staleness_badge_reflects_result_state():
 def test_stale_result_views_keep_the_calculated_section_geometry(view):
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Both").run()
     _calculate(at)
     _select_view(at, view)
@@ -10505,7 +10758,10 @@ def test_combined_preflight_warns_when_prerequisites_missing():
     # (under its toggle) instead of only after Calculate.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'combined_on')
     at.checkbox(key="combined_on").set_value(True).run()      # shear+torsion still off
+    native_widget_owner(at, "combined_mv_independent")
     warns = [w.value for w in at.warning]
     cross = chr(0x2717)
     # v0.63: a requirements checklist -- the missing shear/torsion checks are crossed.
@@ -10514,15 +10770,23 @@ def test_combined_preflight_warns_when_prerequisites_missing():
                for w in warns)
     # Enabling both component checks still leaves the current physical
     # shared-link authority missing.
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
+    native_widget_owner(at, "combined_mv_independent")
     assert any(
         f"{cross} Shared links / closed torsion stirrups present" in w.value
         for w in at.warning
     )
 
     # Selecting the shared physical link authority completes the preflight.
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_links')
     at.checkbox(key="shear_links").set_value(True).run()
+    native_widget_owner(at, "combined_mv_independent")
     assert not any("needs all of these" in w.value for w in at.warning)
     assert any("requirements met" in s.value for s in at.success)
 
@@ -10543,6 +10807,8 @@ def test_section_input_preview_is_geometry_only():
     # on the Analysis page after a calculation and subsequent input change.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     _calculate(at)
     _goto_input_tab(at, "Section")
@@ -10576,6 +10842,8 @@ def test_elastic_fully_tensile_case_renders_without_phantom_zone():
     # phantom compression zone or raise.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     _set(
         at,
@@ -10592,6 +10860,8 @@ def test_elastic_fully_tensile_case_renders_without_phantom_zone():
 def test_elastic_results_show_neutral_axis_and_max_steel():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     _calculate(at)
     _select_view(at, "Elastic Results")
@@ -10649,9 +10919,15 @@ def test_material_manual_override_calculates():
     at.run()
     # A picked preset must remain editable.
     _goto_material_tab(at, "Concrete")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(45.0).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_gamma_c')
     at.number_input(key="conc_gamma_c").set_value(0.5).run()
     _goto_material_tab(at, "Mild steel")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mild_gamma_y')
     at.number_input(key="mild_gamma_y").set_value(2.0).run()
     assert not at.exception
     _calculate(at)
@@ -10673,6 +10949,8 @@ def test_elastic_reports_cracking_and_section_properties():
     # transformed section properties (cracked + uncracked when cracked).
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     _set(at, ("number_input", "el_long_Mx", 400.0))  # force cracking
     _calculate(at)
@@ -10998,11 +11276,12 @@ def test_bonded_tendon_ratio_invalidates_elastic_results_and_report():
 
 
 def test_crack_basis_widget_uses_only_stable_capability_keys():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     from sector import design_standards
 
     at = _fresh()
     at.run()
-    box = at.selectbox(key="sls_code")
+    box = _mounted_widget(at, 'selectbox', key="sls_code")
     assert box.options == [
         design_standards.get_design_basis(key).label
         for key in (_SLS_BASE, _SLS_DK, _SLS_2023)
@@ -11151,6 +11430,7 @@ def test_heightened_crack_control_runs_once_and_its_inputs_mark_results_stale():
 
 
 def test_persisted_enabled_heightened_config_is_hidden_and_rejected_for_2023():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     at = _fresh()
     seeded = {
         "mode": "Elastic",
@@ -11170,7 +11450,17 @@ def test_persisted_enabled_heightened_config_is_hidden_and_rejected_for_2023():
     at.run()
 
     assert not at.exception
-    assert at.selectbox(key="sls_code").value == _SLS_2023
+    import sector_app
+    assert at.session_state["sls_code"] == _SLS_2023
+    assert at.session_state["sls_heightened_on"] is True
+    latest_first_render = at.session_state["_latest_inputs"]
+    assert latest_first_render["sls_code"] == _SLS_2023
+    assert latest_first_render["sls_heightened_on"] is True
+    assert any(
+        "Select the first-generation DK NA:2024 design basis for heightened crack control" in str(message)
+        for message in sector_app._heightened_crack_control_validation_errors(latest_first_render)
+    )
+    assert _mounted_widget(at, 'selectbox', key="sls_code").value == _SLS_2023
     assert not any(
         widget.key and widget.key.startswith("sls_heightened_")
         for widgets in (at.toggle, at.selectbox, at.number_input)
@@ -11665,20 +11955,34 @@ def test_b2_inactive_settings_restore_values_and_legacy_material_selection():
     _goto_input_tab(at, "Analysis settings")
     at.number_input(key="v_inc").set_value(23.0).run()
     assert at.session_state["_plastic_settings_open"] is True
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Elastic").run()
     assert at.session_state["_plastic_settings_open"] is False
     assert at.number_input(key="v_inc").value == 23.0
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'mode')
     at.radio(key="mode").set_value("Both").run()
     assert at.number_input(key="v_inc").value == 23.0
     assert at.session_state["_plastic_settings_open"] is True
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'sls_code')
     at.selectbox(key="sls_code").set_value(_SLS_DK).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'sls_heightened_on')
     at.toggle(key="sls_heightened_on").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'sls_heightened_effective_tensile_strength_mpa')
     at.number_input(key="sls_heightened_effective_tensile_strength_mpa").set_value(3.7).run()
     assert at.session_state["_heightened_settings_open"] is True
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'sls_heightened_on')
     at.toggle(key="sls_heightened_on").set_value(False).run()
     assert at.session_state["_heightened_settings_open"] is False
     _goto_page(at, "Analysis")
     _goto_page(at, "Inputs")
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'sls_heightened_on')
     at.toggle(key="sls_heightened_on").set_value(True).run()
     assert at.number_input(key="sls_heightened_effective_tensile_strength_mpa").value == 3.7
     assert at.session_state["_heightened_settings_open"] is True

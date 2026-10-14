@@ -166,7 +166,9 @@ class _PdfObject(dict):
     def get_object(self):
         return self
 
-    def extract_text(self, *, visitor_text):
+    def extract_text(self, *, visitor_text=None, visitor_operand_before=None):
+        if visitor_operand_before is not None:
+            return self.brand_page.extract_text(visitor_operand_before=visitor_operand_before)
         for text, cm, tm, font, size in self.caption_fragments:
             visitor_text(text, cm, tm, font, size)
         return ""
@@ -199,6 +201,9 @@ _FIGURE_CAPTIONS = (
 
 
 def _figure_pages():
+    from app.publication_branding import logo_bytes
+    from reportlab.lib.utils import ImageReader
+
     pages = [_PdfObject({"/Resources": _PdfObject({"/XObject": _PdfObject({
         "/Img": _PdfObject({"/Subtype": "/Image"}),
     })})}) for _ in _FIGURE_CAPTIONS]
@@ -209,6 +214,19 @@ def _figure_pages():
             (f"Figure 3.{i}.", cm, tm, {"/BaseFont": "/DejaVuSans-Bold"}, 9.5),
             (" " + caption + "\n", cm, tm, {"/BaseFont": "/DejaVuSans"}, 9.5),
         ]
+    # Retain every caption/index mutation while adding the required real cover logo.
+    stream = io.BytesIO()
+    pdf = canvas.Canvas(stream)
+    width = 45 * 72 / 25.4
+    pdf.drawImage(ImageReader(io.BytesIO(logo_bytes())), 40, 700, width,
+                  width * 373 / 1280)
+    pdf.save()
+    brand_page = pypdf.PdfReader(io.BytesIO(stream.getvalue())).pages[0]
+    pages[0]["/Resources"]["/XObject"].update(
+        brand_page["/Resources"]["/XObject"].get_object()
+    )
+    pages[0].brand_page = brand_page
+    pages[0].mediabox = brand_page.mediabox
     reader = type("Reader", (), {"pages": pages})()
     texts = [f"Figure 3.{i}. {caption}\n" for i, caption in enumerate(_FIGURE_CAPTIONS, 1)]
     return reader, texts

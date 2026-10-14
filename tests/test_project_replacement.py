@@ -74,40 +74,24 @@ def _fresh() -> AppTest:
     return AppTest.from_file(APP, default_timeout=90).run()
 
 
-def _goto_page(at: AppTest, page: str) -> AppTest:
-    current = at.session_state["_main_page"]
-    if current != page:
-        at.segmented_control(key="_main_page").set_value(page).run()
-    return at
+def _goto_page(at, page):
+    from app_workflow_navigation import goto_page
+    return goto_page(at, page)
 
 
-def _goto_input_tab(at: AppTest, name: str) -> AppTest:
-    _goto_page(at, "Inputs")
-    dot = chr(0x00B7)
-    labels = {
-        "Analysis settings": f"1 {dot} Analysis settings",
-        "Section": f"2 {dot} Section",
-        "Material parameters": f"3 {dot} Material parameters",
-        "Project": "Project",
-    }
-    if at.session_state["_input_tab"] != labels[name]:
-        at.session_state["_input_tab"] = labels[name]
-        at.run()
-    return at
+def _goto_input_tab(at, name):
+    from app_workflow_navigation import goto_input_stage
+    return goto_input_stage(at, name)
 
 
-def _goto_material_tab(at: AppTest, name: str) -> AppTest:
-    _goto_input_tab(at, "Material parameters")
-    current = at.session_state["_material_tab"]
-    if current != name:
-        at.session_state["_material_tab"] = name
-        at.session_state["_material_tab_preference"] = name
-        at.run()
-    return at
+def _goto_material_tab(at, name):
+    from app_workflow_navigation import goto_material
+    return goto_material(at, name)
 
 
-def _goto_project(at: AppTest) -> AppTest:
-    return _goto_input_tab(at, "Project")
+def _goto_project(at):
+    from app_workflow_navigation import goto_input_stage
+    return goto_input_stage(at, "Project")
 
 
 def _upload_project(
@@ -136,21 +120,29 @@ def _build_history(name: str) -> AppTest:
         return at
     if name == "altered-concrete":
         _goto_material_tab(at, "Concrete")
+        from app_workflow_navigation import goto_widget_owner as native_widget_owner
+        native_widget_owner(at, 'conc_fck')
         at.number_input(key="conc_fck").set_value(70.0).run()
         assert at.session_state["conc_fck"] == pytest.approx(70.0)
         return at
     if name == "altered-material":
         _goto_material_tab(at, "Mild steel")
+        from app_workflow_navigation import goto_widget_owner as native_widget_owner
+        native_widget_owner(at, 'mild_fytk')
         at.number_input(key="mild_fytk").set_value(777.0).run()
         assert at.session_state["mild_fytk"] == pytest.approx(777.0)
         return at
     if name == "fatigue-enabled":
         _goto_input_tab(at, "Analysis settings")
+        from app_workflow_navigation import goto_widget_owner as native_widget_owner
+        native_widget_owner(at, 'fatigue_on')
         at.toggle(key="fatigue_on").set_value(True).run()
         assert at.session_state["fatigue_on"] is True
         return at
     if name == "torsion-enabled":
         _goto_input_tab(at, "Analysis settings")
+        from app_workflow_navigation import goto_widget_owner as native_widget_owner
+        native_widget_owner(at, 'torsion_on')
         at.checkbox(key="torsion_on").set_value(True).run()
         assert at.session_state["torsion_on"] is True
         return at
@@ -166,12 +158,14 @@ def _build_history(name: str) -> AppTest:
     if name == "quick-section":
         at.session_state["_qs_open"] = True
         at.session_state["_main_page"] = "Analysis"
+        at.session_state["_next_workflow_page"] = "results"
         at.run()
         at.number_input(key="b_mm").set_value(1234.0).run()
         assert at.session_state["qsv_b_mm"] == pytest.approx(1234.0)
         at.session_state["_qs_open"] = False
         at.session_state["_main_page"] = "Inputs"
         at.session_state["_input_tab"] = "Project"
+        at.session_state["_next_workflow_page"] = "project"
         at.run()
         return at
     raise AssertionError(f"unknown history {name}")
@@ -302,6 +296,7 @@ def test_same_sparse_project_reconstructs_identically_from_every_history(
     elif history == "quick-section":
         at.session_state["_qs_open"] = True
         at.session_state["_main_page"] = "Analysis"
+        at.session_state["_next_workflow_page"] = "results"
         at.run()
         assert at.selectbox(key="shape").value == "Rectangle"
         assert at.number_input(key="b_mm").value == pytest.approx(400.0)
@@ -374,13 +369,13 @@ def test_initial_replacement_preserves_explicit_fields_without_presets() -> None
 
     at = AppTest.from_file(APP, default_timeout=90)
     at.session_state["_input_tab"] = f"3 {chr(0x00B7)} Material parameters"
+    at.session_state["_next_workflow_page"] = "materials"
     at.session_state["_pending_project"] = (
         _EXPLICIT_FIELDS_WITHOUT_PRESETS_PROJECT.decode("utf-8")
     )
     at.run()
 
     assert not at.exception
-    assert at.number_input(key="conc_fck").value == pytest.approx(41.0)
     assert at.session_state["conc_fck"] == pytest.approx(41.0)
     assert at.session_state["mild_fytk"] == pytest.approx(615.0)
     assert at.session_state["mild_futk"] == pytest.approx(650.0)
@@ -401,6 +396,11 @@ def test_initial_replacement_preserves_explicit_fields_without_presets() -> None
     assert at.session_state["_latest_inputs"]["prestress_material_catalog"][
         "items"
     ][0]["futk"] == pytest.approx(1800.0)
+
+    # Verify the visible field only after every original first-render state check.
+    from app_workflow_navigation import goto_widget_owner
+    goto_widget_owner(at, "conc_fck")
+    assert at.number_input(key="conc_fck").value == pytest.approx(41.0)
 
 
 def test_successful_sparse_replacement_discards_old_results_events_and_reports() -> None:

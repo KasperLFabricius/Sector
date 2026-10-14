@@ -42,6 +42,7 @@ from publication_notation import normalize_trusted_markup
 import publication_theme
 from app import manual_information_architecture as manual_ia
 from app import report_profiles
+from app import publication_branding
 from app import table_field_definitions as table_fields
 from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
@@ -185,9 +186,9 @@ def fig_workspace_overview():
     """A reproducible workspace schematic; it is not a screenshot."""
     fig = go.Figure()
     panels = (
-        ("Inputs", "Input stage:<br>Analysis settings<br>Section<br>Material parameters<br>Loads / Project"),
-        ("Analysis", "Calculate<br>Results Overview<br>Result details<br>Open selected result<br>Read criterion and reason"),
-        ("Report", "Document details<br>Project/action references<br>Brief / Standard / Audit<br>Generate report<br>Download PDF"),
+        ("Prepare", "Section<br>Materials<br>Actions<br>Analysis settings"),
+        ("Review and issue", "Results<br>Calculate and examine<br>Report<br>Generate and download PDF"),
+        ("Project and help", "Project and recovery<br>Save, load and autosave<br>Help and manual<br>Read and export guidance"),
     )
     for index, (title, text) in enumerate(panels):
         fig.add_shape(type="rect", x0=index + 0.04, x1=index + 0.94,
@@ -700,7 +701,7 @@ def manual_blocks() -> list:
        "checks and a calculation report.")
     h2("Who this manual is for")
     md('This manual serves engineers who define section geometry, reinforcement and design actions. The operating chapters give information about the controls and results. The method chapters give information about the physical models. The numerical procedures give the arithmetic needed for an independent calculation.')
-    md('**Open and export the manual**\n\n1. Open **Inputs > Project**.\n2. Expand **About**.\n3. Select **User manual**.\n4. Select a **Manual part** to read it in the application.\n5. Select **Generate PDF** to prepare the full PDF and HTML manuals.\n6. Select **Download PDF** or **Download accessible HTML**.\n\nThe HTML file opens in a browser for offline reading. The two exports contain all manual parts. **Close** returns to the application. **About** also shows the installed Sector version.')
+    md('**Open and export the manual**\n\n1. Open **Help and manual**.\n2. Select a **Manual part** to read it in the application.\n3. Select **Generate PDF** to prepare the full PDF and HTML manuals.\n4. Select **Download PDF** or **Download accessible HTML**.\n\nThe HTML file opens in a browser for offline reading. The two exports contain all manual parts. Select a page in the navigation to return to your work. **About** in **Project and recovery** also shows the installed Sector version.')
     md('Prepare the section dimensions, reinforcement layout, material properties and action combinations before calculation. Also select the project design basis, partial factors, creep coefficient and the applicable acceptance criteria. Sector calculates the section properties and responses from those inputs.')
     h2("The section model")
     md('Sector represents concrete by polygons and reinforcement by discrete areas at specified coordinates. Voids remove concrete from the section. Plane sections stay plane, so section strain varies linearly with position. Bonded reinforcement follows that strain field. Tendon strain also includes the entered initial strain.')
@@ -785,7 +786,7 @@ def manual_blocks() -> list:
 
     h1("Start the portable application")
     md('The Windows release contains the full application in a portable ZIP. Microsoft Edge, or a different supported Chromium-family browser, supplies the image-export dependency for report figures.')
-    md('1. Download the **0.96.7 Windows portable ZIP** from the repository release.\n2. Use **Extract All** to extract the full archive to a short local path, such as `C:\\Sector`.\n3. Keep the `_internal` folder beside `Sector.exe`.\n4. Open `Sector.exe`.\n5. Wait for the Sector interface to open in the default browser.')
+    md('1. Download the **0.96.9 Windows portable ZIP** from the repository release.\n2. Use **Extract All** to extract the full archive to a short local path, such as `C:\\Sector`.\n3. Keep the `_internal` folder beside `Sector.exe`.\n4. Open `Sector.exe`.\n5. Wait for the Sector interface to open in the default browser.')
     md("Sector runs on the local computer. Keep its console window open during use. "
        "To stop Sector, close that console window or press **Ctrl+C** in it.")
     md('Before an update, download the current project file. Keep the issued report. Extract the new release into a different folder. Open the saved project in the new version. Examine its inputs. Calculate again.')
@@ -795,12 +796,12 @@ def manual_blocks() -> list:
     md('This tutorial calculates a 300 by 600 mm reinforced concrete beam. It gives one plastic capacity case and one elastic stress case. The selected values define a teaching example. The method chapters use the same geometry for independent calculations.')
     md('Before this exercise, save the current project if you must keep it. Replace its geometry and action rows with the tutorial data. Set optional fatigue, N-M, crack-control, shear, torsion, combined and detailing checks to off for this first calculation.')
     fig(fig_workspace_overview, 'Workspace overview (schematic): prepare inputs, calculate and examine named results, then publish.',
-        'Three linked panels show the workspaces. Inputs has a stage selector. Analysis has Calculate and result details. Report has document details, references, profile selection and PDF generation.')
+        'Three linked panels group the navigation pages. Prepare contains Section, Materials, Actions and Analysis settings. Review and issue contains Results and Report. Project and help contains Project and recovery and Help and manual.')
     h2("1. Select the calculation modes")
-    md('1. Open **Inputs > Analysis settings**.\n2. Under **Bending analysis**, select **Both**.\n3. Set the plastic start angle to 0 degrees and the end angle to 360 degrees.\n4. Set the maximum angle increment to 15 degrees.\n5. Enable **Check utilisation against applied moment**.')
+    md('1. Open **Analysis settings**.\n2. Under **Bending analysis**, select **Both**.\n3. Set the plastic start angle to 0 degrees and the end angle to 360 degrees.\n4. Set the maximum angle increment to 15 degrees.\n5. Enable **Check utilisation against applied moment**.')
     md('Use the plastic and elastic calculations for this first exercise. The task procedures in Part B add crack width, fatigue, shear, torsion and detailing with their required inputs.')
     h2("2. Define the materials")
-    md('Open **Inputs > Material parameters**. Enter these concrete values and define one reinforcing-steel material. If you use **Auto-calc all derived values**, then enter the teaching values in the table.')
+    md('Open **Materials**. Enter these concrete values and define one reinforcing-steel material. If you use **Auto-calc all derived values**, then enter the teaching values in the table.')
     table(["Material input", "Value entered in Sector", "Use"], [
         ["Concrete preset", "Curve 2 (parabola-rectangle)", "Compression stress-strain law"],
         ["$f_{ck}$", "40 MPa", "Characteristic concrete strength"],
@@ -821,7 +822,7 @@ def manual_blocks() -> list:
        "uses the design stress-strain laws and their strain limits.")
     md('After you enter $f_{ck}=40$ MPa, set $f_{ctm}$ with its **Auto** button. Sector uses this value for the cracking threshold and reports a result for that threshold. Then make sure that $E_c$ keeps the teaching value in the table.')
     h2("3. Enter the section and bars")
-    md('Open **Inputs > Section**. Replace the outer concrete points with the four coordinates in the table. Keep the void and tendon tables empty for this example.')
+    md('Open **Section**. Replace the outer concrete points with the four coordinates in the table. Keep the void and tendon tables empty for this example.')
     table(["Corner", "$x$ (mm)", "$y$ (mm)"], [
         ["1", "-150", "-300"], ["2", "-150", "300"],
         ["3", "150", "300"], ["4", "150", "-300"],
@@ -834,7 +835,7 @@ def manual_blocks() -> list:
     ])
     md('Examine the preview. The origin is at the rectangle center. Three bars are near the bottom and two near the top. Before calculation, correct the cause of each geometry or material-assignment warning.')
     h2("4. Enter two named actions")
-    md('Open **Inputs > Loads**. Under **Global Elastic parameter**, set the creep coefficient to 0. Enter these rows. Use zero for the remaining action components.')
+    md('Open **Actions**. Under **Global Elastic parameter**, set the creep coefficient to 0. Enter these rows. Use zero for the remaining action components.')
     table(["Table and case name", "Entered actions", "Requested output"], [
         ["Plastic/capacity: Beam capacity", '$N=0$ kN. $M_x=300$ kNm. $M_y=0$ kNm', "Bending capacity and utilization"],
         ["Elastic: Beam elastic", 'Sustained components: 0. Additional $M_x=150$ kNm', 'Elastic stresses. Crack width off for this exercise'],
@@ -843,7 +844,7 @@ def manual_blocks() -> list:
        "action, the total moment is 150 kNm. Positive axial force means tension. "
        "Positive $M_x$ produces tension near the bottom of this section.")
     h2("5. Calculate and check the results")
-    md('1. Open **Analysis** and press **Calculate**.\n2. Examine **Results Overview** for calculation warnings.\n3. Open **Plastic Results** and select **Beam capacity**.\n4. Select the 90-degree **Neutral-axis state**.\n5. Open **Elastic Results** and select **Beam elastic**.\n6. Compare the results with the values in the table.')
+    md('1. Open **Results** and press **Calculate**.\n2. Examine **Results Overview** for calculation warnings.\n3. Open **Plastic Results** and select **Beam capacity**.\n4. Select the 90-degree **Neutral-axis state**.\n5. Open **Elastic Results** and select **Beam elastic**.\n6. Compare the results with the values in the table.')
     table(["Result", "Expected value", "Comparison tolerance"], [
         ["Plastic compression depth at 90 degrees", "83.7991 mm", "0.01 mm"],
         ["Plastic $M_x$ resistance at 90 degrees", "345.9766 kNm", "0.01 kNm"],
@@ -855,11 +856,11 @@ def manual_blocks() -> list:
     ])
     md('The tolerances allow for displayed rounding and the entered modulus precision. If a value differs, examine geometry, material factors, modulus units, action duration and selected case in that sequence.')
     h2("6. Save and report the calculation")
-    md('1. Open **Inputs > Project**.\n2. Expand **Save / Load**.\n3. Select **Download project**.\n4. Keep that file with a descriptive calculation name.\n5. Open **Report**.\n6. Enter the project, section and revision details.\n7. Select **Standard**.\n8. Generate the report.\n9. Download the PDF.\n10. Open **Inputs > Project**.\n11. Expand **Save / Load**.\n12. Under **Load project**, select the saved project file.\n13. Examine the restored inputs.\n14. Open **Analysis**.\n15. Select **Calculate**.\n16. Compare the results again.')
+    md('1. Open **Project and recovery**.\n2. Expand **Save / Load**.\n3. Select **Download project**.\n4. Keep that file with a descriptive calculation name.\n5. Open **Report**.\n6. Enter the project, section and revision details.\n7. Select **Standard**.\n8. Generate the report.\n9. Download the PDF.\n10. Open **Project and recovery**.\n11. Expand **Save / Load**.\n12. Under **Load project**, select the saved project file.\n13. Examine the restored inputs.\n14. Open **Results**.\n15. Select **Calculate**.\n16. Compare the results again.')
     md('The project file keeps the inputs. The PDF records the issued calculation. Keep the two files and the Sector version with the calculation record.')
 
     h1("Task workflows")
-    md('Select a task from the table. Its destination includes prerequisites, the steps and expected state.\n\nAfter you edit calculation inputs or load a project, open **Analysis**. Press **Calculate** before you use the results. If only Report details change, the report uses the current results.')
+    md('Select a task from the table. Its destination includes prerequisites, the steps and expected state.\n\nAfter you edit calculation inputs or load a project, open **Results**. Press **Calculate** before you use the results. If only Report details change, the report uses the current results.')
     table(
         ["Task", "Outcome"],
         [[f"[{workflow.label}](#{manual_ia.destination(workflow.destination_key).anchor})",
@@ -911,17 +912,18 @@ def manual_blocks() -> list:
     part("Part B - Features & options")
 
     h1("Input reference")
-    md('The reference follows the same five stages as the application. Select a stage from the table, then use the shared field definitions and troubleshooting entries in this part.')
+    md('The reference links each input page to its manual chapter. Select a page from the table, then use the field definitions and troubleshooting entries in this part.')
     table(
-        ["Application stage", "Manual destination"],
+        ["Application page", "Manual destination"],
         [
-            [stage.label, f"[Open {stage.label}](#{stage.anchor})"]
+            [manual_ia.PUBLIC_PAGE_LABELS[stage.key],
+             f"[Open {manual_ia.PUBLIC_PAGE_LABELS[stage.key]}](#{stage.anchor})"]
             for stage in manual_ia.INPUT_STAGES
         ],
     )
 
     h1("The workspace")
-    md('The **Inputs** page stages *Analysis settings*, *Section*, *Material parameters*, *Loads* and *Project* in the **Input stage** selector. The *Section* stage places the section drawing beside its point tables, and each material panel places the selected stress-strain law beside its parameters. Each preview updates when an input changes. \n\nThe **Analysis** workspace contains calculated results selected with the **View** dropdown. \n\nThe **Report** workspace, immediately to its right, owns document details, profile selection, generation and PDF download.')
+    md('Use the navigation pages **Section**, **Materials**, **Actions**, **Analysis settings**, **Results**, **Report**, **Project and recovery**, and **Help and manual**. **Section** places the section drawing beside its point tables. Each material panel places its stress-strain law beside its parameters. Each preview updates when an input changes.\n\n**Results** contains the overview and detailed result views. **Report** contains document details, profile selection, coverage and PDF generation. The project and section context stays visible with calculation and save state.\n\nEach input keeps its field-specific help. Open the help beside a control for its meaning, unit, conditions and limits. The field guide above an editable table gives the corresponding column definitions. Page help links to the relevant manual topic.')
     table(["View", "Shows"],
           [["Results Overview", 'Most unfavorable result for each engineering check, with the governing action or direction'],
            ["Plastic Results", 'Selected case: M-M envelope and utilization'],
@@ -933,20 +935,21 @@ def manual_blocks() -> list:
            ["Torsion", 'Selected Plastic case: torsion resistance and utilization'],
            ["M-V-T Combined", "Selected Plastic case: combined interactions"]])
     h2("Report workspace")
+    md('Examine the report coverage before generation. Select **Brief**, **Standard** or **Audit** for the required detail. Coverage identifies the included checks and case families. It retains each applicable status, warning and report component. Open the generated PDF preview before download. The Sweco logo identifies the UI, reports and both manual formats.')
     md('Enter the project number, project name, section, revision, author, optional Checker and Approver names, and comments. Select **Brief**, **Standard** or **Audit**. Sector shows Checker and Approver only when you supply them. These fields identify document roles. \n\nSector uses Analysis results for the report if they match the current inputs. If they are different, Sector recalculates the results. \n\nAfter a project-detail or input edit, Sector marks the existing PDF out of date. Regenerate the PDF before download.')
     md('Under **Project and action references**, select Project assumptions or an exact named case/spectrum, then enter the document or record identifier and section/page locator. \n\nThe PDF identifies user-supplied references and calculation-method citations in different groups. Missing locations stay explicit in the PDF. \n\nAn unmatched reference stays saved after a case rename. Select it and clear the two fields to remove it. Project references do not automatically apply to each action.')
-    call("tip", 'Report details and publication controls are in **Report**. Save/load and autosave are in **Inputs > Project > Save / Load**.')
-    call("tip", '*Auto-calc all derived values* is in Material parameters. It calculates these quantities from the current grade:\n\n- Concrete strain limits.\n- $f_{ctm}$.\n- $E_c$.\n\nSector calculates the modular ratios from $E_c$, $E_s$, $E_p$ and creep.')
+    call("tip", 'Report details and publication controls are in **Report**. Save/load and autosave are in **Project and recovery > Save / Load**.')
+    call("tip", '*Auto-calc all derived values* is in **Materials**. It calculates these quantities from the current grade:\n\n- Concrete strain limits.\n- $f_{ctm}$.\n- $E_c$.\n\nSector calculates the modular ratios from $E_c$, $E_s$, $E_p$ and creep.')
 
     h1("Project")
     h2("Project files and autosave")
     md('**Loaded-project messages.** **Saved-file input record: matches** means that the file agrees with its stored input record. **Inputs match the recorded calculation** means that those inputs also agree with the recorded calculation inputs. The two messages check different records. If the records are different, examine the loaded inputs and calculate again.')
     md('Sector shows the recorded saving version and calculation time when these are available. If Sector rejects a new file, it keeps the current project unchanged. Select a different compatible project file with no damage. If invalid current inputs disable the project download, correct the displayed input issue before you save.')
-    md('Open **Inputs > Project**. Expand **Save / Load**. To save the inputs, select **Download project**. To restore inputs, select a saved file under **Load project**.\n\nA downloaded project file stores the section, materials, settings, named load cases and saving information. When you load a project, Sector restores its inputs and clears earlier results.\n\nExamine the restored inputs. Before you use or report the results, open **Analysis**. Select **Calculate**.')
-    md('Open **Inputs > Project**. Expand **Save / Load**. Use **Autosave** for local recovery.\n\nAutosave is enabled by default with a two-minute interval. Set **Autosave interval (min)** from 1 to 120 minutes. Existing saved preferences keep their selected values. Sector checks for due saves while the session is open. It saves changed, completed inputs after pending input changes, project loading and report generation have finished. The panel shows the last save time.')
-    md('Sector restores the recovery file on the next launch. An explicitly loaded project takes precedence. Examine the restored inputs. Open **Analysis**. Select **Calculate**. Save the project file used for each issued report.')
+    md('Open **Project and recovery**. Expand **Save / Load**. To save the inputs, select **Download project**. To restore inputs, select a saved file under **Load project**.\n\nA downloaded project file stores the section, materials, settings, named load cases and saving information. When you load a project, Sector restores its inputs and clears earlier results.\n\nExamine the restored inputs. Before you use or report the results, open **Results**. Select **Calculate**.')
+    md('Open **Project and recovery**. Expand **Save / Load**. Use **Autosave** for local recovery.\n\nAutosave is enabled by default with a two-minute interval. Set **Autosave interval (min)** from 1 to 120 minutes. Existing saved preferences keep their selected values. Sector checks for due saves while the session is open. It saves changed, completed inputs after pending input changes, project loading and report generation have finished. The panel shows the last save time.')
+    md('Sector restores the recovery file on the next launch. An explicitly loaded project takes precedence. Examine the restored inputs. Open **Results**. Select **Calculate**. Save the project file used for each issued report.')
     md("Autosave preserves an unreadable recovery file. If another session changes the recovery file, autosave pauses for the current session. The Save / Load panel shows the reason. Use **Download project** to keep the current inputs before closing the session.")
-    md('The Windows executable usually stores recovery data in **%LOCALAPPDATA%/Sector/autosave.json**. A source installation uses **%USERPROFILE%/.sector/autosave.json**. An installation can specify a different recovery folder. If automatic recovery fails, load a saved project file with no damage through **Inputs > Project**.')
+    md('The Windows executable usually stores recovery data in **%LOCALAPPDATA%/Sector/autosave.json**. A source installation uses **%USERPROFILE%/.sector/autosave.json**. An installation can specify a different recovery folder. If automatic recovery fails, load a saved project file with no damage through **Project and recovery**.')
     h1("Defining the section")
     md('A section is a set of points in millimeters: concrete corners, voids, bars and tendons. Sector calculates from these point tables. Quick Section updates these tables when you apply its geometry.')
     h2("The point tables")
@@ -1033,6 +1036,8 @@ def manual_blocks() -> list:
         'A prestressing-steel stress-strain curve with an initial elastic branch and a nonlinear branch to design strength and ultimate strain.')
 
     h1("Analysis & result settings")
+    md('Open **Analysis settings**. Select **General**, **Shear / torsion / M-V-T**, **Crack width**, **Detailing**, or **Fatigue**. The selected group keeps related controls together. Field help states the conditions that apply to each setting.')
+    md('Under **Shear / torsion / M-V-T**, use these pages:\n\n- **Checks and methods**: select the requested checks and supported design methods.\n- **Shared reinforcement**: enter the common reference material, link geometry and compression-strut limits.\n- **Shear**: enter the section form, directional web properties and method-specific inputs.\n- **Torsion**: enter tube geometry, member scope and each case declaration.\n- **Combined M-V-T**: examine component prerequisites and enter the applicable interaction assumptions.\n\nShared reinforcement has one editing location. A prerequisite link opens its control. Enabling a check keeps physical reinforcement declarations and engineering assumptions explicit.')
     h2("Analysis mode")
     md('**Bending analysis** selects **Plastic** (nonlinear M-M capacity), **Elastic** (cracked-section stresses), or **Both**. Record the project limit-state classification in each action-set name, source or note.')
     h2("The plastic sweep")
@@ -1088,7 +1093,7 @@ def manual_blocks() -> list:
            ["$\\beta_{cc}(t_0)$, $t_0$", "Concrete strength at the start of cyclic loading"],
            ["$k_1$, $C$", '2005 concrete-strength coefficient. C applies to the explicit and user-defined concrete fatigue-life methods']])
     md("The **Fatigue details** material tab holds named resistance definitions. Assign one detail ID to each checked bar or tendon. Standard presets lock $N^{*}$, the two S-N slopes, the characteristic reference range and its source. Custom / imported makes them editable. Sector applies the diameter-dependent and bent-bar reductions specified by the selected preset. If the section has mild reinforcement and bonded tendons, enter the bond ratio $\\xi$ for each tendon. Also enter each tendon's equivalent diameter.")
-    md('**Create or change a fatigue detail**\n\n1. Open **Inputs > Material parameters > Fatigue details**.\n2. Select **Add mild** for reinforcing steel or **Add tendon** for prestressing steel.\n3. Enter the detail name.\n4. Select its preset.\n5. Examine the displayed parameters and source.\n6. Under **Inputs > Section**, assign the detail ID to the applicable reinforcement elements.\n\n**Duplicate** copies the selected detail to a new definition. **Assigned elements** shows its current use. **Delete** is available when the detail is unassigned and a different detail is available.')
+    md('**Create or change a fatigue detail**\n\n1. Open **Materials > Fatigue details**.\n2. Select **Add mild** for reinforcing steel or **Add tendon** for prestressing steel.\n3. Enter the detail name.\n4. Select its preset.\n5. Examine the displayed parameters and source.\n6. Under **Section**, assign the detail ID to the applicable reinforcement elements.\n\n**Duplicate** copies the selected detail to a new definition. **Assigned elements** shows its current use. **Delete** is available when the detail is unassigned and a different detail is available.')
     md('The **Spectrum basis** records the selected grouped-spectrum method and optional action-set notes. Sector uses each action and cycle count as entered. The project spectrum supplies the traffic coverage and route assumptions.')
     md("**Resistance preset** includes straight bars, bent bars, welded bars or fabrics, steel couplers, pretensioning and bonded tendon details. "
        "Tendon families distinguish plastic ducts, curved tendons in steel ducts, and coupler or anchorage details. "
@@ -1161,10 +1166,13 @@ def manual_blocks() -> list:
     call("standard", '**Danish interaction criterion**\n\nDK NA 6.3.2(6) applies this criterion to $N$, $M$, $V$ and $T$:\n\n$\\sum(S_{Ed}/S_{Rd}) \\leq 1$.\n\nEach $S_{Rd}$ is the resistance to that action acting alone.\n\n**Separate M/V route**\n\nFirst check the additional longitudinal reinforcement for shear, beyond the bending requirement, independently of the section calculation. If this reinforcement satisfies the applicable conditions, select **separate M/V route as a design assumption**.\n\nSector calculates $N+M+T$ and $N+V+T$ independently and uses the larger value. A value no greater than the numerical limit is **CONDITIONAL**. The section calculation does not assess the additional reinforcement area, distribution or anchorage.\n\nA value larger than the limit is **FAIL**, also under that favorable assumption.')
     call("limit", 'Scope: cross-section resistance. Complete the applicable Annex F member and detailing assessment independently.')
     h2("Modular ratios and creep")
-    md('The cracked-elastic analysis calculates the modular ratios from the assigned moduli.\n\n**Short-term ratio**\n\n$n_s=E/E_c$.\n\n**Effective concrete modulus**\n\n$E_{c,eff}=E_c/(1+\\varphi)$.\n\n**Sustained ratio**\n\n$n_l=E/E_{c,eff}$.\n\nEnter the global creep coefficient $\\varphi$ under **Inputs > Loads**.\n\nSector uses the assigned $E_s$ or $E_p$ for each bar or tendon. Different material definitions can thus have different ratios. The results report the ratios for each material in the section.')
+    md('The cracked-elastic analysis calculates the modular ratios from the assigned moduli.\n\n**Short-term ratio**\n\n$n_s=E/E_c$.\n\n**Effective concrete modulus**\n\n$E_{c,eff}=E_c/(1+\\varphi)$.\n\n**Sustained ratio**\n\n$n_l=E/E_{c,eff}$.\n\nEnter the global creep coefficient $\\varphi$ under **Actions**.\n\nSector uses the assigned $E_s$ or $E_p$ for each bar or tendon. Different material definitions can thus have different ratios. The results report the ratios for each material in the section.')
 
     h1("Loads")
-    md('Enter loads in the three editable tables. Each active row has one name, and names are unique across the Plastic/capacity, Elastic and fatigue-bin rows. Use the optional description for the project classification, combination or source. Add, delete or paste rows directly in the tables.')
+    md('Open **Actions**. Select the **Plastic**, **Elastic** or **Fatigue** tab. In Plastic or Elastic, select the required case. Each active row has one name. Case names are unique across the Plastic/capacity, Elastic and fatigue-bin tables. Use the optional description for the project classification, combination or source. Add, duplicate, delete or paste cases with the case controls. The **Fatigue** tab contains the existing grouped spectrum and bin table. Each bin has sustained/basic actions, a cyclic increment and a cycle count. Sector solves the basic and combined states elastically. Select **Open fatigue analysis settings** to enable fatigue or change its analysis settings. Saved spectra remain retained when fatigue is disabled.')
+    md('**Axes and signs**\n\nView the section as drawn: +x points right and +y points up. Coordinates are in millimeters from the section origin. Enter moments about that origin. Sector applies its existing centroid translation.\n\n- Positive $N$ means tension. Negative $N$ means compression.\n- For centered pure bending, positive $M_x$ compresses the top face and positive $M_y$ compresses the right face.\n- Positive $V_x$ acts along +x. Positive $V_y$ acts along +y. Resistance uses the action magnitudes.\n- $V_x$ pairs with $M_y$; $V_y$ pairs with $M_x$ for automatic tension-face selection.\n- Keep the signed source torsion action $T$ and document its sense. Current torsion resistance uses $|T|$.\n\nAxial force, biaxial bending and prestress determine the actual combined stress field. The centered pure-bending examples describe the moment convention.')
+    md('**Paste action cases**\n\n1. Select the **Plastic** or **Elastic** tab.\n2. Open **Paste cases with preview**.\n3. Select **Download paste headings** and retain the required column headings.\n4. Paste the headings and case rows into **Spreadsheet rows**.\n5. Examine the parsed preview and correct each marked cell.\n6. Select **Append previewed cases** with the displayed row count.\n\nThe preview accepts tab, semicolon or comma-separated columns. Forces use kN and moments use kNm. Numeric cells accept a dot or comma decimal. Ambiguous grouped or mixed separators require correction. Blank ordinary action cells use zero. Required case names stay explicit. Elastic instantaneous values are additional increments to the sustained actions. For example, -350 kN sustained and -120 kN instantaneous give -470 kN total.')
+    md('**Selected case** identifies the working row. **Add case** creates a row. **Duplicate selected** copies its actions. For a copied Plastic case, select the minimum-reinforcement check and torsion declarations again as applicable. **Delete selected** removes the selected row. Examine the remaining actions before calculation.')
     table(["Table", "Per-row fields", "Row-specific rule"],
           [["Plastic / capacity", "$N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$, $V_{x,Ed}$, $V_{y,Ed}$, $T_{Ed}$",
             'Zero shear/torsion skips that component. Minimum reinforcement is selected per row'],
@@ -1182,7 +1190,7 @@ def manual_blocks() -> list:
     call("tip", 'Use case names from the project combination register. Sector uses the same names in the result selector, summary and PDF.')
 
     h1("Reading the results")
-    md('Open the required result view. Select its **Case**. When an input issue offers **Go to**, select it to open the related input stage. A setting can be disabled because of its parent calculation, selected edition or preset. Read its input help before you change the related selection.')
+    md('Open **Results** and select the required result view and **Case**. When an input issue offers **Go to**, select it to open the related input page. A verified action-table issue identifies its case, physical row and field. Correct the highlighted input, then calculate again. If the case changed after the issue was recorded, examine the current issues before you select a correction destination.\n\nNavigation keeps the selected case, result view and applicable filters. Returning from help restores the related working page. A setting can be disabled because of its parent calculation, selected edition or preset. Read its input help before you change the related selection.')
     h2("Result status reference")
     md('Read each status in the context of its named case, criterion and method scope. A passing resistance component does not override a failed or unavailable overall check. The overview gives no combined compliance verdict.')
     table(["Status", "Meaning", "Next action"], [
@@ -1212,7 +1220,7 @@ def manual_blocks() -> list:
          'Calculate after engineering edits. Regenerate the report after document-only edits.'],
     ])
     h2("Results overview")
-    md("Select a result under **Result details**. Select **Open selected result** to open its view.")
+    md("Select a result row in an **Overview** table. Select **Open selected result** to open its view.")
     md('The overview shows one governing row for each engineering check. Each row identifies its action set, direction or scope, result, criterion and status. A calculated result takes precedence over an inactive state. For equal states, the largest valid utilization governs. An exact tie keeps the first listed case.\n\nFor a check with different directions, the most unfavorable direction governs. Its label identifies that direction. **Not run**, **Not calculated**, **Not applicable** and **Not requested** identify the calculation scope and state. Headline counts summarize the rows on the screen. Each row keeps its own status.')
     md('In analysis figures, hover text reports the plotted capacity or material response represented by the selected point. Section-result markers show stress and strain. Section maps also show coordinates. The full result tables give reinforcement areas and coordinates.\n\n**Plot controls**\n\nThe plot toolbar gives these controls:\n\n- **Download plot as a PNG:** save the plot shown as an image.\n- **Zoom:** select a region to make it larger.\n- **Pan:** move the region shown.\n- **Zoom in** and **Zoom out:** change the scale.\n- **Autoscale:** change the axis ranges to include all plotted data.\n- **Reset axes:** use the initial axis ranges.\n- **Fullscreen:** show the plot on the full screen.\n\nSelect the required control in the plot toolbar. For Zoom or Pan, drag within the plot.')
     h2("Plastic results")
@@ -2348,6 +2356,8 @@ def build_manual_pdf(buffer, figures=True):
 
     page_w = 16.5 * cm
     flow = [
+        publication_branding.logo_flowable(4.5 * cm),
+        Spacer(1, 0.4 * cm),
         Paragraph("Sector user manual", styles["MTitle"]),
         Paragraph(f"Version {APP_VERSION}", styles["MSmall"]),
         Paragraph(f"Author: {APP_AUTHOR}", styles["MSmall"]),
@@ -2952,6 +2962,7 @@ th {{ background:var(--surface); }} .table-scroll {{ overflow-x:auto; }}
 .display-math,.equation-text {{ overflow-wrap:anywhere; padding:.5rem; background:#f7f8fa; }}
 .math {{ font-family:"Cambria Math","STIX Two Math","Times New Roman",serif; font-size:1.08em; }}
 code {{ font-family:"Courier New", monospace; }}
+.publication-logo {{ width:180px; max-width:100%; height:auto; display:block; }}
 .manual-figure {{ width:100%; height:auto; display:block; }}
 .figure-alternative {{ padding:.4rem 0; color:var(--muted); font-size:.9rem; }}
 @media print {{ body {{ max-width:none; padding:1cm; }} a {{ color:inherit; }} }}
@@ -2960,6 +2971,7 @@ code {{ font-family:"Courier New", monospace; }}
 <body>
 <a class="skip-link" href="#manual-main">Skip to main content</a>
 <header>
+{publication_branding.logo_html()}
 <h1>Sector user manual</h1>
 <p class="document-control"><strong>Version:</strong> {html.escape(APP_VERSION)}<br>
 <strong>Author:</strong> {html.escape(APP_AUTHOR)}<br>
@@ -2999,7 +3011,7 @@ def _render_manual_equation_streamlit(equation) -> None:
         st.markdown(_manual_equation_symbols_markdown(equation))
 
 
-def render_manual_streamlit():
+def render_manual_streamlit(*, full_page=False):
     """Render the selected manual part and its PDF actions."""
     with st.container(horizontal=True):
         if st.button(
@@ -3032,7 +3044,7 @@ def render_manual_streamlit():
                 key="manual_dl_html",
                 icon=":material/download:",
             )
-        if st.button("Close", key="manual_close", icon=":material/close:"):
+        if not full_page and st.button("Close", key="manual_close", icon=":material/close:"):
             st.session_state["_manual_open"] = False
             st.rerun(scope="app")
 
@@ -3040,6 +3052,32 @@ def render_manual_streamlit():
                "to use it.")
 
     parts = manual_published_item_parts()
+    from app import help_navigation
+    index = help_navigation.sections(parts)
+    topic = st.session_state.pop("_help_topic", None)
+    match = help_navigation.requested_topic(index, topic)
+    if match:
+        st.session_state["manual_part"] = match["part"]
+        st.session_state["_manual_section"] = (match["part"], match["start"])
+    if full_page:
+        query = st.text_input(
+            "Search the manual", key="_manual_search", persist_state="session",
+            help="Enter words from an input label, method, result status or procedure.",
+        )
+        if query.strip():
+            matches = help_navigation.search(index, query)
+            if matches:
+                labels = {(entry["part"], entry["start"]): entry for entry in matches}
+                destination = st.selectbox(
+                    "Matching topics", list(labels), index=None,
+                    format_func=lambda key: labels[key]["title"] + " | " + key[0],
+                    key="_manual_search_result", help="Choose a topic, then open it below.",
+                )
+                if st.button("Open topic", disabled=destination is None):
+                    st.session_state["manual_part"] = destination[0]
+                    st.session_state["_manual_section"] = destination
+            else:
+                st.info("No topics match these words. Try an input label or a shorter phrase.")
     selected_part = st.selectbox(
         "Manual part",
         list(parts),
@@ -3048,11 +3086,29 @@ def render_manual_streamlit():
     )
     st.caption(_PART_SUMMARIES[selected_part])
 
+    focus = st.session_state.get("_manual_section")
+    focus_entry = next((entry for entry in index if (entry["part"], entry["start"]) == focus), None)
+    if focus_entry and focus_entry["part"] != selected_part:
+        st.session_state.pop("_manual_section", None)
+        focus_entry = None
+    if focus_entry:
+        st.caption("Selected topic: " + focus_entry["title"])
+        if st.button("Show the complete manual part"):
+            st.session_state.pop("_manual_section", None)
+            st.rerun(scope="app")
+
     n1 = n2 = 0
     for i, published in enumerate(parts[selected_part]):
         block = published.block
         item = published.item
         kind = block[0]
+        if focus_entry and not focus_entry["start"] <= i < focus_entry["end"]:
+            if kind == "h1":
+                n1 += 1
+                n2 = 0
+            elif kind == "h2":
+                n2 += 1
+            continue
         if kind == "part":
             st.divider()
             st.markdown(f"# {block[1]}")

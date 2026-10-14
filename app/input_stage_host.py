@@ -291,6 +291,11 @@ def stateful_input_tabs(
         raise ValueError("Stateful input tab labels must be unique")
 
     normalise_stage_selection(state, key, labels)
+    mounted = set(state.get(_MOUNTED_WIDGET_KEYS, ()))
+    if not bool(getattr(host, "open", True)) or key not in mounted:
+        _retained_widget_value(
+            "selectbox", ("Input stage", labels), {"key": key}, state
+        )
     tabs = tuple(
         host.tabs(
             labels,
@@ -315,6 +320,7 @@ def stateful_input_tabs(
             InputStage(None, active=False, state=state) for _ in labels
         )
 
+    state[_MOUNTED_WIDGET_KEYS] = set(state.get(_MOUNTED_WIDGET_KEYS, ())) | {key}
     active_index = open_indices[0]
     return tuple(
         InputStage(

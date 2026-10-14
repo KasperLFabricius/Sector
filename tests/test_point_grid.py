@@ -459,7 +459,8 @@ def test_app_feeds_grid_points_to_the_analysis():
         {"x (mm)": [-200.0, -200.0, 200.0, 200.0],
          "y (mm)": [-300.0, 300.0, 300.0, -300.0]})
     at.run()  # rebuild the durable input payload from the edited base table
-    at.segmented_control(key="_main_page").set_value("Analysis").run()
+    at.session_state["_next_workflow_page"] = "results"
+    at.run()
     at.button(key="calculate").click().run()
     assert not at.exception
     assert "plastic" in at.session_state["results"]

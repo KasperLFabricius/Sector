@@ -31,13 +31,17 @@ import pandas as pd  # noqa: E402
 import streamlit as st  # noqa: E402
 
 import app_run_probe  # noqa: E402
-from app import input_issues  # noqa: E402
+from app import action_workspace  # noqa: E402
+from app import input_issues, workflow_navigation, result_workspace, navigation_context, help_navigation  # noqa: E402
+from app import mvt_workspace  # noqa: E402
 from app import engineer_messages  # noqa: E402
 from app import elastic_display  # noqa: E402
 from app import manual_information_architecture as manual_ia  # noqa: E402
 from app import report_profiles, report_sources  # noqa: E402
 from deferred_import import deferred_module  # noqa: E402
 from input_stage_host import (  # noqa: E402
+    InputStage,
+    input_stages,
     live_fragment_value,
     normalise_stage_selection,
     reset_input_stage_mounts,
@@ -84,6 +88,7 @@ session_state_migrations = deferred_module("session_state_migrations")
 table_fields = deferred_module("app.table_field_definitions")
 modelled_direction = deferred_module("app.modelled_direction")
 viz = deferred_module("viz")
+section_drawing = deferred_module("section_drawing")
 section_fields = deferred_module("section_fields")
 
 capacity = deferred_module("sector.capacity")
@@ -384,7 +389,7 @@ _startup_probe = app_run_probe.start_phase(st.session_state, "startup")
 st.set_page_config(
     layout="wide",
     page_title=f"Sector v{APP_VERSION}",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 
@@ -402,9 +407,12 @@ def _warm_solver():
 
 _logo = ROOT / "assets" / "logo.png"
 if _logo.exists():
-    st.image(str(_logo), width=180)
-st.title(f"Sector v{APP_VERSION}")
-st.caption("Reinforced-concrete cross-section analysis - elastic stresses and plastic capacity")
+    st.logo(str(_logo), size="large")
+brand_logo, brand_title = st.columns([1, 5], vertical_alignment="center")
+if _logo.exists():
+    brand_logo.image(str(_logo), width=150)
+brand_title.subheader(f"Sector v{APP_VERSION}")
+brand_title.caption("Reinforced-concrete cross-section analysis - elastic stresses and plastic capacity")
 
 
 # ---------------------------------------------------------------------------
@@ -440,10 +448,12 @@ def _prefill(prefix, preset, presets):
         st.session_state[prev] = preset
 
 
-def _input_widget_kwargs(key, kwargs):
+def _input_widget_kwargs(key, kwargs, *, host=None):
     """Attach the input-event journal while preserving an existing callback."""
 
     options = dict(kwargs)
+    if host is not None and not isinstance(host, InputStage):
+        options.setdefault("persist_state", "session")
     callback = options.pop("on_change", None)
     callback_args = tuple(options.pop("args", ()) or ())
     callback_kwargs = dict(options.pop("kwargs", {}) or {})
@@ -462,6 +472,8 @@ def _manual_warning(box, warning_key, message):
 def _number(box, prefix, field, meta, help_map=None, disabled=False):
     label, lo, hi, step = meta[field]
     key = f"{prefix}_{field}"
+    if key in st.session_state:
+        st.session_state[key] = st.session_state[key]
     return box.number_input(
         label,
         float(lo),
@@ -474,23 +486,23 @@ def _number(box, prefix, field, meta, help_map=None, disabled=False):
                 "help": (help_map or {}).get(field),
                 "disabled": disabled,
             },
+            host=box,
         ),
     )
 
 
 def _seeded_number(box, label, lo, hi, default, step, key, **kw):
-    """A number_input whose initial value is seeded into session state rather than
-    passed as ``value=``.
+    """Publish the retained or live value before native widget registration.
 
-    A loaded project (or an autosave restore) writes the widget key before the widget
-    is created; a widget that also passes ``value=`` then trips Streamlit's "created
-    with a default value but also had its value set via the Session State API"
-    warning. Seeding via ``setdefault`` (a no-op once the key exists) and omitting
-    ``value=`` avoids it while keeping the same default on a fresh session."""
-    st.session_state.setdefault(key, default)
+    A value compacted into old session state must be marked as newly assigned
+    for the frontend to receive it instead of the intrinsic widget default.
+    The current state already includes any explicit incoming widget event.
+    Omitting value= preserves the single source of initialization.
+    """
+    st.session_state[key] = st.session_state.get(key, default)
     return box.number_input(
         label, lo, hi, step=step, key=key,
-        **_input_widget_kwargs(key, kw),
+        **_input_widget_kwargs(key, kw, host=box),
     )
 
 
@@ -498,33 +510,33 @@ def _seeded_checkbox(box, label, default, key, **kw):
     """A checkbox whose default is seeded into session state rather than passed as
     ``value=`` -- same reason as :func:`_seeded_number`: a loaded project writes the
     key before the widget is built, and a ``value=`` alongside it trips the warning."""
-    st.session_state.setdefault(key, default)
-    return box.checkbox(label, key=key, **_input_widget_kwargs(key, kw))
+    st.session_state[key] = st.session_state.get(key, default)
+    return box.checkbox(label, key=key, **_input_widget_kwargs(key, kw, host=box))
 
 
 def _seeded_toggle(box, label, default, key, **kw):
     """A persisted on/off setting without a competing widget default."""
 
-    st.session_state.setdefault(key, default)
-    return box.toggle(label, key=key, **_input_widget_kwargs(key, kw))
+    st.session_state[key] = st.session_state.get(key, default)
+    return box.toggle(label, key=key, **_input_widget_kwargs(key, kw, host=box))
 
 
 def _seeded_selectbox(box, label, options, default, key, **kw):
     """A selectbox whose default is seeded into session state rather than passed as
     ``index=`` -- same reason as :func:`_seeded_number`. ``default`` must be one of
     ``options``."""
-    st.session_state.setdefault(key, default)
+    st.session_state[key] = st.session_state.get(key, default)
     if st.session_state[key] not in options:
         st.session_state[key] = default
     return box.selectbox(
-        label, options, key=key, **_input_widget_kwargs(key, kw)
+        label, options, key=key, **_input_widget_kwargs(key, kw, host=box)
     )
 
 
 def _seeded_segmented_control(box, label, options, default, key, **kw):
     """A required single-choice segmented control with durable widget state."""
 
-    st.session_state.setdefault(key, default)
+    st.session_state[key] = st.session_state.get(key, default)
     if st.session_state[key] not in options:
         raise ValueError(f"unknown persisted selection for {key!r}")
     return box.segmented_control(
@@ -533,21 +545,21 @@ def _seeded_segmented_control(box, label, options, default, key, **kw):
         selection_mode="single",
         required=True,
         key=key,
-        **_input_widget_kwargs(key, kw),
+        **_input_widget_kwargs(key, kw, host=box),
     )
 
 
 def _seeded_text(box, label, default, key, **kw):
     """A persisted text input that does not conflict with loaded session state."""
-    st.session_state.setdefault(key, default)
-    return box.text_input(label, key=key, **_input_widget_kwargs(key, kw))
+    st.session_state[key] = st.session_state.get(key, default)
+    return box.text_input(label, key=key, **_input_widget_kwargs(key, kw, host=box))
 
 
 def _seeded_text_area(box, label, default, key, **kw):
     """A persisted multi-line input without a competing widget default."""
 
-    st.session_state.setdefault(key, default)
-    return box.text_area(label, key=key, **_input_widget_kwargs(key, kw))
+    st.session_state[key] = st.session_state.get(key, default)
+    return box.text_area(label, key=key, **_input_widget_kwargs(key, kw, host=box))
 
 
 _TORSION_GAMMA_METHOD_KEY = "_torsion_gamma_ct_default_method"
@@ -1001,11 +1013,11 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
     _seed_material_entry_widgets(entry, "mild", prefix)
     if catalogue_mode:
         box.caption(f"Material ID: {entry['id']}")
-        name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name")
+        name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name", help='Name of this reinforcing-steel catalogue entry. Bars retain their assigned material ID when this name changes.')
         description = _seeded_text(
             box, "Description", entry.get("description", ""),
             f"{prefix}_description",
-        )
+         help='Optional description of this reinforcing-steel material. Record the grade or project reference used to identify it.')
     else:
         name, description = entry["name"], entry.get("description", "")
     presets = mp.MILD_PRESETS
@@ -1119,11 +1131,11 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
     _seed_material_entry_widgets(entry, "prestress", prefix)
     if catalogue_mode:
         box.caption(f"Material ID: {entry['id']}")
-        name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name")
+        name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name", help='Name of this prestressing-steel catalogue entry. Tendons retain their assigned material ID when this name changes.')
         description = _seeded_text(
             box, "Description", entry.get("description", ""),
             f"{prefix}_description",
-        )
+         help='Optional description of this prestressing-steel material. Record the grade or project reference used to identify it.')
     else:
         name, description = entry["name"], entry.get("description", "")
     presets = mp.PRESTRESS_PRESETS
@@ -1596,7 +1608,7 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
     entry = next(item for item in items if item["id"] == selected)
     prefix = _fatigue_catalog_prefix(selected)
     _seed_fatigue_detail_widgets(entry, prefix)
-    name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name")
+    name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name", help='Name of this fatigue-detail catalogue entry. Reinforcement assignments use its stable detail ID.')
     description = _seeded_text(
         box,
         "Description",
@@ -1905,7 +1917,9 @@ def _rebar_df(
             default_mode=rebar_table.INDEPENDENT_MODE,
         )
     if material_id is not None and not frame.empty:
-        frame[rebar_table.MATERIAL_ID] = str(material_id)
+        frame[rebar_table.MATERIAL_ID] = pd.Series(
+            str(material_id), index=frame.index, dtype="object",
+        )
     return frame
 
 
@@ -2266,7 +2280,7 @@ def _reinforcement_bulk_assignment(
         [_BULK_ALL, _BULK_SELECTED],
         key=scope_key,
         width="stretch",
-    )
+     help='Choose all elements in this table or the selected element IDs. Apply assignments commits the chosen material and fatigue-detail changes.')
 
     selected_key = f"_{ed_key}_bulk_ids"
     selected_state = st.session_state.get(selected_key)
@@ -2282,7 +2296,7 @@ def _reinforcement_bulk_assignment(
         element_ids,
         key=selected_key,
         disabled=scope != _BULK_SELECTED,
-    )
+     help='Select the persistent element IDs that receive the bulk assignment. This list is used when Apply to is set to selected IDs.')
 
     material_ids = list(_grid_material_ids(kind) or ())
     material_catalogue_kind = "mild" if kind == "bar" else "prestress"
@@ -2327,7 +2341,7 @@ def _reinforcement_bulk_assignment(
             if value in material_entries
             else value
         ),
-    )
+     help='Choose a catalogue material for the target elements. No change retains each existing material assignment.')
     fatigue_id = fatigue_col.selectbox(
         "Fatigue detail",
         fatigue_options,
@@ -2341,7 +2355,7 @@ def _reinforcement_bulk_assignment(
             if value in fatigue_entries
             else value
         ),
-    )
+     help='Choose a fatigue detail for the target elements. No change retains existing assignments; Clear assignment removes them.')
 
     targets = (
         element_ids
@@ -2581,41 +2595,86 @@ def _case_table_editor(box, key):
     return load_cases.active_table(current, key)
 
 
-def _load_case_editors(box):
+def _open_fatigue_settings():
+    """Retain pending input edits and open the existing fatigue settings."""
+    _snapshot_completed_input_state()
+    st.session_state["_analysis_group"] = "Fatigue"
+    for key in (_INPUT_STATE_KEY, _PENDING_INPUT_EVENTS_KEY):
+        if key in st.session_state:
+            st.session_state[key]["_analysis_group"] = "Fatigue"
+    st.session_state["_next_workflow_page"] = "settings"
+
+
+def _load_case_editors(box, *, fatigue_on=False):
     """Render and return the authoritative Plastic and Elastic case tables."""
     defaults = load_cases.default_tables()
     for key in load_cases.CASE_TABLE_KEYS:
         if key not in st.session_state:
             st.session_state[key] = defaults[key]
 
+    if bool(getattr(box, "open", True)):
+        action_workspace.consume_command(st.session_state, _reseed_case_table)
+        notice = st.session_state.pop(action_workspace.NOTICE_KEY, None)
+        if notice:
+            (box.success if notice[0] else box.warning)(notice[1])
+    action_workspace.conventions(box)
+    plastic_box, elastic_box, fatigue_box = action_workspace.family_stages(
+        box, state=st.session_state,
+        on_change=_snapshot_completed_input_state,
+    )
+
     direction_label = modelled_direction.resolved_markdown_label(
         cut_direction=st.session_state.get("detailing_cut_direction"),
         alias=st.session_state.get(modelled_direction.ALIAS_KEY),
     )
     box.info(f"Modelled reinforcement direction: {direction_label}")
-    box.markdown("**Plastic and capacity cases**")
-    box.caption(
+    plastic_box.markdown("**Plastic and capacity cases**")
+    plastic_box.caption(
         "One row per named case. Section forces keep their signs. Zero Vx,Ed, "
         "Vy,Ed or TEd skips that component. Select minimum reinforcement only "
         "for cases with the design situation required by the chosen detailing "
         "method. Paste rectangular ranges directly."
     )
-    _table_field_guide(box, load_cases.PLASTIC_TABLE_KEY)
-    plastic = _case_table_editor(box, load_cases.PLASTIC_TABLE_KEY)
-    box.markdown("**Elastic cases**")
-    box.caption(
+    _table_field_guide(plastic_box, load_cases.PLASTIC_TABLE_KEY)
+    plastic = _case_table_editor(plastic_box, load_cases.PLASTIC_TABLE_KEY)
+    action_workspace.toolbar(plastic_box, load_cases.PLASTIC_TABLE_KEY,
+                             state=st.session_state,
+                             on_change=_snapshot_completed_input_state)
+    elastic_box.markdown("**Elastic cases**")
+    elastic_box.caption(
         "Long and short action parts share the global creep coefficient below. "
         "Each action reports stresses and can calculate crack width. Independent "
         "long- and short-term limits apply to their matching branches; Formula "
         "7.100 NA uses a separate limit. Define combination completeness in the "
         "project basis."
     )
-    _table_field_guide(box, load_cases.ELASTIC_TABLE_KEY)
-    elastic = _case_table_editor(box, load_cases.ELASTIC_TABLE_KEY)
+    _table_field_guide(elastic_box, load_cases.ELASTIC_TABLE_KEY)
+    elastic = _case_table_editor(elastic_box, load_cases.ELASTIC_TABLE_KEY)
+    action_workspace.toolbar(elastic_box, load_cases.ELASTIC_TABLE_KEY,
+                             state=st.session_state,
+                             on_change=_snapshot_completed_input_state)
+    fatigue_box.markdown("**Grouped fatigue spectra**")
+    fatigue_box.caption(
+        "Each bin combines sustained/basic actions with the cyclic increment. "
+        "Sector solves both states elastically and uses their stress range."
+    )
+    fatigue_box.button(
+        "Open fatigue analysis settings", key="_actions_fatigue_settings",
+        on_click=_open_fatigue_settings,
+        help="Open the existing fatigue check, material and spectrum-basis settings.",
+    )
+    if fatigue_on:
+        _fatigue_spectrum_editor(fatigue_box)
+    else:
+        fatigue_box.info(
+            "Enable fatigue under Analysis settings > Fatigue to edit and calculate spectra. "
+            "Previously entered spectra remain saved."
+        )
     return {
         load_cases.PLASTIC_TABLE_KEY: plastic,
         load_cases.ELASTIC_TABLE_KEY: elastic,
     }
+
 
 
 def _case_name_identity_is_valid(plastic_cases, elastic_cases):
@@ -3007,6 +3066,8 @@ _DURABLE_INPUT_SCALARS = (
     )
     + (
         "autosave_on", "autosave_min", "_input_tab", "_material_tab",
+        "_analysis_group", "_mvt_page", "_actions_family",
+        "_actions_selected::plastic_cases_base", "_actions_selected::elastic_cases_base",
         "_material_tab_preference",
         "_material_catalog_revision", "_mild_catalog_selected",
         "_prestress_catalog_selected", "_fatigue_catalog_revision",
@@ -3021,7 +3082,9 @@ _LAST_WORKSPACE_KEY = "_last_completed_workspace"
 _PENDING_INPUT_EVENTS_KEY = "_pending_input_events"
 _PENDING_REPORT_EVENTS_KEY = "_pending_report_events"
 _INPUT_NAVIGATION_KEYS = frozenset(
-    {"_input_tab", "_material_tab", "_material_tab_preference"}
+    {"_input_tab", "_material_tab", "_material_tab_preference",
+     "_analysis_group", "_mvt_page", "_actions_family",
+     "_actions_selected::plastic_cases_base", "_actions_selected::elastic_cases_base"}
 )
 _INPUT_ISSUE_FOCUS_KEY = "_input_issue_focus"
 _SHOW_INPUT_ISSUES_KEY = "_show_input_validation_issues"
@@ -3067,6 +3130,9 @@ def _record_input_event(
         pending = dict(st.session_state.get(_PENDING_INPUT_EVENTS_KEY, {}))
         pending[key] = copy.deepcopy(st.session_state[key])
         st.session_state[_PENDING_INPUT_EVENTS_KEY] = pending
+        if key in _NON_REPLAYABLE_INPUT_EVENT_KEYS:
+            from project_widget_state import commit_editor_values
+            commit_editor_values(st.session_state, (key,))
     elif workspace == "Report" and key in _REPORT_STATE_SCALAR_SET:
         pending = dict(st.session_state.get(_PENDING_REPORT_EVENTS_KEY, {}))
         pending[key] = copy.deepcopy(st.session_state[key])
@@ -3095,6 +3161,8 @@ def _mark_heightened_reference_explicit() -> None:
 
 def _snapshot_input_state(inp=None) -> None:
     """Keep live input values available while their widgets are not mounted."""
+    from project_widget_state import commit_editor_values
+    commit_editor_values(st.session_state)
     saved = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
     for key in _DURABLE_INPUT_SCALARS:
         if key == "_material_tab":
@@ -3252,7 +3320,7 @@ def _open_manual_dialog() -> None:
 
 def _set_main_page(page: str) -> None:
     """Select a top-level page from a button callback."""
-    st.session_state["_main_page"] = page
+    st.session_state["_next_main_page"] = page
 
 
 def _queue_input_issue_navigation(issue: input_issues.InputIssue) -> None:
@@ -3265,6 +3333,22 @@ def _queue_input_issue_navigation(issue: input_issues.InputIssue) -> None:
     durable = dict(st.session_state.get(_INPUT_STATE_KEY, {}))
     durable["_input_tab"] = stage_label
     st.session_state["_input_tab"] = stage_label
+    if target.stage == "Analysis settings":
+        map_page = mvt_workspace.field_page(target.widget_key)
+        if map_page is not None:
+            group = "Shear / torsion / M-V-T"
+            durable["_mvt_page"] = map_page
+            st.session_state["_mvt_page"] = map_page
+        elif str(target.widget_key or "").startswith("sls_"):
+            group = "Crack width"
+        elif str(target.widget_key or "").startswith("fatigue_"):
+            group = "Fatigue"
+        elif str(target.widget_key or "").startswith(("detailing_", "minimum_reinforcement_")):
+            group = "Detailing"
+        else:
+            group = "General"
+        durable["_analysis_group"] = group
+        st.session_state["_analysis_group"] = group
     if target.material_family is not None:
         durable["_material_tab"] = target.material_family
         durable["_material_tab_preference"] = target.material_family
@@ -3294,11 +3378,13 @@ def _queue_input_issue_navigation(issue: input_issues.InputIssue) -> None:
 
     st.session_state[_INPUT_ISSUE_FOCUS_KEY] = {
         "message": issue.message,
+        "request_id": time.time_ns(),
         "stage": target.stage,
         "material_family": target.material_family,
         "material_id": target.material_id,
         "widget_key": target.widget_key,
         "widget_label": target.widget_label,
+        "case_location": target.case_location,
     }
     # The top-level segmented control is already mounted on this run. Follow the
     # existing auxiliary-view lifecycle and apply the destination before its next
@@ -3818,17 +3904,20 @@ def _advance_project_upload_widget(widget_key: str | None = None) -> None:
 
 
 def _project_transaction_snapshot() -> dict[str, object]:
-    """Deep-copy the complete keyed session namespace before replacement."""
+    """Prepare complete recovery state before any project replacement."""
+    from project_widget_state import recovery_values
 
-    return copy.deepcopy(st.session_state.to_dict())
+    return recovery_values(copy.deepcopy(st.session_state.to_dict()))
 
 
 def _restore_project_transaction(snapshot: dict[str, object]) -> None:
-    """Restore the exact pre-transaction keyed namespace before widgets mount."""
+    """Restore durable inputs and results without assigning event widget state."""
+    from project_widget_state import recovery_values
 
+    restored = recovery_values(snapshot)
     for key in tuple(st.session_state.to_dict()):
         st.session_state.pop(key, None)
-    for key, value in snapshot.items():
+    for key, value in restored.items():
         st.session_state[key] = value
 
 
@@ -3841,6 +3930,7 @@ def _apply_project_text(text: str) -> None:
     """
     tables, scalars, parse_info = project_io.parse_project_with_info(text)
     provenance = parse_info["provenance"]
+    st.session_state["_project_context_epoch"] = int(st.session_state.get("_project_context_epoch", 0)) + 1
     # The caller owns the all-state transaction. These values are cleared only
     # inside that rollback-protected boundary, after complete project validation.
     st.session_state.pop("_project_migration_warnings", None)
@@ -3852,6 +3942,13 @@ def _apply_project_text(text: str) -> None:
     st.session_state.pop(_HEIGHTENED_AUTO_REFERENCE_KEY, None)
     st.session_state.pop(_HEIGHTENED_EXPLICIT_REFERENCE_KEY, None)
     st.session_state.pop(_PENDING_REPORT_EVENTS_KEY, None)
+    for key in list(st.session_state):
+        if key.startswith(("_actions_", "overview_rows_")) or key in {
+            "_plastic_result_case_index", "_elastic_result_case_index",
+            "_fatigue_result_spectrum", "_project_export_offered_at",
+            "_report_preview_signature", "_next_main_page",
+        }:
+            st.session_state.pop(key, None)
     # A valid project is a whole-project replacement. Current-schema files may
     # intentionally omit any persisted scalar, so remove every live project value
     # before overlaying the parsed file. Missing values are then reconstructed by
@@ -4054,6 +4151,8 @@ def _apply_project_text(text: str) -> None:
         "result_input_snapshot", "_latest_inputs",
         "_case_error", "pl_state", "_report_msg",
         _INPUT_ISSUE_FOCUS_KEY, _SHOW_INPUT_ISSUES_KEY,
+        "_workflow_calculate_request", "_next_workflow_page", "_actions_pending_command",
+        "_overview_selection", "_overview_filter", "_overview_result_detail",
     ):
         st.session_state.pop(key, None)
     _clear_report_artifact()
@@ -4140,6 +4239,10 @@ def _apply_pending_project() -> None:
 
 
 @st.fragment
+def _record_project_export():
+    st.session_state["_project_export_offered_at"] = time.time()
+
+
 def _save_load_panel() -> None:
     """Download the current project and upload one to restore it.
 
@@ -4158,6 +4261,7 @@ def _save_load_panel() -> None:
         project_data = b""
         project_error = project_io.engineer_error_message(exc)
     box.download_button("Download project", data=project_data,
+                        on_click=_record_project_export,
                         file_name="sector_section.json", mime="application/json",
                         disabled=project_error is not None,
                         width="stretch",
@@ -4262,13 +4366,14 @@ def _report_source_editor(inp):
         key = "_report_source_assignment"
         if st.session_state.get(key) not in options:
             st.session_state[key] = options[0]
+        st.session_state[key] = st.session_state[key]
         selected = st.selectbox(
-            "Reference scope", options, key=key,
+            "Reference scope", options, key=key, persist_state="session",
             format_func=lambda item: (
                 item[0] + (" \u2014 " + item[1] if item[1] else " assumptions")
                 + (" (unmatched)" if item not in current else "")
             ),
-        )
+         help='Assign this reference to the project assumptions or the named action case or fatigue spectrum. Each scope retains its own reference.')
         entry = next((item for item in register
                       if (item["scope"], item["case_name"]) == selected), {})
         # Editor keys are transient. Restore from the exact report-owned record
@@ -4278,7 +4383,7 @@ def _report_source_editor(inp):
         st.text_input(
             "Document or record", key="_report_source_document",
             on_change=_store_report_source, args=selected,
-        )
+         help='Document title, number or record identifier supplied for this scope. Add its section or page in the locator field.')
         st.text_input(
             "Section / page locator", key="_report_source_locator",
             help="Identify the section or page; a record entry may add detail.",
@@ -4646,6 +4751,8 @@ def _generate_report(inp):
 def _report_workspace(inp):
     """Own all report metadata, profile, generation and download controls."""
 
+    from app import report_workspace_presentation as report_ui
+
     app_run_probe.open_fragment_run(st.session_state, "report")
     if st.session_state.get(_REPORT_BUILD_KEY, False):
         _restore_report_state(replace=True)
@@ -4659,19 +4766,21 @@ def _report_workspace(inp):
     st.session_state[_REPORT_BUILD_KEY] = True
     uncommitted_input = _has_uncommitted_inputs()
 
-    st.subheader("Report")
+    if st.session_state.get("_workflow_page") != "report":
+        st.subheader("Report")
     st.caption(
         "Add document details and choose the report depth. Generate uses the "
-        "current inputs and the matching Analysis results."
+        "current inputs and matching results. Review the generated PDF before issue."
     )
-    metadata_box = st.container(border=True)
+    details_column, publication_column = st.columns([1.15, 1], gap="large")
+    metadata_box = details_column.container(border=True)
     metadata_box.markdown("**Document details**")
-    _seeded_text(metadata_box, _REPORT_FIELDS[0][1], "", "rep_proj_no")
-    _seeded_text(metadata_box, _REPORT_FIELDS[1][1], "", "rep_proj_name")
-    _seeded_text(metadata_box, _REPORT_FIELDS[2][1], "", "rep_section")
+    _seeded_text(metadata_box, _REPORT_FIELDS[0][1], "", "rep_proj_no", help='Project identifier printed in the report document-control information. Enter the identifier used in the project records.')
+    _seeded_text(metadata_box, _REPORT_FIELDS[1][1], "", "rep_proj_name", help='Project name printed in the report document-control information.')
+    _seeded_text(metadata_box, _REPORT_FIELDS[2][1], "", "rep_section", help='Name or identifier of the analysed section, printed in the report document-control information.')
     c1, c2 = metadata_box.columns(2)
-    _seeded_text(c1, "Revision", "", "rep_rev")
-    _seeded_text(c2, "Prepared by", "", "rep_author")
+    _seeded_text(c1, "Revision", "", "rep_rev", help='Report revision printed in the document-control information. Enter the revision used for this issue.')
+    _seeded_text(c2, "Prepared by", "", "rep_author", help='Name of the report preparer, printed in the document-control information.')
     checker, approver = metadata_box.columns(2)
     _seeded_text(checker, "Checker (optional)", "", "rep_checker",
                  help="Document-control name printed only when supplied.")
@@ -4679,17 +4788,18 @@ def _report_workspace(inp):
                  help="Document-control name printed only when supplied.")
     _seeded_text_area(
         metadata_box, "Comments", "", "rep_comments", height=100
-    )
+    , help='Optional report comments. Record assumptions or context that the reader needs with this calculation.')
 
-    _report_source_editor(inp or {})
+    with details_column:
+        _report_source_editor(inp or {})
 
-    publication_box = st.container(border=True)
+    publication_box = publication_column.container(border=True)
     publication_box.markdown("**Publication**")
     if uncommitted_input:
         _manual_warning(
             publication_box,
             "report-stale",
-            "Input preparation was interrupted. Open Inputs and allow it to "
+            "Input preparation was interrupted. Open an input page and allow it to "
             "finish once before generating or downloading a report.",
         )
     profile_error = st.session_state.get(_REPORT_PROFILE_ERROR_KEY)
@@ -4699,6 +4809,34 @@ def _report_workspace(inp):
             "report-generation",
             profile_error,
         )
+    with publication_box.expander("Presentation preset"):
+        if "_report_presentation_preset_choice" in st.session_state:
+            st.session_state["_report_presentation_preset_choice"] = st.session_state["_report_presentation_preset_choice"]
+        selected_preset = st.selectbox(
+            "Profile preset", list(_REPORT_CONTENT_OPTIONS),
+            key="_report_presentation_preset_choice", persist_state="session",
+            help="Preview a report-depth preference before you apply it.",
+        )
+        preset = report_ui.read_preset({"profile": selected_preset})
+        changes = report_ui.preset_changes(
+            st.session_state.get(project_io.REPORT_PROFILE_KEY, _REPORT_DEFAULT),
+            preset,
+        )
+        st.caption("The preset contains only report depth. Project details, references and names remain as entered.")
+        if changes:
+            st.table(changes)
+        else:
+            st.caption("This report profile is already selected.")
+        if st.button(
+            "Apply presentation preset", key="_apply_report_presentation_preset",
+            disabled=not changes,
+            help="Apply only the Report profile change listed above.",
+        ):
+            # Apply before the keyed profile control mounts. The original event
+            # journal preserves this explicit edit if rendering is interrupted.
+            st.session_state[project_io.REPORT_PROFILE_KEY] = preset.profile
+            _journal_current_input_values(project_io.REPORT_PROFILE_KEY)
+
     report_profile = _seeded_segmented_control(
         publication_box,
         "Report profile",
@@ -4715,6 +4853,16 @@ def _report_workspace(inp):
     )
     policy = report_profiles.resolve_profile(report_profile)
     publication_box.caption(policy.description + " " + policy.omitted_detail)
+    with publication_box.expander("Report outline and coverage", expanded=True):
+        st.table(report_ui.profile_outline(report_profile))
+        st.caption("Applicable cases, statuses and figures follow the existing report rules. The generated PDF contains the final contents and page numbers.")
+        declared_cases = report_ui.declared_case_rows(
+            report_sources.available_assignments(inp or {})
+        )
+        if declared_cases:
+            st.markdown("**Declared cases and spectra**")
+            st.dataframe(declared_cases, hide_index=True, width="stretch")
+            st.caption("Review these declared identities. Report content follows requested checks and current result evidence.")
     generate = publication_box.button(
         "Generate report",
         type="primary",
@@ -4724,7 +4872,7 @@ def _report_workspace(inp):
     )
     if inp is None:
         publication_box.info(
-            "Open Inputs once to prepare the section and report data."
+            "Open Section once to prepare the section and report data."
         )
 
     global _REPORT_PROG
@@ -4761,6 +4909,27 @@ def _report_workspace(inp):
                 mime="application/pdf",
                 width="stretch",
             )
+            if publication_box.button(
+                "Preview generated PDF", key="_preview_generated_report",
+                help="Open the exact generated PDF shown by the download control.",
+            ):
+                st.session_state["_report_preview_signature"] = current_signature
+            preview_url = report_ui.pdf_preview_url(
+                st.session_state["report_buffer"],
+                artifact_signature=st.session_state.get("report_signature"),
+                current_signature=current_signature,
+                requested_signature=st.session_state.get("_report_preview_signature"),
+                pending_inputs=uncommitted_input,
+            )
+            if preview_url is not None:
+                with st.container(border=True):
+                    st.markdown("**Generated PDF preview**")
+                    st.caption("This preview and Download report use the same PDF. Your browser supplies the PDF controls.")
+                    st.iframe(preview_url, height=760, width="stretch", tab_index=0)
+                    if st.button("Close PDF preview", key="_close_report_preview"):
+                        st.session_state.pop("_report_preview_signature", None)
+                        app_run_probe.close_fragment_run(st.session_state)
+                        st.rerun(scope="fragment")
             record = st.session_state.get("report_generation_record") or {}
             source = record.get("calculation_state")
             generated = record.get("generated_at_utc")
@@ -4782,6 +4951,7 @@ def _report_workspace(inp):
     st.session_state[_LAST_WORKSPACE_KEY] = "Report"
     if not uncommitted_input:
         _measured_autosave()
+    _render_navigation_context()
     app_run_probe.close_fragment_run(st.session_state)
 
 
@@ -5698,9 +5868,11 @@ def _quick_section_geometry(box):
             "For a finite section, By spacing is the maximum centre-to-centre gap "
             "over the covered face; the builder derives count and actual spacing."
         )
+        if "qs_rebar_mode" in st.session_state:
+            st.session_state["qs_rebar_mode"] = st.session_state["qs_rebar_mode"]
         by_spacing = box.radio(
             "Bar placement", ["By number", "By spacing"], horizontal=True,
-            key="qs_rebar_mode",
+            key="qs_rebar_mode", persist_state="session",
             help=spacing_help,
         ) == "By spacing"
         slab_unit_spacing = shape == "Slab strip" and by_spacing
@@ -6091,7 +6263,7 @@ def _quick_section_viewport():
                     ]
                 tendon_xy = [(x, y, a) for x, y, a in tendons]
                 st.plotly_chart(
-                    viz.section_figure(outer, holes, bar_xy, tendons=tendon_xy,
+                    section_drawing.section_figure(outer, holes, bar_xy, tendons=tendon_xy,
                                        title="Preview", show_labels=True, height=560,
                                        scale=_MM, unit="mm"),
                     width="stretch")
@@ -6121,6 +6293,7 @@ def _quick_section_viewport():
     if back:
         st.session_state["_qs_open"] = False
         st.session_state["_next_main_page"] = "Inputs"
+        _render_navigation_context()
         app_run_probe.close_fragment_run(st.session_state)
         st.rerun()
     if apply:
@@ -6158,8 +6331,10 @@ def _quick_section_viewport():
         st.session_state["pts_init"] = True
         st.session_state["_qs_open"] = False
         st.session_state["_next_main_page"] = "Inputs"
+        _render_navigation_context()
         app_run_probe.close_fragment_run(st.session_state)
         st.rerun()
+    _render_navigation_context()
     app_run_probe.close_fragment_run(st.session_state)
 
 
@@ -6346,18 +6521,31 @@ def build_inputs(host=st):
     # Panels carry calculation methodology (Elastic / Plastic), not a limit
     # state -- the same analysis can serve several load combinations.
     input_tab_labels = list(_input_stage_labels().values())
-    aset, sec_tab, mat_tab, loads, project = stateful_input_tabs(
-        s,
-        input_tab_labels,
-        key="_input_tab",
-        state=st.session_state,
-        on_change=_snapshot_completed_input_state,
-    )
+    if st.session_state.get("_workflow_page") in workflow_navigation.BY_KEY:
+        aset, sec_tab, mat_tab, loads, project = input_stages(
+            s, input_tab_labels, st.session_state.get("_input_tab"),
+            state=st.session_state,
+        )
+    else:
+        aset, sec_tab, mat_tab, loads, project = stateful_input_tabs(
+            s, input_tab_labels, key="_input_tab", state=st.session_state,
+            on_change=_snapshot_completed_input_state,
+        )
     # Geometry tables and their drawing remain visible together. The wider input
     # column keeps the four editable point grids practical on a normal laptop.
     sec, sec_preview = sec_tab.columns([1.15, 0.85], gap="large")
     focus = st.session_state.get(_INPUT_ISSUE_FOCUS_KEY, {})
     focus_widget = str(focus.get("widget_key") or "")
+    analysis_groups = ("General", "Shear / torsion / M-V-T", "Crack width", "Detailing", "Fatigue")
+    normalise_stage_selection(st.session_state, "_analysis_group", analysis_groups)
+    selected_group = aset.segmented_control(
+        "Settings group", analysis_groups, key="_analysis_group", required=True,
+        on_change=_snapshot_completed_input_state,
+        help="Choose the settings group. Other groups retain their entered values.",
+    )
+    aset, sts, scw, det, fat = input_stages(
+        aset, analysis_groups, selected_group, state=st.session_state,
+    )
     mode = aset.radio(
         "Bending analysis",
         ["Plastic", "Elastic", "Both"],
@@ -6376,21 +6564,6 @@ def build_inputs(host=st):
     )
     plastic_on = mode in ("Plastic", "Both")
     elastic_on = mode in ("Elastic", "Both")
-    scw = aset.expander(
-        "Elastic crack-width method",
-        expanded=focus_widget.startswith("sls_"),
-    )
-    det = aset.expander("Reinforcement detailing", expanded=False)
-    fat = aset.expander(
-        "Fatigue",
-        expanded=focus_widget.startswith("fatigue_"),
-    )
-    sts = aset.expander(
-        "Shear, torsion & combined (Plastic)",
-        expanded=focus_widget.startswith(
-            ("shear_", "torsion_", "combined_", "capacity_")
-        ),
-    )
     about_slot = project.container()
     save_slot = project.container()
     fatigue_on = _seeded_toggle(
@@ -6622,18 +6795,10 @@ def build_inputs(host=st):
 
     # Load tables are rendered before the crack controls so their per-case
     # choices can enable the numerical crack-width settings in the same rerun.
-    case_frames = _load_case_editors(loads)
-    if fatigue_on:
-        loads.markdown("**Grouped fatigue spectra**")
-        loads.caption(
-            "Each bin combines sustained/basic actions with the cyclic increment. "
-            "Sector solves both states and uses their stress range."
-        )
-        fatigue_spectrum = _fatigue_spectrum_editor(loads)
-    else:
-        fatigue_spectrum = fatigue_inputs.active_spectrum_table(
-            st.session_state.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
-        )
+    case_frames = _load_case_editors(loads, fatigue_on=fatigue_on)
+    fatigue_spectrum = fatigue_inputs.active_spectrum_table(
+        st.session_state.get(fatigue_inputs.SPECTRUM_TABLE_KEY)
+    )
     case_head = load_cases.head_inputs(case_frames)
     pl_case_id = case_head["pl_case_id"]
     pl_case_type = case_head["pl_case_type"]
@@ -7230,27 +7395,33 @@ def build_inputs(host=st):
         "Lap and bundle verification is outside this section-plane spacing check."
     )
 
+    mvt_panel, mvt_preview = sts.columns([1.15, 0.85], gap="large")
+    (mvt_checks, mvt_shared, mvt_shear, mvt_torsion,
+     mvt_combined) = mvt_workspace.stages(
+        mvt_panel, state=st.session_state,
+        on_change=_snapshot_completed_input_state,
+    )
     shear_codes_by_label = _shear_codes()
     shear_methods_by_label = _shear_methods()
 
-    sts.markdown(r"**Combined $M$-$V$-$T$ interaction**")
-    sts.caption(r"Tie the bending (plastic $M$), shear ($V$) and torsion ($T$) checks "
+    mvt_checks.markdown(r"**Combined $M$-$V$-$T$ interaction**")
+    mvt_checks.caption(r"Tie the bending (plastic $M$), shear ($V$) and torsion ($T$) checks "
                  "together under one consistent code edition (6.3.2). Enable Plastic "
                  "(or Both), the shear check and the torsion check as well.")
     combined_on = _seeded_checkbox(
-        sts, r"Check combined $M$-$V$-$T$", False, "combined_on",
+        mvt_checks, r"Check combined $M$-$V$-$T$", False, "combined_on",
         help=r"Tie the $M$, $V$ and $T$ checks together under one shared edition. "
              "Base EN reports its supported physical interactions; the DK NA edition "
              "also applies its action-alone sum rule. See the manual.")
     combined_method = _seeded_selectbox(
-        sts, "Combined edition (shared)", list(shear_codes_by_label),
+        mvt_checks, "Combined edition (shared)", list(shear_codes_by_label),
         codes.EC2_2005_DKNA.label, key="combined_method", disabled=not combined_on,
         help="The single code edition used for the shear and torsion checks while "
              "Combined is on (their own method selectors are locked to this).")
     dkna_combined = combined_method == codes.EC2_2005_DKNA.label
     if dkna_combined:
         combined_mv_independent = _seeded_checkbox(
-            sts, r"Apply separate $M$/$V$ route as a design assumption", False,
+            mvt_combined, r"Apply separate $M$/$V$ route as a design assumption", False,
             "combined_mv_independent", disabled=not combined_on,
             help="DK NA 6.3.2(6): select after verifying the capacity, distribution "
                  "and anchorage of the longitudinal reinforcement added for shear "
@@ -7270,17 +7441,17 @@ def build_inputs(host=st):
     # Filled at the end of this block (once the shear/torsion toggles below are
     # known) with any missing combined-check prerequisites -- so the user sees them
     # here, right under the toggle, instead of only after Calculate.
-    combined_warn = sts.container()
+    combined_warn = mvt_combined.container()
 
-    sts.markdown("**Shear capacity**")
-    sts.caption(r"Directional resistance for $V_{x,Ed}$ and $V_{y,Ed}$. Loads and optional "
+    mvt_shear.markdown("**Shear capacity**")
+    mvt_shear.caption(r"Directional resistance for $V_{x,Ed}$ and $V_{y,Ed}$. Loads and optional "
                 "tension-face overrides are entered per Plastic/capacity case.")
     shear_on = _seeded_checkbox(
-        sts, "Check shear capacity", False, "shear_on",
+        mvt_checks, "Check shear capacity", False, "shear_on",
         help=r"Compute directional $V_{Rd,c}$ and utilisation. Enable links below when "
              "shear reinforcement is present.")
     shear_method = _seeded_selectbox(
-        sts, "Shear method", list(shear_methods_by_label),
+        mvt_checks, "Shear method", list(shear_methods_by_label),
         codes.EC2_2005_DKNA.label,
         key="shear_method", disabled=(not shear_on) or combined_on,
         help=r"Code edition for the shear rules: the 2005 family ($V_{Rd,c}$, 6.2.2(1)) "
@@ -7294,7 +7465,7 @@ def build_inputs(host=st):
         ) == "2023"
     )
     shear_dlower = _seeded_number(
-        sts, r"Aggregate size $D_{\mathrm{lower}}$ (mm)", 4.0, 40.0, 16.0, 1.0, "shear_dlower",
+        mvt_shear, r"Aggregate size $D_{\mathrm{lower}}$ (mm)", 4.0, 40.0, 16.0, 1.0, "shear_dlower",
         disabled=not (shear_on and _shear_2023),
         help=r"Lower sieve size of the coarsest aggregate (2023 method only): "
              r"$d_{dg}=16+D_{\mathrm{lower}}\leq40$ mm for $f_{ck}\leq60$ MPa (8.2.1(4)).")
@@ -7303,7 +7474,7 @@ def build_inputs(host=st):
         and _shear_2023
     )
     shear_gamma_v = _seeded_number(
-        sts,
+        mvt_shear,
         r"Shear partial factor $\gamma_V$",
         None,
         None,
@@ -7325,8 +7496,8 @@ def build_inputs(host=st):
         else float(codes.EC2_2023.shear_gamma_v)
     )
     if combined_on:
-        sts.caption(f"Shear method set by Combined: {combined_method}")
-    bwx, bwy = sts.columns(2)
+        mvt_shear.caption(f"Shear method set by Combined: {combined_method}")
+    bwx, bwy = mvt_shear.columns(2)
     shear_vx_bw = _seeded_number(
         bwx, r"$b_{w,x}$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0,
         "shear_vx_bw", disabled=not shear_on,
@@ -7338,7 +7509,7 @@ def build_inputs(host=st):
         help=r"Web width for $V_{y,Ed}$ (depth along y; bottom/top faces).",
     )
     shear_section_form = _seeded_selectbox(
-        sts,
+        mvt_shear,
         "Shear section form",
         list(shear_inputs.SHEAR_SECTION_FORMS),
         shear_inputs.SHEAR_SECTION_AUTO,
@@ -7354,12 +7525,12 @@ def build_inputs(host=st):
     circular_section = shear_section_form == shear_inputs.SHEAR_SECTION_CIRCULAR
     if shear_on and not _shear_2023 and (variable_section or circular_section):
         _manual_warning(
-            sts,
+            mvt_shear,
             "method-applicability",
             "This section form is not assessed by the selected first-generation "
             "shear method in Sector. Use a separately applicable member calculation."
         )
-    incx, incy = sts.columns(2)
+    incx, incy = mvt_shear.columns(2)
     shear_vx_web_inclination_deg = _seeded_number(
         incx,
         r"$V_x$ reinforcement inclination $\delta_x$ (degrees)",
@@ -7389,7 +7560,7 @@ def build_inputs(host=st):
         ),
     )
     shear_hoop_diameter = _seeded_number(
-        sts,
+        mvt_shear,
         r"Circular hoop diameter $D_h$ (mm)",
         0.0,
         100000.0,
@@ -7402,7 +7573,7 @@ def build_inputs(host=st):
             r"is multiplied by $b_w/D_h$."
         ),
     )
-    fitx, fity = sts.columns(2)
+    fitx, fity = mvt_shear.columns(2)
     shear_vx_fitted_z = _seeded_number(
         fitx,
         r"$V_x$ fitted-section arm $z_x$ (mm)",
@@ -7426,7 +7597,7 @@ def build_inputs(host=st):
         help="Lever arm from the section fitted into the circular section.",
     )
     shear_duct_case = _seeded_selectbox(
-        sts,
+        mvt_shear,
         "Web duct condition",
         list(shear_inputs.SHEAR_DUCT_CASES),
         shear_inputs.SHEAR_DUCT_NONE,
@@ -7438,7 +7609,7 @@ def build_inputs(host=st):
         ),
     )
     ducts_present = shear_duct_case != shear_inputs.SHEAR_DUCT_NONE
-    ductx, ducty = sts.columns(2)
+    ductx, ducty = mvt_shear.columns(2)
     shear_vx_duct_sum = _seeded_number(
         ductx,
         r"$V_x$ duct diameter sum $\Sigma\phi_{duct}$ (mm)",
@@ -7461,7 +7632,7 @@ def build_inputs(host=st):
         disabled=not (shear_on and ducts_present),
         help="Sum of duct outer diameters at the most unfavourable level.",
     )
-    largestx, largesty = sts.columns(2)
+    largestx, largesty = mvt_shear.columns(2)
     shear_vx_duct_largest = _seeded_number(
         largestx,
         r"$V_x$ largest duct diameter (mm)",
@@ -7490,22 +7661,22 @@ def build_inputs(host=st):
             "grouted-steel threshold."
         ),
     )
-    sts.markdown(r"**Torsion ($T_{Rd}$, thin-walled tube)**")
-    sts.caption(
+    mvt_torsion.markdown(r"**Torsion ($T_{Rd}$, thin-walled tube)**")
+    mvt_torsion.caption(
         "EN 1992-1-1 section 6.3 thin-walled-tube calculation. Current closed "
         "links establish the transverse/strut resistance component. Overall "
         "torsion also requires Formula (6.28) longitudinal steel, perimeter "
         "distribution and member anchorage."
     )
     torsion_on = _seeded_checkbox(
-        sts, "Check torsion capacity", False, "torsion_on",
+        mvt_checks, "Check torsion capacity", False, "torsion_on",
         help=r"With current closed links, calculates the $T_{Rd,s}$ / "
              r"$T_{Rd,max}$ resistance component, utilisation and the combined "
              "shear-torsion crushing check. The overall status also considers "
              "longitudinal reinforcement. Without links, only concrete resistance "
              "and reinforcement demand are reported.")
     torsion_case_authorities = _torsion_case_authority_controls(
-        sts,
+        mvt_torsion,
         case_frames[load_cases.PLASTIC_TABLE_KEY],
         case_frames[load_cases.ELASTIC_TABLE_KEY],
         disabled=not torsion_on,
@@ -7530,20 +7701,20 @@ def build_inputs(host=st):
         capacity.TORSION_CASE_MEMBER_SCOPE_KEY
     ]
     if torsion_on:
-        sts.caption(
+        mvt_torsion.caption(
             "Sector does not determine compatibility-torsion redistribution, "
             "static indeterminacy, stability independence, restraints or member "
             "response."
         )
     torsion_method = _seeded_selectbox(
-        sts, "Torsion method", list(shear_codes_by_label),
+        mvt_checks, "Torsion method", list(shear_codes_by_label),
         codes.EC2_2005_DKNA.label,
         key="torsion_method", disabled=(not torsion_on) or combined_on,
         help="Code edition for the torsion rules. The DK NA:2024 uses its plasticity "
              r"pure-torsion strut factor $\nu_t=0.7(0.7-f_{ck}/200)$ (5.104 NA) in "
              r"place of the recommended $\nu=0.6(1-f_{ck}/250)$.")
     if combined_on:
-        sts.caption(f"Torsion method set by Combined: {combined_method}")
+        mvt_torsion.caption(f"Torsion method set by Combined: {combined_method}")
     effective_torsion_method = combined_method if combined_on else torsion_method
     torsion_gamma_ct_boolean_state = isinstance(
         st.session_state.get("torsion_gamma_ct"), (bool, np.bool_)
@@ -7555,15 +7726,15 @@ def build_inputs(host=st):
         st.session_state["torsion_gamma_ct"] = None
         _mark_torsion_gamma_ct_custom()
     torsion_gamma_default = _seed_torsion_gamma_ct(effective_torsion_method)
-    sts.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
+    mvt_torsion.caption(r"The applied torsion $T_{Ed}$ is entered in the Loads panel.")
     _tors = torsion_on
-    sts.caption(
+    mvt_torsion.caption(
         "The selected closed stirrup supplies one leg to torsion; longitudinal "
         "demand uses the selected reinforcing material. Only the enabled shared-"
         "link selection establishes link presence."
     )
     torsion_tef = _seeded_number(
-        sts, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
+        mvt_torsion, r"Wall thickness $t_{ef}$ (mm, 0 = auto)", 0.0, 5000.0, 0.0, 5.0,
         "torsion_tef", disabled=not _tors,
         help="Zero applies A/u with the wall-specific lower bound from "
              "the longitudinal reinforcement centres and the real-wall limit for "
@@ -7572,7 +7743,7 @@ def build_inputs(host=st):
              "global effective-wall-thickness override to 0 mm and provide "
              "complete reinforcement locations for each sub-tube.")
     torsion_gamma_ct = _seeded_number(
-        sts,
+        mvt_torsion,
         r"Concrete tensile factor $\gamma_{ct}$",
         None,
         None,
@@ -7602,7 +7773,7 @@ def build_inputs(host=st):
         or torsion_gamma_ct_number <= 0.0
     ):
         torsion_gamma_ct_error = _TORSION_GAMMA_CT_INPUT
-        sts.error(engineer_messages.error_detail(
+        mvt_torsion.error(engineer_messages.error_detail(
             torsion_gamma_ct_error,
             fallback=_TORSION_GAMMA_CT_INPUT,
             context="torsion concrete tensile factor",
@@ -7613,13 +7784,13 @@ def build_inputs(host=st):
         rel_tol=0.0,
         abs_tol=1e-12,
     ):
-        sts.caption(
+        mvt_torsion.caption(
             f"Custom gamma_ct = {torsion_gamma_ct_number:g}; the selected "
             f"method default is {torsion_gamma_default:g}. The custom value is "
             "used unchanged."
         )
     torsion_nu_v = _seeded_checkbox(
-        sts, r"$\nu_t = \nu_v$ (closed stirrups + distributed long. steel)", False,
+        mvt_torsion, r"$\nu_t = \nu_v$ (closed stirrups + distributed long. steel)", False,
         "torsion_nu_v",
         disabled=not (
             _tors and st.session_state.get("shear_links") is True
@@ -7630,7 +7801,7 @@ def build_inputs(host=st):
              "of the modelled bars or member anchorage. Requires current shared "
              "links and the DK NA edition.")
     torsion_subdivide = _seeded_checkbox(
-        sts, "Subdivide into sub-tubes (T / compound section)", False,
+        mvt_torsion, "Subdivide into sub-tubes (T / compound section)", False,
         "torsion_subdivide", disabled=not _tors,
         help="EN 1992-1-1 6.3.1(3): define positioned component rectangles for a "
              "T, L, I or flanged section. Rectangle 1 is the web paired with shear; "
@@ -7638,7 +7809,7 @@ def build_inputs(host=st):
     torsion_subrects = []
     if torsion_subdivide and _tors:
         n_sub = int(_seeded_number(
-            sts, "Number of sub-rectangles", 2.0, 4.0, 2.0, 1.0, "torsion_nsub",
+            mvt_torsion, "Number of sub-rectangles", 2.0, 4.0, 2.0, 1.0, "torsion_nsub",
             help="Component rectangles: a T = web + flange (2), a double console = web "
                  "+ 2 consoles (3). The first is the web."))
         defaults = (
@@ -7650,7 +7821,7 @@ def build_inputs(host=st):
         for i in range(n_sub):
             role = "web" if i == 0 else f"part {i + 1}"
             x_default, y_default, b_default, h_default = defaults[i]
-            cx_col, cy_col, cb, ch = sts.columns(4)
+            cx_col, cy_col, cb, ch = mvt_torsion.columns(4)
             x_i = _seeded_number(
                 cx_col, fr"$x_{{{i + 1}}}$ (mm)", -100000.0, 100000.0, x_default, 10.0,
                 f"torsion_sub_x{i}", disabled=not _tors,
@@ -7668,7 +7839,7 @@ def build_inputs(host=st):
                 f"torsion_sub_h{i}", disabled=not _tors,
                 help=f"Global y-direction height of {role}.")
             torsion_subrects.append((x_i, y_i, b_i, h_i))
-        sts.caption(
+        mvt_torsion.caption(
             "Define a complete, non-overlapping partition of the concrete net "
             "area. Rectangle 1 is the web used with shear in the combined checks "
             "(6.3.1(3))."
@@ -7676,9 +7847,9 @@ def build_inputs(host=st):
     # One current authority and one stored geometry serve both physical roles. Shear
     # uses the selected number of vertical legs; torsion uses one leg of the same
     # closed, anchored loop. Stored positive geometry never implies presence.
-    sts.markdown("**Compression strut and shared links (shear + torsion)**")
+    mvt_shared.markdown("**Compression strut and shared links (shear + torsion)**")
     shear_links = _seeded_checkbox(
-        sts,
+        mvt_shared,
         "Shared links / closed torsion stirrups present",
         False,
         "shear_links",
@@ -7694,16 +7865,16 @@ def build_inputs(host=st):
     _shared_links = bool(_links or _torsion_links)
     _strut_model = bool(_links or torsion_on)
     if torsion_nu_v and not _torsion_links:
-        sts.caption(
+        mvt_shared.caption(
             "The nu_t = nu_v detailing option is inactive while current shared "
             "links / closed torsion stirrups are absent."
         )
-    sts.caption(
+    mvt_shared.caption(
         "The compression-strut band also supports torsion concrete resistance. "
         "Stirrup geometry applies only with shared links enabled: shear uses n "
         "legs and torsion one closed-loop leg."
     )
-    strut_lo, strut_hi = sts.columns(2)
+    strut_lo, strut_hi = mvt_shared.columns(2)
     strut_cot_min = _seeded_number(
         strut_lo,
         r"Compression strut $\cot\theta_{\min}$",
@@ -7754,7 +7925,7 @@ def build_inputs(host=st):
             strut_cot_min < code_cot_min
             or strut_cot_max > code_cot_max
         ):
-            sts.caption(
+            mvt_shared.caption(
                 "Warning: the shared strut bounds fall outside the selected "
                 "method's permitted range "
                 f"{code_cot_min:g}..{code_cot_max:g}. Dependent design checks "
@@ -7766,7 +7937,7 @@ def build_inputs(host=st):
             "_capacity_steel_pending_material_id"
         )
     capacity_steel_material_id = _seeded_selectbox(
-        sts, "Reference reinforcing material", mild_material_ids,
+        mvt_shared, "Reference reinforcing material", mild_material_ids,
         mild_material_ids[0], "capacity_steel_material_id",
         disabled=not (shear_on or torsion_on),
         format_func=lambda value: next(
@@ -7778,7 +7949,7 @@ def build_inputs(host=st):
              "for shear/torsion member checks. Element-level bending and stress "
              "calculations use each bar's assigned material.",
     )
-    legs_x, legs_y = sts.columns(2)
+    legs_x, legs_y = mvt_shared.columns(2)
     shear_vx_link_legs = _seeded_number(
         legs_x, r"Effective legs for $V_x$", 1.0, 20.0, 2.0, 1.0,
         "shear_vx_link_legs", disabled=not _links,
@@ -7789,7 +7960,7 @@ def build_inputs(host=st):
         "shear_vy_link_legs", disabled=not _links,
         help=r"Number of stirrup legs crossing the $V_y$ shear plane.",
     )
-    spacing_x, spacing_y = sts.columns(2)
+    spacing_x, spacing_y = mvt_shared.columns(2)
     shear_vx_transverse_leg_spacing = _seeded_number(
         spacing_x,
         r"Max. $V_x$-leg spacing along $y$ (mm; 0 = screen)",
@@ -7816,26 +7987,26 @@ def build_inputs(host=st):
              r"legs parallel to $V_y$. Zero uses gross web breadth as an upper-"
              "bound screen; enter actual spacing if the screen exceeds the limit.",
     )
-    sts.caption(
+    mvt_shared.caption(
         r"$s_t$ is the in-section distance between parallel link legs: along $y$ "
         r"for $V_x$ and along $x$ for $V_y$. Longitudinal stirrup spacing is $s$."
     )
     shear_link_dia = _seeded_number(
-        sts, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
+        mvt_shared, "Stirrup diameter (mm)", 4.0, 40.0, 10.0, 1.0, "shear_link_dia",
         disabled=not _shared_links,
         help=r"Stirrup bar diameter $\phi$; one leg has area $\pi\phi^2/4$.")
     shear_link_s = _seeded_number(
-        sts, r"Stirrup spacing $s$ (mm)", 10.0, 2000.0, 150.0, 10.0, "shear_link_s",
+        mvt_shared, r"Stirrup spacing $s$ (mm)", 10.0, 2000.0, 150.0, 10.0, "shear_link_s",
         disabled=not _shared_links, help="Longitudinal spacing of the stirrups.")
     shear_fywk = _seeded_number(
-        sts, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
+        mvt_shared, r"Stirrup yield $f_{ywk}$ (MPa)", 100.0, 900.0, 500.0, 10.0, "shear_fywk",
         disabled=not _shared_links,
         help="Characteristic stirrup yield; the design value is divided by the "
              r"selected material's final effective $\gamma_s$. Enter an appropriately "
              r"reduced $f_{ywk}$ where full anchorage is unavailable.")
     if transverse_detailing_on and not _shared_links:
         _manual_warning(
-            sts,
+            mvt_shared,
             "calculation-warning",
             "Link detailing is selected, but no links are defined for the active "
             "shear/torsion actions.",
@@ -7863,6 +8034,18 @@ def build_inputs(host=st):
                 "Combined M-V-T needs all of these (it is not evaluated until "
                 "then):  \n" + lines,
             )
+
+    if combined_on:
+        mvt_workspace.requirement_links(
+            mvt_checks, reqs, state=st.session_state,
+            key_prefix="mvt_checks_prerequisite", show_status=True,
+            on_change=_snapshot_completed_input_state,
+        )
+        mvt_workspace.requirement_links(
+            mvt_combined, reqs, state=st.session_state,
+            key_prefix="mvt_combined_prerequisite",
+            on_change=_snapshot_completed_input_state,
+        )
 
     # (Section / Material / Loads tabs were created at the top; fill them now.)
     sec.caption("Define the section with Quick Section or edit the point tables below.")
@@ -8169,14 +8352,14 @@ def build_inputs(host=st):
                 "will be reported as INVALID until every assignment is resolved.",
             )
     label_scale, label_min_gap = _section_input_preview(
-        sec_preview,
+        mvt_preview if sts.open else sec_preview,
         outer,
         holes,
         bars,
         tendons,
         bar_elements,
         tendon_elements,
-        visible=bool(sec_tab.open),
+        visible=bool(sec_tab.open or sts.open),
     )
 
     # In a purely elastic-bending calculation the design stress-strain laws do not
@@ -8851,7 +9034,11 @@ def _input_workspace() -> None:
         inp = build_inputs(st)
     finally:
         app_run_probe.stop_phase(st.session_state, pane_token)
+    _render_navigation_context(restore=not bool(focus))
     _commit_input_fragment(inp)
+    if st.session_state.get("_next_workflow_page") in workflow_navigation.BY_KEY:
+        app_run_probe.close_fragment_run(st.session_state)
+        st.rerun(scope="app")
     app_run_probe.close_fragment_run(st.session_state)
 
 
@@ -12000,7 +12187,7 @@ def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
             fig = _memo_fig(
                 "section",
                 sig,
-                lambda: viz.section_figure(
+                lambda: section_drawing.section_figure(
                     outer,
                     holes,
                     bar_xy,
@@ -12095,6 +12282,28 @@ def _ui_summary_quantity(row, name):
     }
     return "".join(labels.get(plain, plain) if kind == "catalogue" else plain
                    for kind, plain in fragments)
+
+
+def _review_overview_inputs(row):
+    """Open a related input without changing its value or declaring a check."""
+    destination, group, mvt_page = result_workspace.input_destination(row)
+    if group:
+        st.session_state["_analysis_group"] = group
+        st.session_state.setdefault(_INPUT_STATE_KEY, {})["_analysis_group"] = group
+    if mvt_page:
+        mvt_workspace.select_page(st.session_state, mvt_page)
+    if destination == "actions" and row.get("family") in {"plastic", "elastic"}:
+        family = row["family"].title()
+        table_key = action_workspace.TABLES[family]
+        frame = load_cases.normalise_table(st.session_state.get(table_key), table_key)
+        matches = [i for i, name in enumerate(frame[load_cases.NAME]) if name == row.get("case")]
+        if len(matches) == 1:
+            st.session_state[action_workspace.FAMILY_KEY] = family
+            st.session_state[action_workspace.selection_key(table_key)] = matches[0]
+            action_workspace.retain_selection(st.session_state, table_key)
+            for key in (action_workspace.FAMILY_KEY, action_workspace.selection_key(table_key)):
+                st.session_state.setdefault(_INPUT_STATE_KEY, {})[key] = st.session_state[key]
+    st.session_state["_next_workflow_page"] = destination
 
 
 def results_overview_view(inp, results, *, stale=False):
@@ -12217,52 +12426,78 @@ def results_overview_view(inp, results, *, stale=False):
         ),
     }
     if not summary.empty:
-        output_mask = [
-            str(row.get("overview_key") or "").startswith("elastic_stress:")
-            or row.get("overview_key") == "cracking_threshold"
-            or row.get("status") in {"CALCULATED", "CALCULATED - NO LIMIT COMPARISON"}
-            for row in rows
-        ]
-        for title, mask in (
-            ("Checks and criteria", [not value for value in output_mask]),
-            ("Calculated outputs", output_mask),
-        ):
-            group = summary.loc[mask]
-            if group.empty:
-                continue
-            st.markdown(f"**{title}**")
-            styled = group.style.map(
-                lambda value: status_colours.get(str(value), ""),
-                subset=["Status"],
+        choice = st.segmented_control(
+            "Result register", result_workspace.FILTERS, default="All checks",
+            key="_overview_filter", persist_state="session",
+            help="Filter the governing records. Each result retains its assessment status and criterion.",
+        )
+        visible_rows = result_workspace.filter_rows(rows, choice)
+        table, details = st.columns([1.2, 1], gap="large")
+        chosen = result_workspace.reconcile_selection(
+            visible_rows, st.session_state.get("_overview_selection"),
+        )
+        if visible_rows:
+            compact = pd.DataFrame([
+                {"Check": r["check"], "Case": r["case"], "Status": r["status"]}
+                for r in visible_rows
+            ])
+            table.caption("Select a row to review its result and criterion.")
+            event = table.dataframe(
+                compact.style.map(lambda value: status_colours.get(str(value), ""), subset=["Status"]),
+                hide_index=True, width="stretch", height=min(580, 36 * (len(compact) + 1)),
+                on_select="rerun", selection_mode="single-row",
+                selection_default={"selection": {"rows": [chosen]}},
+                key=result_workspace.table_key(visible_rows, choice),
+                column_config={"Check": st.column_config.TextColumn(width="medium"),
+                               "Case": st.column_config.TextColumn(width="small"),
+                               "Status": st.column_config.TextColumn(width="medium")},
             )
-            st.dataframe(
-                styled, hide_index=True, width="stretch",
-                height=min(460, 36 * (len(group) + 1)),
-                column_config={
-                    "Check": st.column_config.TextColumn(width=220),
-                    "Governing action": st.column_config.TextColumn(width=130, pinned=True),
-                    "Status": st.column_config.TextColumn(width=250),
-                    "Result": st.column_config.TextColumn(width=250),
-                    "Criterion": st.column_config.TextColumn(width=230),
-                    "View": st.column_config.TextColumn(width=170),
-                },
-            )
+            selected_indices = event.selection.rows
+            if len(selected_indices) == 1 and 0 <= selected_indices[0] < len(visible_rows):
+                chosen = selected_indices[0]
+            selected_row = visible_rows[chosen]
+            st.session_state["_overview_selection"] = result_workspace.identity(selected_row)
+            with details.container(border=True):
+                st.markdown("**Selected result**")
+                st.text(selected_row["check"] + " | " + selected_row["case"])
+                st.markdown("**Status**")
+                st.write(selected_row["status"])
+                st.markdown("**Result**")
+                st.write(_ui_summary_quantity(selected_row, "result") or "-")
+                st.markdown("**Criterion**")
+                st.write(_ui_summary_quantity(selected_row, "criterion") or "No numerical criterion is stated for this output.")
+                if selected_row.get("note"):
+                    st.markdown("**Conditions and scope**")
+                    st.write(_ui_summary_quantity(selected_row, "note"))
+                st.button("Open selected result", key="overview_open_result",
+                          on_click=_open_overview_result, args=(selected_row, inp, results),
+                          help="Open the result view for this concurrent case.")
+                if st.button("Review related inputs", key="overview_related_inputs"):
+                    _review_overview_inputs(selected_row)
+                    return True
+                if st.button("Explain this status", key="overview_status_help"):
+                    st.session_state["_help_topic"] = "result-status"
+                    st.session_state["_next_workflow_page"] = "help"
+                    return True
+        else:
+            table.info("No governing results match this filter.")
         st.caption(
             f"{len(rows)} governing results \u00b7 {failure_count} fail / invalid \u00b7 "
-            f"{warning_count} review / stale \u00b7 {len(information_rows)} scope / availability. "
-            "Scroll tables horizontally to read every result and criterion."
+            f"{warning_count} review / stale \u00b7 {len(information_rows)} scope / availability."
         )
-        detail_key = "_overview_result_detail"
-        if st.session_state.get(detail_key) not in range(len(rows)):
-            st.session_state[detail_key] = 0
-        detail_index = st.selectbox(
-            "Result details", range(len(rows)), key=detail_key, persist_state="session",
-            format_func=lambda index: f"{rows[index]['check']} - {rows[index]['case']}",
-        )
-        st.button(
-            "Open selected result", key="overview_open_result",
-            on_click=_open_overview_result,
-            args=(rows[detail_index], inp, results),
+        comparison = st.expander("Full comparison table", expanded=False)
+        comparison.dataframe(
+            summary.style.map(lambda value: status_colours.get(str(value), ""), subset=["Status"]),
+            hide_index=True, width="stretch",
+            height=min(460, 36 * (len(summary) + 1)),
+            column_config={
+                "Check": st.column_config.TextColumn(width=220),
+                "Governing action": st.column_config.TextColumn(width=130, pinned=True),
+                "Status": st.column_config.TextColumn(width=250),
+                "Result": st.column_config.TextColumn(width=250),
+                "Criterion": st.column_config.TextColumn(width=230),
+                "View": st.column_config.TextColumn(width=170),
+            },
         )
 
     for row in rows:
@@ -13094,7 +13329,7 @@ def _section_field_panel(inp, result, *, family, point_index=None):
     quantity = st.segmented_control(
         "Contour quantity", ("stress", "strain"), default="stress",
         required=True, format_func=str.capitalize,
-        key=f"{family.lower()}_field_quantity", persist_state="session")
+        key=f"{family.lower()}_field_quantity", persist_state="session", help='Choose stress or strain for the displayed section field. Tension is positive and compression is negative. The calculation state stays the same.')
     duration = "TOTAL"
     if family == "Elastic":
         duration = st.segmented_control(
@@ -13102,7 +13337,7 @@ def _section_field_panel(inp, result, *, family, point_index=None):
             required=True, key="elastic_field_duration", persist_state="session",
             format_func=lambda value: (
                 "Combined actions (TOTAL)" if value == "TOTAL"
-                else "Sustained actions (LONG)"))
+                else "Sustained actions (LONG)"), help='LONG shows sustained actions. TOTAL combines sustained actions with the additional instantaneous increment, using the existing creep and prestress definitions.')
     try:
         field, figures = section_fields.field_pair(
             inp, result, family=family, point_index=point_index, duration=duration)
@@ -14407,7 +14642,7 @@ def fatigue_view(inp, results, *, stale=False):
         detail_options,
         persist_state="session", key=detail_key,
         required=True,
-    )
+     help='Choose the fatigue result tables for the selected spectrum: reinforcement, concrete, spectrum bins or calculation basis.')
     if detail == "Reinforcement":
         _fatigue_reinforcement_panel(payload, spectrum)
     elif detail == "Concrete":
@@ -14658,7 +14893,7 @@ def shear_view(inp, results, *, global_results=None):
                 format_func=lambda value: "Vx,Ed" if value == "vx" else "Vy,Ed",
                 persist_state="session", key="shear_direction_view",
                 required=True,
-            )
+             help='Choose the shear direction to examine. Vx acts along x and pairs with My; Vy acts along y and pairs with Mx.')
         else:
             selected = options[0]
         sh = directions[selected or options[0]]
@@ -16635,7 +16870,7 @@ def combined_view(inp, results):
             format_func=lambda value: "Vx,Ed + TEd" if value == "vx" else "Vy,Ed + TEd",
             persist_state="session", key="combined_direction_view",
             required=True,
-        )
+         help='Choose the direction of the combined M-V-T result to examine. Vx pairs with My; Vy pairs with Mx.')
         c = directions[selected or options[0]]
     else:
         c = aggregate
@@ -17418,9 +17653,9 @@ def _analysis_workspace(inp):
     c_view, c_calc = st.columns([3, 1])
     # Create Calculate before View; the containers preserve their visual order.
     c_calc.markdown("<div style='height:1.7em'></div>", unsafe_allow_html=True)
-    calc = c_calc.button(
-        "Calculate", type="primary", key="calculate", width="stretch",
-        help="Run the selected analysis for the current inputs.",
+    calc = workflow_navigation.take_calculate_request(
+        st.session_state, inp, pending=_has_uncommitted_inputs(),
+        generation=st.session_state.get(_PROJECT_UPLOAD_GENERATION_KEY, 0),
     )
     case_errors = list(
         case_analysis.validation_errors(inp)
@@ -17430,7 +17665,11 @@ def _analysis_workspace(inp):
     heightened_errors = _heightened_crack_control_validation_errors(inp)
     section_input_issues = input_issues.section_issues(inp)
     requested_input_issues = (
-        *input_issues.case_issues(case_errors),
+        *input_issues.case_issues(
+            case_errors,
+            plastic=st.session_state.get(load_cases.PLASTIC_TABLE_KEY),
+            elastic=st.session_state.get(load_cases.ELASTIC_TABLE_KEY),
+        ),
         *input_issues.heightened_issues(heightened_errors),
     )
     all_input_issues = (*section_input_issues, *requested_input_issues)
@@ -17570,6 +17809,7 @@ def _analysis_workspace(inp):
             "The displayed calculation cannot be matched to its inputs. Press "
             "Calculate before viewing the results."
         )
+        _render_navigation_context()
         app_run_probe.close_fragment_run(st.session_state)
         return
     if inp.get("fatigue_assignment_error"):
@@ -17613,6 +17853,7 @@ def _analysis_workspace(inp):
         else results
     )
     if capacity_contract_stale and view in _CAPACITY_RESULT_VIEWS:
+        _render_navigation_context()
         app_run_probe.close_fragment_run(st.session_state)
         return
     family = (
@@ -17637,7 +17878,9 @@ def _analysis_workspace(inp):
         )
 
     if view == "Results Overview":
-        results_overview_view(result_inp, visible_results, stale=input_stale)
+        if results_overview_view(result_inp, visible_results, stale=input_stale):
+            app_run_probe.close_fragment_run(st.session_state)
+            st.rerun(scope="app")
     elif view == "Plastic Results":
         plastic_view(view_inp, view_results)
     elif view == "N-M Interaction":
@@ -17654,7 +17897,120 @@ def _analysis_workspace(inp):
         combined_view(view_inp, view_results)
     else:
         elastic_view(view_inp, view_results, global_results=visible_results)
+    _render_navigation_context()
     app_run_probe.close_fragment_run(st.session_state)
+
+
+def _render_navigation_context(*, restore=True):
+    page = st.session_state.get("_workflow_page", "section")
+    subpage = ""
+    if page == "materials":
+        subpage = str(st.session_state.get("_material_tab") or "Concrete")
+    elif page == "actions":
+        subpage = str(st.session_state.get(action_workspace.FAMILY_KEY) or "Plastic")
+    elif page == "settings":
+        subpage = str(st.session_state.get("_analysis_group") or "General")
+        if subpage == "Shear / torsion / M-V-T":
+            subpage += " / " + str(st.session_state.get("_mvt_page") or "Checks and methods")
+    elif page == "results":
+        subpage = "Quick Section" if st.session_state.get("_qs_open") else str(st.session_state.get("view") or VIEWS[0])
+    elif page == "report":
+        subpage = str(st.session_state.get(project_io.REPORT_PROFILE_KEY) or _REPORT_DEFAULT)
+    elif page == "help":
+        subpage = str(st.session_state.get("manual_part") or "")
+        section = st.session_state.get("_manual_section")
+        if isinstance(section, tuple) and len(section) == 2 and type(section[1]) is int:
+            subpage += " / topic " + str(section[1])
+    navigation_context.render(page, subpage, project_epoch=st.session_state.get("_project_context_epoch", 0), restore=restore)
+
+
+@st.fragment(run_every=10)
+def _persistence_context():
+    st.markdown("**Project records**")
+    for key, label in (("_autosave_last", "Recovery updated"), ("_project_export_offered_at", "Project export offered")):
+        value = st.session_state.get(key)
+        if key == "_autosave_last":
+            displayed = str(value) if value else "Not yet"
+        else:
+            displayed = time.strftime("%H:%M:%S", time.localtime(value)) if value else "Not yet"
+        st.caption(label + ": " + displayed)
+
+
+def _request_workflow_calculation():
+    """Queue one intentional calculation of the completed current project."""
+    inp = st.session_state.get("_latest_inputs")
+    st.session_state.pop("_workflow_calculate_request", None)
+    if inp is None or _has_uncommitted_inputs():
+        st.session_state["_workflow_notice"] = "Complete the current input edit before calculation."
+        return
+    st.session_state["_workflow_calculate_request"] = {
+        "signature": inp.get("signature"),
+        "generation": st.session_state.get(_PROJECT_UPLOAD_GENERATION_KEY, 0),
+    }
+    st.session_state["_next_workflow_page"] = "results"
+    st.rerun(scope="app")
+
+
+@st.fragment(run_every=2)
+def _workflow_context():
+    """Keep project, calculation and recovery state visible without a solve."""
+    inp = st.session_state.get("_latest_inputs")
+    pending = _has_uncommitted_inputs()
+    state, explanation = workflow_navigation.context_status(
+        inp, st.session_state, pending=pending,
+        contract_current=st.session_state.get(_RESULT_CAPACITY_CONTRACT_KEY) == _CAPACITY_RESULT_CONTRACT_TOKEN,
+    )
+    with st.container(border=True):
+        project, status, action = st.columns([2.2, 1.7, 1])
+        project.markdown("**" + str(st.session_state.get("rep_proj_name") or "Current project") + "**")
+        project.caption(str(st.session_state.get("rep_section") or "Section") + " | " + str((inp or {}).get("mode") or "Analysis inputs"))
+        status.markdown("**" + state + "**")
+        status.caption(explanation)
+        last = st.session_state.get("_autosave_last")
+        if last:
+            project.caption("Recovery updated: " + str(last))
+        if action.button("Calculate", type="primary", key="calculate", width="stretch",
+                         disabled=inp is None or pending,
+                         help="Run the selected analysis for the completed current inputs."):
+            _request_workflow_calculation()
+
+
+def _workflow_navigation():
+    """Expose public routes while keeping the original workspace state owners."""
+    def destination():
+        pass
+    pages = {
+        page.key: st.Page(destination, title=page.label, url_path=page.key,
+                          icon=":material/" + page.icon + ":", default=page.key == "section")
+        for page in workflow_navigation.PAGES
+    }
+    selected = st.navigation({
+        "Prepare": [pages[k] for k in ("section", "materials", "actions", "settings")],
+        "Review and issue": [pages[k] for k in ("results", "report")],
+        "Project": [pages[k] for k in ("project", "help")],
+    })
+    requested = st.session_state.pop("_next_workflow_page", None)
+    legacy = st.session_state.pop("_next_main_page", None)
+    if requested is None and legacy in app_run_probe.WORKSPACE_NAMES:
+        stage = next((stage for stage, label in _input_stage_labels().items()
+                      if label == st.session_state.get("_input_tab")), None)
+        requested = workflow_navigation.legacy_destination(legacy, stage)
+    current = next(k for k, page in pages.items() if page is selected)
+    if requested in pages and requested != current:
+        st.switch_page(pages[requested])
+    selected.run()
+    if st.session_state.get("_qs_open") and current != "results":
+        st.session_state["_qs_open"] = False
+    page = workflow_navigation.BY_KEY[current]
+    st.session_state["_workflow_page"] = current
+    st.session_state["_main_page"] = page.workspace
+    if page.stage:
+        label = _input_stage_labels()[page.stage]
+        st.session_state["_input_tab"] = label
+        for key in (_INPUT_STATE_KEY, _PENDING_INPUT_EVENTS_KEY):
+            if key in st.session_state:
+                st.session_state[key]["_input_tab"] = label
+    return page
 
 
 # ---------------------------------------------------------------------------
@@ -17674,20 +18030,10 @@ _normalise_report_profile_session_state()
 if st.session_state.get("view") in _VIEW_ALIASES:
     st.session_state["view"] = _VIEW_ALIASES[st.session_state["view"]]
 manual_open = bool(st.session_state.get("_manual_open"))
+public_page = _workflow_navigation()
 quick_section_open = bool(st.session_state.get("_qs_open"))
-# Fragment exit buttons cannot modify an already-instantiated navigation widget.
-# They queue the destination instead; a full rerun applies it here, before the
-# widget is created again.
-next_main_page = st.session_state.pop("_next_main_page", None)
-if next_main_page in app_run_probe.WORKSPACE_NAMES:
-    st.session_state["_main_page"] = next_main_page
-# The Quick Section builder remains a full-width Analysis view. The manual is a
-# dialog and deliberately leaves the current workspace page mounted behind it.
 if quick_section_open:
     st.session_state["_main_page"] = "Analysis"
-st.session_state.setdefault("_main_page", "Inputs")
-if st.session_state["_main_page"] not in app_run_probe.WORKSPACE_NAMES:
-    st.session_state["_main_page"] = "Inputs"
 _restore_input_state(
     replace=(
         _v093_state_purged
@@ -17715,17 +18061,29 @@ for _migration_warning in st.session_state.get(
 ):
     _manual_warning(st, "crack-criterion-missing", _migration_warning)
 
-main_page = st.segmented_control(
-    "Workspace",
-    list(app_run_probe.WORKSPACE_NAMES),
-    key="_main_page",
-    on_change=_snapshot_completed_input_state,
-    required=True,
-    width="stretch",
-    label_visibility="collapsed",
-)
+_workflow_context()
+with st.sidebar:
+    _persistence_context()
+if public_page.key in help_navigation.PAGE_HELP:
+    title, help_control = st.columns([5, 1])
+    title.subheader(public_page.label)
+    with help_control.popover("Page help", icon=":material/help:", width="stretch"):
+        st.write(help_navigation.PAGE_HELP[public_page.key])
+        if st.button("Open full manual", key="_context_full_manual"):
+            st.session_state["_help_topic"] = public_page.key
+            st.session_state["_next_workflow_page"] = "help"
+            st.rerun(scope="app")
+if st.session_state.get("_workflow_notice"):
+    _manual_warning(st, "input-invalid", st.session_state.pop("_workflow_notice"))
+main_page = st.session_state["_main_page"]
 
-if main_page == "Inputs":
+if public_page.key == "help":
+    reset_input_stage_mounts(st.session_state)
+    st.subheader("Help and manual")
+    import manual
+    manual.render_manual_streamlit(full_page=True)
+    _render_navigation_context()
+elif main_page == "Inputs":
     st.session_state[_REPORT_BUILD_KEY] = False
     _input_workspace()
 elif main_page == "Analysis":
@@ -17753,7 +18111,7 @@ _idle_autosave()
 # Keep the current workspace visible behind the manual. The
 # dialog is imported and built only while open, so its figures stay off the normal
 # rerun path.
-if manual_open:
+if manual_open and public_page.key != "help":
     import manual                          # lazy: keep the manual off the hot path
     manual.render_manual_dialog()
 app_run_probe.close_run(st.session_state)
