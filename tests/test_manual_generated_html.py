@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import base64
 import hashlib
 import inspect
 import sys
@@ -403,7 +404,10 @@ def test_each_generated_class_token_is_supported_on_its_owner(owner_tag, token):
     attributes = f'class="{token}"'
     if owner_tag == "code" and token == "math":
         attributes += ' aria-label="Mathematical expression: Visible"'
-    if owner_tag == "img":
+    if owner_tag == "img" and token == "publication-logo":
+        encoded = base64.b64encode((ROOT / "assets/logo.png").read_bytes()).decode("ascii")
+        body = f'<header><img {attributes} alt="Sweco" src="data:image/png;base64,{encoded}"></header>'
+    elif owner_tag == "img":
         body = f'<figure><img {attributes} alt="" src="data:image/png;base64,iVBORw0KGgo="></figure>'
     else:
         body = f'<{owner_tag} {attributes}>Visible</{owner_tag}>'

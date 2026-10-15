@@ -381,13 +381,8 @@ def _fresh():
 
 
 def _goto_page(at, page):
-    try:
-        current = at.session_state["_main_page"]
-    except KeyError:
-        current = None
-    if current != page:
-        at.segmented_control(key="_main_page").set_value(page).run()
-    return at
+    from app_workflow_navigation import goto_page
+    return goto_page(at, page)
 
 
 def _calculate(at):
@@ -454,6 +449,7 @@ def _mvt(at, my=0.0, torsion=True):
 def _valid_t_subdivision(at, *, complete_cage=True):
     """Apply a 1000 x 200 flange + 300 x 600 web and its positioned partition."""
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set(at, ("selectbox", "shape", "T-section"))
     _set_and_click(

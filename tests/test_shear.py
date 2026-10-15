@@ -1385,13 +1385,8 @@ def _fresh():
 
 
 def _goto_page(at, page):
-    try:
-        current = at.session_state["_main_page"]
-    except KeyError:
-        current = None
-    if current != page:
-        at.segmented_control(key="_main_page").set_value(page).run()
-    return at
+    from app_workflow_navigation import goto_page
+    return goto_page(at, page)
 
 
 def _calculate(at):
@@ -1556,6 +1551,8 @@ def test_app_sparse_links_keep_concrete_capacity_and_fail_detailing_separately()
 def test_app_shear_check_produces_a_resistance():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(at, "calculate", ("number_input", "shear_V", 100.0))
     assert not at.exception
@@ -1583,6 +1580,7 @@ def test_app_circular_2023_fails_closed_then_applies_factor_and_fitted_arm(
     at = _fresh()
     at.run()
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set(at, ("selectbox", "shape", "Circular"))
     _set_and_click(at, "qs_apply")
@@ -1698,6 +1696,7 @@ def test_app_circular_vx_torsion_rejects_invalid_off_axis_arm_then_recovers():
     at = _fresh()
     at.run()
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set(at, ("selectbox", "shape", "Circular"))
     _set_and_click(at, "qs_apply")
@@ -1874,6 +1873,7 @@ def test_app_variable_width_2023_applies_cosine_and_2005_fails_closed():
     at = _fresh()
     at.run()
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set(at, ("selectbox", "shape", "T-section"))
     _set_and_click(at, "qs_apply")
@@ -2128,6 +2128,8 @@ def test_app_slab_detailing_exposes_the_modelled_section_cut_direction():
 def test_app_biaxial_shear_reports_two_directions_without_interaction_claim():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -2189,6 +2191,8 @@ def test_pub_m01_incomplete_biaxial_wrapper_is_value_free_in_ui_and_overview():
 
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -2233,6 +2237,8 @@ def test_pub_m01_incomplete_biaxial_wrapper_is_value_free_in_ui_and_overview():
 def test_app_biaxial_shear_top_table_fails_closed_for_stale_nominal_alias():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -2268,6 +2274,8 @@ def test_app_biaxial_shear_top_table_fails_closed_for_stale_nominal_alias():
 def test_app_auto_face_checks_both_sides_when_associated_moment_is_zero():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -2673,6 +2681,8 @@ def test_legacy_bending_blocks_combined_evidence_in_both_face_shear_view():
 def test_app_linked_shear_governing_uses_the_selected_link_utilisation():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -2709,6 +2719,8 @@ def test_app_linked_shear_governing_uses_the_selected_link_utilisation():
 def test_app_shear_bw_override_is_used():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -2725,6 +2737,8 @@ def test_app_shear_bw_override_is_used():
 def test_app_shear_view_renders_and_shows_utilisation():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(at, "calculate", ("number_input", "shear_V", 80.0))
     _select_view(at, "Shear")
@@ -2787,6 +2801,8 @@ def test_app_shear_links_produce_a_resistance():
     # VRd,c; the default section (bottom bars at d~550, bw~400) gives a positive VRd.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set(
         at,
@@ -2818,6 +2834,8 @@ def test_app_shear_links_use_the_plastic_lever_arm(face, angle, face_caption):
     # resultant separation for bending about the shear axis), not the 0.9d default.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -2854,6 +2872,8 @@ def test_app_links_with_a_degenerate_plastic_arm_are_not_assessed(monkeypatch):
     )
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -2892,7 +2912,11 @@ def test_shear_lever_arm_fails_closed_without_a_section():
 def test_app_shear_links_outside_permitted_bounds_are_not_assessed():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_links')
     at.checkbox(key="shear_links").set_value(True).run()
     _set_and_click(
         at,
@@ -2944,7 +2968,11 @@ def test_app_shear_links_outside_permitted_bounds_are_not_assessed():
 def test_app_invalid_strut_angle_caption_omits_hostile_optional_operands():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_links')
     at.checkbox(key="shear_links").set_value(True).run()
     _set_and_click(
         at,
@@ -2997,7 +3025,11 @@ def test_app_angle_gate_cannot_bypass_unavailable_link_arm(monkeypatch, method):
     )
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_links')
     at.checkbox(key="shear_links").set_value(True).run()
     _set_and_click(
         at,
@@ -3064,6 +3096,8 @@ def test_app_shear_uses_final_material_factors():
 def test_app_shear_2023_method_uses_tau_rdc():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -3088,6 +3122,8 @@ def test_app_shear_2023_fyd_from_yield_parameters():
     # fixed strain (which a hardening / low-rupture law would misread).
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -3106,6 +3142,8 @@ def test_app_shear_2023_fyd_from_yield_parameters():
 def test_app_shear_2023_links_produce_compression_field_result(demand):
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -3233,6 +3271,7 @@ def test_app_shear_2023_links_with_axial_compression_fail_closed(monkeypatch):
 def test_app_prestress_triggers_2023_links_guard_until_exactly_cancelled():
     at = _fresh()
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set_and_click(
         at,
@@ -3470,6 +3509,8 @@ def test_app_shear_is_saved_and_restored():
     import project_io
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set(
         at,
@@ -3575,6 +3616,7 @@ def _qs_prestressed_shear(pre_is, *, method=None):
     the shear check enabled. ``pre_is`` in permille (0 = no precompression)."""
     at = _fresh()
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set_and_click(
         at,
@@ -3620,6 +3662,8 @@ def test_app_shear_2023_applies_axial_factor():
     m2023 = codes.EC2_2023.label
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -3647,10 +3691,11 @@ def test_app_shear_2023_applies_axial_factor():
 
 
 def test_app_gamma_v_control_has_the_exact_2023_scope_and_references():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     at = _fresh()
     at.run()
 
-    gamma = at.number_input(key="shear_gamma_v")
+    gamma = _mounted_widget(at, 'number_input', key="shear_gamma_v")
     assert gamma.value == pytest.approx(1.40)
     assert gamma.disabled is True
     for reference in (
@@ -3666,12 +3711,12 @@ def test_app_gamma_v_control_has_the_exact_2023_scope_and_references():
         ("checkbox", "shear_on", True),
         ("selectbox", "shear_method", codes.EC2_2023.label),
     )
-    assert at.number_input(key="shear_gamma_v").disabled is False
+    assert _mounted_widget(at, 'number_input', key="shear_gamma_v").disabled is False
 
     _set(at, ("checkbox", "shear_links", True))
-    assert at.number_input(key="shear_gamma_v").disabled is False
+    assert _mounted_widget(at, 'number_input', key="shear_gamma_v").disabled is False
     _set(at, ("checkbox", "shear_links", False))
-    assert at.number_input(key="shear_gamma_v").disabled is False
+    assert _mounted_widget(at, 'number_input', key="shear_gamma_v").disabled is False
 
     _set_and_click(
         at,
@@ -3687,7 +3732,7 @@ def test_app_gamma_v_control_has_the_exact_2023_scope_and_references():
         at,
         ("selectbox", "shear_method", codes.EC2_2005_DKNA.label),
     )
-    assert at.number_input(key="shear_gamma_v").disabled is True
+    assert _mounted_widget(at, 'number_input', key="shear_gamma_v").disabled is True
 
 
 def test_app_gamma_v_change_marks_results_stale_and_recalculates():
@@ -3737,6 +3782,7 @@ def test_app_gamma_v_is_absent_from_the_2005_result_signature():
 
 
 def test_app_gamma_v_remains_active_for_2023_sparse_links():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     at = _fresh()
     at.run()
     _set(
@@ -3748,7 +3794,7 @@ def test_app_gamma_v_remains_active_for_2023_sparse_links():
         ("checkbox", "shear_links", True),
     )
 
-    assert at.number_input(key="shear_gamma_v").disabled is False
+    assert _mounted_widget(at, 'number_input', key="shear_gamma_v").disabled is False
     _calculate(at)
 
     assert not at.exception

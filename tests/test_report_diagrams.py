@@ -435,7 +435,7 @@ def test_map_groups_keep_each_figure_with_extrema_and_local_signs(chapter, monke
                         lambda value, quantity: [(quantity + " minimum", -1., 0., 0.)])
     builder._section_field_maps({}, family="Elastic")
     assert sizes == [(170, 148.75), (170, 148.75)]
-    # Definitions precede the complete map groups; the chapter heading stays first.
+    # Definitions accompany a complete map group when pagination permits; the chapter heading stays first.
     common, (first, second) = builder.flow[:-2], builder.flow[-2:]
     assert isinstance(first, KeepTogether) and isinstance(second, KeepTogether)
     text1 = [item.getPlainText() for item in first._content if isinstance(item, Paragraph)]
@@ -450,6 +450,6 @@ def test_map_groups_keep_each_figure_with_extrema_and_local_signs(chapter, monke
         assert common[0] is heading
         assert common.count(heading) == 1
     assert all(isinstance(item, Paragraph) for item in common)
-    assert any("color limits stay fixed" in item.getPlainText() for item in common)
-    assert any("Display bands" in item.getPlainText() for item in common)
-    assert any("Slab-density" in item.getPlainText() for item in common)
+    all_text = [item.getPlainText() for item in common] + text1 + text2
+    for definition in ("color limits stay fixed", "Display bands", "Slab-density"):
+        assert sum(definition in text for text in all_text) == 1

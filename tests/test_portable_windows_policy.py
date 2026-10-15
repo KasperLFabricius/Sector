@@ -47,7 +47,7 @@ def test_portable_upload_is_only_the_zip_and_checksum():
     portable = _workflow()["jobs"]["portable"]
     upload = _step(portable, "Upload portable ZIP")
     assert upload["uses"].split()[0] == UPLOAD_ACTION
-    assert upload["with"]["name"].startswith("Sector-v0.96.8-windows-portable-")
+    assert upload["with"]["name"].startswith("Sector-v0.96.9-windows-portable-")
     paths = upload["with"]["path"].splitlines()
     assert paths == [
         "${{ env.SECTOR_PORTABLE_OUTPUT }}/*.zip",

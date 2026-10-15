@@ -822,13 +822,8 @@ def _fresh_unclassified():
 
 
 def _goto_page(at, page):
-    try:
-        current = at.session_state["_main_page"]
-    except KeyError:
-        current = None
-    if current != page:
-        at.segmented_control(key="_main_page").set_value(page).run()
-    return at
+    from app_workflow_navigation import goto_page
+    return goto_page(at, page)
 
 
 def _calculate(at):
@@ -1134,6 +1129,13 @@ def test_biaxial_directional_vt_outside_permitted_range_withholds_verdicts():
 
 
 
+def _member_checkbox_value(at, key):
+    """Read the existing checkbox after mounting its native input owner."""
+    from app_workflow_navigation import goto_widget_owner
+    goto_widget_owner(at, key)
+    return at.checkbox(key=key).value
+
+
 def _run_member(
     at,
     *,
@@ -1146,14 +1148,12 @@ def _run_member(
 ):
     """Configure a complete M-V-T member with only the reruns needed for reveals."""
     _goto_page(at, "Inputs")
-    # Once a shared AppTest has revealed every conditional member input, later load
-    # cases can update all values and calculate in one rerun. This keeps repeated
-    # engineering comparisons independent at result level without rebuilding the
-    # same Streamlit controls two extra times per case.
+    # Read each checkbox from its native page. Retain the original short-circuit
+    # order so later owners are mounted only when their prerequisites are enabled.
     ready = (
-        at.checkbox(key="shear_on").value
-        and at.checkbox(key="torsion_on").value
-        and at.checkbox(key="shear_links").value
+        _member_checkbox_value(at, "shear_on")
+        and _member_checkbox_value(at, "torsion_on")
+        and _member_checkbox_value(at, "shear_links")
     )
     if ready:
         changes = [
@@ -1649,6 +1649,8 @@ def test_app_combined_edition_lock():
     assert res["shear"]["method"] == codes.EC2_2005.label
     assert res["torsion"]["method"] == codes.EC2_2005.label
     _goto_page(at, "Inputs")
+    from app_workflow_navigation import goto_widget_owner
+    goto_widget_owner(at, "shear_method")
     assert at.selectbox(key="shear_method").disabled
     assert at.selectbox(key="torsion_method").disabled
 
@@ -2633,6 +2635,8 @@ def test_app_combined_view_renders():
 def test_app_combined_outside_permitted_range_withholds_all_verdicts():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'strut_cot_max')
     at.number_input(key="strut_cot_max").set_value(3.0).run()
     _enable_all(at)
     assert not at.exception
@@ -2861,7 +2865,11 @@ def test_app_strut_angle_responds_to_loads():
     # now minimises the governing utilisation, so it must respond to the loads.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_links')
     at.checkbox(key="shear_links").set_value(True).run()
 
     def run(v, mx, p):
@@ -2897,6 +2905,8 @@ def test_app_chord_check_in_shear_payload_without_torsion():
     # (torsion term = 0) and shown from the shear links payload.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -5460,6 +5470,8 @@ def test_app_invalid_tube_does_not_poison_the_member_angle():
     # at band-low, changing the shear result.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -5491,6 +5503,8 @@ def test_app_objective_matches_reported_chord_cap():
     # uncapped objective dragged cot to 1.0 and failed them).
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set_and_click(
         at,
@@ -6195,7 +6209,11 @@ def test_app_combined_is_saved_and_restored():
     import project_io
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'combined_on')
     at.checkbox(key="combined_on").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'combined_method')
     at.selectbox(key="combined_method").set_value(codes.EC2_2005.label).run()
     at.session_state["combined_mv_independent"] = True
     at.run()

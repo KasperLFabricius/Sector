@@ -179,7 +179,7 @@ def test_manual_excludes_component_mapped_bridge_surfaces_and_states_2023_scope(
         ),
         "Examine the restored inputs",
         "Report details and publication controls are in **Report**",
-        "Save/load and autosave are in **Inputs > Project > Save / Load**",
+        "Save/load and autosave are in **Project and recovery > Save / Load**",
         (
             'identify the reported quantity, units and location'
         ),
@@ -268,7 +268,7 @@ def test_manual_uses_solver_clear_view_names_and_symbol_glossary():
     assert "Material laws" in text
     assert "Stress-Strain diagrams" not in text
     assert "the section, the material-law diagrams" not in text
-    assert 'Open Analysis > Results Overview' in text
+    assert 'Open Results > Results Overview' in text
     for term in ("varphi_{NA}", "V_{Ed}", "A_{sl}", "A_{s,min}",
                  "D_{upper}", "A_{sw}/s", "z_x", "z_y",
                  "TOTAL", "LONG", "DIF", "RST1", "F_c"):
@@ -1082,6 +1082,7 @@ def test_manual_opens_as_dialog_without_leaving_the_current_workspace():
     # The "User manual" button lives in the About expander. It opens above the
     # current page instead of replacing the workspace.
     at.session_state["_input_tab"] = "Project"
+    at.session_state["_next_workflow_page"] = "project"
     at.run()
     at.button(key="open_manual").click().run()
     assert not at.exception
@@ -1118,6 +1119,7 @@ def test_manual_generation_exposes_pdf_and_accessible_html_downloads(monkeypatch
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.session_state["_input_tab"] = "Project"
+    at.session_state["_next_workflow_page"] = "project"
     at.run()
     at.button(key="open_manual").click().run()
     at.button(key="manual_gen_pdf").click().run()
@@ -1142,6 +1144,7 @@ def test_manual_generation_failure_is_engineer_facing(monkeypatch):
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.session_state["_input_tab"] = "Project"
+    at.session_state["_next_workflow_page"] = "project"
     at.run()
     at.button(key="open_manual").click().run()
     at.button(key="manual_gen_pdf").click().run()
@@ -1165,9 +1168,13 @@ def test_native_manual_dismissal_event_closes_and_stays_closed():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.session_state["_input_tab"] = f"3 {chr(0x00B7)} Material parameters"
+    at.session_state["_next_workflow_page"] = "materials"
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(55.0).run()
     at.session_state["_input_tab"] = "Project"
+    at.session_state["_next_workflow_page"] = "project"
     at.run()
     at.button(key="open_manual").click().run()
     dialog = next(element for element in at._tree if element.type == "dialog")
@@ -1198,9 +1205,13 @@ def test_opening_and_closing_the_manual_keeps_inputs():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.session_state["_input_tab"] = f"3 {chr(0x00B7)} Material parameters"
+    at.session_state["_next_workflow_page"] = "materials"
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'conc_fck')
     at.number_input(key="conc_fck").set_value(55.0).run()   # a non-default input
     at.session_state["_input_tab"] = "Project"
+    at.session_state["_next_workflow_page"] = "project"
     at.run()
     at.button(key="open_manual").click().run()
     at.button(key="manual_close").click().run()

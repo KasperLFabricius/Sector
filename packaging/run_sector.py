@@ -13,6 +13,7 @@ import os
 import pathlib
 import runpy
 import sys
+import tomllib
 
 
 def _bundle_base() -> pathlib.Path:
@@ -59,6 +60,39 @@ def _headless() -> bool:
     return True
 
 
+def _theme_argv() -> list[str]:
+    """Load the shipped theme independently of the launch working directory."""
+    path = _bundle_base() / ".streamlit" / "config.toml"
+    with path.open("rb") as stream:
+        theme = tomllib.load(stream).get("theme")
+    if not isinstance(theme, dict) or not theme:
+        raise ValueError("The bundled Sector theme is missing")
+    keys = {
+        "base", "primaryColor", "backgroundColor", "secondaryBackgroundColor",
+        "textColor", "borderColor", "baseRadius", "buttonRadius", "font",
+    }
+    sidebar_keys = {"backgroundColor", "secondaryBackgroundColor"}
+    if set(theme) != keys | {"sidebar"}:
+        raise ValueError("The bundled Sector theme has unexpected fields")
+    sidebar = theme["sidebar"]
+    if not isinstance(sidebar, dict) or set(sidebar) != sidebar_keys:
+        raise ValueError("The bundled Sector sidebar theme has unexpected fields")
+    values = {key: theme[key] for key in sorted(keys)}
+    values.update({"sidebar." + key: sidebar[key] for key in sorted(sidebar_keys)})
+    if any(not isinstance(value, str) or not value for value in values.values()):
+        raise ValueError("The bundled Sector theme values must be nonempty text")
+    if values["base"] != "light":
+        raise ValueError("The bundled Sector theme must use the approved light base")
+    # Match normal inheritance for the authored light theme. Explicit variants
+    # prevent unrelated launch-directory config from replacing these values.
+    common = {key: values[key] for key in sorted(keys - {"base"})}
+    effective_sidebar = {**common, **sidebar}
+    values.update({"sidebar." + key: value for key, value in effective_sidebar.items()})
+    values.update({"light." + key: value for key, value in common.items()})
+    values.update({"light.sidebar." + key: value for key, value in effective_sidebar.items()})
+    return [f"--theme.{key}={value}" for key, value in values.items()]
+
+
 def _streamlit_argv(
     app_path: str | os.PathLike[str], port: str, *, headless: bool = False
 ) -> list[str]:
@@ -77,6 +111,7 @@ def _streamlit_argv(
         "--browser.gatherUsageStats=false",
         "--client.toolbarMode=viewer",
         "--client.showErrorDetails=type",
+        *_theme_argv(),
     ]
 
 

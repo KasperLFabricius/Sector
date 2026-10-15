@@ -14,6 +14,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT / "app"), str(ROOT / "tests")]
 
+from app_case_inputs import overview_table  # noqa: E402
 import result_presentation as presentation  # noqa: E402
 import sector_report  # noqa: E402
 from sector import shear as shear_core  # noqa: E402
@@ -87,10 +88,7 @@ def current_participants(request, tmp_path_factory):
         )
         _select_view(at, "Results Overview")
         assert not at.exception
-        overview = next(
-            item.value.copy(deep=True) for item in at.dataframe
-            if "Check" in item.value.columns
-        )
+        overview = overview_table(at).copy(deep=True)
         yield {
             "name": name, "at": at, "inp": inp, "out": out,
             "metrics": metrics, "tables": tables,
@@ -360,7 +358,7 @@ def test_pub_m01_poisoned_participant_is_withheld_in_native_views(
         assert "876.543" not in all_visible and "947.321" not in all_visible
         _select_view(at, "Results Overview")
         assert not at.exception
-        overview = next(item.value for item in at.dataframe if "Check" in item.value.columns)
+        overview = overview_table(at)
         if t.get("directional_interactions"):
             row = overview.loc[
                 overview["Check"] == "Vy+T Formula (6.31) minimum-reinforcement screen"

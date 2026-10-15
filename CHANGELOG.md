@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+## 0.96.9 - 2026-10-13
+
+The navigation separates section, materials, actions, analysis settings, results,
+reports, project recovery and help. Common project context shows calculation
+freshness and recovery time. Page, case and result selections remain available
+when returning to a workspace.
+
+Shear, torsion and M-V-T settings use five pages with shared reinforcement,
+the current section preview and links to missing prerequisite settings.
+Actions include case management, paste preview, explicit sign conventions and
+input-issue links to the affected case and field.
+
+The result register provides filters, selected-result detail and a complete
+comparison table. Reports add a coverage outline, profile presets and a preview
+of the generated PDF. Contextual help and manual navigation follow the same
+workspace names. Sweco branding remains in the UI and document exports.
+
+These presentation changes preserve the calculation methods, material laws,
+numerical results and project schema 27.
+
 ## 0.96.8 - 2026-10-12
 
 Result views show one selected section contour with quantity and elastic

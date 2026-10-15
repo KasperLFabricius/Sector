@@ -21,6 +21,7 @@ MAX_WINDOWS_RUNTIME_PATH_CHARS = 240
 _BUFFER_BYTES = 1024 * 1024
 _RUNTIME_SUFFIXES = {".dll", ".exe", ".pyd"}
 _REQUIRED_SOURCE_PATHS = (
+    ".streamlit/config.toml",
     ".python-version",
     "LICENSE",
     "app/point_grid_frontend/LICENSE",

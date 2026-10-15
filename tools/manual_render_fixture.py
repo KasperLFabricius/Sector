@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import functools
+import io
 from html.parser import HTMLParser
 import pathlib
 import re
@@ -20,6 +22,7 @@ import manual  # noqa: E402
 
 from app import manual_information_architecture as manual_ia  # noqa: E402
 from app import project_io  # noqa: E402
+from app import publication_branding  # noqa: E402
 from sector import __version__  # noqa: E402
 from tools.manual_current_program_statements import (  # noqa: E402
     validate_current_manual_program_statements,
@@ -59,15 +62,15 @@ _MANUAL_CROPS = (
         "manual contents navigation",
         1,
         (0.09, 0.18, 0.92, 0.45),
-        "f5dbabbb3c61547d4960fab7074d1b2309ed56fdf0c30d0641067605c0767d05",
+        "d3ff518b5b6c34c6e742b000e761d26b03f3d915cc34a110b5e946fb4d4121cd",
     ),
     RasterCrop(
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # The reviewed 0.96.8 footer has the current version and 148-page count;
+        # The reviewed 0.96.9 footer has the current version and 149-page count;
         # the crop geometry is unchanged.
-        "40e777a9eb66e112278f81b5175777e2346998606c287a266230a747d2fb6a03",
+        "47f099b1a1da8cb0600f27b821180f2442e539b3a81d13d45dddfa8edd993a9d",
     ),
 )
 
@@ -100,9 +103,30 @@ class _HTMLInventory(HTMLParser):
         self.figure_alternatives = 0
         self.figcaptions = 0
         self.equations = 0
+        self.brand_images = 0
+        self.engineering_images = 0
+        self.in_header = False
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
+        if tag == "header":
+            self.in_header = True
+        if tag == "img":
+            classes = set(values.get("class", "").split())
+            if classes == {"publication-logo"}:
+                prefix = "data:image/png;base64,"
+                source = values.get("src", "")
+                if (not self.in_header or values.get("alt") != "Sweco"
+                        or set(values) != {"class", "alt", "src"}
+                        or not source.startswith(prefix)
+                        or base64.b64decode(source[len(prefix):], validate=True)
+                        != publication_branding.logo_bytes()):
+                    raise AssertionError("manual HTML Sweco logo identity or aspect changed")
+                self.brand_images += 1
+            elif classes == {"manual-figure"}:
+                self.engineering_images += 1
+            else:
+                raise AssertionError("manual HTML contains an unclassified image")
         if "id" in values:
             self.ids.append(values["id"])
         if tag == "html":
@@ -128,6 +152,16 @@ class _HTMLInventory(HTMLParser):
         if tag == "section" and "equation" in values.get("class", ""):
             self.equations += 1
 
+    def handle_endtag(self, tag):
+        if tag == "header":
+            self.in_header = False
+
+    def validate_image_inventory(self):
+        if self.brand_images != 1:
+            raise AssertionError("manual HTML must contain one original Sweco logo")
+        if self.engineering_images != _EXPECTED_FIGURE_COUNT:
+            raise AssertionError("manual HTML engineering image inventory changed")
+
 
 def validate_html_content(html: bytes) -> str:
     """Validate the semantic HTML companion without starting a browser."""
@@ -136,6 +170,7 @@ def validate_html_content(html: bytes) -> str:
     flat_text = " ".join(reference_text.split())
     parser = _HTMLInventory()
     parser.feed(text)
+    parser.validate_image_inventory()
     if not text.startswith("<!doctype html>") or parser.lang != "en":
         raise AssertionError("manual HTML lacks its HTML5 language contract")
     if parser.scripts or parser.external_resources:
@@ -257,6 +292,42 @@ def validate_visible_contents_destinations(reader, outline_entries) -> None:
         )
 
 
+def _validate_pdf_image_inventory(reader):
+    """Keep all 40 engineering images and classify the exact cover logo."""
+    from PIL import Image as PillowImage
+
+    with PillowImage.open(io.BytesIO(publication_branding.logo_bytes())) as logo:
+        size = logo.size
+        pixels = logo.convert("RGB").tobytes()
+    figures = brands = 0
+    for page_index, page in enumerate(reader.pages):
+        resources = page.get("/Resources")
+        xobjects = resources.get_object().get("/XObject") if resources else None
+        if xobjects is None:
+            continue
+        for reference in xobjects.get_object().values():
+            image = reference.get_object()
+            if image.get("/Subtype") != "/Image":
+                continue
+            is_logo = (
+                (image.get("/Width"), image.get("/Height")) == size
+                and image.get("/ColorSpace") == "/DeviceRGB"
+                and image.get_data() == pixels
+            )
+            if is_logo:
+                if page_index != 0:
+                    raise AssertionError("manual Sweco logo must be on the cover")
+                brands += 1
+            else:
+                figures += 1
+    if brands != 1:
+        raise AssertionError("manual PDF must contain one original Sweco logo")
+    if figures != _EXPECTED_FIGURE_COUNT:
+        raise AssertionError(
+            f"expected {_EXPECTED_FIGURE_COUNT} manual figures, found {figures}"
+        )
+
+
 def validate_pdf_content(pdf: bytes) -> str:
     reader, page_texts = preflight_pdf(pdf, min_pages=6)
     text = "\n".join(page_texts)
@@ -279,22 +350,7 @@ def validate_pdf_content(pdf: bytes) -> str:
                 f"the manual is missing rendered mathematics symbol U+{ord(symbol):04X}"
             )
 
-    images = 0
-    for page in reader.pages:
-        resources = page.get("/Resources")
-        if resources is None:
-            continue
-        xobjects = resources.get_object().get("/XObject")
-        if xobjects is None:
-            continue
-        images += sum(
-            reference.get_object().get("/Subtype") == "/Image"
-            for reference in xobjects.get_object().values()
-        )
-    if images != _EXPECTED_FIGURE_COUNT:
-        raise AssertionError(
-            f"expected {_EXPECTED_FIGURE_COUNT} manual figures, found {images}"
-        )
+    _validate_pdf_image_inventory(reader)
 
     outline_entries = validate_outline_destinations(reader)
     outline_titles = [title for title, _ in outline_entries]

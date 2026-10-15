@@ -74,6 +74,7 @@ def calculated_example(isolated_native_module):
     assert not at.exception
     assert not at.error
     at.session_state["_main_page"] = "Analysis"
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     at.button(key="calculate").click().run(timeout=300)
     assert not at.exception
@@ -122,6 +123,7 @@ def _build_pub_m01_example(*, shear_vy=30.0):
     assert not at.exception
     assert not at.error
     at.session_state["_main_page"] = "Analysis"
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     at.button(key="calculate").click().run(timeout=300)
     assert not at.exception
@@ -1221,6 +1223,7 @@ def test_manual_omits_reference_downloads_and_keeps_normal_controls():
     at = AppTest.from_file(APP, default_timeout=90)
     at.run()
     at.session_state["_input_tab"] = "Project"
+    at.session_state["_next_workflow_page"] = "project"
     at.run()
     at.button(key="open_manual").click().run()
     assert not at.exception

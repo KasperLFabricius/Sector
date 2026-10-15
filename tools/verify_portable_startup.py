@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextvars
 import hashlib
 import http.client
 import json
@@ -25,13 +26,8 @@ _PAGE_RERUN_BACKMSG = b"\x5a\x00"
 _PAGE_SUCCESS_STATUS = 0
 _PAGE_EARLY_RERUN_STATUS = 2
 _PAGE_FRAGMENT_SUCCESS_STATUS = 3
-_WORKSPACE_LABEL = "Workspace"
-_INPUT_WORKSPACE = "Inputs"
-_REPORT_WORKSPACE = "Report"
 _REPORT_PROFILE_LABEL = "Report profile"
 _REPORT_PROFILE_DEFAULT = "Standard"
-_SECTION_TAB_LABEL = "2 \u00b7 Section"
-_PROJECT_TAB_LABEL = "Project"
 _PROJECT_DOWNLOAD_LABEL = "Download project"
 _USER_MANUAL_BUTTON_LABEL = "User manual"
 _MANUAL_GENERATE_BUTTON_LABEL = "Generate PDF"
@@ -57,6 +53,14 @@ _MAX_WEBSOCKET_FRAME = 16 * 1024 * 1024
 _MAX_PAGE_MESSAGES = 4096
 _MAX_PAGE_BYTES = 64 * 1024 * 1024
 _TERMINATE_TIMEOUT_SECONDS = 10.0
+_PUBLIC_PAGES = {
+    "": "Section", "materials": "Materials", "actions": "Actions",
+    "settings": "Analysis settings", "results": "Results", "report": "Report",
+    "project": "Project and recovery", "help": "Help and manual",
+}
+_PAGE_DIAGNOSTICS: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "portable_startup_diagnostics", default=None
+)
 
 
 class PortableStartupError(RuntimeError):
@@ -131,6 +135,20 @@ class _BidiComponentEvidence:
 
 
 @dataclass(frozen=True)
+class _NavigationPageEvidence:
+    page_hash: str
+    label: str
+    path: str
+    is_default: bool
+
+
+@dataclass(frozen=True)
+class _NavigationEvidence:
+    pages: tuple[_NavigationPageEvidence, ...]
+    current_page_hash: str
+
+
+@dataclass(frozen=True)
 class _PageSurfaceEvidence:
     button_groups: dict[str, _ButtonGroupEvidence]
     alerts: tuple[tuple[int, str], ...]
@@ -141,6 +159,7 @@ class _PageSurfaceEvidence:
     bidi_components: dict[str, _BidiComponentEvidence] = field(
         default_factory=dict
     )
+    navigation: _NavigationEvidence | None = None
 
 
 @dataclass(frozen=True)
@@ -361,6 +380,29 @@ def _trigger_widget_rerun_backmsg(
     return _protobuf_bytes_field(11, client_state)
 
 
+def _with_page_hash(backmsg: bytes, page_hash: str) -> bytes:
+    """Preserve widget state and use the page identity emitted by Streamlit."""
+    _require_page_hash(page_hash)
+    client = _nested_bytes(_protobuf_fields(backmsg), 11)
+    if len(client) != 1 or _nested_bytes(_protobuf_fields(client[0]), 3):
+        raise PortableStartupError("page request has an invalid existing identity")
+    return _protobuf_bytes_field(
+        11, client[0] + _protobuf_bytes_field(3, page_hash.encode("ascii"))
+    )
+
+
+def _require_page_hash(value: str) -> None:
+    if len(value) != 32 or any(char not in "0123456789abcdef" for char in value):
+        raise PortableStartupError("native navigation page hash is malformed")
+
+
+def _write_page_diagnostic(stage: str, data: object) -> None:
+    destination = _PAGE_DIAGNOSTICS.get()
+    if destination is not None:
+        with destination.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps({"stage": stage, "data": data}) + "\n")
+
+
 def _autosave_payload(report_profile: str) -> bytes:
     """Build a small valid current project with one raw profile value."""
 
@@ -529,6 +571,52 @@ def _utf8_fields(
         )
     except UnicodeDecodeError as exc:
         raise PortableStartupError(f"page {description} is not UTF-8") from exc
+
+
+def _page_navigation(payload: bytes) -> _NavigationEvidence | None:
+    """Decode native Navigation/AppPage identities from the pinned protocol."""
+    envelope = _protobuf_fields(payload)
+    if any(field.number == 23 and field.wire_type != 2 for field in envelope):
+        raise PortableStartupError("native navigation has an invalid wire type")
+    messages = _nested_bytes(envelope, 23)
+    if not messages:
+        return None
+    if len(messages) != 1:
+        raise PortableStartupError("page repeats native navigation")
+    fields = _protobuf_fields(messages[0])
+    if any(field.number in (2, 4) and field.wire_type != 2 for field in fields):
+        raise PortableStartupError("native navigation identity has an invalid wire type")
+    current = _utf8_fields(fields, 4, "current navigation page hash")
+    if len(current) != 1:
+        raise PortableStartupError("native navigation lacks a unique current page")
+    _require_page_hash(current[0])
+    pages = []
+    for raw in _nested_bytes(fields, 2):
+        item = _protobuf_fields(raw)
+        expected_wires = {1: 2, 2: 2, 4: 0, 6: 2, 7: 0, 8: 2}
+        if any(field.number in expected_wires and field.wire_type != expected_wires[field.number] for field in item):
+            raise PortableStartupError("native navigation page has an invalid wire type")
+        hashes = _utf8_fields(item, 1, "navigation page hash")
+        labels = _utf8_fields(item, 2, "navigation page label")
+        paths = _utf8_fields(item, 6, "navigation page path")
+        defaults = [field.value for field in item if field.number == 4 and field.wire_type == 0]
+        hidden = [field.value for field in item if field.number == 7 and field.wire_type == 0]
+        if (len(hashes) != 1 or len(labels) != 1 or not labels[0]
+                or len(paths) > 1 or len(defaults) > 1 or len(hidden) > 1
+                or any(value not in (0, 1) for value in defaults + hidden)
+                or any(hidden) or _nested_bytes(item, 8)):
+            raise PortableStartupError("native navigation page is malformed or not local")
+        _require_page_hash(hashes[0])
+        pages.append(_NavigationPageEvidence(
+            hashes[0], labels[0], paths[0] if paths else "", bool(defaults and defaults[0])
+        ))
+    if (not pages or len({page.path for page in pages}) != len(pages)
+            or len({page.page_hash for page in pages}) != len(pages)
+            or len({page.label for page in pages}) != len(pages)
+            or sum(page.is_default for page in pages) != 1
+            or current[0] not in {page.page_hash for page in pages}):
+        raise PortableStartupError("native navigation is missing or has duplicate identities")
+    return _NavigationEvidence(tuple(pages), current[0])
 
 
 def _page_button_groups(payload: bytes) -> tuple[_ButtonGroupEvidence, ...]:
@@ -900,6 +988,8 @@ def _execute_page_run(
     bidi_components: dict[str, _BidiComponentEvidence] = {}
     alerts: list[tuple[int, str]] = []
     tab_containers: dict[str, int] = {}
+    navigation: _NavigationEvidence | None = None
+    _write_page_diagnostic("request", {"backmsg_base64": base64.b64encode(backmsg).decode("ascii")})
     connection.sendall(_masked_websocket_frame(2, backmsg))
     while time.monotonic() < deadline:
         if (returncode := process.poll()) is not None:
@@ -927,6 +1017,11 @@ def _execute_page_run(
         if message_count > _MAX_PAGE_MESSAGES or total_bytes > _MAX_PAGE_BYTES:
             raise PortableStartupError("page execution evidence exceeds the limit")
         fields = _protobuf_fields(payload)
+        if _nested_bytes(fields, 23):
+            _write_page_diagnostic("navigation-forward", {"base64": base64.b64encode(payload).decode("ascii")})
+        emitted_navigation = _page_navigation(payload)
+        if emitted_navigation is not None:
+            navigation = emitted_navigation
         saw_new_session = saw_new_session or bool(_nested_bytes(fields, 4))
         if exception := _page_exception(payload):
             exception_type, message = exception
@@ -962,6 +1057,11 @@ def _execute_page_run(
                 raise PortableStartupError(
                     "packaged page finished without a session and rendered element"
                 )
+            _write_page_diagnostic("completed-surface", asdict(_PageSurfaceEvidence(
+                button_groups=button_groups, alerts=tuple(alerts), tab_containers=tab_containers,
+                buttons=buttons, downloads=downloads, dataframes=dataframes,
+                bidi_components=bidi_components, navigation=navigation,
+            )))
             return (
                 _PageExecutionEvidence(
                     message_count=message_count,
@@ -975,6 +1075,7 @@ def _execute_page_run(
                     downloads=downloads,
                     dataframes=dataframes,
                     bidi_components=bidi_components,
+                    navigation=navigation,
                 ),
             )
     raise PortableStartupError("packaged page did not finish before the timeout")
@@ -1027,17 +1128,23 @@ def _require_editable_grid(surface: _PageSurfaceEvidence) -> None:
         )
 
 
-def _required_input_tabs(surface: _PageSurfaceEvidence) -> str:
-    if len(surface.tab_containers) != 1:
-        raise PortableStartupError(
-            "packaged page did not expose exactly one input tab container"
-        )
-    widget_id, default_index = next(iter(surface.tab_containers.items()))
-    if default_index != 0:
-        raise PortableStartupError(
-            "packaged page did not start on the first input tab"
-        )
-    return widget_id
+def _required_navigation(
+    surface: _PageSurfaceEvidence, path: str,
+    original: _NavigationEvidence | None = None,
+) -> _NavigationEvidence:
+    navigation = surface.navigation
+    if navigation is None:
+        raise PortableStartupError("packaged page did not expose native navigation")
+    if ({page.path: page.label for page in navigation.pages} != _PUBLIC_PAGES
+            or len(navigation.pages) != len(_PUBLIC_PAGES)
+            or {page.path for page in navigation.pages if page.is_default} != {""}):
+        raise PortableStartupError("packaged native page inventory differs")
+    matches = [page for page in navigation.pages if page.path == path]
+    if len(matches) != 1 or navigation.current_page_hash != matches[0].page_hash:
+        raise PortableStartupError("packaged page did not render the requested native route")
+    if original is not None and navigation.pages != original.pages:
+        raise PortableStartupError("packaged native page identities changed")
+    return navigation
 
 
 def _require_autosave_notice(
@@ -1073,8 +1180,7 @@ def _run_manual_document_probe(
     connection: socket.socket,
     reader: _SocketReader,
     deadline: float,
-    workspace: _ButtonGroupEvidence,
-    input_tabs_id: str,
+    project_page_hash: str,
     project_surface: _PageSurfaceEvidence,
 ) -> int:
     """Open the frozen manual, generate both formats, then close the dialog."""
@@ -1087,10 +1193,8 @@ def _run_manual_document_probe(
         connection,
         reader,
         deadline,
-        _trigger_widget_rerun_backmsg(
-            manual.widget_id,
-            string_arrays=((workspace.widget_id, _INPUT_WORKSPACE),),
-            strings=((input_tabs_id, _PROJECT_TAB_LABEL),),
+        _with_page_hash(
+            _trigger_widget_rerun_backmsg(manual.widget_id), project_page_hash,
         ),
         require_new_session=False,
     )
@@ -1102,10 +1206,8 @@ def _run_manual_document_probe(
         connection,
         reader,
         deadline,
-        _trigger_widget_rerun_backmsg(
-            generate.widget_id,
-            string_arrays=((workspace.widget_id, _INPUT_WORKSPACE),),
-            strings=((input_tabs_id, _PROJECT_TAB_LABEL),),
+        _with_page_hash(
+            _trigger_widget_rerun_backmsg(generate.widget_id), project_page_hash,
         ),
         require_new_session=False,
     )
@@ -1117,10 +1219,8 @@ def _run_manual_document_probe(
         connection,
         reader,
         deadline,
-        _trigger_widget_rerun_backmsg(
-            close.widget_id,
-            string_arrays=((workspace.widget_id, _INPUT_WORKSPACE),),
-            strings=((input_tabs_id, _PROJECT_TAB_LABEL),),
+        _with_page_hash(
+            _trigger_widget_rerun_backmsg(close.widget_id), project_page_hash,
         ),
         require_new_session=False,
     )
@@ -1136,7 +1236,7 @@ def _run_report_document_probe(
     connection: socket.socket,
     reader: _SocketReader,
     deadline: float,
-    workspace: _ButtonGroupEvidence,
+    report_page_hash: str,
     report_profile: _ButtonGroupEvidence,
     report_surface: _PageSurfaceEvidence,
 ) -> int:
@@ -1150,12 +1250,11 @@ def _run_report_document_probe(
         connection,
         reader,
         deadline,
-        _trigger_widget_rerun_backmsg(
-            generate.widget_id,
-            string_arrays=(
-                (workspace.widget_id, _REPORT_WORKSPACE),
-                (report_profile.widget_id, _REPORT_PROFILE_DEFAULT),
-            ),
+        _with_page_hash(
+            _trigger_widget_rerun_backmsg(
+                generate.widget_id,
+                string_arrays=((report_profile.widget_id, _REPORT_PROFILE_DEFAULT),),
+            ), report_page_hash,
         ),
         require_new_session=False,
     )
@@ -1194,17 +1293,17 @@ def _run_page_session(
             _PAGE_RERUN_BACKMSG,
             require_new_session=True,
         )
-        input_tabs_id = _required_input_tabs(surface)
+        navigation = _required_navigation(surface, "")
+        pages = {page.path: page.page_hash for page in navigation.pages}
         section_page, section_surface = _execute_page_run(
             process,
             connection,
             reader,
             deadline,
-            _string_widget_rerun_backmsg(
-                ((input_tabs_id, _SECTION_TAB_LABEL),)
-            ),
+            _with_page_hash(_PAGE_RERUN_BACKMSG, pages[""]),
             require_new_session=False,
         )
+        _required_navigation(section_surface, "", navigation)
         _require_editable_grid(section_surface)
         probes = ["editable-data-grid"]
         project_page, project_surface = _execute_page_run(
@@ -1212,11 +1311,10 @@ def _run_page_session(
             connection,
             reader,
             deadline,
-            _string_widget_rerun_backmsg(
-                ((input_tabs_id, _PROJECT_TAB_LABEL),)
-            ),
+            _with_page_hash(_PAGE_RERUN_BACKMSG, pages["project"]),
             require_new_session=False,
         )
+        _required_navigation(project_surface, "project", navigation)
         _require_autosave_notice(project_surface.alerts, scenario)
         probes.append(
             "project-load"
@@ -1227,9 +1325,6 @@ def _run_page_session(
             project_surface.downloads, _PROJECT_DOWNLOAD_LABEL
         )
         probes.append("project-save")
-        workspace = _required_button_group(
-            project_surface.button_groups, _WORKSPACE_LABEL, _REPORT_WORKSPACE
-        )
         document_message_count = 0
         if scenario == _LEGACY_SCENARIO:
             document_message_count += _run_manual_document_probe(
@@ -1237,8 +1332,7 @@ def _run_page_session(
                 connection,
                 reader,
                 deadline,
-                workspace,
-                input_tabs_id,
+                pages["project"],
                 project_surface,
             )
             probes.extend(("manual-pdf", "manual-html"))
@@ -1247,11 +1341,10 @@ def _run_page_session(
             connection,
             reader,
             deadline,
-            _widget_rerun_backmsg(
-                ((workspace.widget_id, _REPORT_WORKSPACE),)
-            ),
+            _with_page_hash(_PAGE_RERUN_BACKMSG, pages["report"]),
             require_new_session=False,
         )
+        _required_navigation(report_surface, "report", navigation)
         report_profile = _required_button_group(
             report_surface.button_groups,
             _REPORT_PROFILE_LABEL,
@@ -1269,7 +1362,7 @@ def _run_page_session(
                 connection,
                 reader,
                 deadline,
-                workspace,
+                pages["report"],
                 report_profile,
                 report_surface,
             )
@@ -1352,6 +1445,7 @@ def _run_startup_scenario(
     creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
     process: subprocess.Popen[bytes] | None = None
     page: _PageExecutionEvidence | None = None
+    diagnostic_token = _PAGE_DIAGNOSTICS.set(scenario_workspace / "page-protocol.jsonl")
     try:
         with stdout_path.open("xb") as stdout_log, stderr_path.open("xb") as stderr_log:
             try:
@@ -1368,7 +1462,11 @@ def _run_startup_scenario(
                 raise PortableStartupError("cannot launch Sector.exe") from exc
             _wait_for_health(process, port, timeout_seconds)
             page = _run_page_session(process, port, timeout_seconds, scenario)
+    except Exception as exc:
+        _write_page_diagnostic("failure", {"type": type(exc).__name__, "message": str(exc)})
+        raise
     finally:
+        _PAGE_DIAGNOSTICS.reset(diagnostic_token)
         if process is not None:
             _stop_process(process)
     if page is None:

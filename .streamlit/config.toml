@@ -15,3 +15,18 @@ showErrorDetails = "type"
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+base = "light"
+primaryColor = "#176b75"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f2f5f7"
+textColor = "#233644"
+borderColor = "#d6dfe5"
+baseRadius = "medium"
+buttonRadius = "medium"
+font = "sans-serif"
+
+[theme.sidebar]
+backgroundColor = "#eef3f5"
+secondaryBackgroundColor = "#e2eaee"

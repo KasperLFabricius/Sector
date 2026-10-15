@@ -1017,6 +1017,8 @@ def test_torsion_nu_closed_detailing_only_changes_dk_na():
 def test_app_nu_v_detailing_flag_gated_to_dk_na():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _enable_shared_links(at)
     _set_and_click(
@@ -1154,13 +1156,8 @@ def _fresh_unclassified():
 
 
 def _goto_page(at, page):
-    try:
-        current = at.session_state["_main_page"]
-    except KeyError:
-        current = None
-    if current != page:
-        at.segmented_control(key="_main_page").set_value(page).run()
-    return at
+    from app_workflow_navigation import goto_page
+    return goto_page(at, page)
 
 
 def _calculate(at):
@@ -1241,6 +1238,7 @@ def _replace_plastic_cases(at, rows):
 
 def _apply_t_section(at, bf=1000.0, hf=200.0, bw=300.0, hw=600.0):
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set(at, ("selectbox", "shape", "T-section"))
     _set_and_click(
@@ -1256,6 +1254,7 @@ def _apply_t_section(at, bf=1000.0, hf=200.0, bw=300.0, hw=600.0):
 
 def _apply_box_section(at, b=600.0, h=600.0, wall=100.0):
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set(at, ("selectbox", "shape", "Box girder"))
     _set_and_click(
@@ -1270,6 +1269,7 @@ def _apply_box_section(at, b=600.0, h=600.0, wall=100.0):
 
 def _apply_rectangle(at, *, b=300.0, h=600.0, bar_dia=20.0):
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set_and_click(
         at,
@@ -1301,12 +1301,13 @@ def _enable_shared_links(at):
 
 
 def test_app_torsion_applicability_blocks_then_recovers_without_stale_values():
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     at = _fresh_unclassified()
     at.run()
-    assert at.selectbox(key="_torsion_case_design_basis::0::PL-01").value == (
+    assert _mounted_widget(at, 'selectbox', key="_torsion_case_design_basis::0::PL-01").value == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
-    assert at.selectbox(key="_torsion_case_member_scope::0::PL-01").value == (
+    assert _mounted_widget(at, 'selectbox', key="_torsion_case_member_scope::0::PL-01").value == (
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED
     )
 
@@ -1676,6 +1677,8 @@ def test_duplicate_plastic_case_names_keep_authority_widgets_distinct():
     duplicate = dict(row)
     _replace_plastic_cases(at, [row, duplicate])
 
+    from app_workflow_navigation import goto_widget_owner
+    goto_widget_owner(at, "_torsion_case_design_basis::invalid::0::PL-01")
     design_keys = {
         item.key
         for item in at.selectbox
@@ -1823,6 +1826,8 @@ def test_duplicate_case_authority_edits_do_not_transfer_after_name_resolution():
 def test_app_torsion_without_current_closed_links_is_not_assessed(tmp_path):
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 40.0))
     assert not at.exception
@@ -1858,6 +1863,8 @@ def test_app_torsion_without_current_closed_links_is_not_assessed(tmp_path):
 def test_app_retains_but_does_not_apply_nu_v_request_without_current_links():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _enable_shared_links(at)
     _set_and_click(
@@ -1882,6 +1889,8 @@ def test_app_retains_but_does_not_apply_nu_v_request_without_current_links():
 def test_app_torsion_produces_a_resistance_with_current_closed_links():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 40.0))
@@ -2214,6 +2223,8 @@ def test_app_torsion_rejects_injected_numpy_boolean_gamma_ct():
         == codes.EC2_2005.label
     )
     assert at.session_state["_torsion_gamma_ct_uses_method_default"] is False
+    from app_workflow_navigation import goto_widget_owner
+    goto_widget_owner(at, "torsion_gamma_ct")
     assert any(
         "Enter a positive finite concrete tensile partial factor gamma_ct"
         in item.value
@@ -2314,6 +2325,8 @@ def test_shared_link_authority_change_marks_torsion_stale_and_recalculates():
 def test_app_torsion_view_renders():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 30.0))
@@ -3182,6 +3195,8 @@ def test_app_compound_torsion_requires_subdivision(tmp_path):
     at = _fresh()
     at.run()
     _apply_t_section(at)
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 20.0))
@@ -3309,7 +3324,11 @@ def test_app_torsion_subdivided_uses_the_shared_member_angle():
     # One physical compression-strut band applies to the live shear and every
     # torsion sub-tube, so all reported sub-tubes use the selected member angle.
     at = _fresh(); at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_links')
     at.checkbox(key="shear_links").set_value(True).run()
     _set(at, ("number_input", "shear_V", 150.0))
     _subdivided(at, T=40.0)
@@ -3340,6 +3359,8 @@ def test_app_torsion_subdivided_uses_the_shared_member_angle():
 def test_app_torsion_subdivided_combined_pairs_web(web_established):
     # The combined V+T crushing must use the WEB sub-tube's torsion SHARE, not full TEd.
     at = _fresh(); at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'shear_on')
     at.checkbox(key="shear_on").set_value(True).run()
     _set(
         at,
@@ -3513,6 +3534,8 @@ def test_app_torsion_multi_void_rejected():
     at.session_state["hole_base"] = pd.DataFrame({
         "x (mm)": [-100.0, -40.0, -70.0, None, 40.0, 100.0, 70.0],
         "y (mm)": [-50.0, -50.0, 50.0, None, -50.0, -50.0, 50.0]})
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 20.0))
@@ -3537,16 +3560,19 @@ def test_app_torsion_uses_the_shared_stirrup():
     # The torsion tube reads the shared Links/stirrups definition (shear_link_*), not
     # its own inputs; the stirrup field is enabled for a torsion-only run and a bigger
     # bar raises TRd,s.
+    from app_workflow_navigation import mounted_widget as _mounted_widget
     at = _fresh()
     at.run()
-    at.checkbox(key="torsion_on").set_value(True).run()
-    assert at.number_input(key="shear_link_dia").disabled
-    assert at.number_input(key="shear_link_s").disabled
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
+    _mounted_widget(at, 'checkbox', key="torsion_on").set_value(True).run()
+    assert _mounted_widget(at, 'number_input', key="shear_link_dia").disabled
+    assert _mounted_widget(at, 'number_input', key="shear_link_s").disabled
     _enable_shared_links(at)
-    assert not at.number_input(key="shear_link_dia").disabled
-    assert not at.number_input(key="shear_link_s").disabled
-    assert at.number_input(key="shear_vx_link_legs").disabled
-    assert at.number_input(key="shear_vy_link_legs").disabled
+    assert not _mounted_widget(at, 'number_input', key="shear_link_dia").disabled
+    assert not _mounted_widget(at, 'number_input', key="shear_link_s").disabled
+    assert _mounted_widget(at, 'number_input', key="shear_vx_link_legs").disabled
+    assert _mounted_widget(at, 'number_input', key="shear_vy_link_legs").disabled
     _set_and_click(
         at,
         "calculate",
@@ -3566,6 +3592,8 @@ def test_app_torsion_uses_the_shared_stirrup():
 def test_app_torsion_longitudinal_uses_mild_fyd():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 40.0))
@@ -3581,6 +3609,7 @@ def test_app_torsion_prestress_raises_alpha_cw():
     at = _fresh()
     at.run()
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set_and_click(
         at,
@@ -3641,6 +3670,8 @@ def test_app_min_reinf_screen_needs_shear():
     # Without the shear check there is no VRd,c, so the screen is not applicable.
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 15.0))
     mr = at.session_state["results"]["torsion"]["min_reinf"]
@@ -3797,6 +3828,7 @@ def test_app_nonrectangular_sections_never_receive_formula_631_verdict(shape):
     at = _fresh()
     at.run()
     at.session_state["_qs_open"] = True
+    at.session_state["_next_workflow_page"] = "results"
     at.run()
     _set(at, ("selectbox", "shape", shape))
     _set_and_click(at, "qs_apply")
@@ -3989,6 +4021,7 @@ def test_app_dkna_formula_631_requirement_outranks_other_scope_limits(
     at.run()
     if scope_context == "nonrectangular":
         at.session_state["_qs_open"] = True
+        at.session_state["_next_workflow_page"] = "results"
         at.run()
         _set(at, ("selectbox", "shape", "Circular"))
         _set_and_click(at, "qs_apply")
@@ -4158,6 +4191,8 @@ def test_app_torsion_is_saved_and_restored():
     import project_io
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _set(
         at,
@@ -4202,6 +4237,8 @@ def test_trd_max_respects_closed_detailing():
 def test_app_torsion_nu_v_toggle_raises_trd_max():
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _enable_shared_links(at)
     _set_and_click(at, "calculate", ("number_input", "torsion_T", 30.0))
@@ -4215,6 +4252,8 @@ def test_app_torsion_nu_v_toggle_raises_trd_max():
 def test_app_torsion_outside_permitted_range_withholds_verdict(tmp_path):
     at = _fresh()
     at.run()
+    from app_workflow_navigation import goto_widget_owner as native_widget_owner
+    native_widget_owner(at, 'torsion_on')
     at.checkbox(key="torsion_on").set_value(True).run()
     _enable_shared_links(at)
     _set(at, ("checkbox", "transverse_detailing_on", True))

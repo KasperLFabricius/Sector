@@ -114,7 +114,7 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
         "fragment_href_pattern",
     )
     assert vocabulary.current_head_style_sha256 == (
-        "c0bc3def5f095720542356a439c21c1dc263c79fc7ecae45751a640122f53d28"
+        "26059281b87bd1c289168cb9801b67fc0e18152e20323bd7669f2cb28c431e15"
     )
     assert vocabulary.body_block_tags == frozenset(
         {
@@ -218,7 +218,7 @@ def test_generated_manual_html_vocabulary_has_exact_data_contract():
         "div": frozenset({"display-math", "figure-alternative", "table-scroll"}),
         "dl": frozenset({"equation-results"}),
         "figure": frozenset({"table-figure"}),
-        "img": frozenset({"manual-figure"}),
+        "img": frozenset({"manual-figure", "publication-logo"}),
         "li": frozenset({"toc-level-0", "toc-level-1", "toc-level-2"}),
         "p": frozenset(
             {

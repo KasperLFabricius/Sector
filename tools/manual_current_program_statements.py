@@ -2,7 +2,7 @@
 
 CURRENT_REPORT_METADATA_WORDING = (
     "Report details and publication controls are in Report. "
-    "Save/load and autosave are in Inputs > Project > Save / Load."
+    "Save/load and autosave are in Project and recovery > Save / Load."
 )
 CURRENT_RESULT_LABEL_WORDING = (
     "Select the case and identify the reported quantity, units and location."

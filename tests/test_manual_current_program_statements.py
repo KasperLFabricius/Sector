@@ -25,7 +25,7 @@ class _ContainsEverything(str):
 
 _REPORT_LITERAL = (
     "Report details and publication controls are in Report. "
-    "Save/load and autosave are in Inputs > Project > Save / Load."
+    "Save/load and autosave are in Project and recovery > Save / Load."
 )
 _RESULT_LITERAL = (
     "Select the case and identify the reported quantity, units and location."

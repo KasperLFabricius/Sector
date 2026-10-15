@@ -42,6 +42,7 @@ def native_formula_631_cases(tmp_path_factory):
                     at = _fresh().run()
                     if scope_context == "nonrectangular":
                         at.session_state["_qs_open"] = True
+                        at.session_state["_next_workflow_page"] = "results"
                         at.run()
                         _set(at, ("selectbox", "shape", "Circular"))
                         _set_and_click(at, "qs_apply")

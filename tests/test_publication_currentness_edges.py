@@ -7,6 +7,11 @@ import pickle
 
 import pytest
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
+
 import case_analysis
 import result_presentation as presentation
 from sector import capacity
