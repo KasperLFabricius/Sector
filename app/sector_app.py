@@ -557,6 +557,7 @@ def case_moment_maxima(plastic_cases):
 
 def _member_moment_inputs(box, plastic_cases, *, disabled):
     """Optional member input MEd,max for the 6.2.3(7) shear-shift cap."""
+    box.markdown("**Member maximum moment**")
     on = _seeded_checkbox(
         box,
         r"Limit the shear term with $M_{Ed,max}$ (6.2.3(7))",
@@ -591,7 +592,8 @@ def _member_moment_inputs(box, plastic_cases, *, disabled):
             columns[index % 2], label, 0.0, 1.0e7, 0.0, 10.0, key,
             disabled=disabled or not on,
             help="Maximum moment of this direction and sign along the member "
-                 "(magnitude). A value below the case moment is not used.",
+                 "(magnitude). 0 means not entered (no limit). A value below "
+                 "the case moment is not used.",
         )
     if on and not disabled:
         box.caption(
@@ -996,8 +998,8 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
         help="EN 1992-1-1 6.1(5) and Figure 6.1: when the whole section is in "
              "compression, the strain at (1 - eps_c2/eps_cu2) h from the more "
              "compressed face is limited to eps_c2. On by default for the "
-             "Eurocode presets. Clear it only to reproduce a legacy ECROSS "
-             "calculation.",
+             "EN 1992-1-1:2004 presets; DS/EN 1992-1-1:2023 8.1.1(3) limits only "
+             "eps_cu. Clear it only to reproduce a legacy ECROSS calculation.",
     )
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n,
@@ -10641,65 +10643,6 @@ def run_analysis(
     return result
 
 
-def _concrete_route_chord(inp, out, shear_result, nominal):
-    """Tension chord of the concrete shear route with the shift ``a_l = d``.
-
-    EN 1992-1-1 6.2.2(5) and 9.2.1.3(2), and DS/EN 1992-1-1:2023 8.2.2(10): when
-    no shear reinforcement is required, the tension chord carries the moment
-    increased by ``|VEd|*d``, capped only by an engineer-entered ``MEd,max``. The
-    torsion truss carries the chords when torsion acts, so no result is made then.
-    Returns ``None`` when the route does not apply.
-    """
-    if nominal.valid is not True or nominal.route != "concrete":
-        return None
-    torsion_t = inp.get("torsion_T") or 0.0
-    if inp.get("torsion_on") is True and abs(float(torsion_t)) > 0.0:
-        return None
-    v_ed = shear_result.get("v_ed")
-    d_mm = shear_result.get("d")
-    axis = shear_result.get("axis")
-    tension_low = shear_result.get("tension_low")
-    if (
-        axis not in {"x", "y"}
-        or type(tension_low) is not bool
-        or v_ed is None
-        or d_mm is None
-        or not math.isfinite(float(d_mm))
-        or float(d_mm) <= 0.0
-    ):
-        return None
-    model_2023 = shear_result.get("model_2023") is True
-    m_origin = inp["Mx_pl"] if axis == "x" else inp["My_pl"]
-    m_signed = shear_result["m_ed_2023"] if model_2023 else m_origin
-    shift = shear_result["moment_reference_shift"] if model_2023 else 0.0
-    off_signed = inp["My_pl"] if axis == "x" else inp["Mx_pl"]
-    m_ed = combined.chord_applied_moment(m_signed, tension_low)
-    m_ed_max = capacity.chord_med_max(inp, axis, tension_low)
-    base = dict(
-        axis=axis, tension_low=tension_low, model_2023=model_2023,
-        m_ed_signed=m_signed, moment_reference_shift=shift, m_off=off_signed,
-    )
-    pl = out.get("plastic")
-    if pl is None or pl.get("util") is None:
-        return dict(
-            base, status="NOT ASSESSED", ok=None, util=None, valid=False,
-            reason="the plastic bending analysis is required for the tension chord",
-        )
-    m_rd, exact = _shear_face_mrd(
-        inp, axis, tension_low, m_off=off_signed, moment_reference_shift=shift
-    )
-    if not exact:
-        return dict(
-            base, status="NOT ASSESSED", ok=None, util=None, valid=False,
-            reason="the bending resistance of the tension chord face is not solved",
-        )
-    check = combined.concrete_route_chord_check(
-        m_ed, m_rd, float(v_ed), float(d_mm) / 1000.0,
-        m_ed_max=m_ed_max, model_2023=model_2023,
-    )
-    return dict(base, **check, valid=True, reason=None)
-
-
 def _run_uniaxial_capacity_checks(inp, out):
     """Shear, torsion and the combined M-V-T checks for ``inp``; mutates ``out``.
 
@@ -11618,7 +11561,9 @@ def _run_uniaxial_capacity_checks(inp, out):
                     nominal.status,
                     chord_status,
                 ))
-        concrete_chord = _concrete_route_chord(inp, out, shear_result, nominal)
+        concrete_chord = capacity.concrete_route_chord(
+            inp, out.get("plastic"), shear_result, nominal
+        )
         shear_result["concrete_chord"] = concrete_chord
         if concrete_chord is not None:
             assessment_status = capacity.aggregate_assessment_status((

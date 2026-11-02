@@ -68,9 +68,9 @@ MIGRATABLE_VERSIONS = (
 # Sector 0.97.0 corrected these calculation methods. A project from schema 27 or
 # earlier is calculated with them after load, and the load message lists them.
 SCHEMA28_METHOD_CHANGES = (
-    "Bending resistance: a fully compressed section has the concentric-"
-    "compression strain limit of EN 1992-1-1 6.1(5) (pivot C). The concrete "
-    "panel has an option to clear it for a legacy calculation.",
+    "Bending resistance: for the EN 1992-1-1:2004 presets, a fully compressed "
+    "section has the concentric-compression strain limit of 6.1(5) (pivot C). "
+    "The concrete panel has an option to clear it for a legacy calculation.",
     "Shear chord, 2005 family: only an entered member maximum moment MEd,max "
     "limits the shear term of 6.2.3(7). Sector no longer uses the section "
     "resistance MRd as that limit.",

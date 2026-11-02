@@ -110,3 +110,33 @@ def test_fully_compressed_state_has_pivot_strain():
     selection = point.curvature_selection
     assert selection.selected_mode == "concrete_concentric_compression"
     assert point.converged
+
+
+def test_non_monotonic_axial_response_reaches_its_maximum():
+    # Steel near the compressed face loses stress as its strain falls to eps_c2,
+    # so with pivot C the largest axial force occurs at a finite depth (review
+    # finding R1-06). An axial force just below that maximum must converge.
+    section = Section.from_polygon(
+        corners=[(-0.2, -0.2), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)],
+        bars_xy_area_mm2=[(-0.1, 0.15, 2000.0), (0.1, 0.15, 2000.0)],
+    )
+    concrete = Concrete(fck=30.0, gamma_c=1.45, curve=2, pivot_c=True)
+    top = plastic.plastic_capacity_at_angle(section, concrete, _steel(), 1.0e6, 270.0)
+    deep = plastic.plastic_capacity_at_angle(section, concrete, _steel(), 1.0e6, 90.0)
+    for angle, limit in ((270.0, top.axial), (90.0, deep.axial)):
+        point = plastic.plastic_capacity_at_angle(
+            section, concrete, _steel(), limit - 1.0, angle
+        )
+        assert point.converged
+
+
+def test_pivot_c_default_follows_the_edition():
+    # EN 1992-1-1:2004 6.1(5) has pivot C; DS/EN 1992-1-1:2023 8.1.1(3) limits
+    # only eps_cu.
+    from sector import codes, material_presets
+
+    assert codes.EC2_2005_DKNA.concrete(30.0).pivot_c is True
+    assert codes.EC2_2023.concrete(30.0).pivot_c is False
+    assert material_presets.pivot_c_default(codes.EC2_2005_DKNA.label) is True
+    assert material_presets.pivot_c_default(codes.EC2_2023.label) is False
+    assert material_presets.pivot_c_default("Curve 2 (parabola-rectangle)") is False

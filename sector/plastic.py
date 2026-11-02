@@ -840,9 +840,11 @@ def plastic_capacity_at_angle(
     # the pivot position s_na + eps_c2/phi must stay resolvable in floating point,
     # so the depth stops at 2^14 c_full. There the strain at the far fibre is
     # within 4e-5 of eps_c2, which is the squash state for engineering purposes.
-    # A section whose steel centroid lies between the compressed fibre and pivot C
-    # can reach its largest axial force at a finite depth; the bisection then
-    # returns the root on the rising branch, which is the conservative one.
+    # With pivot C the net axial force need not rise monotonically beyond
+    # c_full: steel near the compressed face loses stress as its strain falls to
+    # eps_c2, so the largest axial force can occur at a finite depth. When the
+    # growth stops below P, a log-spaced scan of [c_full, hi] finds that maximum,
+    # and the bisection then uses the rising branch up to it.
     max_grow = 14 if pivot_c is not None else 80
     hi = c_full
     n_hi = net_axial(hi)
@@ -851,6 +853,33 @@ def plastic_capacity_at_angle(
         hi *= 2.0
         n_hi = net_axial(hi)
         grow += 1
+    if pivot_c is not None and n_hi < P:
+        best_c, best_n = hi, n_hi
+        for depth in c_full * np.logspace(0.0, math.log10(hi / c_full), 57):
+            value = net_axial(float(depth))
+            if value > best_n:
+                best_c, best_n = float(depth), value
+        if best_n > n_hi:
+            # Refine the maximum with a golden-section search on log(c).
+            a = math.log(max(best_c / 1.2, c_full))
+            b = math.log(min(best_c * 1.2, hi))
+            ratio = (math.sqrt(5.0) - 1.0) / 2.0
+            x1 = b - ratio * (b - a)
+            x2 = a + ratio * (b - a)
+            f1, f2 = net_axial(math.exp(x1)), net_axial(math.exp(x2))
+            for _ in range(40):
+                if f1 >= f2:
+                    b, x2, f2 = x2, x1, f1
+                    x1 = b - ratio * (b - a)
+                    f1 = net_axial(math.exp(x1))
+                else:
+                    a, x1, f1 = x1, x2, f2
+                    x2 = a + ratio * (b - a)
+                    f2 = net_axial(math.exp(x2))
+            if max(f1, f2) > best_n:
+                best_n = max(f1, f2)
+                best_c = math.exp(x1 if f1 >= f2 else x2)
+            hi, n_hi = best_c, best_n
 
     # Residual tolerance alone cannot distinguish a genuine root from an endpoint
     # clamp: a request just outside the achievable range can lie within that

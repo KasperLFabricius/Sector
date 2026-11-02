@@ -1739,9 +1739,24 @@ def chord_med_max(inp: Mapping[str, Any], axis: str, tension_low: bool) -> float
         number = float(value)
     except (OverflowError, TypeError, ValueError):
         return None
-    if not math.isfinite(number) or number < 0.0:
+    if not math.isfinite(number) or number <= 0.0:
+        # 0 (the field default) means "not entered". A zero cap would remove the
+        # whole shear term at a section with zero moment.
         return None
     return number
+
+
+def chord_cap_in_reference(m_ed_max, reference_shift, tension_low):
+    """Move an entered MEd,max to the moment reference of the chord check.
+
+    The 2023 chord moment is taken about the centre of the web (8.2.3(8)), which
+    adds ``reference_shift`` to the origin moment. MEd,max is entered about the
+    origin, so the same shift applies to it: ``+shift`` on the low face and
+    ``-shift`` on the high face, because the face moment is ``+M`` or ``-M``.
+    """
+    if m_ed_max is None:
+        return None
+    return m_ed_max + (reference_shift if tension_low else -reference_shift)
 
 
 def concrete_route_chord_is_consistent(
@@ -1769,7 +1784,14 @@ def concrete_route_chord_is_consistent(
         if not math.isfinite(number) or number < 0.0:
             return False
         numbers[key] = number
-    m_ed_max = chord_med_max(inp, chord["axis"], chord["tension_low"])
+    shift = chord.get("moment_reference_shift", 0.0)
+    if _is_boolean_scalar(shift) or not isinstance(shift, Real):
+        return False
+    m_ed_max = chord_cap_in_reference(
+        chord_med_max(inp, chord["axis"], chord["tension_low"]),
+        float(shift),
+        chord["tension_low"],
+    )
     retained_cap = chord.get("m_ed_max")
     if (m_ed_max is None) is not (retained_cap is None):
         return False
@@ -1805,6 +1827,66 @@ def concrete_route_chord_is_consistent(
         return False
     expected_status = "PASS" if float(util) <= 1.0 + 1.0e-9 else "FAIL"
     return status == expected_status and chord.get("ok") is (expected_status == "PASS")
+
+
+def concrete_route_chord(inp, plastic_result, shear_result, nominal):
+    """Tension chord of the concrete shear route with the shift ``a_l = d``.
+
+    EN 1992-1-1 6.2.2(5) and 9.2.1.3(2), and DS/EN 1992-1-1:2023 8.2.2(10): when
+    no shear reinforcement is required, the tension chord carries the moment
+    increased by ``|VEd|*d``, capped only by an engineer-entered ``MEd,max``. With
+    torsion the check is also made; the link-truss chord check carries the torsion
+    share (their combination on one chord follows review item TB-06). Returns
+    ``None`` when the route does not apply.
+    """
+    if nominal.valid is not True or nominal.route != "concrete":
+        return None
+    v_ed = shear_result.get("v_ed")
+    d_mm = shear_result.get("d")
+    axis = shear_result.get("axis")
+    tension_low = shear_result.get("tension_low")
+    if (
+        axis not in {"x", "y"}
+        or type(tension_low) is not bool
+        or v_ed is None
+        or d_mm is None
+        or not math.isfinite(float(d_mm))
+        or float(d_mm) <= 0.0
+    ):
+        return None
+    model_2023 = shear_result.get("model_2023") is True
+    m_origin = inp["Mx_pl"] if axis == "x" else inp["My_pl"]
+    m_signed = shear_result["m_ed_2023"] if model_2023 else m_origin
+    shift = shear_result["moment_reference_shift"] if model_2023 else 0.0
+    off_signed = inp["My_pl"] if axis == "x" else inp["Mx_pl"]
+    combined = _module("combined")
+    m_ed = combined.chord_applied_moment(m_signed, tension_low)
+    m_ed_max = chord_cap_in_reference(
+        chord_med_max(inp, axis, tension_low), shift, tension_low
+    )
+    base = dict(
+        axis=axis, tension_low=tension_low, model_2023=model_2023,
+        m_ed_signed=m_signed, moment_reference_shift=shift, m_off=off_signed,
+    )
+    pl = plastic_result
+    if pl is None or pl.get("util") is None:
+        return dict(
+            base, status="NOT ASSESSED", ok=None, util=None, valid=False,
+            reason="the plastic bending analysis is required for the tension chord",
+        )
+    m_rd, exact = shear_face_mrd(
+        inp, axis, tension_low, m_off=off_signed, moment_reference_shift=shift
+    )
+    if not exact:
+        return dict(
+            base, status="NOT ASSESSED", ok=None, util=None, valid=False,
+            reason="the bending resistance of the tension chord face is not solved",
+        )
+    check = combined.concrete_route_chord_check(
+        m_ed, m_rd, float(v_ed), float(d_mm) / 1000.0,
+        m_ed_max=m_ed_max, model_2023=model_2023,
+    )
+    return dict(base, **check, valid=True, reason=None)
 
 
 def longitudinal_chord_assessment(

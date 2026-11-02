@@ -52,10 +52,10 @@ def _concrete_presets():
     presets = {
         "Curve 1 (cubic)":
             {"curve": 1, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0,
-             "k_tc": 1.0, **base},
+             "k_tc": 1.0, "pivot_c": False, **base},
         "Curve 2 (parabola-rectangle)":
             {"curve": 2, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0,
-             "k_tc": 1.0, **base},
+             "k_tc": 1.0, "pivot_c": False, **base},
     }
     for label, code in codes.CODES.items():
         presets[label] = {
@@ -64,6 +64,7 @@ def _concrete_presets():
             "gamma_c": code.gamma_c,
             "alpha_cc": round(code.concrete_factor(_DEFAULT_FCK), 4),
             "k_tc": code.k_tc,
+            "pivot_c": bool(code.pivot_c),
             **base,
         }
     return presets
@@ -107,10 +108,10 @@ CONCRETE_HELP = {
 def pivot_c_default(preset) -> bool:
     """Default of the pivot C strain limit (EN 1992-1-1 6.1(5)) for a preset.
 
-    The Eurocode edition presets apply it. The two curve presets reproduce the
-    legacy ECROSS laws, which have no concentric-compression limit.
+    The EN 1992-1-1:2004 edition presets apply it. DS/EN 1992-1-1:2023 8.1.1(3)
+    has no such limit, and the two curve presets reproduce the legacy ECROSS laws.
     """
-    return preset in codes.CODES
+    return bool(CONCRETE_PRESETS.get(preset, {}).get("pivot_c", False))
 
 
 def build_concrete(curve, fck, gamma_c, alpha_cc,

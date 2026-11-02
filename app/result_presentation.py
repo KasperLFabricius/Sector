@@ -3133,7 +3133,7 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
             add_objective(
                 label,
                 lambda cot, rebuilt=rebuilt, gets_shift=gets_shift,
-                axis=axis, tension_low=tension_low: (
+                axis=axis, tension_low=tension_low, role=role: (
                     combined_core.longitudinal_check(
                         rebuilt["m_ed"],
                         rebuilt["m_rd"],
@@ -3145,8 +3145,10 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
                         ),
                         torsion_force(cot),
                         rebuilt["z"],
-                        m_ed_max=capacity.chord_med_max(
-                            inp, axis, tension_low
+                        m_ed_max=(
+                            capacity.chord_med_max(inp, axis, tension_low)
+                            if role == "shear_axis"
+                            else None
                         ),
                     )["util"]
                 ),
@@ -4903,7 +4905,11 @@ def _current_link_chord_candidate(
                 ftd_v,
                 ftd_t,
                 z_mm / 1000.0,
-                m_ed_max=capacity.chord_med_max(inp, axis, tension_low),
+                m_ed_max=(
+                    capacity.chord_med_max(inp, axis, tension_low)
+                    if role == "shear_axis"
+                    else None
+                ),
             )
     except (TypeError, ValueError, OverflowError):
         return None
