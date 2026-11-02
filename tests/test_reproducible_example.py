@@ -1183,8 +1183,9 @@ def test_fatigue_outputs_match_independent_equations(
     assert concrete.stress_utilisation == pytest.approx(
         expected_fatigue["concrete_stress_utilisation"]
     )
-    assert spectrum.concrete_search.converged is False
-    assert results["fatigue"]["passed"] is False
+    # TA-01: the corrected bound converges on the reference project.
+    assert spectrum.concrete_search.converged is True
+    assert results["fatigue"]["passed"] is True
 
 def test_checking_pack_remains_a_qa_asset_outside_the_end_user_manual():
     pack = reproducible_example.checking_pack()
@@ -1199,7 +1200,7 @@ def test_checking_pack_remains_a_qa_asset_outside_the_end_user_manual():
         "the user-specified long-term and short-term ordinary limits are both "
         "0.20 mm",
         "The separate Formula 7.100 NA permitted-width operand is also 0.20 mm",
-        "0.1343977823/0.20=0.6719889115",
+        "0.1346851147/0.20=0.6734255736",
         "phi=max(25.23132522,25.23132522)=25.23132522 mm",
         "Fine gives base ratio",
         "As,required/As,provided=1.81457651843",

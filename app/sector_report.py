@@ -5129,7 +5129,9 @@ class ReportBuilder:
             "sigma<sub>p,0,i</sub> = E<sub>p,i</sub> "
             "eps<sub>p,0,i</sub>",
             equation_key="prestress.initial-stress",
-            ref="Sector locked-in prestress initialisation from entered tendon strain.",
+            ref=("Effective prestress after all losses from the entered strain "
+                 "difference IS. The section model bonds the tendon with the "
+                 "derived strain difference eps_p(0) = IS - eps_c,p."),
             subst=labelled(
                 elements,
                 lambda row: (f"{_fmt(row['modulus_mpa'], 1)} &#183; "

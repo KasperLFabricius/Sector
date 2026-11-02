@@ -337,7 +337,7 @@ def fatigue() -> dict[str, float]:
     stress_ranges = (steel_at_55 * 4.0 / 55.0, steel_at_55 * 2.0 / 55.0)
     applied_cycles = (100_000.0, 1_000_000.0)
     reference = 162.5
-    gamma_s_fatigue = 1.15
+    gamma_s_fatigue = 1.32  # DK NA:2024 2.4.2.4(1): 1.20 x 1.1
     knee = reference / gamma_s_fatigue
     steel_damage = 0.0
     for stress_range, cycles in zip(stress_ranges, applied_cycles):
@@ -345,7 +345,7 @@ def fatigue() -> dict[str, float]:
         life = 1_000_000.0 * (reference / gamma_s_fatigue / stress_range) ** exponent
         steel_damage += cycles / life
 
-    fcd_fat = 0.85 * FCK_MPA / 1.50 * (1.0 - FCK_MPA / 250.0)
+    fcd_fat = 0.85 * FCK_MPA / 1.595 * (1.0 - FCK_MPA / 250.0)  # 1.45 x 1.1
     concrete_damage = 0.0
     concrete_stress_utilisation = 0.0
     for total_moment, cycles in zip((9.0, 7.0), applied_cycles):
@@ -357,7 +357,7 @@ def fatigue() -> dict[str, float]:
         concrete_stress_utilisation = max(
             concrete_stress_utilisation, sigma_max / fcd_fat
         )
-    yield_utilisation = (steel_at_55 * 9.0 / 55.0) / (FYK_MPA / 1.15)
+    yield_utilisation = (steel_at_55 * 9.0 / 55.0) / (FYK_MPA / gamma_s_fatigue)
     return {
         "steel_high_range_mpa": stress_ranges[0],
         "steel_low_range_mpa": stress_ranges[1],

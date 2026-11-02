@@ -99,6 +99,9 @@ def overall_note(payload, *, stale=False):
         suffix = "" if len(errors) == 1 else "s"
         return f"{len(errors)} fatigue input error{suffix}; fatigue not assessed"
     if status == "INVALID":
+        causes = invalid_causes(payload)
+        if causes:
+            return "; ".join(causes)
         return "One or more grouped spectra did not converge"
     if status == "FAIL":
         breakdown = criterion_breakdown(payload)
@@ -114,6 +117,55 @@ def overall_note(payload, *, stale=False):
         breakdown = criterion_breakdown(payload)
         return warning_note + ("; " + breakdown if breakdown else "")
     return criterion_breakdown(payload) or "Governing grouped spectrum"
+
+
+def invalid_causes(payload):
+    """Return one plain cause for each spectrum that is INVALID.
+
+    A concrete search that did not converge states its last damage bounds. The
+    reinforcement verdict of the same spectrum is stated separately, because the
+    concrete search does not change it.
+    """
+
+    causes = []
+    for spectrum in items(payload, "spectra"):
+        if result_status(spectrum) != "INVALID":
+            continue
+        name = str(value(spectrum, "spectrum_name", "-"))
+        bins_converged = all(
+            bool(value(state, "converged", False))
+            for state in items(spectrum, "bins")
+        )
+        search = value(spectrum, "concrete_search")
+        if not bins_converged:
+            causes.append(
+                f"{name}: the elastic solution of one or more bins did not converge"
+            )
+            continue
+        if search is not None and not bool(value(search, "converged", False)):
+            lower = compact_number(value(search, "damage"))
+            upper = compact_number(value(search, "upper_damage"))
+            boxes = value(search, "boxes_evaluated", 0)
+            quantity = (
+                "utilisation"
+                if value(search, "method") == "Damage-equivalent stress amplitude"
+                else "Miner damage"
+            )
+            cause = (
+                f"{name}: the concrete fibre search did not converge "
+                f"({quantity} between {lower} and {upper} after {boxes} boxes)"
+            )
+            steel = items(spectrum, "reinforcement")
+            if steel:
+                steel_passed = all(
+                    bool(value(result, "passed", False)) for result in steel
+                )
+                cause += (
+                    "; the reinforcement check gives "
+                    + ("PASS" if steel_passed else "FAIL")
+                )
+            causes.append(cause)
+    return causes
 
 
 def spectrum_by_name(payload, spectrum_name):

@@ -906,3 +906,48 @@ def solve_elastic_combined(
         na_y_intercept=st_res.na_y_intercept,
         converged=c1 and c2,
     )
+
+
+def bonded_prestress_stress(
+    section: Section,
+    n: float,
+    effective_stress: np.ndarray,
+    *,
+    n_mult: np.ndarray | None = None,
+    displace_concrete: bool = True,
+    rel_tol: float = 1.0e-10,
+    max_iter: int = 100,
+) -> np.ndarray:
+    """Locked-in tendon stress that gives the effective stress under prestress alone.
+
+    The entered tendon prestrain ``IS`` is the strain difference after all losses,
+    so under prestress alone the tendon stress is ``Ep*IS`` (``effective_stress``,
+    kN/m2 per element, zero for ordinary bars). In the bonded section model the
+    tendon also follows the concrete strain at its level, so the solver needs the
+    larger locked-in stress ``sigma_0 = Ep*IS - Ep*eps_c,p``, where ``eps_c,p`` is
+    the concrete strain at the tendon under that prestress. ``sigma_0/Ep`` is then
+    the bond strain difference eps_p(0) of EN 1992-1-1 Figure 6.1, which includes
+    the decompression strain. The fixed point is solved at the modular ratio ``n``
+    of the sustained state (``nl``), because prestress is a sustained action. The
+    iteration contracts with the factor ``n*rho_p`` and stops at ``rel_tol``.
+    """
+    effective = np.asarray(effective_stress, dtype=float)
+    scale = float(np.max(np.abs(effective))) if effective.size else 0.0
+    if scale == 0.0:
+        return effective.copy()
+    tendon = effective != 0.0
+    locked = effective.copy()
+    for _ in range(max_iter):
+        state = solve_elastic_combined(
+            section, 0.0, 0.0, 0.0, n, 0.0, 0.0, 0.0, n,
+            displace_concrete=displace_concrete,
+            n_mult=n_mult,
+            prestress_stress=locked,
+        )
+        residual = np.where(
+            tendon, effective - np.asarray(state.bar_stress_total, dtype=float), 0.0
+        )
+        locked = locked + residual
+        if float(np.max(np.abs(residual))) <= rel_tol * scale:
+            return locked
+    raise ValueError("the bonded prestress state did not converge")

@@ -66,7 +66,9 @@ _DEFAULT_FIBRE_SEARCH_DIVISIONS = 4
 _DEFAULT_FIBRE_SEARCH_MAX_DEPTH = 26
 _DEFAULT_FIBRE_SEARCH_MAX_BOXES = 200_000
 _DEFAULT_FIBRE_SEARCH_REL_TOL = 1.0e-3
-_DEFAULT_FIBRE_SEARCH_ABS_TOL = 1.0e-8
+# Absolute gap relative to the decision limit 1.0 of both the Miner damage and
+# the 6.8.7(2) utilisation (review item TA-01).
+_DEFAULT_FIBRE_SEARCH_ABS_TOL = 1.0e-4
 
 
 def _finite(value: float, label: str) -> float:
@@ -1046,6 +1048,76 @@ def _search_damage_field(
     return np.sum(partial, axis=1)
 
 
+def _clip_half_plane(polygon, plane, sign):
+    """Clip a convex polygon to ``sign * (c0 + cx*x + cy*y) >= 0``."""
+
+    kept = []
+    count = len(polygon)
+    for index in range(count):
+        p = polygon[index]
+        q = polygon[(index + 1) % count]
+        fp = sign * (plane[0] + plane[1] * p[0] + plane[2] * p[1])
+        fq = sign * (plane[0] + plane[1] * q[0] + plane[2] * q[1])
+        if fp >= 0.0:
+            kept.append(p)
+        if (fp >= 0.0) != (fq >= 0.0):
+            fraction = fp / (fp - fq)
+            kept.append((
+                p[0] + fraction * (q[0] - p[0]),
+                p[1] + fraction * (q[1] - p[1]),
+            ))
+    return kept
+
+
+def _plane_values(polygon, plane):
+    return [
+        max(plane[0] + plane[1] * x + plane[2] * y, 0.0)
+        for x, y in polygon
+    ]
+
+
+def _bin_stress_bounds(box, long_plane, total_plane):
+    """Bounds of ``sigma_max`` and ``R`` for one bin over one box.
+
+    Returns ``(sigma_max_both, ratio_low_both, sigma_max_single)``. The first two
+    cover the part of the box where both states are in compression: there
+    ``R = min/max`` is linear-fractional in each subregion, so its minimum is
+    at a vertex of the clipped polygon. A vertex where both stresses vanish (a
+    common zero-stress line) carries no damage and does not set ``R``. The third
+    value covers the part where only one state is in compression, where
+    ``R = 0`` is real; it is ``None`` when that part is empty.
+    """
+
+    corners_long = _plane_values(box, long_plane)
+    corners_total = _plane_values(box, total_plane)
+    if min(corners_long) > 0.0 and min(corners_total) > 0.0:
+        sigma = [max(a, b) for a, b in zip(corners_long, corners_total)]
+        ratio = [min(a, b) / max(a, b) for a, b in zip(corners_long, corners_total)]
+        return max(sigma), min(ratio), None
+    scale = max(max(corners_long), max(corners_total))
+    if scale <= 0.0:
+        return 0.0, 1.0, None
+    tiny = 1.0e-12 * scale
+    both = _clip_half_plane(_clip_half_plane(box, long_plane, 1.0), total_plane, 1.0)
+    sigma_both = 0.0
+    ratio_both = 1.0
+    for a, b in zip(_plane_values(both, long_plane), _plane_values(both, total_plane)):
+        high = max(a, b)
+        if high <= tiny:
+            continue
+        sigma_both = max(sigma_both, high)
+        ratio_both = min(ratio_both, min(a, b) / high)
+    sigma_single = None
+    for compressed, other in ((long_plane, total_plane), (total_plane, long_plane)):
+        region = _clip_half_plane(
+            _clip_half_plane(box, compressed, 1.0), other, -1.0
+        )
+        for value in _plane_values(region, compressed):
+            if value > tiny:
+                sigma_single = max(sigma_single or 0.0, value)
+    return sigma_both, ratio_both, sigma_single
+
+
 def _box_damage_upper_bound(
     bounds: tuple[float, float, float, float],
     data: _ConcreteSearchData,
@@ -1053,70 +1125,69 @@ def _box_damage_upper_bound(
     """Conservative accumulated-damage upper bound over an axis-aligned box.
 
     For a potentially passing concrete state, damage increases with maximum
-    compression and decreases with minimum compression.  Affine plane extrema
-    occur at box corners, so using each bin's upper maximum and lower minimum
-    gives a conservative bound even though those extrema need not coincide.
-    A box that can reach ``fcd,fat`` receives an infinite damage bound and is
-    subdivided; the independent stress check already makes a real exceedance
-    fail.
+    compression and decreases with ``R = sigma_min/sigma_max``. Each bin is
+    bounded separately on the part of the box where both of its states are in
+    compression (largest vertex compression, smallest vertex ``R``) and on the
+    part where only one state is in compression (``R = 0``). Without this split
+    a box on the neutral axis kept ``R = 0`` with a finite maximum compression,
+    so the bound could not fall below ``sum(n) * 10**(-c)`` (Miner) or 0.43
+    (6.8.7(2)) and the search did not converge (review item TA-01). A box that
+    can reach ``fcd,fat`` receives an infinite damage bound and is subdivided;
+    the independent stress check already makes a real exceedance fail.
     """
 
     x_min, x_max, y_min, y_max = bounds
-    corners = np.asarray([
-        (x_min, y_min),
-        (x_max, y_min),
-        (x_max, y_max),
-        (x_min, y_max),
-    ])
+    box = ((x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max))
+    corners = np.asarray(box)
     long = _search_compressions(corners, data.long_planes)
     total = _search_compressions(corners, data.total_planes)
-    long_low = np.min(long, axis=0)
-    long_high = np.max(long, axis=0)
-    total_low = np.min(total, axis=0)
-    total_high = np.max(total, axis=0)
     range_high = np.maximum(
-        np.abs(long_high - total_low),
-        np.abs(total_high - long_low),
+        np.abs(np.max(long, axis=0) - np.min(total, axis=0)),
+        np.abs(np.max(total, axis=0) - np.min(long, axis=0)),
     )
-    sigma_max = np.maximum(long_high, total_high)
-    active = (sigma_max > 0.0) & (range_high > 1.0e-12)
-    if (
-        data.method in CONCRETE_MINER_METHODS
-        and np.any(active & (sigma_max >= data.strength_mpa))
+    terms = []
+    for index in range(len(data.long_planes)):
+        sigma_both, ratio_both, sigma_single = _bin_stress_bounds(
+            box, data.long_planes[index], data.total_planes[index]
+        )
+        candidates = []
+        if sigma_both > 0.0:
+            candidates.append((sigma_both, min(max(ratio_both, 0.0), 1.0)))
+        if sigma_single is not None:
+            candidates.append((sigma_single, 0.0))
+        terms.append((index, candidates))
+    if data.method in CONCRETE_MINER_METHODS and any(
+        range_high[index] > 1.0e-12
+        and any(sigma >= data.strength_mpa for sigma, _ in candidates)
+        for index, candidates in terms
     ):
         return math.inf
-    sigma_min = np.minimum(long_low, total_low)
-    ratio = np.divide(
-        sigma_min,
-        sigma_max,
-        out=np.zeros_like(sigma_max),
-        where=sigma_max > 0.0,
-    )
-    ratio = np.clip(ratio, 0.0, 1.0)
     if data.method == CONCRETE_EQUIVALENT:
-        utilisation = (
-            sigma_max / data.strength_mpa
-            + 0.43 * np.sqrt(np.maximum(1.0 - ratio, 0.0))
-        )
-        utilisation[sigma_max <= 0.0] = 0.0
-        return float(np.max(utilisation))
-    denominator = np.sqrt(
-        np.maximum(1.0 - ratio, np.finfo(float).tiny)
-    )
-    exponent = np.full_like(sigma_max, math.inf)
-    exponent[active] = (
-        data.coefficient_c
-        * (1.0 - sigma_max[active] / data.strength_mpa)
-        / denominator[active]
-    )
-    partial = np.asarray([
-        _pow10(log_cycles - life_exponent)
-        for log_cycles, life_exponent in zip(
-            data.log10_cycles,
-            exponent,
-        )
-    ])
-    upper = float(np.sum(partial))
+        utilisation = 0.0
+        for _index, candidates in terms:
+            for sigma, ratio in candidates:
+                utilisation = max(
+                    utilisation,
+                    sigma / data.strength_mpa
+                    + 0.43 * math.sqrt(max(1.0 - ratio, 0.0)),
+                )
+        return float(utilisation)
+    upper = 0.0
+    for index, candidates in terms:
+        if range_high[index] <= 1.0e-12:
+            continue
+        partial = 0.0
+        for sigma, ratio in candidates:
+            denominator = math.sqrt(max(1.0 - ratio, np.finfo(float).tiny))
+            exponent = (
+                data.coefficient_c
+                * (1.0 - sigma / data.strength_mpa)
+                / denominator
+            )
+            partial = max(
+                partial, _pow10(data.log10_cycles[index] - exponent)
+            )
+        upper += partial
     return math.inf if math.isinf(upper) else upper
 
 

@@ -319,8 +319,11 @@ PRESTRESS_FIELD_META = {
 }
 
 PRESTRESS_HELP = {
-    "IS": r"Initial effective prestrain $\varepsilon_p^{(0)}$ locked into the tendon after losses; "
-          "the section strain adds to this.",
+    "IS": r"Strain difference between the tendon and the adjacent concrete after all "
+          r"losses, $IS=\sigma_{pm,t}/E_p$. Under prestress alone the tendon stress is "
+          r"$E_p \cdot IS$. Sector adds no elastic-shortening or creep loss; it derives "
+          r"the bond strain difference $\varepsilon_p^{(0)}$, which includes the "
+          r"decompression strain, internally.",
     "fytk": r"Characteristic 0.1% proof stress $f_{p0.1k}$.",
     "futk": r"Characteristic ultimate stress $f_{pk}$.",
     "eut": "Strain at rupture.",

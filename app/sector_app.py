@@ -603,6 +603,25 @@ def _member_moment_inputs(box, plastic_cases, *, disabled):
     return values
 
 
+# Fatigue material factors per design basis (reinforcement, concrete). DS/EN
+# 1992-1-1 DK NA:2024 2.4.2.4(1) multiplies the Table 2.1Na NA values by 1.1:
+# 1.20 x 1.1 = 1.32 and 1.45 x 1.1 = 1.595 (normal control class, gamma_3 = 1.0).
+FATIGUE_FACTOR_DEFAULTS = {
+    design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value: (1.32, 1.595),
+}
+FATIGUE_FACTOR_SOURCES = {
+    design_standards.DesignBasisKey.FIRST_GEN_DK_NA_2024.value: (
+        "DS/EN 1992-1-1 DK NA:2024, 2.4.2.4(1): Table 2.1Na NA values times 1.1, "
+        "normal control class."
+    ),
+}
+
+
+def fatigue_material_factor_defaults(edition):
+    """Default (gamma_s,fat, gamma_c,fat) for one fatigue design basis."""
+    return FATIGUE_FACTOR_DEFAULTS.get(str(edition), (1.15, 1.50))
+
+
 def _seeded_selectbox(box, label, options, default, key, **kw):
     """A selectbox whose default is seeded into session state rather than passed as
     ``index=`` -- same reason as :func:`_seeded_number`. ``default`` must be one of
@@ -6775,6 +6794,9 @@ def build_inputs(host=st):
         "Enter final effective partial factors, including applicable control, "
         "construction and consequence-category effects."
     )
+    factor_default_s, factor_default_c = fatigue_material_factor_defaults(
+        fatigue_edition
+    )
     ff1, ff2, ff3 = fat.columns(3)
     fatigue_gamma_ff = _seeded_number(
         ff1,
@@ -6795,7 +6817,7 @@ def build_inputs(host=st):
         r"$\gamma_s$",
         0.1,
         10.0,
-        1.15,
+        factor_default_s,
         0.05,
         "fatigue_gamma_s",
         disabled=not (fatigue_on and fatigue_check_steel),
@@ -6810,7 +6832,7 @@ def build_inputs(host=st):
         r"$\gamma_{c,\mathrm{fat}}$",
         0.1,
         10.0,
-        1.50,
+        factor_default_c,
         0.05,
         "fatigue_gamma_c",
         disabled=not (fatigue_on and fatigue_check_concrete),
@@ -6820,6 +6842,16 @@ def build_inputs(host=st):
             f"{fatigue_concrete_factor_guidance.tooltip}"
         ),
     )
+    if fatigue_on and (
+        not math.isclose(float(fatigue_gamma_s), factor_default_s, abs_tol=1.0e-9)
+        or not math.isclose(float(fatigue_gamma_c), factor_default_c, abs_tol=1.0e-9)
+    ):
+        fat.caption(
+            "Note: the entered fatigue material factors differ from the values "
+            f"of the selected basis (gamma_s,fat = {factor_default_s:g}, "
+            f"gamma_c,fat = {factor_default_c:g}). "
+            + FATIGUE_FACTOR_SOURCES.get(fatigue_edition, "")
+        )
     fc1, fc2 = fat.columns(2)
     fatigue_beta_cc_t0 = _seeded_number(
         fc1,
@@ -9086,8 +9118,54 @@ def build_inputs(host=st):
                 plastic_case_context_sig=plastic_case_context_sig,
                 elastic_case_context_sig=elastic_case_context_sig,
                 plastic_bending_context_sig=plastic_bending_context_sig)
+    _apply_bonded_prestrain(inp)
     app_run_probe.stop_phase(st.session_state, input_assembly_token)
     return inp
+
+
+def _apply_bonded_prestrain(inp):
+    """Replace the entered tendon prestrain by the bond strain difference.
+
+    The entered ``IS`` is the strain difference after all losses (user decision
+    for Sector 0.97.0): under prestress alone the tendon stress is ``Ep*IS``.
+    The section model bonds the tendon to the concrete, so the solvers need the
+    bond strain difference eps_p(0) = IS - eps_c,p (EN 1992-1-1 Figure 6.1),
+    which includes the decompression strain. ``tendon_effective_prestrain``
+    keeps the entered values for the effective prestress force.
+    """
+    tendons = list(inp.get("tendons") or [])
+    materials = list(inp.get("tendon_materials") or [])
+    if not tendons or len(materials) != len(tendons):
+        return
+    inp["tendon_effective_prestrain"] = [float(item.IS) for item in materials]
+    if inp.get("section") is None or inp.get("geometry_error"):
+        return
+    bar_laws = list(inp.get("bar_materials") or
+                    [inp["steel"]] * len(inp.get("bars") or []))
+    try:
+        sec = section_core.Section.from_polygon(
+            corners=inp["outer"],
+            bars_xy_area_mm2=list(inp.get("bars") or []) + tendons,
+            holes=inp["holes"],
+        )
+        n_mult = np.asarray(
+            [law.Es / STEEL_REFERENCE_MODULUS for law in bar_laws + materials],
+            dtype=float,
+        )
+        effective = np.asarray(
+            [0.0] * len(bar_laws)
+            + [float(item.Es) * float(item.IS) * 1000.0 for item in materials],
+            dtype=float,
+        )
+        locked = elastic_core.bonded_prestress_stress(
+            sec, float(inp["nl"]), effective, n_mult=n_mult
+        )
+    except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+        return
+    inp["tendon_materials"] = [
+        dataclasses.replace(item, IS=float(stress) / 1000.0 / float(item.Es))
+        for item, stress in zip(materials, locked[len(bar_laws):])
+    ]
 
 
 def _commit_input_fragment(inp) -> None:
@@ -9536,12 +9614,14 @@ def _elastic_solver_inputs(inp, shared_results):
         )
         if all_laws else None
     )
-    prestress_rows = shared_results["prestress_initial"]["elements"]
+    tendon_laws = list(inp.get("tendon_materials") or [])
     prestress_stress = None
-    if prestress_rows:
+    if inp.get("tendons") and tendon_laws:
+        # The bonded locked-in stress Ep*eps_p(0); under prestress alone the
+        # solved tendon stress is the effective Ep*IS (see _apply_bonded_prestrain).
         prestress_stress = np.asarray(
             [0.0] * len(inp.get("bars", []))
-            + [row["locked_in_stress_mpa"] * 1000.0 for row in prestress_rows],
+            + [material.Es * material.IS * 1000.0 for material in tendon_laws],
             dtype=float,
         )
     return n_mult, prestress_stress
@@ -10143,10 +10223,13 @@ def _run_single_analysis(
             )
 
             def _cw(state, n, kt, coarse):
+                # n sets the cracked state; Formula (7.9) and 2023 (9.11) use
+                # alpha_e = Es/Ecm (7.3.4(2)) for both durations.
                 return evaluate_crack_width(
                     sec,
                     state,
                     n,
+                    alpha_e_ratio=inp["ns"],
                     fctm=inp["sls_fctm"],
                     Es=[material.Es for material in all_laws],
                     kt=kt,

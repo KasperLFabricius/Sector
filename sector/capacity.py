@@ -11,7 +11,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from importlib import import_module
 from numbers import Real
 from typing import Any
@@ -4267,6 +4267,15 @@ def locked_in_prestress_result(
     materials = materials or [prestress] * len(tendons)
     if len(materials) != len(tendons):
         raise ValueError("one prestressing material is required per tendon")
+    # The effective prestress after all losses uses the entered strain
+    # difference IS, also after the app has replaced the solver prestrain by the
+    # bond strain difference eps_p(0).
+    effective = inp.get("tendon_effective_prestrain")
+    if effective is not None and len(effective) == len(materials):
+        materials = [
+            replace(material, IS=float(value))
+            for material, value in zip(materials, effective)
+        ]
     forces = [
         material.Es * material.IS * 1000.0 * tendon[2] / 1.0e6
         for material, tendon in zip(materials, tendons)
@@ -6231,14 +6240,34 @@ def _dkna_shear_action_alone(inp):
             if not selection.valid:
                 raise CapacityResultError("action-alone shear resistance is unavailable")
             resistance = selection.resistance
+            route = selection.route
+            # The resistance to V acting alone is that of the section with its
+            # installed links. While VEd <= VRd,c the nominal route is the
+            # concrete route, but valid links can resist more. Using VRd,c there
+            # made the 6.3.2(6) sum non-monotonic in VEd (review item TB-04).
+            link_vrd = (
+                (shear_payload.get("links") or {}).get("res", {}).get("vrd")
+                if link_context is not None
+                else None
+            )
+            if (
+                route == "concrete"
+                and link_vrd is not None
+                and not _is_boolean_scalar(link_vrd)
+                and isinstance(link_vrd, Real)
+                and math.isfinite(float(link_vrd))
+                and float(link_vrd) > float(resistance)
+            ):
+                resistance = float(link_vrd)
+                route = "links"
             cot = (
                 (shear_payload.get("links") or {}).get("res", {}).get("cot")
-                if selection.route == "links"
+                if route == "links"
                 else None
             )
             resistance_kind = (
                 "concrete shear resistance"
-                if selection.route == "concrete"
+                if route == "concrete"
                 else "reinforced shear resistance"
             )
             resistance_value = _positive_finite_real(
