@@ -7343,7 +7343,10 @@ class ReportBuilder:
                 ["Standard-defined concrete-shear arm", "z",
                  f"{_fmt(res['z'], 1)} mm (0.9 d; 8.2.1(3))"],
                 ["Tension reinforcement", "A<sub>sl</sub>",
-                 f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"],
+                 f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"
+                 + (f" (includes bonded tendons A<sub>p</sub> = "
+                    f"{_fmt(sh['asl_tendon_area'], 1)} mm<sup>2</sup>)"
+                    if sh.get("asl_tendon_area") else "")],
                 ["Reinforcement ratio", "rho<sub>l</sub>", f"{_fmt(res['rho_l'], 4)}"],
                 ["Action moment at centroid", "M<sub>Ed</sub>",
                  f"{_fmt(sh.get('m_ed_2023'), 3)} kNm"],
@@ -7999,7 +8002,10 @@ class ReportBuilder:
                 ["Web width", "b<sub>w</sub>",
                  f"{_fmt(calculation_bw, 1)} mm ({bw_src})"],
                 ["Tension reinforcement", "A<sub>sl</sub>",
-                 f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"],
+                 f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"
+                 + (f" (includes bonded tendons A<sub>p</sub> = "
+                    f"{_fmt(sh['asl_tendon_area'], 1)} mm<sup>2</sup>)"
+                    if sh.get("asl_tendon_area") else "")],
                 ["Reinforcement ratio", "rho<sub>l</sub>",
                  f"{_fmt(res['rho_l'], 4)} (&#8804; 0.02)"],
                 ["Size factor", "k", f"{_fmt(res['k'], 3)} (&#8804; 2.0)"],

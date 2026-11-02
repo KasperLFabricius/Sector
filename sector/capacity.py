@@ -4696,10 +4696,9 @@ def _build_shear_face_context(
     _, mx_prestress, my_prestress = prestress_resultants(inp, cx, cy)
     centroid_coord = cy if axis == "x" else cx
     shear = _module("shear")
-    asl, cg, asl_bar_ids = shear.tension_reinforcement_selection(
-        inp["bars"], axis, tension_low, centroid_coord
+    asl, cg, asl_bar_ids, d_mm, asl_tendon_area = shear_tension_steel(
+        inp, axis, tension_low, centroid_coord, model_2023=model_2023
     )
-    d_mm = shear.effective_depth(inp["outer"], axis, tension_low, cg)
     bw_auto = shear.min_web_width(inp["outer"], inp["holes"], axis)
     bw_mm = bw_override if bw_override > 0.0 else bw_auto
     shared_links_present = _shared_links_present(inp)
@@ -4807,6 +4806,7 @@ def _build_shear_face_context(
         "d": d_mm,
         "asl": asl,
         "asl_bar_ids": asl_bar_ids,
+        "asl_tendon_area": asl_tendon_area,
         "asl_cg": cg,
         "ac": area,
         "fck": fck,
@@ -5041,6 +5041,59 @@ def build_directional_shear_contexts(inp, n_prestress, n_ed_comp):
             "candidates": candidates,
         }
     return contexts
+
+# Bonded tendons in the longitudinal shear reinforcement (review item TB-05).
+SHEAR_TENDONS_KEY = "shear_include_tendons"
+
+
+def shear_tendons_default(shear_method) -> bool:
+    """Default of the tendon option: on for 2023, off for the 2005 family.
+
+    DS/EN 1992-1-1:2023 8.2.2(6) includes Ap in d and rho_l. EN 1992-2
+    6.2.2(101) permits the bonded prestressing steel in Asl for the 2005 family.
+    """
+    try:
+        code = selected_shear_code(shear_method)
+    except (CapacityInputError, TypeError, ValueError):
+        return False
+    return getattr(code, "shear_model", "2005") == "2023"
+
+
+def shear_tension_steel(inp, axis, tension_low, centroid_coord, *, model_2023):
+    """Return ``(Asl, centroid, bar_ids, d_mm, Ap)`` for one shear tension face.
+
+    Without the tendon option, Asl and d come from the ordinary bars on the
+    tension side. With it, the bonded tendons on the tension side join Asl.
+    The 2005 family uses the area-weighted depth (EN 1992-2 6.2.2(101)); the
+    2023 edition uses Formula (8.36), d = (ds^2 As + dp^2 Ap)/(ds As + dp Ap).
+    The returned centroid is the coordinate at depth d.
+    """
+    shear = _module("shear")
+    asl, cg, bar_ids = shear.tension_reinforcement_selection(
+        inp["bars"], axis, tension_low, centroid_coord
+    )
+    d_mm = shear.effective_depth(inp["outer"], axis, tension_low, cg)
+    tendons = list(inp.get("tendons") or [])
+    if inp.get(SHEAR_TENDONS_KEY) is not True or not tendons:
+        return asl, cg, bar_ids, d_mm, 0.0
+    ap, cg_p, _ids = shear.tension_reinforcement_selection(
+        tendons, axis, tension_low, centroid_coord
+    )
+    if ap <= 0.0:
+        return asl, cg, bar_ids, d_mm, 0.0
+    dp_mm = shear.effective_depth(inp["outer"], axis, tension_low, cg_p)
+    if asl <= 0.0:
+        return ap, cg_p, bar_ids, dp_mm, ap
+    if model_2023:
+        depth = (d_mm ** 2 * asl + dp_mm ** 2 * ap) / (d_mm * asl + dp_mm * ap)
+    else:
+        depth = (d_mm * asl + dp_mm * ap) / (asl + ap)
+    coords = [
+        float(point[1] if axis == "x" else point[0]) for point in inp["outer"]
+    ]
+    fibre = max(coords) if tension_low else min(coords)
+    centroid = fibre - depth / 1000.0 if tension_low else fibre + depth / 1000.0
+    return asl + ap, centroid, bar_ids, depth, ap
 
 
 def build_shear_context(inp, n_prestress, n_ed_comp):

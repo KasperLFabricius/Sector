@@ -1254,10 +1254,13 @@ def manual_blocks() -> list:
        "capacity case. Sector performs additional calculations that vary axial force "
        "between the attainable tension and compression limits.")
     md('The $N$-$M_x$ diagram joins the 90-degree and 270-degree neutral-axis branches. The $N$-$M_y$ diagram joins the 0-degree and 180-degree branches. Each branch uses 32 axial-force intervals and includes the two endpoints. The applied point identifies the selected action.')
-    md("For an asymmetric section, a fixed neutral-axis orientation can also "
-       "produce an orthogonal moment. Read each diagram as the stated fixed-orientation "
-       "trace. Use the full fixed-$N$ biaxial envelope to assess the concurrent "
-       "applied moment pair. A nonconverged boundary is identified as diagnostic output.")
+    md("Each diagram holds the moment about the other axis at the value of the "
+       "selected case ($M_y=M_{y,Ed}$ for the $N$-$M_x$ diagram). On a section that "
+       "is not symmetric about the bending axis, a fixed neutral-axis orientation "
+       "also produces an orthogonal moment. For such points Sector rotates the "
+       "neutral axis until the orthogonal moment equals the case value, so the "
+       "diagram gives the capacity that applies to the case. A nonconverged boundary "
+       "is identified as diagnostic output.")
     h2("Elastic results")
     md("Use **Contour quantity** to select **Stress** or **Strain**. Use **Map action duration** to select **Combined actions (TOTAL)** or **Sustained actions (LONG)**. "
        "One contour is shown at a time. The quantities use the same section geometry and fixed color limits for these two states. "

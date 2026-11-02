@@ -6450,7 +6450,7 @@ _SHEAR_SIG_KEYS = (
     "shear_vx_fitted_z", "shear_vy_fitted_z", "shear_duct_case",
     "shear_vx_duct_sum", "shear_vy_duct_sum", "shear_vx_duct_largest",
     "shear_vy_duct_largest",
-    "shear_dlower", "shear_gamma_v",
+    "shear_dlower", "shear_gamma_v", "shear_include_tendons",
     "shear_links", "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
@@ -7501,6 +7501,26 @@ def build_inputs(host=st):
     )
     if combined_on:
         mvt_shear.caption(f"Shear method set by Combined: {combined_method}")
+    shear_include_tendons = _seeded_checkbox(
+        mvt_shear,
+        "Include bonded tendons in Asl and d",
+        capacity.shear_tendons_default(_eff_shear_method),
+        capacity.SHEAR_TENDONS_KEY,
+        disabled=not shear_on,
+        help=(
+            "Bonded tendons on the tension side join the longitudinal "
+            "reinforcement Asl and the effective depth d of the concrete shear "
+            "resistance. EN 1992-2 6.2.2(101) permits this for the 2005 family "
+            "(area-weighted d). DS/EN 1992-1-1:2023 8.2.2(6) includes Ap with "
+            "Formula (8.36); Ap may be omitted only if this reduces the "
+            "resistance and As alone resists MEd and NEd."
+        ),
+    )
+    if shear_on and _shear_2023 and not shear_include_tendons:
+        mvt_shear.caption(
+            "DS/EN 1992-1-1:2023 8.2.2(6): omit Ap only when this reduces the "
+            "resistance and the ordinary reinforcement alone resists MEd and NEd."
+        )
     bwx, bwy = mvt_shear.columns(2)
     shear_vx_bw = _seeded_number(
         bwx, r"$b_{w,x}$ (mm, 0 = auto)", 0.0, 100000.0, 0.0, 10.0,
@@ -8919,6 +8939,7 @@ def build_inputs(host=st):
                 shear_vx_duct_largest=shear_vx_duct_largest,
                 shear_vy_duct_largest=shear_vy_duct_largest,
                 shear_dlower=shear_dlower,
+                shear_include_tendons=bool(shear_include_tendons),
                 shear_gamma_v=effective_shear_gamma_v,
                 shear_links=shear_links,
                 shear_vx_link_legs=shear_vx_link_legs,
@@ -9675,14 +9696,26 @@ def _run_single_analysis(
         # pure tension to the squash load, then join them into one closed capacity
         # boundary. About x uses a horizontal neutral axis (V = 90/270, Mx varies);
         # about y a vertical one (V = 0/180, My varies).
+        # Each diagram holds the companion moment at the case value (review item
+        # TA-08): a fixed neutral-axis angle overstated the uniaxial capacity of
+        # sections that are not symmetric about the bending axis.
         if inp.get("interaction"):
-            branch = lambda v: solve_interaction(inp["section"], inp["concrete"],
-                                                 inp["steel"], v, prestress=pre,
-                                                 bar_materials=inp.get("bar_materials"),
-                                                 tendon_materials=inp.get(
-                                                     "tendon_materials"))
-            loop_x = branch(90.0) + list(reversed(branch(270.0)))
-            loop_y = branch(0.0) + list(reversed(branch(180.0)))
+            def branch(v, axis, m_off):
+                return plastic_core.uniaxial_interaction(
+                    inp["section"], inp["concrete"], inp["steel"], v, axis,
+                    m_off=m_off, prestress=pre,
+                    bar_materials=inp.get("bar_materials"),
+                    tendon_materials=inp.get("tendon_materials"),
+                )
+
+            loop_x = (
+                branch(90.0, "x", inp["My_pl"])
+                + list(reversed(branch(270.0, "x", inp["My_pl"])))
+            )
+            loop_y = (
+                branch(0.0, "y", inp["Mx_pl"])
+                + list(reversed(branch(180.0, "y", inp["Mx_pl"])))
+            )
             # The solver reports the axial compression-positive; negate it so the
             # diagram and the applied point are both tension-positive (matching N).
             out["plastic"]["interaction"] = dict(
@@ -15277,7 +15310,9 @@ def shear_view(inp, results, *, global_results=None):
                           f"Axial stress {_SIGMA}cp", "Concrete area Ac",
                           "CRd,c", "vmin", "fcd"],
              "Value": [f"{sh['d']:.1f} mm", f"{calculation_bw:.1f} mm ({bw_note})",
-                       f"{sh['asl']:.1f} mm2",
+                       f"{sh['asl']:.1f} mm2"
+                       + (f" (includes tendons Ap = {sh['asl_tendon_area']:.1f} mm2)"
+                          if sh.get("asl_tendon_area") else ""),
                        f"{res['rho_l']:.4f} ({chr(0x2264)} 0.02)",
                        f"{res['k']:.3f} ({chr(0x2264)} 2.0)",
                        f"{res['sigma_cp']:.3f} MPa ({chr(0x2264)} 0.2 fcd)",

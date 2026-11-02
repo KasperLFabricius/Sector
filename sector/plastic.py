@@ -1642,3 +1642,59 @@ def conditional_capacity(
     # -- could have hidden a crossing, so defer to the caller's pure-axis fallback
     # instead of asserting zero.
     return (0.0, False) if (any_fail or solve_failed[0]) else (0.0, True)
+
+
+def uniaxial_interaction(
+    section: Section,
+    concrete: Concrete,
+    steel: MildSteel,
+    V_deg: float,
+    axis: str,
+    *,
+    m_off: float = 0.0,
+    prestress: "Prestress | None" = None,
+    bar_materials: "Sequence[MildSteel] | None" = None,
+    tendon_materials: "Sequence[Prestress] | None" = None,
+    n_points: int = 32,
+    n_bands: int = 80,
+    rel_tol: float = 1.0e-3,
+) -> list[InteractionPoint]:
+    """N-M branch about ``axis`` with the companion moment held at ``m_off``.
+
+    :func:`solve_interaction` keeps the neutral-axis angle fixed, so on a section
+    that is not symmetric about the bending axis its points carry a companion
+    moment, and the own moment is not the uniaxial capacity (review item TA-08:
+    an L-section gave Mx 47 % too high). Each fixed-angle point whose companion
+    moment differs from ``m_off`` by more than ``rel_tol`` of the own moment is
+    replaced by :func:`conditional_capacity` at the same axial force, which
+    rotates the neutral axis until the companion moment equals ``m_off``. A
+    symmetric section therefore keeps the fixed-angle trace unchanged.
+    """
+    if axis not in {"x", "y"}:
+        raise ValueError("axis must be 'x' or 'y'")
+    points = solve_interaction(
+        section, concrete, steel, V_deg, prestress=prestress,
+        bar_materials=bar_materials, tendon_materials=tendon_materials,
+        n_points=n_points, n_bands=n_bands,
+    )
+    refined = []
+    for point in points:
+        own = point.Mx if axis == "x" else point.My
+        companion = point.My if axis == "x" else point.Mx
+        if abs(companion - m_off) <= rel_tol * max(abs(own), 1.0):
+            refined.append(point)
+            continue
+        tension_low = own >= 0.0
+        mrd, exact = conditional_capacity(
+            section, concrete, steel, point.axial, axis, tension_low, m_off,
+            prestress=prestress, bar_materials=bar_materials,
+            tendon_materials=tendon_materials, n_bands=n_bands,
+        )
+        signed = mrd if tension_low else -mrd
+        refined.append(InteractionPoint(
+            axial=point.axial,
+            Mx=signed if axis == "x" else m_off,
+            My=m_off if axis == "x" else signed,
+            converged=bool(point.converged and exact),
+        ))
+    return refined

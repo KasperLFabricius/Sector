@@ -1914,10 +1914,10 @@ def concrete_shear_publication_input_is_current(inp, shear_result):
         _, mx_prestress, my_prestress = capacity.prestress_resultants(inp, cx, cy)
         n_prestress = capacity.prestress_axial(inp)
         centroid_coord = cy if axis == "x" else cx
-        asl, cg, asl_ids = shear_core.tension_reinforcement_selection(
-            bars, axis, tension_low, centroid_coord
+        asl, cg, asl_ids, d_mm, _asl_tendons = capacity.shear_tension_steel(
+            inp, axis, tension_low, centroid_coord,
+            model_2023=bool(model_2023),
         )
-        d_mm = shear_core.effective_depth(outer, axis, tension_low, cg)
         bw_auto = shear_core.min_web_width(outer, holes, axis)
         bw_mm = expected_bw_override if expected_bw_override > 0.0 else bw_auto
         concrete = inp.get("concrete")
