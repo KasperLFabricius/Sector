@@ -4239,6 +4239,17 @@ def _tendon_element_id(elements: object, index: int) -> str:
     return element_id.strip()
 
 
+def plastic_tendon_materials(inp):
+    """Tendon laws of the plastic (ULS) model.
+
+    The app derives ``tendon_materials_uls`` with the decompression strain at the
+    short-term modulus (``_apply_bonded_prestrain``). An input without it uses
+    ``tendon_materials``.
+    """
+    laws = inp.get("tendon_materials_uls")
+    return laws if laws is not None else inp.get("tendon_materials")
+
+
 def locked_in_prestress_result(
     inp,
     cx=0.0,
@@ -4341,7 +4352,7 @@ def shear_lever_arm(inp, axis, tension_low, d_mm):
         inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
         angle, prestress=prestress,
         bar_materials=inp.get("bar_materials"),
-        tendon_materials=inp.get("tendon_materials"),
+        tendon_materials=plastic_tendon_materials(inp),
     )
     if not _solver_flag(
         _solver_member(point, "converged", "plastic point"),
@@ -4452,7 +4463,7 @@ def shear_link_arm_publication_basis(inp, axis, tension_low, z_mm):
         "steel": inp.get("steel"),
         "prestress": inp.get("prestress"),
         "bar_materials": inp.get("bar_materials"),
-        "tendon_materials": inp.get("tendon_materials"),
+        "tendon_materials": plastic_tendon_materials(inp),
         "plastic_axial_action_kn": inp.get("P_pl"),
         "plastic_mx_action_knm": inp.get("Mx_pl"),
         "plastic_my_action_knm": inp.get("My_pl"),
@@ -4494,7 +4505,7 @@ def shear_face_mrd(
         own_moment_offset=reference_shift,
         prestress=prestress,
         bar_materials=inp.get("bar_materials"),
-        tendon_materials=inp.get("tendon_materials"),
+        tendon_materials=plastic_tendon_materials(inp),
     )
     if type(conditional) is not tuple or len(conditional) != 2:
         raise CapacityResultError(
@@ -4516,7 +4527,7 @@ def shear_face_mrd(
         inp["section"], inp["concrete"], inp["steel"], -inp["P_pl"],
         angle, prestress=prestress,
         bar_materials=inp.get("bar_materials"),
-        tendon_materials=inp.get("tendon_materials"),
+        tendon_materials=plastic_tendon_materials(inp),
     )
     if not _solver_flag(
         _solver_member(point, "converged", "pure-axis plastic point"),
@@ -6000,7 +6011,7 @@ def _dkna_plastic_envelope(inp, axial_solver_kn):
         inp["v_inc"],
         prestress=prestress,
         bar_materials=inp.get("bar_materials"),
-        tendon_materials=inp.get("tendon_materials"),
+        tendon_materials=plastic_tendon_materials(inp),
     )
     if not points or not all(
         _solver_flag(
@@ -6049,7 +6060,7 @@ def _dkna_axial_action_alone(inp):
             tension=n_ed > 0.0,
             prestress=prestress,
             bar_materials=inp.get("bar_materials"),
-            tendon_materials=inp.get("tendon_materials"),
+            tendon_materials=plastic_tendon_materials(inp),
         )
     except (ArithmeticError, TypeError, ValueError, OverflowError):
         return _dkna_action_record(

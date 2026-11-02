@@ -306,7 +306,7 @@ def _prestress_presets():
 PRESTRESS_PRESETS = _prestress_presets()
 
 PRESTRESS_FIELD_META = {
-    "IS": (r"Prestrain $\varepsilon_{p}^{(0)}$ (" + _PERMILLE + ")", 0.0, 50.0, 0.1),
+    "IS": (r"Prestrain $IS=\sigma_{pm}/E_p$ (" + _PERMILLE + ")", 0.0, 50.0, 0.1),
     "fytk": (r"$f_{p0.1k}$ (MPa)", 0.0, 5000.0, 10.0),
     "futk": (r"$f_{pk}$ (MPa)", 0.0, 5000.0, 10.0),
     "eut": (r"$\varepsilon_{ut}$ (" + _PERMILLE + ")", 0.0, 2000.0, 0.5),
@@ -319,11 +319,11 @@ PRESTRESS_FIELD_META = {
 }
 
 PRESTRESS_HELP = {
-    "IS": r"Strain difference between the tendon and the adjacent concrete after all "
-          r"losses, $IS=\sigma_{pm,t}/E_p$. Under prestress alone the tendon stress is "
-          r"$E_p \cdot IS$. Sector adds no elastic-shortening or creep loss; it derives "
-          r"the bond strain difference $\varepsilon_p^{(0)}$, which includes the "
-          r"decompression strain, internally.",
+    "IS": r"Tendon strain under prestress alone after all losses, "
+          r"$IS=\sigma_{pm,t}/E_p$. Calculate the losses outside Sector; Sector adds "
+          r"none. Sector derives the bond strain difference $\varepsilon_p^{(0)}$ "
+          r"(Figure 6.1), which adds the concrete strain at the tendon under "
+          r"prestress (decompression strain).",
     "fytk": r"Characteristic 0.1% proof stress $f_{p0.1k}$.",
     "futk": r"Characteristic ultimate stress $f_{pk}$.",
     "eut": "Strain at rupture.",

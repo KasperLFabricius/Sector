@@ -285,6 +285,11 @@ _MATERIAL_INPUT_BLOCKER = EngineerMessage(
     "MATERIAL-INPUT-BLOCKER",
     "Resolve the material definitions and assignments before calculating",
 )
+_PRESTRESS_BOND_BLOCKER = EngineerMessage(
+    "PRESTRESS-BOND-STATE",
+    "Sector cannot establish the bond strain difference of the prestressing "
+    "tendons. Check the prestrain IS, the rupture strain and the tendon positions",
+)
 _TORSION_GAMMA_CT_INPUT = EngineerMessage(
     "TORSION-GAMMA-CT",
     "Enter a positive finite concrete tensile partial factor gamma_ct",
@@ -1076,9 +1081,12 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
                               {
                                   "disabled": lock_elastic,
                                   "help": (
-                                      "Concrete secant modulus, used only by the "
-                                      r"elastic analysis to derive the modular "
-                                      r"ratios $n=E_s/E_c$."
+                                      r"Concrete secant modulus $E_{cm}$. The "
+                                      r"elastic analysis derives the modular "
+                                      r"ratios $n=E_s/E_c$ and the crack-width "
+                                      r"ratio $\alpha_e=E_s/E_{cm}$ from it. "
+                                      "Enter the short-term value; the creep "
+                                      "coefficient sets the long-term state."
                                   ),
                               },
                           ))
@@ -1270,9 +1278,9 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
     pre = _safe_build(box, mp.build_prestress, curve, vals)
     if curve in (1, 2, 3, 4, 5):
         box.caption(f"built-in curve {curve} (fixed shape); only the prestrain "
-                    f"$\\varepsilon_p^{{(0)}}={vals['IS']:.3f}$ {_PERMILLE} applies")
+                    f"$IS={vals['IS']:.3f}$ {_PERMILLE} applies")
     else:
-        box.caption(f"$\\varepsilon_p^{{(0)}}={vals['IS']:.3f}$ {_PERMILLE},  "
+        box.caption(f"$IS={vals['IS']:.3f}$ {_PERMILLE},  "
                     f"$f_{{pd}}={vals['fytk'] / vals['gamma_y']:.3f}$ MPa,  "
                     f"$E_p={vals['Es']:.0f}$ GPa")
     if not catalogue_mode:
@@ -9126,22 +9134,37 @@ def build_inputs(host=st):
 def _apply_bonded_prestrain(inp):
     """Replace the entered tendon prestrain by the bond strain difference.
 
-    The entered ``IS`` is the strain difference after all losses (user decision
-    for Sector 0.97.0): under prestress alone the tendon stress is ``Ep*IS``.
-    The section model bonds the tendon to the concrete, so the solvers need the
-    bond strain difference eps_p(0) = IS - eps_c,p (EN 1992-1-1 Figure 6.1),
-    which includes the decompression strain. ``tendon_effective_prestrain``
-    keeps the entered values for the effective prestress force.
+    The entered ``IS`` is the tendon strain after all losses (user decision for
+    Sector 0.97.0): under prestress alone the tendon stress is ``Ep*IS``. The
+    section models bond the tendon to the concrete, so they need the bond strain
+    difference eps_p(0) = IS - eps_c,p (EN 1992-1-1 Figure 6.1), where eps_c,p is
+    the concrete strain at the tendon under prestress alone:
+
+    * ``tendon_materials`` (elastic and fatigue): eps_c,p at the long-term
+      modular ratio ``nl``, because prestress is a sustained action.
+    * ``tendon_materials_uls`` (plastic): eps_c,p at ``Es/Ecm``. The creep strain
+      under prestress does not recover in a short-term load to failure, so the
+      decompression strain uses the short-term modulus Ecm (Table 3.1).
+
+    ``tendon_effective_prestrain`` keeps the entered values for the effective
+    prestress force. When the bond state cannot be established, the input is
+    blocked with a message (fail closed).
     """
     tendons = list(inp.get("tendons") or [])
     materials = list(inp.get("tendon_materials") or [])
     if not tendons or len(materials) != len(tendons):
         return
-    inp["tendon_effective_prestrain"] = [float(item.IS) for item in materials]
-    if inp.get("section") is None or inp.get("geometry_error"):
-        return
     bar_laws = list(inp.get("bar_materials") or
-                    [inp["steel"]] * len(inp.get("bars") or []))
+                    [inp.get("steel")] * len(inp.get("bars") or []))
+    if (
+        inp.get("section") is None
+        or inp.get("geometry_error")
+        or inp.get("material_error")
+        or any(law is None for law in materials + bar_laws)
+    ):
+        # Another input error already blocks the calculation.
+        return
+    inp["tendon_effective_prestrain"] = [float(item.IS) for item in materials]
     try:
         sec = section_core.Section.from_polygon(
             corners=inp["outer"],
@@ -9157,15 +9180,29 @@ def _apply_bonded_prestrain(inp):
             + [float(item.Es) * float(item.IS) * 1000.0 for item in materials],
             dtype=float,
         )
-        locked = elastic_core.bonded_prestress_stress(
-            sec, float(inp["nl"]), effective, n_mult=n_mult
-        )
-    except (TypeError, ValueError, OverflowError, ZeroDivisionError):
+        laws = {}
+        for key, ratio in (
+            ("tendon_materials", float(inp["nl"])),
+            (
+                "tendon_materials_uls",
+                STEEL_REFERENCE_MODULUS / codes.ecm(float(inp["concrete"].fck)),
+            ),
+        ):
+            locked = elastic_core.bonded_prestress_stress(
+                sec, ratio, effective, n_mult=n_mult
+            )
+            laws[key] = [
+                dataclasses.replace(
+                    item, IS=float(stress) / 1000.0 / float(item.Es)
+                )
+                for item, stress in zip(materials, locked[len(bar_laws):])
+            ]
+    except (
+        AttributeError, TypeError, ValueError, OverflowError, ZeroDivisionError,
+    ):
+        inp["material_error"] = _PRESTRESS_BOND_BLOCKER
         return
-    inp["tendon_materials"] = [
-        dataclasses.replace(item, IS=float(stress) / 1000.0 / float(item.Es))
-        for item, stress in zip(materials, locked[len(bar_laws):])
-    ]
+    inp.update(laws)
 
 
 def _commit_input_fragment(inp) -> None:
@@ -9549,8 +9586,33 @@ def _section_and_material_results(inp):
             if value.tendon_index < len(tendon_elements) else None
         )
         prestress_rows.append(row)
+    # Bond strain difference per tendon (see _apply_bonded_prestrain): elastic and
+    # fatigue models at nl, plastic model at Es/Ecm.
+    bond_strain = []
+    effective = inp.get("tendon_effective_prestrain")
+    sls_laws = list(inp.get("tendon_materials") or [])
+    uls_laws = list(capacity.plastic_tendon_materials(inp) or [])
+    if (
+        effective is not None
+        and len(effective) == len(sls_laws) == len(uls_laws)
+        and inp.get("tendon_materials_uls") is not None
+    ):
+        for index, (value, sls, uls) in enumerate(
+            zip(effective, sls_laws, uls_laws)
+        ):
+            bond_strain.append(dict(
+                element_id=(
+                    prestress_rows[index]["element_id"]
+                    if index < len(prestress_rows) else str(index + 1)
+                ),
+                effective_strain=float(value),
+                bond_strain_elastic=float(sls.IS),
+                bond_stress_elastic_mpa=float(sls.Es) * float(sls.IS),
+                bond_strain_plastic=float(uls.IS),
+            ))
     prestress_initial = dict(
         elements=prestress_rows,
+        bond_strain=bond_strain,
         internal_resultant_origin=dict(
             n_kn=prestress.total_n_kn,
             mx_knm=prestress.total_mx_knm,
@@ -9803,7 +9865,7 @@ def _run_single_analysis(
         pts = solve_plastic(inp["section"], inp["concrete"], inp["steel"],
                             -inp["P_pl"], vlo, sweep_hi, inp["v_inc"], prestress=pre,
                             bar_materials=inp.get("bar_materials"),
-                            tendon_materials=inp.get("tendon_materials"))
+                            tendon_materials=capacity.plastic_tendon_materials(inp))
         mx = [p.Mx for p in pts]
         my = [p.My for p in pts]
         # Utilisation is a closed-envelope check (a partial arc has no wrap-around), and
@@ -9864,8 +9926,8 @@ def _run_single_analysis(
             branch = lambda v: solve_interaction(inp["section"], inp["concrete"],
                                                  inp["steel"], v, prestress=pre,
                                                  bar_materials=inp.get("bar_materials"),
-                                                 tendon_materials=inp.get(
-                                                     "tendon_materials"))
+                                                 tendon_materials=capacity.plastic_tendon_materials(
+                                                     inp))
             loop_x = branch(90.0) + list(reversed(branch(270.0)))
             loop_y = branch(0.0) + list(reversed(branch(180.0)))
             # The solver reports the axial compression-positive; negate it so the

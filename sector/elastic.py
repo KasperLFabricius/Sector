@@ -920,16 +920,21 @@ def bonded_prestress_stress(
 ) -> np.ndarray:
     """Locked-in tendon stress that gives the effective stress under prestress alone.
 
-    The entered tendon prestrain ``IS`` is the strain difference after all losses,
-    so under prestress alone the tendon stress is ``Ep*IS`` (``effective_stress``,
+    The entered tendon prestrain ``IS`` is the tendon strain after all losses, so
+    under prestress alone the tendon stress is ``Ep*IS`` (``effective_stress``,
     kN/m2 per element, zero for ordinary bars). In the bonded section model the
     tendon also follows the concrete strain at its level, so the solver needs the
     larger locked-in stress ``sigma_0 = Ep*IS - Ep*eps_c,p``, where ``eps_c,p`` is
-    the concrete strain at the tendon under that prestress. ``sigma_0/Ep`` is then
-    the bond strain difference eps_p(0) of EN 1992-1-1 Figure 6.1, which includes
-    the decompression strain. The fixed point is solved at the modular ratio ``n``
-    of the sustained state (``nl``), because prestress is a sustained action. The
-    iteration contracts with the factor ``n*rho_p`` and stops at ``rel_tol``.
+    the concrete strain at the tendon under that prestress at the modular ratio
+    ``n``. ``sigma_0/Ep`` is then the bond strain difference of EN 1992-1-1
+    Figure 6.1, which includes the decompression strain.
+
+    For one tendon in a linear section the tendon stress is ``sigma_0/(1 + k)``
+    with ``k = Ep*Ap*c > 0``. Each step therefore scales the locked-in stress by
+    ``effective/solved``, which is exact in that case and converges in a few
+    steps for coupled tendons and cracked states. A step that cannot be scaled
+    uses the residual. Raises ``ValueError`` when an elastic state or the fixed
+    point does not converge.
     """
     effective = np.asarray(effective_stress, dtype=float)
     scale = float(np.max(np.abs(effective))) if effective.size else 0.0
@@ -944,10 +949,14 @@ def bonded_prestress_stress(
             n_mult=n_mult,
             prestress_stress=locked,
         )
-        residual = np.where(
-            tendon, effective - np.asarray(state.bar_stress_total, dtype=float), 0.0
-        )
-        locked = locked + residual
+        if not state.converged:
+            raise ValueError("the elastic state under prestress alone did not converge")
+        solved = np.asarray(state.bar_stress_total, dtype=float)
+        residual = np.where(tendon, effective - solved, 0.0)
         if float(np.max(np.abs(residual))) <= rel_tol * scale:
             return locked
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.where(tendon, effective / solved, 1.0)
+        scalable = tendon & np.isfinite(ratio) & (ratio > 0.0) & (solved * locked > 0.0)
+        locked = np.where(scalable, locked * ratio, locked + residual)
     raise ValueError("the bonded prestress state did not converge")

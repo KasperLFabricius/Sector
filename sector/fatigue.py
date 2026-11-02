@@ -67,7 +67,9 @@ _DEFAULT_FIBRE_SEARCH_MAX_DEPTH = 26
 _DEFAULT_FIBRE_SEARCH_MAX_BOXES = 200_000
 _DEFAULT_FIBRE_SEARCH_REL_TOL = 1.0e-3
 # Absolute gap relative to the decision limit 1.0 of both the Miner damage and
-# the 6.8.7(2) utilisation (review item TA-01).
+# the 6.8.7(2) utilisation (review item TA-01). The search stops when the upper
+# bound exceeds the best sampled value by at most ABS_TOL + REL_TOL * best, so
+# 1.1e-3 at the limit. The verdict uses the upper bound, so it is conservative.
 _DEFAULT_FIBRE_SEARCH_ABS_TOL = 1.0e-4
 
 

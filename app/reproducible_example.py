@@ -440,9 +440,9 @@ def checking_pack() -> str:
         The top fibre has max compressions 3.168208832 MPa and
         2.464162425 MPa, producing total Miner damage 5.358432445e-12
         and stress utilisation 3.168208832/14.06896552=0.2251913141.
-        The adaptive spatial bound converges: its upper bound is within the
-        absolute tolerance 1e-4 of the decision limit 1.0. The spectrum
-        verdict is PASS.
+        The adaptive spatial bound converges: its upper bound exceeds the
+        largest sampled damage by at most 1e-4 + 1e-3 x that damage. The
+        verdict uses the upper bound. The spectrum verdict is PASS.
 
         ## Report completeness
 

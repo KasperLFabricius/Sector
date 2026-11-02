@@ -2,8 +2,10 @@
 
 EN 1992-1-1 7.3.4(2) defines alpha_e as the ratio Es/Ecm. The long-term cracked
 state uses the creep modular ratio nl for the steel stress, but the concrete
-term of (7.9) keeps alpha_e = Es/Ecm. The expected values below follow from the
-clause text and the published operands of the governing bar.
+term of (7.9) keeps alpha_e = Es/Ecm. The expected values follow from a hand
+calculation of the cracked rectangular section and from the clause text: with
+the first branch of (7.9) in both cases, the mean strain changes by
+kt fct,eff (nl - ns)/Es, independent of rho_p,eff.
 """
 
 from __future__ import annotations
@@ -28,11 +30,6 @@ def _beam() -> Section:
     )
 
 
-def _formula_7_9(sigma_s, rho, fct, alpha_e):
-    term = KT * fct / rho * (1.0 + alpha_e * rho)
-    return max((sigma_s - term) / ES, 0.6 * sigma_s / ES)
-
-
 @pytest.mark.parametrize("edition", ("2004", "2023"))
 def test_long_term_mean_strain_uses_short_term_modular_ratio(edition):
     section = _beam()
@@ -50,9 +47,23 @@ def test_long_term_mean_strain_uses_short_term_modular_ratio(edition):
         edition=edition,
     ).result
     assert corrected is not None and legacy is not None
+    # Hand calculation, cracked rectangle with n = nl: b x^2/2 = n As (d - x),
+    # Icr = b x^3/3 + n As (d - x)^2, sigma_s = n M (d - x)/Icr.
+    b, d, area = 300.0, 550.0, 3.0 * 491.0
+    n_as = NL * area
+    x = (-n_as + (n_as**2 + 2.0 * b * n_as * d) ** 0.5) / b
+    i_cr = b * x**3 / 3.0 + n_as * (d - x) ** 2
+    sigma_hand = NL * 150.0e6 * (d - x) / i_cr
+    assert sigma_hand == pytest.approx(216.0, abs=0.1)
     governing = max(corrected.candidates, key=lambda item: item.wk)
-    expected = _formula_7_9(governing.sigma_s, governing.rho_p_eff, fct, NS)
-    assert governing.esm_ecm == pytest.approx(expected, rel=1.0e-9)
+    assert governing.sigma_s == pytest.approx(sigma_hand, rel=1.0e-4)
+    old_bar = next(
+        item for item in legacy.candidates if item.bar_index == governing.bar_index
+    )
+    # (7.9), first branch: esm - ecm = (sigma_s - kt fct/rho (1 + alpha_e rho))/Es.
+    assert governing.esm_ecm - old_bar.esm_ecm == pytest.approx(
+        KT * fct * (NL - NS) / ES, rel=1.0e-9
+    )
     # alpha_e = nl reduces the mean strain, so the former width was too small.
     assert corrected.wk > legacy.wk
 

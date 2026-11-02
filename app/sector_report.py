@@ -3434,7 +3434,7 @@ class ReportBuilder:
                     properties = (
                         f"built-in fixed curve {law.curve}; E<sub>p</sub> = "
                         f"{_fmt(law.Es / 1000, 1)} GPa; "
-                        f"eps<sub>p,0</sub> / eps<sub>ut</sub> = "
+                        f"IS / eps<sub>ut</sub> = "
                         f"{_fmt(law.IS * 1000, 3)} / "
                         f"{_fmt(law.rupture_strain * 1000, 3)} &#8240;; "
                         f"gamma<sub>y</sub> = {_fmt(law.gamma_y, 3)}"
@@ -3453,7 +3453,7 @@ class ReportBuilder:
                         f"f<sub>pk</sub> = {_fmt(law.fytk, 3)} / "
                         f"{_fmt(law.futk, 3)} MPa; E<sub>p</sub> = "
                         f"{_fmt(law.Es / 1000, 1)} GPa; "
-                        f"eps<sub>p,0</sub> = "
+                        f"IS = "
                         f"{_fmt(law.IS * 1000, 3)} &#8240;",
                         f"eps<sub>ut</sub> = {_fmt(law.eut * 1000, 3)} &#8240;",
                         f"gamma<sub>y</sub> / gamma<sub>u</sub> / "
@@ -5015,7 +5015,7 @@ class ReportBuilder:
             if item.get("description"):
                 self._small(_html_escape(item["description"]))
             rows = [["Parameter", "Symbol", "Value"],
-                    ["Initial prestrain", "eps<sub>p</sub><super>(0)</super>",
+                    ["Prestrain after all losses", "IS",
                      f"{_fmt(p.IS*1000, 3)} &#8240;"],
                     [
                         "Design-law source",
@@ -5084,7 +5084,7 @@ class ReportBuilder:
         block_start = len(self.flow)
         self._h2("Initial prestress action")
         state_rows = [[
-            "Tendon", "Material", "E<sub>p</sub> (MPa)", "eps<sub>p,0</sub> (-)",
+            "Tendon", "Material", "E<sub>p</sub> (MPa)", "IS (-)",
             "sigma<sub>p,0</sub> (MPa)", "A<sub>p</sub> (mm<super>2</super>)", "F<sub>p,0</sub> (kN)",
         ]]
         moment_rows = [[
@@ -5120,6 +5120,44 @@ class ReportBuilder:
             repeat_cols=1,
         )
 
+        bond = payload.get("bond_strain") or []
+        if bond:
+            self._p(
+                "The section models bond each tendon with the bond strain "
+                "difference eps<sub>p</sub><super>(0)</super> = IS - "
+                "eps<sub>c,p</sub> (EN 1992-1-1 Figure 6.1). eps<sub>c,p</sub> "
+                "(negative in compression) is the concrete strain at the tendon "
+                "under prestress alone: at the long-term modular ratio "
+                "n<sub>l</sub> for the elastic and fatigue models, and at "
+                "E<sub>s</sub>/E<sub>cm</sub> for the plastic model, because "
+                "the creep strain does not recover in a short-term load to "
+                "failure. The elastic model applies sigma<sub>p</sub><super>(0)"
+                "</super> = E<sub>p</sub> eps<sub>p</sub><super>(0)</super> to "
+                "the bonded section. Under prestress alone the tendon stress "
+                "then returns to sigma<sub>p,0</sub> = E<sub>p</sub> IS."
+            )
+            bond_rows = [[
+                "Tendon", "IS (&#8240;)",
+                "eps<sub>p</sub><super>(0)</super> elastic (&#8240;)",
+                "sigma<sub>p</sub><super>(0)</super> elastic (MPa)",
+                "eps<sub>p</sub><super>(0)</super> plastic (&#8240;)",
+            ]]
+            for row in bond:
+                bond_rows.append([
+                    row["element_id"],
+                    _fmt(row["effective_strain"] * 1000.0, 4),
+                    _fmt(row["bond_strain_elastic"] * 1000.0, 4),
+                    _fmt(row["bond_stress_elastic_mpa"], 2),
+                    _fmt(row["bond_strain_plastic"] * 1000.0, 4),
+                ])
+            self._table(
+                bond_rows,
+                [22 * mm, 26 * mm, 40 * mm, 40 * mm, 40 * mm],
+                font=6.8,
+                keep=False,
+                repeat_cols=1,
+            )
+
         def labelled(values, formatter):
             return "; ".join(
                 f"{row['element_id']}: {formatter(row)}" for row in values
@@ -5127,11 +5165,10 @@ class ReportBuilder:
 
         self._formula(
             "sigma<sub>p,0,i</sub> = E<sub>p,i</sub> "
-            "eps<sub>p,0,i</sub>",
+            "IS<sub>i</sub>",
             equation_key="prestress.initial-stress",
-            ref=("Effective prestress after all losses from the entered strain "
-                 "difference IS. The section model bonds the tendon with the "
-                 "derived strain difference eps_p(0) = IS - eps_c,p."),
+            ref=("Effective prestress after all losses from the entered tendon "
+                 "strain IS."),
             subst=labelled(
                 elements,
                 lambda row: (f"{_fmt(row['modulus_mpa'], 1)} &#183; "
@@ -9136,7 +9173,7 @@ class ReportBuilder:
                 f"{angle_note}."
             )
         self._p("The sectional actions use the shared edition <b>" + str(c["method"]) + "</b>.")
-        self._p("Each denominator in the DK NA interaction is the resistance to that action acting alone. The other external sectional actions are set to zero.")
+        self._p("Each denominator in the DK NA interaction is the resistance to that action acting alone. The other external sectional actions are set to zero. For V this is the resistance of the section with its installed links, max(V<sub>Rd,c</sub>, V<sub>Rd</sub>), also when the shear check itself uses the concrete route (V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>).")
         governing_assessment_note = (
             presentation.combined_governing_assessment_note(c)
         )
@@ -10931,7 +10968,7 @@ class ReportBuilder:
             )
         )
         if ps is not None and self.inp.get("tendons"):
-            self._p("Tendon prestress is applied through its initial strain. The entered N is the external force only.")
+            self._p("Tendon prestress is applied through the bond strain difference eps<sub>p</sub><super>(0)</super> (Initial prestress action). The entered N is the external force only.")
             self._p("Equivalent prestress actions, with N positive in tension:")
             self._p(f"N = {_fmt(ps['n_kn'], 3)} kN.")
             self._p(f"M<sub>x</sub> = {_fmt(ps['mx_knm'], 3)} kN&#183;m.")
@@ -11865,6 +11902,14 @@ class ReportBuilder:
                 ref="DS/EN 1992-1-1:2023 Formula (9.11)",
                 subst=subst,
                 result=result,
+            )
+        if mean.get("alpha_e") is not None:
+            self._small(
+                f"alpha<sub>e</sub> = E<sub>s</sub>/E<sub>cm</sub> = "
+                f"{_fmt(mean.get('alpha_e'), 3)} "
+                + ("(7.3.4(2))" if edition == "2005" else "(9.2.3(3))")
+                + ", also for the long-term width. The creep modular ratio "
+                "sets only the cracked-section state."
             )
 
     def _crack_candidates(self, cases):

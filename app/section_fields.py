@@ -32,7 +32,8 @@ class FieldUnavailable(ValueError):
 def context_signature(inp, family):
     """Bind field evidence to the calculated geometry, materials and actions."""
     keys = ["outer", "holes", "bars", "tendons", "bar_elements", "tendon_elements",
-            "concrete", "steel", "prestress", "bar_materials", "tendon_materials", "slab_density"]
+            "concrete", "steel", "prestress", "bar_materials", "tendon_materials",
+            "tendon_materials_uls", "slab_density"]
     keys += (["P_pl", "Mx_pl", "My_pl", "plastic_case"] if family == "Plastic" else
              ["P_el_l", "Mx_el_l", "My_el_l", "P_el_s", "Mx_el_s", "My_el_s",
               "conc_Ec", "el_phi", "ns", "nl", "elastic_case"])

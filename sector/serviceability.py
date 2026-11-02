@@ -2203,7 +2203,10 @@ def evaluate_crack_width(
     the instantaneous (short-term) state of the combined creep analysis, whose
     bar stress is ``s2 + RST1``. ``cracked_state`` supplies the neutral axis /
     strain gradient and the per-bar steel stress; the bar with the largest ``wk``
-    governs. See :func:`analyse_cracking` for the remaining parameters.
+    governs. ``alpha_e_ratio`` is Es/Ecm of the concrete term of Formula (7.9)
+    (7.3.4(2); 2023: (9.11)). Pass it whenever ``n`` is a long-term modular
+    ratio: without it the concrete term uses ``n``. See :func:`analyse_cracking`
+    for the remaining parameters.
     """
     section.require_valid_geometry()
     return _crack_width(section, cracked_state, n, fctm, Es, cover, kt,

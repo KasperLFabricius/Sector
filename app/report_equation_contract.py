@@ -169,9 +169,9 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("prestress.initial-stress", None): _result(
         "sigma<sub>p,0,i</sub>", "MPa",
-        ("sigma<sub>p,0,i</sub>", "locked-in initial stress of tendon i", "MPa"),
+        ("sigma<sub>p,0,i</sub>", "effective stress of tendon i after all losses", "MPa"),
         ("E<sub>p,i</sub>", "elastic modulus of tendon i", "MPa"),
-        ("eps<sub>p,0,i</sub>", "entered initial strain of tendon i"),
+        ("IS<sub>i</sub>", "entered strain of tendon i after all losses"),
     ),
     ("prestress.element-force", None): _result(
         "F<sub>p,0,i</sub>", "kN",

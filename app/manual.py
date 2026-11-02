@@ -22,11 +22,13 @@ the same small subset to its own markup.
 
 from __future__ import annotations
 
+import dataclasses
 import html
 import io
 import logging
 import re
 
+import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -48,9 +50,10 @@ from sector import __author__ as APP_AUTHOR
 from sector import __licensee__ as APP_LICENSEE
 from sector import __version__ as APP_VERSION
 from sector import design_standards, material_presets, templates
-from sector.codes import fctm
+from sector.codes import ecm, fctm
 from sector.fatigue import steel_fatigue_life
-from sector.materials import Concrete, Prestress
+from sector.elastic import bonded_prestress_stress
+from sector.materials import ES, Concrete, Prestress
 from sector.plastic import solve_plastic
 from sector.section import Section
 from sector.serviceability import analyse_cracking
@@ -138,10 +141,41 @@ def example_circular() -> dict:
         "name": "Circular hollow section (mild + prestress)",
         "outer": outer, "holes": [hole], "bars": bars, "tendons": tendons,
         "concrete": concrete, "steel": steel, "prestress": prestress,
+        "prestress_plastic": plastic_bond_prestress(
+            outer, [hole], bars, tendons, concrete, steel, prestress
+        ),
         "mild_preset": mild_preset,
         "P": 1500.0, "Mx": 600.0, "My": 0.0,
         "note": "800/400 mm annulus, C40/50; 12 x 20 mm mild ring + 8 tendons.",
     }
+
+
+def plastic_bond_prestress(outer, holes, bars, tendons, concrete, steel, prestress):
+    """Tendon law of the plastic model: IS plus the decompression strain at Es/Ecm.
+
+    The same derivation as the app (``_apply_bonded_prestrain``): the bond strain
+    difference eps_p(0) = IS - eps_c,p, with eps_c,p the concrete strain at the
+    tendon under prestress alone at the short-term modular ratio Es/Ecm.
+    """
+    section = Section.from_polygon(
+        corners=outer, bars_xy_area_mm2=list(bars) + list(tendons), holes=holes,
+    )
+    n_mult = np.asarray(
+        [steel.Es / ES] * len(bars) + [prestress.Es / ES] * len(tendons),
+        dtype=float,
+    )
+    effective = np.asarray(
+        [0.0] * len(bars)
+        + [prestress.Es * prestress.IS * 1000.0] * len(tendons),
+        dtype=float,
+    )
+    locked = bonded_prestress_stress(
+        section, ES / ecm(concrete.fck), effective, n_mult=n_mult
+    )
+    # The tendons of the example lie on one ring, so they share one value.
+    return dataclasses.replace(
+        prestress, IS=float(locked[len(bars)]) / 1000.0 / prestress.Es
+    )
 
 
 # ==========================================================================
@@ -1397,7 +1431,13 @@ def manual_blocks() -> list:
     fig(fig_beam_steel_law, "The B550 mild-steel law of the beam example.",
         'Positive and negative B550 stress branches are linear to the yield points and then follow matching post-yield branches to the strain limits.')
     h2("Prestressing steel")
-    md(('Sector evaluates a tendon at its **total** strain. The entered prestrain $IS$ is the strain difference between the tendon and the adjacent concrete after all prestress losses, so under prestress alone the tendon stress is $E_p IS$. Sector adds no elastic-shortening or creep loss. It solves the section under the prestress alone at the long-term modular ratio $n_l$ and derives the bond strain difference $\\varepsilon_{p,IS}=IS-\\varepsilon_{c,p}$ (EN 1992-1-1 Figure 6.1), where $\\varepsilon_{c,p}$ is the concrete strain at the tendon. This value includes the decompression strain. The elastic, fatigue and plastic models use it as the locked-in strain, and the total tendon strain is $\\varepsilon_{p,IS}$ plus the tension-positive section strain. For tendon $j$ at depth $s_{p,j}$ this is:\n\n$$\\varepsilon_{p,j}=\\varepsilon_{p,IS,j}-\\kappa(s_{p,j}-s_{na}), \\qquad \\sigma_p = f(\\varepsilon_p),\\quad f_{pd}=f_{p0.1k}/\\gamma_s.$$\n\n**Worked (circular):** $\\varepsilon_{p,IS}=5.0$ per mille and $f_{pd}=1600/1.15=1391$ MPa.').replace("per mille", _PERMILLE))
+    md((r'Sector evaluates a tendon at its **total** strain. The entered prestrain $IS$ is the tendon strain under prestress alone after all prestress losses, so under prestress alone the tendon stress is $E_p IS$. Sector adds no elastic-shortening or creep loss. It derives the bond strain difference $\varepsilon_{p,IS}=IS-\varepsilon_{c,p}$ (EN 1992-1-1 Figure 6.1), where $\varepsilon_{c,p}$ is the concrete strain at the tendon under prestress alone. This value includes the decompression strain. The elastic and fatigue models take $\varepsilon_{c,p}$ at the long-term modular ratio $n_l$. The plastic model takes it at $E_s/E_{cm}$, because the creep strain does not recover in a short-term load to failure. The total tendon strain is $\varepsilon_{p,IS}$ plus the tension-positive section strain. For tendon $j$ at depth $s_{p,j}$ this is:'
+        + '\n\n'
+        + r'$$\varepsilon_{p,j}=\varepsilon_{p,IS,j}-\kappa(s_{p,j}-s_{na}), \qquad \sigma_p = f(\varepsilon_p),\quad f_{pd}=f_{p0.1k}/\gamma_s.$$'
+        + '\n\n'
+        + r'**Worked (circular):** $IS=5.0$ per mille gives $\varepsilon_{p,IS}='
+        + f"{example_circular()['prestress_plastic'].IS * 1000.0:.2f}"
+        + r'$ per mille in the plastic model, and $f_{pd}=1600/1.15=1391$ MPa.').replace("per mille", _PERMILLE))
     fig(fig_circular_prestress_law, "The tendon law of the circular example.",
         'The tendon curve starts with an elastic slope, curves in the direction of the proof-strength region and ends at the defined ultimate strain.')
     call("standard", 'The beam and circular examples select the edition-named DS/EN 1992-1-1:2005 + DK NA:2024 Curve 3 design preset for mild steel. Edition-named concrete, mild-steel and tendon presets keep their own sources. Generic named curves stay project-defined / uncited.')
