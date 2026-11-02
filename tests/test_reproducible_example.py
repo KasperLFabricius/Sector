@@ -32,7 +32,7 @@ from sector import capacity, torsion  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
-    "6d0602b9cdb13ae56b8c5d07ed5a0d5f3c2fe2fa49d037c67114c70a3ab54fdd"
+    "d4c597eea7fede83978faf7e4063c197417a3249516085d8abf2e2b7a618baef"
 )
 # Loading normalizes only these newly optional document-control/reference fields.
 # The original download identity remains unchanged above.
@@ -42,7 +42,7 @@ LOADED_REPORT_DEFAULTS = {
     "rep_source_register": [],
 }
 EXPECTED_LOADED_INPUT_SHA256 = (
-    "81397ccb552a9f58e48b900ad5cfa2b3d57ec5fba02c111290d705e299345079"
+    "8202ad6c98608a1f8c345fa1454de33a0ae6c4bf21f339c98b6676c844431306"
 )
 
 

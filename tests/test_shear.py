@@ -2381,34 +2381,37 @@ def pub_m01_signed_2023_cases(tmp_path_factory):
 
 
 _PUB_M01_SIGNED_ORACLE = {
+    # Hand check (8.50)-(8.52): NVd = 150 cot; the flexural tension chord
+    # carries Mface + NVd z/2, the compression chord max(Mface + NVd z/2, 0),
+    # and each chord adds Ftd,T z/2. Positive: 90 + 79.3 + 119.6 = 288.9 kNm.
     1: {
-        "cot": 1.801,
-        "tension_total": 332.0955997951,
-        "tension_resistance": 441.4106040825,
-        "tension_util": 0.7523507517,
-        "compression_total": 109.6184821020,
-        "compression_resistance": 155.1863872534,
+        "cot": 2.07,
+        "tension_total": 288.93369161169505,
+        "tension_resistance": 441.41060408252827,
+        "tension_util": 0.6545689861987879,
+        "compression_total": 98.6253853574674,
+        "compression_resistance": 155.18638725337894,
         "status": "PASS",
         "rows": [
             ["bottom (-y)", "Flexural tension", "(8.51)", "90.0 kNm",
-             "138.0 kNm", "332.1 kNm", "441.4 kNm", "75.2 %", "PASS"],
+             "79.3 kNm", "288.9 kNm", "441.4 kNm", "65.5 %", "PASS"],
             ["top (+y)", "Flexural compression", "(8.52)", "-90.0 kNm",
-             "113.8 kNm", "109.6 kNm", "155.2 kNm", "70.6 %", "PASS"],
+             "65.4 kNm", "98.6 kNm", "155.2 kNm", "63.6 %", "PASS"],
         ],
     },
     -1: {
-        "cot": 1.098,
-        "tension_total": 211.6996631583,
-        "tension_resistance": 155.1863872534,
-        "tension_util": 1.3641638736,
-        "compression_total": 63.4463810066,
-        "compression_resistance": 441.4106040825,
+        "cot": 1.237,
+        "tension_total": 188.02154623226835,
+        "tension_resistance": 155.18638725337894,
+        "tension_util": 1.2115853043558398,
+        "compression_total": 71.47829991361932,
+        "compression_resistance": 441.41060408252827,
         "status": "FAIL",
         "rows": [
             ["top (+y)", "Flexural tension", "(8.51)", "90.0 kNm",
-             "69.4 kNm", "211.7 kNm", "155.2 kNm", "136.4 %", "FAIL"],
+             "39.1 kNm", "188.0 kNm", "155.2 kNm", "121.2 %", "FAIL"],
             ["bottom (-y)", "Flexural compression", "(8.52)", "-90.0 kNm",
-             "84.1 kNm", "63.4 kNm", "441.4 kNm", "14.4 %", "PASS"],
+             "47.4 kNm", "71.5 kNm", "441.4 kNm", "16.2 %", "PASS"],
         ],
     },
 }
@@ -2470,15 +2473,17 @@ def test_pub_m01_current_2023_tension_and_compression_chords_publish(
     for candidate in faces.values():
         assert candidate["m_ed_signed"] == sign * 90.0
         assert candidate["n_vd"] == pytest.approx(150.0 * oracle["cot"])
+        # Formulae (8.51)/(8.52): each chord receives NVd/2.
         assert candidate["m_total"] == pytest.approx(
-            max(candidate["face_m_ed_signed"] + candidate["n_vd"] * candidate["z"], 0.0)
+            max(
+                candidate["face_m_ed_signed"]
+                + candidate["n_vd"] * candidate["z"] / 2.0,
+                0.0,
+            )
             + candidate["ftd_t"] * candidate["z"] / 2.0
         )
-        expected_headroom = max(
-            candidate["m_rd"] - max(candidate["face_m_ed_signed"], 0.0),
-            0.0,
-        )
-        assert candidate["shear_headroom"] == pytest.approx(expected_headroom)
+        # Sector does not establish the (8.53) relief, so no cap applies.
+        assert candidate["capped"] is False
     assert case["native"].values.tolist() == oracle["rows"]
     assert case["native_angle"] == f"{oracle['cot']:.3f}"
     overview = case["overview"].set_index("Check")

@@ -8496,7 +8496,7 @@ class ReportBuilder:
             else:
                 chord_formula = (
                     "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
-                    "min(&#916;F<sub>td</sub>&#183;z, M<sub>Ed,max</sub> &#8722; "
+                    "min(&#916;F<sub>td</sub>&#183;z, M<sub>Ed,max</sub> - "
                     "M<sub>Ed</sub>) + F<sub>td,T</sub>&#183;z/2"
                 )
                 chord_ref = "EN 1992-1-1 6.2.3(7) + 6.3.2"

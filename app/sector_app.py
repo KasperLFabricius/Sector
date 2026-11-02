@@ -995,11 +995,11 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
         mp.pivot_c_default(preset),
         "conc_pivot_c",
         disabled=locked,
-        help="EN 1992-1-1 6.1(5) and Figure 6.1: when the whole section is in "
-             "compression, the strain at (1 - eps_c2/eps_cu2) h from the more "
-             "compressed face is limited to eps_c2. On by default for the "
-             "EN 1992-1-1:2004 presets; DS/EN 1992-1-1:2023 8.1.1(3) limits only "
-             "eps_cu. Clear it only to reproduce a legacy ECROSS calculation.",
+        help="EN 1992-1-1 6.1(5), Figure 6.1: in a fully compressed section, "
+             "the strain at (1 - eps_c2/eps_cu2) h from the more compressed "
+             "face is limited to eps_c2. On by default for the EN 1992-1-1:2004 "
+             "presets. DS/EN 1992-1-1:2023 8.1.1(3) limits only eps_cu. Clear "
+             "it only for a legacy ECROSS calculation.",
     )
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n,
@@ -14912,16 +14912,16 @@ def _concrete_chord_panel(inp, chord):
         cap_text = r"the entered $M_{Ed,max}$ is less than $M_{Ed}$ and is not used"
     st.markdown(
         "| Quantity | Value |\n|---|---|\n"
-        f"| $M_{{Ed}}$ on the {face} chord | {chord['m_ed']:.2f} kNm |\n"
+        f"| $M_{{Ed}}$ | {chord['m_ed']:.2f} kNm |\n"
         f"| $\\lvert V_{{Ed}} \\rvert \\cdot d$ | {chord['v_ed']:.2f} x {chord['d']:.3f} = "
         f"{chord['mv_uncapped']:.2f} kNm |\n"
         f"| $M_{{Ed}} + \\Delta M$ | {chord['m_total']:.2f} kNm |\n"
-        f"| $M_{{Rd}}$ of the chord face | {chord['m_rd']:.2f} kNm |\n"
+        f"| $M_{{Rd}}$ | {chord['m_rd']:.2f} kNm |\n"
         f"| Utilisation | {chord['util']:.3f} ({chord['status']}) |"
     )
     st.caption(
-        f"{chord['clause']}: the tension reinforcement carries the moment "
-        f"increased by $|V_{{Ed}}| \\cdot d$; {cap_text}."
+        f"{chord['clause']}: the {face} tension reinforcement carries the "
+        f"moment increased by $|V_{{Ed}}| \\cdot d$; {cap_text}."
     )
 
 

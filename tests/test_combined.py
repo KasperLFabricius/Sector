@@ -2922,9 +2922,13 @@ def test_app_strut_angle_responds_to_loads():
         assert not at.exception
         return at.session_state["results"]["shear"]["links"]
 
-    # Pure shear: nothing trades against the stirrups -> flattest strut (as before).
+    # Pure shear without an entered MEd,max: 6.2.3(7) gives the chord the full
+    # 0.5 VEd cot(theta) at a zero-moment section, so the angle balances the links
+    # against the chord below the flattest strut.
     lk = run(500.0, 0.0, 0.0)
-    assert lk["res"]["cot"] == pytest.approx(2.5)
+    assert lk["res"]["cot"] < 2.5
+    assert lk["chord"]["capped"] is False
+    assert lk["util"] == pytest.approx(lk["chord"]["util"], rel=0.02)
     # Bending near MRd: the chord governs, the strut steepens to relieve delta_Ftd.
     lk = run(150.0, 400.0, 0.0)
     assert lk["res"]["cot"] < 1.2
@@ -3267,7 +3271,7 @@ def _recalculate_after_2023_solver_fault(at, monkeypatch):
 
 
 def _exact_2023_shear_chord_component():
-    """Coherent declared 215/100 and 35/100 arithmetic, without native authority."""
+    """Coherent (8.51)/(8.52) arithmetic 152.5/100 and 0/100, no native authority."""
     faces = []
     for low in (True, False):
         face = combined.longitudinal_chord_check_2023(
@@ -3293,7 +3297,7 @@ def _exact_2023_shear_chord_component():
     assert publication["assessment"]["coverage_complete"] is True
     assert publication["assessment"]["status"] == "FAIL"
     assert [(face["m_total"], face["util"], face["status"]) for face in faces] == [
-        (215.0, 2.15, "FAIL"), (35.0, 0.35, "PASS"),
+        (152.5, 1.525, "FAIL"), (0.0, 0.0, "PASS"),
     ]
     return publication
 
@@ -3413,7 +3417,7 @@ def _native_2023_shear_pdf(inp, out, profile, path, *, current):
     if not current:
         assert all(row["status"] == "NOT ASSESSED" and row["result"] == "-"
                    and row["util"] is None for row in link_rows)
-        assert "215.0 %" not in text
+        assert "152.5 %" not in text
     else:
         chords = [row for row in rows if row["check"] == "Shear longitudinal chords"]
         assert len(chords) == 1
@@ -3490,8 +3494,8 @@ def test_app_2023_failed_required_chord_propagates_to_shear_and_overview(
     assert assessment["status"] == "FAIL"
     assert assessment["ok"] is False
     assert assessment["coverage_complete"] is True
-    assert assessment["util"] == pytest.approx(2.15)
-    assert assessment["governing"]["m_total"] == pytest.approx(215.0)
+    assert assessment["util"] == pytest.approx(1.525)
+    assert assessment["governing"]["m_total"] == pytest.approx(152.5)
     inp = copy.deepcopy(at.session_state["result_input_snapshot"])
     out = copy.deepcopy(at.session_state["results"])
     _assert_rejected_native_2023_shear(at)
@@ -3512,10 +3516,11 @@ def test_app_2023_failed_required_chord_propagates_to_shear_and_overview(
     overview = overview_table(leaf)
     row = overview.loc[overview["Check"] == "Shear longitudinal chords"].iloc[0]
     assert row["Status"] == "FAIL"
-    assert row["Result"] == "215.0 %"
+    assert row["Result"] == "152.5 %"
 
     native = native_2023_shear_contract_cases["failed"]
-    assert native["chord"]["assessment"]["util"] == pytest.approx(1.695976504439608)
+    # Hand check (8.51) at cot 1.0: 200 + 150 x 0.4213/2 = 231.6 kNm over 155.2 kNm.
+    assert native["chord"]["assessment"]["util"] == pytest.approx(1.4923746689016104)
     assert native["chord"]["assessment"]["status"] == "FAIL"
     assert "Overall reinforced shear assessment: FAIL" in native["visible"]
     assert "required longitudinal chords exceed" in native["visible"]
@@ -3523,7 +3528,7 @@ def test_app_2023_failed_required_chord_propagates_to_shear_and_overview(
     native_row = native["overview"].loc[
         native["overview"]["Check"] == "Shear longitudinal chords"
     ].iloc[0]
-    assert (native_row["Status"], native_row["Result"]) == ("FAIL", "169.6 %")
+    assert (native_row["Status"], native_row["Result"]) == ("FAIL", "149.2 %")
     # The old aggregate 215% shear-resistance claim is replaced by its own
     # independent current |V|/VRd comparison, while the chord remains failed.
     overall_row = native["overview"].loc[
@@ -3552,14 +3557,14 @@ def test_failed_2023_chord_reaches_every_report_profile(
         tmp_path / "retained-exact-shear-chords.pdf",
     )
     assert "Shear longitudinal chords" in text
-    assert "215.0 %" in text
+    assert "152.5 %" in text
     assert "FAIL" in text
     assert "required longitudinal chords exceed" in text
     assert "SHEAR-LONGITUDINAL" not in text
     if profile in {"Standard", "Audit"}:
         assert "Required 2023 longitudinal chord faces" in text
         assert "(8.51)" in text and "(8.52)" in text
-        assert "215.0 kNm" in text
+        assert "152.5 kNm" in text
 
     # Native reconstruction must use the real kernel, not the retained override.
     monkeypatch.undo()
@@ -3568,10 +3573,10 @@ def test_failed_2023_chord_reaches_every_report_profile(
         native["input"], native["results"], profile,
         tmp_path / "native-failed-shear.pdf", current=True,
     )
-    assert "169.6 %" in native_text and "required longitudinal chords exceed" in native_text
+    assert "149.2 %" in native_text and "required longitudinal chords exceed" in native_text
     assert "SHEAR-LONGITUDINAL" not in native_text
     if profile in {"Standard", "Audit"}:
-        assert "263.2 kNm" in native_text
+        assert "231.6 kNm" in native_text
     _recalculate_after_2023_solver_fault(at, monkeypatch)
     _current_2023_shear_views(at)
 
@@ -5518,7 +5523,6 @@ def test_app_invalid_tube_does_not_poison_the_member_angle():
         ("number_input", "shear_V", 500.0),
     )
     base = at.session_state["results"]["shear"]["links"]
-    assert base["res"]["cot"] == pytest.approx(2.5)
     assert math.isfinite(base["util"])
     _set(at, ("checkbox", "torsion_on", True))
     _set_and_click(
@@ -5530,15 +5534,15 @@ def test_app_invalid_tube_does_not_poison_the_member_angle():
     r = at.session_state["results"]
     assert not r["torsion"]["valid"]                             # tube rejected
     lk = r["shear"]["links"]
-    assert lk["res"]["cot"] == pytest.approx(2.5)                # angle unaffected
+    assert lk["res"]["cot"] == pytest.approx(base["res"]["cot"])  # angle unaffected
     assert lk["util"] == pytest.approx(base["util"])             # verdict unchanged
 
 
 def test_app_objective_matches_reported_chord_cap():
-    # Workflow finding: the objective must scan the SAME capped chord utilisation the
-    # app reports. Here the cap saturates (MEd ~ MRd), so steepening cannot improve
-    # the reported chord -- the angle must NOT sacrifice the stirrups (the old
-    # uncapped objective dragged cot to 1.0 and failed them).
+    # The objective must scan the SAME capped chord utilisation the app reports.
+    # With MEd,max = MEd (the section is at the member maximum moment), 6.2.3(7)
+    # leaves no shear term: steepening cannot improve the chord, so the angle must
+    # not sacrifice the stirrups.
     at = _fresh()
     at.run()
     from app_workflow_navigation import goto_widget_owner as native_widget_owner
@@ -5550,11 +5554,15 @@ def test_app_objective_matches_reported_chord_cap():
         ("checkbox", "shear_links", True),
         ("number_input", "shear_V", 500.0),
         ("number_input", "pl_Mx", 430.0),
+        ("checkbox", capacity.MED_MAX_ON_KEY, True),
+        ("number_input", capacity.MED_MAX_KEYS[("x", True)], 430.0),
     )  # ~0.97 MRd
     lk = at.session_state["results"]["shear"]["links"]
     assert lk["res"]["cot"] == pytest.approx(2.5, abs=0.05)
     assert lk["util"] < 1.0                                      # stirrups still pass
     assert lk["chord"]["capped"]                                 # cap is active
+    assert lk["chord"]["m_ed_max"] == pytest.approx(430.0)
+    assert lk["chord"]["m_total"] == pytest.approx(430.0)
 
 
 def test_app_zero_torsion_is_skipped_with_the_shared_strut_band():
@@ -5570,7 +5578,16 @@ def test_app_zero_torsion_is_skipped_with_the_shared_strut_band():
     )
     r = at.session_state["results"]
     lk = r["shear"]["links"]
-    assert lk["res"]["cot"] == pytest.approx(2.5)                # shear band governs
+    cot = lk["res"]["cot"]
+    chord = lk["chord"]
+    # No MEd,max is entered, so 6.2.3(7) leaves the shift term uncapped:
+    # MEd + 0.5 VEd cot z with MEd = 0. The link utilisation falls as 1/cot and
+    # the chord utilisation rises with cot, so the angle balances them in the band.
+    assert 1.0 < cot < 2.5
+    assert chord["capped"] is False and chord["m_ed_max"] is None
+    assert chord["m_total"] == pytest.approx(0.5 * 500.0 * cot * chord["z"])
+    assert chord["util"] == pytest.approx(chord["m_total"] / chord["m_rd"])
+    assert chord["util"] == pytest.approx(lk["util"], rel=1.0e-3)
     assert "torsion" not in r
 
 
@@ -5785,22 +5802,31 @@ def test_pub_m01_exact_minimax_rejects_coherent_fixed_endpoint_result(
     fixed = case["fixed_results"]
 
     selection = wide["combined"]["member_angle_selection"]
-    assert selection["cot"] == pytest.approx(2.332)
-    assert selection["theta_deg"] == pytest.approx(23.210450538217586)
-    assert selection["utilisation"] == pytest.approx(1.7899186763923811)
+    assert selection["cot"] == pytest.approx(2.293)
+    assert selection["theta_deg"] == pytest.approx(23.562492466332248)
+    assert selection["utilisation"] == pytest.approx(1.8201266723532417)
     assert selection["samples"] == 1501
     assert selection["step"] == pytest.approx(0.001)
-    assert selection["selected_index"] == 1332
+    assert selection["selected_index"] == 1293
     assert selection["objective_count"] == 9
-    assert selection["governing_component_indices"] == (6,)
+    assert selection["governing_component_indices"] == (5,)
     assert selection["governing_objectives"] == (
-        "x-axis positive longitudinal chord",
+        "x-axis negative longitudinal chord",
     )
     assert selection["runner_up_utilisation"] == pytest.approx(
-        1.7891604810044097
+        1.8195910343228445
     )
+    # Hand check, 6.2.3(7) with no entered MEd,max: MEd + 0.5 VEd cot z plus
+    # the torsion chord share Ftd,T z/2 = 150 + 322.18 + 331.24 = 803.42 kNm.
+    chord = wide["combined"]["governing_longitudinal"]
+    assert chord["capped"] is False and chord["m_ed_max"] is None
+    assert chord["m_total"] == pytest.approx(
+        150.0 + 0.5 * 550.0 * 2.293 * chord["z"] + chord["ftd_t"] * chord["z"] / 2.0
+    )
+    assert chord["util"] == pytest.approx(chord["m_total"] / chord["m_rd"])
+    assert chord["util"] == pytest.approx(selection["utilisation"])
     assert wide["shear"]["links"]["util"] == pytest.approx(
-        1.0579291203151089
+        1.0759226814543539
     )
     assert wide["combined"]["dkna_sum"] == pytest.approx(
         2.402432432531132
@@ -5812,7 +5838,7 @@ def test_pub_m01_exact_minimax_rejects_coherent_fixed_endpoint_result(
 
     fixed_selection = fixed["combined"]["member_angle_selection"]
     assert fixed_selection["cot"] == pytest.approx(2.5)
-    assert fixed_selection["utilisation"] == pytest.approx(1.9188665055664464)
+    assert fixed_selection["utilisation"] == pytest.approx(1.953761016973181)
     assert fixed["shear"]["links"]["util"] == pytest.approx(
         0.9868362834299335
     )
@@ -5897,29 +5923,29 @@ def test_pub_m01_exact_minimax_reaches_native_views(
 ):
     case = pub_m01_exact_minimax_case
     assert any(
-        value == "105.8 %" and delta in {"FAIL", "Over limit"}
+        value == "107.6 %" and delta in {"FAIL", "Over limit"}
         for _label, value, delta in case["shear_metrics"]
     )
-    assert "2.332" in case["shear_visible"] + case["shear_tables"]
+    assert "2.293" in case["shear_visible"] + case["shear_tables"]
     assert "NOT ASSESSED" not in case["shear_visible"]
     assert any(
         value == "240.2 %" and delta == "FAIL"
         for _label, value, delta in case["combined_metrics"]
     )
-    assert ("Shear share", "105.8 %", "") in case["combined_metrics"]
+    assert ("Shear share", "107.6 %", "") in case["combined_metrics"]
     assert any(
         label == "Closed-stirrup utilisation"
-        and value == "178.9 %" and delta == "FAIL"
+        and value == "182.0 %" and delta == "FAIL"
         for label, value, delta in case["combined_metrics"]
     )
-    assert "cot\\theta=2.33" in case["combined_visible"].replace(" ", "")
+    assert "cot\\theta=2.29" in case["combined_visible"].replace(" ", "")
 
     by_check = {
         row["Check"]: row
         for _, row in case["overview"].iterrows()
     }
     assert by_check["Shear with links"]["Status"] == "FAIL"
-    assert by_check["Shear with links"]["Result"] == "105.8 %"
+    assert by_check["Shear with links"]["Result"] == "107.6 %"
     assert by_check["Combined M-V-T - DK NA sum"]["Status"] == "FAIL"
     assert by_check["Combined M-V-T - DK NA sum"]["Result"] == "240.2 %"
 
@@ -5973,13 +5999,13 @@ def test_pub_m01_exact_minimax_reaches_every_report_profile(
         for page in PdfReader(io.BytesIO(pdf)).pages
     )
 
-    assert "Shear with links PL-01 FAIL 105.8 %" in text
+    assert "Shear with links PL-01 FAIL 107.6 %" in text
     assert "Combined M-V-T - DK NA sum PL-01 FAIL 240.2 %" in text
     if profile != "Brief":
-        assert "Selected common member angle: cot theta = 2.332" in text.replace(
+        assert "Selected common member angle: cot theta = 2.293" in text.replace(
             chr(0x03B8), "theta"
         )
-        assert "105.8 %" in text
+        assert "107.6 %" in text
         assert "240.2 %" in text
 
 

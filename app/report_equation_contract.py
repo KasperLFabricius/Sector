@@ -868,6 +868,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("M<sub>Ed,total</sub>", "total longitudinal-chord demand", "kNm"),
         ("M<sub>Ed</sub>", "bending demand on the chord", "kNm"),
         ("Delta F<sub>td</sub>", "shear-induced longitudinal tension", "kN"),
+        ("M<sub>Ed,max</sub>", "entered maximum moment along the member", "kNm"),
         ("F<sub>td,T</sub>", "distributed torsion longitudinal force", "kN"),
         ("z", "internal lever arm", "m"),
     ),

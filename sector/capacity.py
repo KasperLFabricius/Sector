@@ -2207,6 +2207,12 @@ def _combined_longitudinal_candidate(
         # shift (6.2.3(7)). Retained schema-27 evidence capped with MRd is not
         # reproducible under that rule and is rejected.
         m_ed_max = value.get("m_ed_max")
+        if cap_shear_force is _MISSING and value["capped"] is False and (
+            m_ed_max is None
+        ):
+            # Evidence without the flag that states no cap is unambiguous: the
+            # shear term below must then equal the uncapped term.
+            cap_shear_force = False
         if type(cap_shear_force) is not bool:
             return None
         if m_ed_max is not None:
@@ -3557,10 +3563,13 @@ def provided_link_longitudinal_publication_assessment(
     )
     if retained_force is None or (retained_force > 0.0) is not shear_live:
         return unavailable
+    # 2005: each shifted chord carries delta_Ftd. 2023: the retained force is NVd
+    # (8.50) and Formulae (8.51)/(8.52) give each chord NVd/2.
+    chord_share = retained_force / 2.0 if model_2023 else retained_force
     if any(
         not _combined_longitudinal_close(
             float(candidate["ftd_v"]),
-            retained_force if candidate.get("gets_shift") is True else 0.0,
+            chord_share if candidate.get("gets_shift") is True else 0.0,
         )
         for candidate in shear_candidates
     ):

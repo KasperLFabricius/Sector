@@ -7899,6 +7899,7 @@ def _base_en_incomplete_failed_chord_out():
         off_not_evaluated="not_solved",
         m_rd=60.0,
         util=1.50,
+        cap_shear_force=False,
         capped=False,
         mv_uncapped=20.0,
         m_ed_max=None,
@@ -8368,9 +8369,10 @@ def test_base_en_2005_component_rendering_rejects_ambiguous_shear_cap(profile, t
         row for row in positive_rows
         if row[0] == "Combined longitudinal reinforcement"
     )[2:4] == ("FAIL", "150.0 %")
-    # The old 60 + 20 + 10 = 90 kNm / 60 kNm vector is ambiguous without
-    # its explicit uncapped choice, since the available shear headroom is zero.
+    # A vector capped by the former MRd rule (no flag, capped, no MEd,max) is not
+    # reproducible under 6.2.3(7) with an entered MEd,max only.
     combined["longitudinal"].pop("cap_shear_force")
+    combined["longitudinal"]["capped"] = True
     assert capacity._combined_longitudinal_candidate(combined["longitudinal"]) is None
     assert capacity.combined_longitudinal_assessment(combined)["status"] == "NOT ASSESSED"
     pdf, actual_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
