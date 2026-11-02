@@ -32,7 +32,7 @@ from sector import capacity, torsion  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
-    "d4c597eea7fede83978faf7e4063c197417a3249516085d8abf2e2b7a618baef"
+    "9dc6854e879e6c1843cd9b39f7522fd631d39c46193cfc78a3951e2cf0405fd8"
 )
 # Loading normalizes only these newly optional document-control/reference fields.
 # The original download identity remains unchanged above.
@@ -42,7 +42,7 @@ LOADED_REPORT_DEFAULTS = {
     "rep_source_register": [],
 }
 EXPECTED_LOADED_INPUT_SHA256 = (
-    "8202ad6c98608a1f8c345fa1454de33a0ae6c4bf21f339c98b6676c844431306"
+    "aa530ef60aaf6608c6143fb6bb34e10eb642ec6da57b034e1c61b5b2070437c4"
 )
 
 
@@ -471,10 +471,14 @@ def test_pub_m01_provided_links_publish_their_own_pass_in_native_views(
     assert shear["links"]["longitudinal_shear_force"] == 0.0
     combined = results["combined"]
     action_alone_shear = combined["action_alone"]["v"]
-    assert action_alone_shear["resistance"] == pytest.approx(44.181297943302305)
-    assert action_alone_shear["evidence"]["nominal_route"] == "concrete"
-    assert combined["r_v"] == pytest.approx(30.0 / 44.181297943302305)
-    assert action_alone_shear["resistance"] != pytest.approx(provided.resistance)
+    # DK NA 6.3.2(6), TB-04: V acting alone uses the section with its installed
+    # links, max(VRd,c, min(VRd,s, VRd,max)) = max(44.18, min(127.65, 271.28)).
+    # VRd,s does not depend on N, so it equals the provided-link resistance.
+    assert action_alone_shear["resistance"] == pytest.approx(link_result["vrd_s"])
+    assert action_alone_shear["resistance"] == pytest.approx(127.6538699949732)
+    assert action_alone_shear["evidence"]["nominal_route"] == "links"
+    assert combined["r_v"] == pytest.approx(30.0 / 127.6538699949732)
+    assert action_alone_shear["resistance"] == pytest.approx(provided.resistance)
     assert combined["transverse"]["shear_fraction"] == 0.0
 
     pub_m01_example.selectbox(key="view").set_value("Shear").run()

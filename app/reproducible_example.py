@@ -419,11 +419,13 @@ def checking_pack() -> str:
           1.341758688 and 1.341109946. All four conditional chord objectives
           are lower at 1.295, proving the full member optimum on the 0.001 grid.
           Concrete shear credit gives zero longitudinal shear increment.
-        - DK NA combined interaction uses action-alone resistances: the positive
-          shear face governs with VRd=44.181297943 kN, while isolated torsion
-          balances yielding and crushing at c=1.385965124, TRd=15.965172124 kNm.
-          Combined sum=0.741235999+0.679020341+1.252726863
-          =2.672983203: FAIL.
+        - DK NA combined interaction uses action-alone resistances. For V
+          alone the installed links resist more than VRd,c: VRd,s=VRd,max at
+          c=sqrt(bw nu1 fcd/(Asw/s fywd)-1)=2.053263659 gives
+          VRd=217.335864142 kN on the negative shear face (shorter lever arm).
+          Isolated torsion balances yielding and crushing at c=1.385965124,
+          TRd=15.965172124 kNm. Combined sum=0.741235999+0.138035202
+          +1.252726863=2.131998065: FAIL.
 
         ## Fatigue
 

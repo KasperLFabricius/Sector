@@ -280,7 +280,19 @@ def member_checks(
     rho_positive = 800.0 / (bw_mm * d_mm)
     basic_positive = crdc * k * (100.0 * rho_positive * FCK_MPA) ** (1.0 / 3.0)
     vrd_positive = max(basic_positive, vmin) * bw_mm * d_mm / 1000.0
-    isolated_vrd = min(vrd_c, vrd_positive)
+    # TB-04: V acting alone uses the section with its installed links,
+    # max(VRd,c, VRd). Without T, the best link angle in the band makes VRd,s
+    # equal to VRd,max: asw/s fywd (cot^2 + 1) = bw nu1 fcd. The case face has
+    # the larger tension area (1000 mm2), so the shorter lever arm, and governs.
+    isolated_link_cot = min(max(math.sqrt(
+        bw_mm * nu1 * FCD_MPA / (asw_per_s * fywd) - 1.0
+    ), 1.0), 2.5)
+    isolated_link_vrd = min(
+        asw_per_s * lever_arm_mm * fywd * isolated_link_cot,
+        bw_mm * lever_arm_mm * nu1 * FCD_MPA
+        / (isolated_link_cot + 1.0 / isolated_link_cot),
+    ) / 1000.0
+    isolated_vrd = max(min(vrd_c, vrd_positive), isolated_link_vrd)
     isolated_t_cot = math.sqrt(
         torsion_resistance_coefficient / torsion_yield_coefficient - 1.0
     )
