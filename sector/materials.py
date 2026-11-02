@@ -261,6 +261,12 @@ class Concrete:
         Coefficient on the design compressive strength accounting for long-term
         and unfavourable loading effects, so the design strength is
         ``alpha_cc * fck / gamma_c``. Defaults to 1.0 (no reduction).
+    pivot_c:
+        Apply the concentric-compression strain limit of EN 1992-1-1 6.1(5) and
+        Figure 6.1 (pivot C) in the plastic solver: when the whole section is in
+        compression, the strain at ``(1 - eps_c2/eps_cu2) h`` from the more
+        compressed fibre is limited to ``eps_c2``. The Eurocode presets set it;
+        the engine default ``False`` keeps the legacy curve laws reproducible.
     """
 
     fck: float
@@ -270,10 +276,13 @@ class Concrete:
     eps_c2: float = EPS_C_PEAK   # strain at peak stress (parabola apex), fraction
     eps_cu2: float = EPS_CU      # ultimate (crushing) strain, fraction
     n: float = 2.0              # parabola-rectangle exponent
+    pivot_c: bool = False       # EN 1992-1-1 6.1(5) concentric-compression limit
 
     def __post_init__(self) -> None:
         if self.curve not in (1, 2):
             raise ValueError("concrete curve must be 1 or 2")
+        if type(self.pivot_c) is not bool:
+            raise ValueError("pivot_c must be a Boolean value")
         _require_positive_finite(self.fck, "fck")
         _require_positive_finite(self.gamma_c, "gamma_c")
         _require_positive_finite(self.alpha_cc, "alpha_cc")

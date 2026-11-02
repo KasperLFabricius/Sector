@@ -619,8 +619,10 @@ def test_manual_documents_both_2023_chords_and_the_exact_failed_fixture():
     assert "acting axial force and the moment about the other axis" in chords
     assert "does not add that action a second time" in chords
     assert 'checks the two physical faces with the correct bending sign for each face' in text
-    assert r"M_{Ed,total}=90+250\cdot0.5=215" in text
-    assert '$215/100=2.15$, which gives **FAIL**' in text
+    # DS/EN 1992-1-1:2023 (8.51): Ftd = 90/0.5 + 250/2 = 305 kN, so the
+    # equivalent moment is 90 + 125*0.5 = 152.5 kNm and 152.5/100 = 1.525.
+    assert r"M_{Ed,total}=90+(250/2)\cdot0.5=152.5" in text
+    assert '$152.5/100=1.525$, which gives **FAIL**' in text
     assert 'full longitudinal-chord assessment is **NOT ASSESSED**' in text
 
 

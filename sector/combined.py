@@ -387,6 +387,30 @@ def chord_applied_moment(m_signed: float, tension_low: bool) -> float:
     return max(m_face, 0.0)
 
 
+def shear_term_cap(
+    mv_uncapped: float,
+    m_ed: float,
+    m_ed_max: float | None,
+) -> tuple[float, bool, str]:
+    """Shear term on the tension chord after the 6.2.3(7) peak-moment cap.
+
+    EN 1992-1-1 6.2.3(7) and EN 1992-2 6.2.3(107): ``MEd/z + delta_Ftd`` need not
+    exceed ``MEd,max/z``, where ``MEd,max`` is the maximum moment along the member.
+    The same bound applies to a shifted moment line (9.2.1.3(2)), because a shifted
+    line cannot exceed the maximum of the line. Sector knows ``MEd,max`` only when
+    the engineer enters it, so ``None`` applies no cap (conservative). An entered
+    ``MEd,max`` below ``MEd`` contradicts the actions, and the cap is then not
+    applied either. Returns ``(mv, capped, selection)``.
+    """
+    if m_ed_max is None:
+        return mv_uncapped, False, "uncapped"
+    if m_ed_max < m_ed - 1.0e-9:
+        return mv_uncapped, False, "uncapped, MEd,max below MEd"
+    mv = min(mv_uncapped, m_ed_max - m_ed)
+    capped = mv_uncapped > mv + 1.0e-9
+    return mv, capped, "MEd,max cap" if capped else "uncapped"
+
+
 def longitudinal_check(
     m_ed: float,
     m_rd: float,
@@ -394,7 +418,7 @@ def longitudinal_check(
     ftd_t: float,
     z: float,
     *,
-    cap_shear_force: bool = True,
+    m_ed_max: float | None = None,
 ) -> dict:
     """Longitudinal-steel utilisation on the tension chord under combined M + V + T.
 
@@ -404,51 +428,78 @@ def longitudinal_check(
     equivalent moment on the lever arm ``z`` and added to the applied moment, then
     checked against the uniaxial bending capacity ``m_rd`` about that axis::
 
-        MEd,total = MEd + min(delta_Ftd*z, MRd - MEd) + Ftd,T*z/2
+        MEd,total = MEd + min(delta_Ftd*z, MEd,max - MEd) + Ftd,T*z/2
 
-    ``cap_shear_force`` applies the 2005 peak-moment cap from 6.2.3(7). It is false
-    for the EN 1992-1-1:2023 additional chord force ``NVd`` from Formula (8.50);
-    Sector does not claim the support/load-specific relief in Formula (8.53).
+    ``m_ed_max`` is the engineer-entered maximum moment along the member for the
+    6.2.3(7) cap (see :func:`shear_term_cap`); ``None`` applies no cap. The section
+    resistance ``MRd`` is never a substitute for ``MEd,max``: with that cap the
+    bending plus shear term could not exceed ``MRd`` and the check could not fail.
     The torsion force is distributed round the perimeter, so only half of it acts
     on this one chord (hence ``z/2``). All moments are in the same units (kNm);
     ``ftd_v``/``ftd_t`` are in kN and ``z`` in m.
     """
     mv_uncapped = ftd_v * z
     mt = ftd_t * z / 2.0
-    shear_headroom = max(m_rd - m_ed, 0.0)
+    mv, capped, selection = shear_term_cap(mv_uncapped, m_ed, m_ed_max)
+    m_total = m_ed + mv + mt
     if m_rd <= 0.0:
         # No bending capacity about this axis remains -- the coexisting off-axis
-        # moment exhausts the M-M envelope on this face. The 6.2.3(7) cap would
-        # zero the shear shift against zero headroom and hide a real demand, so
-        # here the UNCAPPED shear-plus-torsion tension has nothing to carry it and
-        # the chord fails outright (util = inf) whenever any demand acts.
-        demand = m_ed + mv_uncapped + mt
-        util = math.inf if demand > 0.0 else 0.0
-        return dict(m_ed=m_ed, m_rd=m_rd, ftd_v=ftd_v, ftd_t=ftd_t, z=z,
-                    mv=mv_uncapped, mt=mt, m_total=demand, util=util,
-                    ok=util <= 1.0 + 1e-9, capped=False,
-                    cap_shear_force=cap_shear_force,
-                    mv_uncapped=mv_uncapped, shear_headroom=shear_headroom,
-                    shear_term_selection="zero-capacity uncapped demand",
-                    status="PASS" if util <= 1.0 + 1e-9 else "FAIL")
-    mv = (
-        min(mv_uncapped, shear_headroom)
-        if cap_shear_force else mv_uncapped
-    )
-    m_total = m_ed + mv + mt
-    util = ratio(m_total, m_rd)
+        # moment exhausts the M-M envelope on this face, so the chord fails
+        # outright (util = inf) whenever any demand acts.
+        util = math.inf if m_total > 0.0 else 0.0
+    else:
+        util = ratio(m_total, m_rd)
     return dict(m_ed=m_ed, m_rd=m_rd, ftd_v=ftd_v, ftd_t=ftd_t, z=z,
                 mv=mv, mt=mt, m_total=m_total, util=util,
                 ok=util <= 1.0 + 1e-9,
-                capped=cap_shear_force and mv_uncapped > mv + 1e-9,
-                cap_shear_force=cap_shear_force,
-                mv_uncapped=mv_uncapped, shear_headroom=shear_headroom,
-                shear_term_selection=(
-                    "capacity headroom cap"
-                    if cap_shear_force and mv_uncapped > mv + 1e-9
-                    else "uncapped"
-                ),
+                capped=capped,
+                cap_shear_force=m_ed_max is not None,
+                m_ed_max=m_ed_max,
+                mv_uncapped=mv_uncapped,
+                shear_term_selection=selection,
                 status="PASS" if util <= 1.0 + 1e-9 else "FAIL")
+
+
+def concrete_route_chord_check(
+    m_ed: float,
+    m_rd: float,
+    v_ed: float,
+    d: float,
+    *,
+    m_ed_max: float | None = None,
+    model_2023: bool = False,
+) -> dict:
+    """Tension chord of a member that needs no shear reinforcement (``a_l = d``).
+
+    EN 1992-1-1 6.2.2(5) and 9.2.1.3(2) shift the ``MEd`` line by ``a_l = d`` for
+    members without shear reinforcement. DS/EN 1992-1-1:2023 8.2.2(10) shifts it by
+    ``d`` or increases the moment by ``d*|VEd|``. Sector uses the moment increase
+    ``|VEd|*d`` with the optional ``MEd,max`` cap of :func:`shear_term_cap`::
+
+        MEd,total = MEd + min(|VEd|*d, MEd,max - MEd) <= MRd
+
+    ``m_ed`` is the moment that tensions the shear tension face (kNm), ``v_ed`` in
+    kN and ``d`` in m.
+    """
+    mv_uncapped = abs(v_ed) * d
+    mv, capped, selection = shear_term_cap(mv_uncapped, m_ed, m_ed_max)
+    m_total = m_ed + mv
+    if m_rd <= 0.0:
+        util = math.inf if m_total > 0.0 else 0.0
+    else:
+        util = ratio(m_total, m_rd)
+    passed = util <= 1.0 + 1.0e-9
+    return dict(
+        m_ed=m_ed, m_rd=m_rd, v_ed=abs(v_ed), d=d, a_l=d,
+        mv=mv, mv_uncapped=mv_uncapped, m_total=m_total, util=util,
+        ok=passed, status="PASS" if passed else "FAIL",
+        capped=capped, m_ed_max=m_ed_max, shear_term_selection=selection,
+        clause=(
+            "DS/EN 1992-1-1:2023, 8.2.2(10)"
+            if model_2023
+            else "EN 1992-1-1, 6.2.2(5) and 9.2.1.3(2)"
+        ),
+    )
 
 
 def longitudinal_chord_check_2023(
@@ -464,13 +515,15 @@ def longitudinal_chord_check_2023(
 ) -> dict:
     """Check one physical chord for the 2023 shear-force addition.
 
-    Formulae (8.51) and (8.52) apply ``NVd`` to both flexural chords.  Sector's
+    Formulae (8.51) and (8.52) give ``Ftd = |MEd|/z + (NVd + NEd)/2`` and
+    ``Fcd = |MEd|/z - (NVd + NEd)/2`` with ``NEd`` positive in tension, so each
+    chord receives the tension ``NVd/2`` (also 12.3.2(1), Formula (12.5)).  Sector's
     bending resistance is already conditional on the acting axial force and the
     coexisting orthogonal moment, so the comparison is made as an equivalent
     face-signed moment without adding ``NEd`` a second time.  The signed ``NEd``
     operand and the corresponding chord force remain in the result for publication.
 
-    On the flexural tension face, ``NVd*z`` adds directly to ``MEd``.  On the
+    On the flexural tension face, ``NVd*z/2`` adds directly to ``MEd``.  On the
     flexural compression face, the acting bending compression first relieves that
     tensile addition; only a reversal beyond zero becomes tensile demand on the
     opposite face.  Distributed torsion tension is then added to both faces.
@@ -505,7 +558,8 @@ def longitudinal_chord_check_2023(
     moment_magnitude = abs(moment)
     flexural_tension = tension_low is flexural_tension_low
     face_moment_signed = moment_magnitude if flexural_tension else -moment_magnitude
-    mv = shear_force * lever_arm
+    chord_share = shear_force / 2.0
+    mv = chord_share * lever_arm
     mt = torsion_force * lever_arm / 2.0
     shear_bending_tension = max(face_moment_signed + mv, 0.0)
     total = shear_bending_tension + mt
@@ -515,14 +569,14 @@ def longitudinal_chord_check_2023(
     if flexural_tension:
         formula = "8.51"
         chord_role = "flexural_tension"
-        chord_force = moment_magnitude / lever_arm + shear_force + axial / 2.0
+        chord_force = moment_magnitude / lever_arm + (shear_force + axial) / 2.0
         force_sign = "tension" if chord_force >= 0.0 else "compression"
     else:
         formula = "8.52"
         chord_role = "flexural_compression"
         # Positive Fcd denotes compression; a negative result denotes tension in
         # the chord that was in flexural compression before NVd was applied.
-        chord_force = moment_magnitude / lever_arm - shear_force + axial / 2.0
+        chord_force = moment_magnitude / lever_arm - (shear_force + axial) / 2.0
         force_sign = "compression" if chord_force >= 0.0 else "tension"
 
     return {
@@ -530,7 +584,7 @@ def longitudinal_chord_check_2023(
         "m_ed_signed": moment,
         "face_m_ed_signed": face_moment_signed,
         "m_rd": resistance,
-        "ftd_v": shear_force,
+        "ftd_v": chord_share,
         "n_vd": shear_force,
         "ftd_t": torsion_force,
         "n_ed": axial,
@@ -544,7 +598,7 @@ def longitudinal_chord_check_2023(
         "capped": False,
         "cap_shear_force": False,
         "mv_uncapped": mv,
-        "shear_headroom": max(resistance - max(face_moment_signed, 0.0), 0.0),
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
         "tension_low": tension_low,
         "flexural_tension_low": flexural_tension_low,

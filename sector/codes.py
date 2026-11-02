@@ -302,7 +302,7 @@ class DesignCode:
         e_c2, e_cu2, n = self.strain_law(fck)
         return Concrete(fck=fck, gamma_c=self.gamma_c, curve=2,
                         alpha_cc=self.concrete_factor(fck),
-                        eps_c2=e_c2, eps_cu2=e_cu2, n=n)
+                        eps_c2=e_c2, eps_cu2=e_cu2, n=n, pivot_c=True)
 
     def steel(self, fyk: float) -> MildSteel:
         """Reinforcement law for characteristic yield ``fyk`` (MPa) under this code.

@@ -1712,6 +1712,101 @@ def combined_longitudinal_chord_evidence_is_valid(
     )
 
 
+# Optional member input for the EN 1992-1-1 6.2.3(7) cap: the maximum moment along
+# the member per bending direction and sign (kNm, magnitude). The positive moment
+# tensions the low face (+Mx the bottom, +My the left), as in chord_applied_moment.
+MED_MAX_ON_KEY = "shear_med_max_on"
+MED_MAX_KEYS = {
+    ("x", True): "shear_med_max_mx_pos",
+    ("x", False): "shear_med_max_mx_neg",
+    ("y", True): "shear_med_max_my_pos",
+    ("y", False): "shear_med_max_my_neg",
+}
+
+
+def chord_med_max(inp: Mapping[str, Any], axis: str, tension_low: bool) -> float | None:
+    """Return the engineer-entered ``MEd,max`` for one chord face, or ``None``.
+
+    ``None`` means that no cap applies (EN 1992-1-1 6.2.3(7) needs the maximum
+    moment along the member, which a section calculation does not know).
+    """
+    if inp.get(MED_MAX_ON_KEY) is not True:
+        return None
+    value = inp.get(MED_MAX_KEYS[(axis, bool(tension_low))])
+    if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number < 0.0:
+        return None
+    return number
+
+
+def concrete_route_chord_is_consistent(
+    chord: object,
+    inp: Mapping[str, Any],
+) -> bool:
+    """Check one retained ``a_l = d`` chord result against its own operands.
+
+    The verdict must follow from the published operands and from the current
+    ``MEd,max`` input, so a stale or edited result cannot reach a report.
+    """
+    if not isinstance(chord, Mapping):
+        return False
+    status = chord.get("status")
+    if chord.get("valid") is not True:
+        return status == "NOT ASSESSED" and chord.get("util") is None
+    if chord.get("axis") not in {"x", "y"} or type(chord.get("tension_low")) is not bool:
+        return False
+    numbers = {}
+    for key in ("m_ed", "m_rd", "v_ed", "d", "mv", "m_total"):
+        value = chord.get(key)
+        if _is_boolean_scalar(value) or not isinstance(value, Real):
+            return False
+        number = float(value)
+        if not math.isfinite(number) or number < 0.0:
+            return False
+        numbers[key] = number
+    m_ed_max = chord_med_max(inp, chord["axis"], chord["tension_low"])
+    retained_cap = chord.get("m_ed_max")
+    if (m_ed_max is None) is not (retained_cap is None):
+        return False
+    if m_ed_max is not None and not math.isclose(
+        float(retained_cap), m_ed_max, rel_tol=1.0e-12, abs_tol=1.0e-12
+    ):
+        return False
+    mv, capped, _selection = _module("combined").shear_term_cap(
+        numbers["v_ed"] * numbers["d"], numbers["m_ed"], m_ed_max
+    )
+
+    def close(left: float, right: float) -> bool:
+        return math.isclose(left, right, rel_tol=1.0e-9, abs_tol=1.0e-9)
+
+    if not (
+        close(numbers["mv"], mv)
+        and chord.get("capped") is capped
+        and close(numbers["m_total"], numbers["m_ed"] + mv)
+    ):
+        return False
+    util = chord.get("util")
+    if _is_boolean_scalar(util) or not isinstance(util, Real):
+        return False
+    expected_util = (
+        numbers["m_total"] / numbers["m_rd"]
+        if numbers["m_rd"] > 0.0
+        else math.inf if numbers["m_total"] > 0.0 else 0.0
+    )
+    if not (
+        float(util) == expected_util
+        or (math.isfinite(expected_util) and close(float(util), expected_util))
+    ):
+        return False
+    expected_status = "PASS" if float(util) <= 1.0 + 1.0e-9 else "FAIL"
+    return status == expected_status and chord.get("ok") is (expected_status == "PASS")
+
+
 def longitudinal_chord_assessment(
     links: object,
     *,
@@ -2004,16 +2099,10 @@ def _combined_longitudinal_candidate(
         ):
             return None
 
+    # Every producer publishes the shear term as an equivalent chord force on z:
+    # delta_Ftd (6.18) on the 2005 route and the chord share NVd/2 of Formulae
+    # (8.51)/(8.52) on the 2023 route.
     mv_uncapped = operands["ftd_v"] * operands["z"]
-    shear_headroom = max(
-        operands["m_rd"]
-        - (
-            max(face_m_ed_number, 0.0)
-            if face_m_ed_number is not None
-            else operands["m_ed"]
-        ),
-        0.0,
-    )
     cap_shear_force = value.get("cap_shear_force", _MISSING)
     if chord_formula in {"8.51", "8.52"}:
         if (
@@ -2021,35 +2110,34 @@ def _combined_longitudinal_candidate(
             or value["capped"] is not False
         ):
             return None
+        n_vd = value.get("n_vd", _MISSING)
+        if n_vd is not _MISSING:
+            n_vd_number = _combined_longitudinal_finite_nonnegative(n_vd)
+            if n_vd_number is None or not _combined_longitudinal_close(
+                operands["ftd_v"], n_vd_number / 2.0
+            ):
+                return None
         expected_mv = mv_uncapped
         expected_capped = False
         expected_selection = "uncapped"
     else:
-        if cap_shear_force is _MISSING:
-            # Current first-generation producers retain the flag. Historic
-            # schema-27 evidence is unambiguous while the raw term is inside
-            # the available headroom, where capped and uncapped values agree.
-            if operands["m_rd"] > 0.0 and mv_uncapped > shear_headroom + 1.0e-9:
-                return None
-            cap_shear_force = True
-        elif type(cap_shear_force) is not bool:
+        # Only the engineer-entered member maximum MEd,max caps the 2005 shear
+        # shift (6.2.3(7)). Retained schema-27 evidence capped with MRd is not
+        # reproducible under that rule and is rejected.
+        m_ed_max = value.get("m_ed_max")
+        if type(cap_shear_force) is not bool:
             return None
-        if operands["m_rd"] <= 0.0:
-            expected_mv = mv_uncapped
-            expected_capped = False
-            expected_selection = "zero-capacity uncapped demand"
-        else:
-            expected_mv = (
-                min(mv_uncapped, shear_headroom)
-                if cap_shear_force
-                else mv_uncapped
+        if m_ed_max is not None:
+            m_ed_max = _combined_longitudinal_finite_nonnegative(m_ed_max)
+            if m_ed_max is None:
+                return None
+        if cap_shear_force is not (m_ed_max is not None):
+            return None
+        expected_mv, expected_capped, expected_selection = (
+            _module("combined").shear_term_cap(
+                mv_uncapped, operands["m_ed"], m_ed_max
             )
-            expected_capped = bool(
-                cap_shear_force and mv_uncapped > expected_mv + 1.0e-9
-            )
-            expected_selection = (
-                "capacity headroom cap" if expected_capped else "uncapped"
-            )
+        )
         if value["capped"] is not expected_capped:
             return None
 
@@ -2061,7 +2149,6 @@ def _combined_longitudinal_candidate(
         return None
     for key, expected in (
         ("mv_uncapped", mv_uncapped),
-        ("shear_headroom", shear_headroom),
     ):
         retained_operand = value.get(key, _MISSING)
         if retained_operand is _MISSING:

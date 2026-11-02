@@ -2349,6 +2349,16 @@ def directional_shear_publication_evidence_is_current(
                         str(shear_status),
                         str(longitudinal_status),
                     ))
+            concrete_chord = candidate_shear.get("concrete_chord")
+            if concrete_chord is not None:
+                if not capacity.concrete_route_chord_is_consistent(
+                    concrete_chord, candidate_input
+                ):
+                    return False, unavailable_reason
+                shear_status = capacity.aggregate_assessment_status((
+                    str(shear_status),
+                    str(concrete_chord["status"]),
+                ))
         else:
             shear_status = str(nominal.get("status") or "NOT ASSESSED").upper()
             if shear_status not in {"NOT ASSESSED", "INVALID"}:
@@ -3122,7 +3132,8 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
         else:
             add_objective(
                 label,
-                lambda cot, rebuilt=rebuilt, gets_shift=gets_shift: (
+                lambda cot, rebuilt=rebuilt, gets_shift=gets_shift,
+                axis=axis, tension_low=tension_low: (
                     combined_core.longitudinal_check(
                         rebuilt["m_ed"],
                         rebuilt["m_rd"],
@@ -3134,7 +3145,9 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
                         ),
                         torsion_force(cot),
                         rebuilt["z"],
-                        cap_shear_force=True,
+                        m_ed_max=capacity.chord_med_max(
+                            inp, axis, tension_low
+                        ),
                     )["util"]
                 ),
             )
@@ -4890,7 +4903,7 @@ def _current_link_chord_candidate(
                 ftd_v,
                 ftd_t,
                 z_mm / 1000.0,
-                cap_shear_force=True,
+                m_ed_max=capacity.chord_med_max(inp, axis, tension_low),
             )
     except (TypeError, ValueError, OverflowError):
         return None

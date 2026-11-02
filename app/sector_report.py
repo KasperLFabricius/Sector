@@ -6935,6 +6935,7 @@ class ReportBuilder:
             if governing_candidate is not None:
                 mode_labels = {
                     "concrete_crushing": "Concrete crushing",
+                    "concrete_concentric_compression": "Concentric compression (pivot C, 6.1(5))",
                     "bar_tension_rupture": "Bar tension rupture",
                     "bar_compression_rupture": "Bar compression rupture",
                     "tendon_tension_rupture": "Tendon tension rupture",
@@ -7044,6 +7045,7 @@ class ReportBuilder:
         if candidates:
             mode_labels = {
                 "concrete_crushing": "Concrete crushing",
+                "concrete_concentric_compression": "Concentric compression (pivot C, 6.1(5))",
                 "bar_tension_rupture": "Bar tension rupture",
                 "bar_compression_rupture": "Bar compression rupture",
                 "tendon_tension_rupture": "Tendon tension rupture",
@@ -7982,8 +7984,64 @@ class ReportBuilder:
             )
         if sh.get("model_2023"):
             self._shear_2023(sh, res)
+        else:
+            self._shear_2005(sh, res)
+        self._concrete_route_chord(sh)
+
+    def _concrete_route_chord(self, sh):
+        """Tension chord of the concrete shear route with the shift a_l = d."""
+        chord = sh.get("concrete_chord")
+        if chord is None:
             return
-        self._shear_2005(sh, res)
+        self._h2("Tension chord with the moment shift a<sub>l</sub> = d")
+        if not capacity.concrete_route_chord_is_consistent(chord, self.inp):
+            self._small(
+                "NOT ASSESSED: Recalculate the shear check before you use the "
+                "tension chord result."
+            )
+            return
+        if chord.get("valid") is not True:
+            self._small(
+                "NOT ASSESSED: " + _html_escape(str(chord.get("reason") or "-"))
+                + "."
+            )
+            return
+        cap = chord.get("m_ed_max")
+        if chord.get("shear_term_selection") == "uncapped, MEd,max below MEd":
+            cap_text = (
+                "The entered M<sub>Ed,max</sub> is less than M<sub>Ed</sub>, so "
+                "it is not used."
+            )
+        elif cap is None:
+            cap_text = (
+                "No member maximum moment M<sub>Ed,max</sub> is entered, so the "
+                "shift has no limit."
+            )
+        else:
+            cap_text = (
+                f"The member maximum moment M<sub>Ed,max</sub> = {_fmt(cap, 1)} kNm "
+                + ("limits the shifted moment." if chord.get("capped")
+                   else "does not limit the shifted moment.")
+            )
+        self._small(
+            _html_escape(str(chord.get("clause") or "-"))
+            + ": without shear reinforcement, the tension reinforcement carries "
+              "the moment increased by |V<sub>Ed</sub>| d. " + cap_text
+        )
+        self._table(
+            [
+                ["Quantity", "Value"],
+                ["M<sub>Ed</sub> on the shear tension face",
+                 f"{_fmt(chord['m_ed'], 2)} kNm"],
+                ["|V<sub>Ed</sub>| d",
+                 f"{_fmt(chord['v_ed'], 2)} &#183; {_fmt(chord['d'], 3)} = "
+                 f"{_fmt(chord['mv_uncapped'], 2)} kNm"],
+                ["M<sub>Ed</sub> + &#916;M", f"{_fmt(chord['m_total'], 2)} kNm"],
+                ["M<sub>Rd</sub> of the face", f"{_fmt(chord['m_rd'], 2)} kNm"],
+                ["Utilisation", f"{_pct(chord['util'])} ({chord['status']})"],
+            ],
+            [70 * mm, 80 * mm],
+        )
 
     def _shear_2005(self, sh, res):
         bw_src = "user input" if sh["bw_user"] else "derived (minimum solid width)"
@@ -8385,7 +8443,7 @@ class ReportBuilder:
             )
         if not links_are_nominal:
             self._small(angle_note)
-            self._small("The provided links do not replace the applicable concrete resistance route. Thus, no longitudinal shear force is applied in the nominal check.")
+            self._small("The provided links do not replace the applicable concrete resistance route. Thus, no longitudinal shear force is applied in the nominal check. The tension chord check with the moment shift a<sub>l</sub> = d applies.")
             chord_status = str(
                 chord_assessment.get("status") or "NOT APPLICABLE"
             ).upper()
@@ -8431,14 +8489,15 @@ class ReportBuilder:
             if model_2023:
                 chord_formula = (
                     "M<sub>Ed,total</sub> = max(M<sub>face</sub> + "
-                    "N<sub>Vd</sub>&#183;z, 0) + "
+                    "(N<sub>Vd</sub>/2)&#183;z, 0) + "
                     "F<sub>td,T</sub>&#183;z/2"
                 )
                 chord_ref = "DS/EN 1992-1-1:2023, 8.2.3(8), Formulae (8.50)-(8.52)"
             else:
                 chord_formula = (
                     "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
-                    "&#916;F<sub>td</sub>&#183;z + F<sub>td,T</sub>&#183;z/2"
+                    "min(&#916;F<sub>td</sub>&#183;z, M<sub>Ed,max</sub> &#8722; "
+                    "M<sub>Ed</sub>) + F<sub>td,T</sub>&#183;z/2"
                 )
                 chord_ref = "EN 1992-1-1 6.2.3(7) + 6.3.2"
             self._formula(
@@ -8490,7 +8549,9 @@ class ReportBuilder:
             notes = [f"Tension chord: {face_desc}. M<sub>Rd</sub> "
                      + _report_chord_mrd_label(ch["axis"], ch.get("m_off", 0.0), ch.get("conditional", True)) + "."]
             if ch.get("theta_mode") == "utilisation":
-                demand_word = "uncapped" if model_2023 else "capped"
+                demand_word = (
+                    "uncapped" if model_2023 or not ch.get("capped") else "capped"
+                )
                 notes.append(f"This {demand_word} demand is part of the strut-angle objective. The selected angle moves away from the interval boundary when the chord would otherwise govern.")
             if model_2023:
                 notes.append("The acting axial force is already included in the conditional bending resistance for each face.")
@@ -8527,7 +8588,7 @@ class ReportBuilder:
         """Render the separate-shear face table after caller validation."""
         rows = [[
             "Face", "Chord", "Formula", "M<sub>face</sub>",
-            "N<sub>Vd</sub>z", "M<sub>Ed,total</sub>",
+            "N<sub>Vd</sub>z/2", "M<sub>Ed,total</sub>",
             "M<sub>Rd</sub>", "Utilization", "Status",
         ]]
         for candidate in chord_publication.get("candidates") or ():
@@ -9394,8 +9455,9 @@ class ReportBuilder:
                 notes.append("The &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check uses the full biaxial bending utilization. It remains the primary combined check.")
             if lg["capped"]:
                 notes[0:0] = [
-                    "The shear shift is limited so that bending plus shear does not exceed M<sub>Rd</sub>.",
-                    "Clause 6.2.3(7) permits the added tension to be limited by the tension at peak moment. This section calculation uses M<sub>Rd</sub> as that limit.",
+                    "The shear shift is limited so that bending plus shear does not exceed the entered member maximum moment M<sub>Ed,max</sub>"
+                    + (f" = {_fmt(lg.get('m_ed_max'), 1)} kNm" if lg.get("m_ed_max") is not None else "")
+                    + " (6.2.3(7)).",
                 ]
             for note in notes:
                 self._small(note)

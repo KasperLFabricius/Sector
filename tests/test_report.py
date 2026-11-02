@@ -7899,10 +7899,9 @@ def _base_en_incomplete_failed_chord_out():
         off_not_evaluated="not_solved",
         m_rd=60.0,
         util=1.50,
-        cap_shear_force=False,
         capped=False,
         mv_uncapped=20.0,
-        shear_headroom=0.0,
+        m_ed_max=None,
         shear_term_selection="uncapped",
     )
     combined.update(
@@ -8445,9 +8444,9 @@ def _pub_h01_report_combined(parent_state="stale_mapping"):
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 4.213620,
-        "shear_headroom": 20.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     for legacy_only_key in (
@@ -8578,7 +8577,7 @@ def _pub_h01_report_current_direct(
                 ok=True,
                 m_rd=direct["m_total"] / 0.80,
                 util=0.80,
-                shear_headroom=direct["m_total"] / 0.80 - direct["m_ed"],
+                m_ed_max=None,
             )
         combined.update(t_ed=40.0, asl_torsion=500.0)
     combined.update(
@@ -8782,9 +8781,9 @@ def _pub_h01_report_four_face_torsion():
             "z": 0.5,
             "util": 1.0 / 15.0,
             "capped": False,
-            "cap_shear_force": True,
+            "cap_shear_force": False,
             "mv_uncapped": 0.0,
-            "shear_headroom": 150.0,
+            "m_ed_max": None,
             "shear_term_selection": "uncapped",
         }
         if role == "shear_axis":
@@ -8887,9 +8886,9 @@ def test_pub_h01_2005_component_rendering_rejects_stale_longitudinal_operands(
         "z": 0.25,
         "util": 0.50,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 10.0,
-        "shear_headroom": 60.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     stale_formula = _pub_h01_report_zero_formula_628()
@@ -9011,8 +9010,8 @@ def test_pub_h01_2005_component_rendering_binds_operand_poison_controls(
         "biaxial": False, "off_util": 0.0, "off_not_evaluated": None,
         "m_ed": 40.0, "mv": 10.0, "mt": 0.0, "m_total": 50.0,
         "m_rd": 100.0, "ftd_v": 40.0, "ftd_t": 0.0, "z": 0.25,
-        "util": 0.50, "capped": False, "cap_shear_force": True,
-        "mv_uncapped": 10.0, "shear_headroom": 60.0,
+        "util": 0.50, "capped": False, "cap_shear_force": False,
+        "mv_uncapped": 10.0, "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     formula = _pub_h01_report_zero_formula_628()
@@ -9616,9 +9615,9 @@ def test_pub_h01_2005_component_rendering_retains_exact_longitudinal_failure(
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 4.213620,
-        "shear_headroom": 20.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     for legacy_only_key in (
@@ -11890,7 +11889,7 @@ def test_report_withholds_verdict_for_preserved_non_governing_fallback(
         if mutation == "zero-substitute":
             altered.update(combined_core.longitudinal_check(
                 altered["m_ed"], 0.0, altered["ftd_v"], altered["ftd_t"],
-                altered["z"], cap_shear_force=True,
+                altered["z"],
             ))
         elif mutation == "missing-off-flag":
             altered.pop("off_not_evaluated")

@@ -104,9 +104,18 @@ CONCRETE_HELP = {
 }
 
 
+def pivot_c_default(preset) -> bool:
+    """Default of the pivot C strain limit (EN 1992-1-1 6.1(5)) for a preset.
+
+    The Eurocode edition presets apply it. The two curve presets reproduce the
+    legacy ECROSS laws, which have no concentric-compression limit.
+    """
+    return preset in codes.CODES
+
+
 def build_concrete(curve, fck, gamma_c, alpha_cc,
                    eps_c2=_DEFAULT_EPS_C2, eps_cu2=_DEFAULT_EPS_CU2,
-                   n=_DEFAULT_N, k_tc=None) -> Concrete:
+                   n=_DEFAULT_N, k_tc=None, pivot_c=False) -> Concrete:
     """Build a :class:`~sector.materials.Concrete` from the panel parameters.
 
     ``eps_c2``/``eps_cu2`` are taken in per mille (the diagram's unit) and
@@ -117,7 +126,7 @@ def build_concrete(curve, fck, gamma_c, alpha_cc,
     return Concrete(fck=float(fck), gamma_c=float(gamma_c), curve=int(curve),
                     alpha_cc=float(alpha_cc),
                     eps_c2=float(eps_c2) / 1000.0, eps_cu2=float(eps_cu2) / 1000.0,
-                    n=float(n))
+                    n=float(n), pivot_c=bool(pivot_c))
 
 
 def strength_dependent_alpha_cc(preset, fck, k_tc=None):

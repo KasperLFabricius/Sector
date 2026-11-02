@@ -251,8 +251,17 @@ def _curvature_at_depth(
     eps_cu: float,
     *,
     retain_selection: bool,
+    pivot_c: tuple[float, float] | None = None,
 ) -> tuple[float, PlasticCurvatureSelection | None]:
-    """Apply the sole ultimate-curvature minimum and optionally retain its rows."""
+    """Apply the sole ultimate-curvature minimum and optionally retain its rows.
+
+    ``pivot_c`` is ``(eps_c2, depth)`` for the concentric-compression limit of
+    EN 1992-1-1 6.1(5) and Figure 6.1, with ``depth`` the projected section depth
+    normal to the neutral axis. When the compression depth ``c`` exceeds that
+    depth, the strain at pivot C, ``(1 - eps_c2/eps_cu2)*depth`` from the more
+    compressed fibre, is limited to ``eps_c2``. The candidate equals the crushing
+    curvature ``eps_cu/c`` at ``c = depth``, so the strain domain is continuous.
+    """
 
     s_na = s_max - c
     phi = eps_cu / c  # concrete-crushing limit
@@ -262,6 +271,22 @@ def _curvature_at_depth(
         [PlasticCurvatureCandidate(selected_mode, None, eps_cu, c, phi)]
         if retain_selection else None
     )
+    if pivot_c is not None:
+        eps_c2, depth = pivot_c
+        if c > depth > 0.0:
+            distance = c - (1.0 - eps_c2 / eps_cu) * depth
+            candidate = eps_c2 / distance
+            if candidates is not None:
+                candidates.append(PlasticCurvatureCandidate(
+                    "concrete_concentric_compression",
+                    None,
+                    eps_c2,
+                    distance,
+                    candidate,
+                ))
+            if candidate < phi:
+                phi = candidate
+                selected_mode = "concrete_concentric_compression"
 
     # When steel or a tendon governs it sits exactly at its rupture strain, where
     # it is still intact (carrying its rupture force). Back the limiting curvature
@@ -332,7 +357,7 @@ def _curvature_at_depth(
 
 
 def _governing_curvature(bar_materials, tendon_materials, s_max, c, s_bars,
-                         s_tendons, eps_cu):
+                         s_tendons, eps_cu, pivot_c=None):
     """Curvature at ultimate for a trial compression depth ``c`` (s-units).
 
     The strain profile is scaled until the first material limit is reached:
@@ -357,6 +382,7 @@ def _governing_curvature(bar_materials, tendon_materials, s_max, c, s_bars,
         s_tendons,
         eps_cu,
         retain_selection=False,
+        pivot_c=pivot_c,
     )
     return phi
 
@@ -780,6 +806,8 @@ def plastic_capacity_at_angle(
     s_max = float(s.max())
     s_min = float(s.min())
     c_full = s_max - s_min
+    # EN 1992-1-1 6.1(5): pivot C limits the strain of a fully compressed section.
+    pivot_c = (concrete.eps_c2, c_full) if concrete.pivot_c else None
 
     # Concrete band stresses depend only on kappa*h, which is constant across the
     # bisection (and the whole sweep) in the plateau-governed regime; a shared memo
@@ -790,7 +818,7 @@ def plastic_capacity_at_angle(
 
     def net_axial(c):
         phi = _governing_curvature(bar_laws, tendon_laws, s_max, c, s_bars,
-                                   s_tendons, concrete.eps_cu2)
+                                   s_tendons, concrete.eps_cu2, pivot_c)
         acc = _accumulate(concrete, bar_laws, tendon_laws, dx, dy, s_max, c, phi,
                           n_bands, rings, bar_data, tendon_data,
                           ring_xy, ring_starts, buf_a, buf_b, band_memo)
@@ -808,10 +836,18 @@ def plastic_capacity_at_angle(
     # compression) up towards the squash load. Without this the compression side
     # of the N-M envelope would be clamped to the full-depth neutral axis. Net
     # axial increases monotonically with c throughout, so bisection still holds.
+    # With pivot C the strain plane tends to the uniform eps_c2 as c grows, and
+    # the pivot position s_na + eps_c2/phi must stay resolvable in floating point,
+    # so the depth stops at 2^14 c_full. There the strain at the far fibre is
+    # within 4e-5 of eps_c2, which is the squash state for engineering purposes.
+    # A section whose steel centroid lies between the compressed fibre and pivot C
+    # can reach its largest axial force at a finite depth; the bisection then
+    # returns the root on the rising branch, which is the conservative one.
+    max_grow = 14 if pivot_c is not None else 80
     hi = c_full
     n_hi = net_axial(hi)
     grow = 0
-    while n_hi < P and grow < 80:
+    while n_hi < P and grow < max_grow:
         hi *= 2.0
         n_hi = net_axial(hi)
         grow += 1
@@ -853,6 +889,7 @@ def plastic_capacity_at_angle(
         s_tendons,
         concrete.eps_cu2,
         retain_selection=True,
+        pivot_c=pivot_c,
     )
     assert curvature_selection is not None
     accumulation = _accumulate(

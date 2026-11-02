@@ -557,34 +557,66 @@ def test_longitudinal_check_uncapped():
     assert r["ok"]
 
 
-def test_longitudinal_check_shear_shift_capped():
-    # The shear shift wants 200*0.5 = 100 kNm but 6.2.3(7) caps it at MRd - MEd = 20.
-    r = combined.longitudinal_check(100.0, 120.0, 200.0, 0.0, 0.5)
-    assert r["mv"] == pytest.approx(20.0)
-    assert r["capped"]
-    assert r["m_total"] == pytest.approx(120.0)   # exactly MRd -> util 1.0
-    assert r["util"] == pytest.approx(1.0)
-
-
-def test_longitudinal_check_2023_shear_force_is_not_peak_moment_capped():
-    # Sector does not establish the direct-support / concentrated-load condition
-    # required for the favourable 2023 Formula (8.53) relief.
-    r = combined.longitudinal_check(
-        100.0,
-        120.0,
-        200.0,
-        0.0,
-        0.5,
-        cap_shear_force=False,
-    )
-    assert r["mv"] == pytest.approx(100.0)
+def test_longitudinal_check_has_no_cap_without_member_maximum():
+    # EN 1992-1-1 6.2.3(7) caps MEd/z + delta_Ftd at MEd,max/z, where MEd,max is the
+    # maximum moment along the member. Without that input there is no cap. Hand:
+    # MEd = 0, MRd = 100 kNm, delta_Ftd*z = 250 kNm -> 250/100 = 2.50 (FAIL).
+    r = combined.longitudinal_check(0.0, 100.0, 500.0, 0.0, 0.5)
+    assert r["mv"] == pytest.approx(250.0)
+    assert r["util"] == pytest.approx(2.5)
+    assert r["status"] == "FAIL"
     assert not r["capped"]
-    assert not r["cap_shear_force"]
-    assert r["m_total"] == pytest.approx(200.0)
-    assert r["util"] == pytest.approx(200.0 / 120.0)
+    assert r["m_ed_max"] is None
+    # MEd = 60, delta_Ftd*z = 150 -> (60 + 150)/100 = 2.10 (FAIL). The former MRd
+    # cap gave 1.00 here, so the check could not fail.
+    r = combined.longitudinal_check(60.0, 100.0, 300.0, 0.0, 0.5)
+    assert r["m_total"] == pytest.approx(210.0)
+    assert r["util"] == pytest.approx(2.1)
 
 
-def test_longitudinal_chord_2023_exact_two_face_review_fixture():
+def test_longitudinal_check_member_maximum_caps_shear_term():
+    # MEd,max = 150: MEd + delta_Ftd*z <= 150 -> total 150, util 1.50 (FAIL).
+    r = combined.longitudinal_check(60.0, 100.0, 300.0, 0.0, 0.5, m_ed_max=150.0)
+    assert r["mv"] == pytest.approx(90.0)
+    assert r["capped"]
+    assert r["m_total"] == pytest.approx(150.0)
+    assert r["util"] == pytest.approx(1.5)
+    assert r["shear_term_selection"] == "MEd,max cap"
+    # MEd,max = 80: total 80, util 0.80 (PASS).
+    r = combined.longitudinal_check(60.0, 100.0, 300.0, 0.0, 0.5, m_ed_max=80.0)
+    assert r["m_total"] == pytest.approx(80.0)
+    assert r["status"] == "PASS"
+
+
+def test_longitudinal_check_member_maximum_below_case_moment_is_not_used():
+    r = combined.longitudinal_check(60.0, 100.0, 300.0, 0.0, 0.5, m_ed_max=50.0)
+    assert r["mv"] == pytest.approx(150.0)
+    assert not r["capped"]
+    assert r["shear_term_selection"] == "uncapped, MEd,max below MEd"
+
+
+def test_concrete_route_chord_shift_al_equals_d():
+    # 6.2.2(5), 9.2.1.3(2): MEd + |VEd|*d = 50 + 80*0.55 = 94 kNm; 94/100 = 0.94.
+    r = combined.concrete_route_chord_check(50.0, 100.0, -80.0, 0.55)
+    assert r["mv"] == pytest.approx(44.0)
+    assert r["m_total"] == pytest.approx(94.0)
+    assert r["util"] == pytest.approx(0.94)
+    assert r["status"] == "PASS"
+    assert r["a_l"] == pytest.approx(0.55)
+    # The shifted moment line cannot exceed MEd,max = 70: total 70, util 0.70.
+    r = combined.concrete_route_chord_check(
+        50.0, 100.0, 80.0, 0.55, m_ed_max=70.0, model_2023=True
+    )
+    assert r["m_total"] == pytest.approx(70.0)
+    assert r["capped"]
+    assert "8.2.2(10)" in r["clause"]
+
+
+def test_longitudinal_chord_2023_formulae_8_51_and_8_52():
+    # DS/EN 1992-1-1:2023 8.2.3(8): Ftd = |MEd|/z + (NVd + NEd)/2 (8.51) and
+    # Fcd = |MEd|/z - (NVd + NEd)/2 (8.52). MEd = 90 kNm, z = 0.5 m, NVd = 250 kN,
+    # NEd = 0: Ftd = 180 + 125 = 305 kN, equivalent moment 152.5 kNm, MRd = 100
+    # -> util 1.525. Fcd = 180 - 125 = 55 kN compression.
     tension = combined.longitudinal_chord_check_2023(
         90.0,
         100.0,
@@ -597,11 +629,13 @@ def test_longitudinal_chord_2023_exact_two_face_review_fixture():
     assert tension["chord_formula"] == "8.51"
     assert tension["chord_role"] == "flexural_tension"
     assert tension["face_m_ed_signed"] == pytest.approx(90.0)
-    assert tension["mv"] == pytest.approx(125.0)
-    assert tension["m_total"] == pytest.approx(215.0)
-    assert tension["util"] == pytest.approx(2.15)
+    assert tension["ftd_v"] == pytest.approx(125.0)
+    assert tension["n_vd"] == pytest.approx(250.0)
+    assert tension["mv"] == pytest.approx(62.5)
+    assert tension["m_total"] == pytest.approx(152.5)
+    assert tension["util"] == pytest.approx(1.525)
     assert tension["status"] == "FAIL"
-    assert tension["chord_force_kn"] == pytest.approx(430.0)
+    assert tension["chord_force_kn"] == pytest.approx(305.0)
 
     compression = combined.longitudinal_chord_check_2023(
         90.0,
@@ -615,11 +649,10 @@ def test_longitudinal_chord_2023_exact_two_face_review_fixture():
     assert compression["chord_formula"] == "8.52"
     assert compression["chord_role"] == "flexural_compression"
     assert compression["face_m_ed_signed"] == pytest.approx(-90.0)
-    assert compression["mv"] == pytest.approx(125.0)
-    assert compression["m_total"] == pytest.approx(35.0)
-    assert compression["util"] == pytest.approx(0.35)
-    assert compression["chord_force_kn"] == pytest.approx(-70.0)
-    assert compression["chord_force_sign"] == "tension"
+    assert compression["m_total"] == pytest.approx(0.0)
+    assert compression["util"] == pytest.approx(0.0)
+    assert compression["chord_force_kn"] == pytest.approx(55.0)
+    assert compression["chord_force_sign"] == "compression"
 
 
 @pytest.mark.parametrize(
@@ -642,13 +675,16 @@ def test_longitudinal_chord_2023_signed_moment_swaps_physical_faces(
         )
         for tension_low in (True, False)
     }
-    assert faces[flexural_tension_low]["m_total"] == pytest.approx(215.0)
+    assert faces[flexural_tension_low]["m_total"] == pytest.approx(152.5)
     assert faces[flexural_tension_low]["chord_formula"] == "8.51"
-    assert faces[not flexural_tension_low]["m_total"] == pytest.approx(35.0)
+    assert faces[not flexural_tension_low]["m_total"] == pytest.approx(0.0)
     assert faces[not flexural_tension_low]["chord_formula"] == "8.52"
 
 
-def test_longitudinal_chord_2023_retains_axial_operand_without_double_counting():
+def test_longitudinal_chord_2023_axial_force_sign_in_published_forces():
+    # NEd is positive in tension (8.2.3(8): NVd + NEd > 0 is a tension).
+    # NEd = -60 kN: Fcd = 180 - (250 - 60)/2 = 85 kN compression.
+    # NEd = +60 kN: Fcd = 180 - (250 + 60)/2 = 25 kN compression.
     compression = combined.longitudinal_chord_check_2023(
         90.0,
         100.0,
@@ -671,11 +707,14 @@ def test_longitudinal_chord_2023_retains_axial_operand_without_double_counting()
     )
     assert compression["n_ed"] == pytest.approx(-60.0)
     assert tension["n_ed"] == pytest.approx(60.0)
-    assert compression["chord_force_kn"] == pytest.approx(-100.0)
-    assert tension["chord_force_kn"] == pytest.approx(-40.0)
+    assert compression["chord_force_kn"] == pytest.approx(85.0)
+    assert tension["chord_force_kn"] == pytest.approx(25.0)
+    # The resistance MRd is conditional on NEd, so the axial force is not added
+    # to the equivalent moment a second time.
     assert compression["m_total"] == pytest.approx(tension["m_total"])
     assert compression["util"] == pytest.approx(tension["util"])
     assert compression["axial_force_conditioned_in_m_rd"] is True
+    # Ftd = 10/0.5 + (5 - 100)/2 = -27.5 kN: the tension chord is in compression.
     reversed_tension_chord = combined.longitudinal_chord_check_2023(
         10.0,
         100.0,
@@ -687,7 +726,7 @@ def test_longitudinal_chord_2023_retains_axial_operand_without_double_counting()
         n_ed=-100.0,
     )
     assert reversed_tension_chord["chord_formula"] == "8.51"
-    assert reversed_tension_chord["chord_force_kn"] == pytest.approx(-25.0)
+    assert reversed_tension_chord["chord_force_kn"] == pytest.approx(-27.5)
     assert reversed_tension_chord["chord_force_sign"] == "compression"
 
 
@@ -3990,9 +4029,9 @@ def test_pub_h01_exact_failure_is_identical_in_mvt_view_and_overview(
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 4.213620,
-        "shear_headroom": 20.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     for legacy_only_key in (
@@ -4095,9 +4134,8 @@ def test_pub_h01_chord_and_formula_628_overall_are_published_separately():
         util=0.50,
     )
     chord.update(
-        cap_shear_force=True,
         mv_uncapped=float(chord["ftd_v"]) * float(chord["z"]),
-        shear_headroom=max(float(chord["m_rd"]) - float(chord["m_ed"]), 0.0),
+        m_ed_max=None,
         shear_term_selection="uncapped",
         capped=False,
     )
@@ -4310,9 +4348,9 @@ def test_pub_h01_stale_operands_never_publish_native_longitudinal_pass():
                 "z": 0.25,
                 "util": 0.50,
                 "capped": False,
-                "cap_shear_force": True,
+                "cap_shear_force": False,
                 "mv_uncapped": 10.0,
-                "shear_headroom": 60.0,
+                "m_ed_max": None,
                 "shear_term_selection": "uncapped",
             }
             formula_628 = _pub_h01_formula_628_assessment(0.0)
@@ -4709,9 +4747,9 @@ def test_pub_h01_known_failed_chord_survives_incomplete_face_in_native_views(
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 4.213620,
-        "shear_headroom": 20.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     combined_result.update(
@@ -4839,9 +4877,9 @@ def test_pub_h01_malformed_candidate_containers_keep_failure_in_native_views(
                 "z": 0.243,
                 "util": 1.2392531643,
                 "capped": False,
-                "cap_shear_force": True,
+                "cap_shear_force": False,
                 "mv_uncapped": 4.213620,
-                "shear_headroom": 20.0,
+                "m_ed_max": None,
                 "shear_term_selection": "uncapped",
             }
             for key in (
@@ -4995,9 +5033,9 @@ def test_pub_h01_malformed_candidate_container_never_promotes_native_pass(
             "z": 0.243,
             "util": 0.80,
             "capped": False,
-            "cap_shear_force": True,
+            "cap_shear_force": False,
             "mv_uncapped": 4.213620,
-            "shear_headroom": 123.925316 / 0.80 - 80.0,
+            "m_ed_max": None,
             "shear_term_selection": "uncapped",
         }
         for key in (
@@ -5092,9 +5130,9 @@ def test_pub_h01_roleless_torsion_failure_with_zero_owner_is_not_published():
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 4.213620,
-        "shear_headroom": 20.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     for role_key in (

@@ -521,6 +521,86 @@ def _seeded_toggle(box, label, default, key, **kw):
     return box.toggle(label, key=key, **_input_widget_kwargs(key, kw, host=box))
 
 
+MED_MAX_FIELDS = (
+    (capacity.MED_MAX_KEYS[("x", True)], r"$M_{Ed,max}$ for $+M_x$ (kNm)",
+     "mx_ed_knm", 1.0),
+    (capacity.MED_MAX_KEYS[("x", False)], r"$M_{Ed,max}$ for $-M_x$ (kNm)",
+     "mx_ed_knm", -1.0),
+    (capacity.MED_MAX_KEYS[("y", True)], r"$M_{Ed,max}$ for $+M_y$ (kNm)",
+     "my_ed_knm", 1.0),
+    (capacity.MED_MAX_KEYS[("y", False)], r"$M_{Ed,max}$ for $-M_y$ (kNm)",
+     "my_ed_knm", -1.0),
+)
+
+
+def case_moment_maxima(plastic_cases):
+    """Largest moment of each bending direction and sign in the case table.
+
+    Returns ``{key: value}`` for the MEd,max fields (kNm, magnitude, 0 when no
+    case has a moment of that sign). Rows with a blank or invalid value are
+    ignored.
+    """
+    maxima = {}
+    for key, _label, column, sign in MED_MAX_FIELDS:
+        values = []
+        if plastic_cases is not None and column in getattr(plastic_cases, "columns", ()):
+            for value in plastic_cases[column].tolist():
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    continue
+                if math.isfinite(number):
+                    values.append(sign * number)
+        maxima[key] = max([0.0, *values])
+    return maxima
+
+
+def _member_moment_inputs(box, plastic_cases, *, disabled):
+    """Optional member input MEd,max for the 6.2.3(7) shear-shift cap."""
+    on = _seeded_checkbox(
+        box,
+        r"Limit the shear term with $M_{Ed,max}$ (6.2.3(7))",
+        False,
+        capacity.MED_MAX_ON_KEY,
+        disabled=disabled,
+        help=r"EN 1992-1-1 6.2.3(7): $M_{Ed}/z + \Delta F_{td}$ need not exceed "
+             r"$M_{Ed,max}/z$, where $M_{Ed,max}$ is the maximum moment along the "
+             "member. The same limit applies to the shifted moment $a_l = d$ "
+             "(9.2.1.3(2)). Without this input, Sector applies no limit. "
+             "Enter magnitudes about the same reference point as the case "
+             "moments.",
+    )
+    copy_help = (
+        "Copy the largest moment of each sign from the Plastic/capacity "
+        "cases. This is valid only when the cases include the section with "
+        "the maximum moment."
+    )
+    if box.button(
+        "Copy the largest case moments",
+        key="shear_med_max_copy",
+        disabled=disabled or not on,
+        help=copy_help,
+    ):
+        for key, value in case_moment_maxima(plastic_cases).items():
+            st.session_state[key] = value
+        _journal_current_input_values(*(field[0] for field in MED_MAX_FIELDS))
+    columns = box.columns(2)
+    values = {capacity.MED_MAX_ON_KEY: bool(on)}
+    for index, (key, label, _column, _sign) in enumerate(MED_MAX_FIELDS):
+        values[key] = _seeded_number(
+            columns[index % 2], label, 0.0, 1.0e7, 0.0, 10.0, key,
+            disabled=disabled or not on,
+            help="Maximum moment of this direction and sign along the member "
+                 "(magnitude). A value below the case moment is not used.",
+        )
+    if on and not disabled:
+        box.caption(
+            "Copied values are valid only when the cases include the section "
+            "with the maximum moment."
+        )
+    return values
+
+
 def _seeded_selectbox(box, label, options, default, key, **kw):
     """A selectbox whose default is seeded into session state rather than passed as
     ``index=`` -- same reason as :func:`_seeded_number`. ``default`` must be one of
@@ -907,8 +987,21 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
         )
         eps_cu2 = eps_c2
 
+    pivot_c = _seeded_checkbox(
+        box,
+        r"Concentric-compression strain limit $\varepsilon_{c2}$ (pivot C)",
+        mp.pivot_c_default(preset),
+        "conc_pivot_c",
+        disabled=locked,
+        help="EN 1992-1-1 6.1(5) and Figure 6.1: when the whole section is in "
+             "compression, the strain at (1 - eps_c2/eps_cu2) h from the more "
+             "compressed face is limited to eps_c2. On by default for the "
+             "Eurocode presets. Clear it only to reproduce a legacy ECROSS "
+             "calculation.",
+    )
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
-                                 alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n)
+                                 alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n,
+                                 pivot_c=bool(pivot_c))
     note = (
         f"  ($\\eta_{{cc}}={eta_cc:.6f}$, $k_{{tc}}={k_tc:.2f}$)"
         if auto is not None else ""
@@ -4129,7 +4222,10 @@ def _apply_project_text(text: str) -> None:
     else:
         st.session_state.pop("calculation_record", None)
     st.session_state["_loaded_project_provenance"] = provenance
-    migration_warnings = tuple(parse_info.get("migration_warnings") or ())
+    migration_warnings = (
+        *tuple(parse_info.get("migration_warnings") or ()),
+        *tuple(parse_info.get("method_changes") or ()),
+    )
     if parse_info.get("migrated"):
         # Keep the structured migration evidence independently of the transient
         # parser result. Plain dict/list/scalar values remain stable across
@@ -6384,7 +6480,7 @@ def _modular_ratio_readout(box, mild_entries, prestress_entries,
 # n_l/n_s are derived from conc_Ec and el_phi, so those enter the elastic signature.
 _SHARED_SIG_KEYS = (
     "conc_preset", "conc_fck", "conc_gamma_c", "conc_k_tc", "conc_alpha_cc",
-    "conc_eps_c2", "conc_eps_cu2", "conc_n",
+    "conc_eps_c2", "conc_eps_cu2", "conc_n", "conc_pivot_c",
     "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
     "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
     "mild_ey0t", "mild_ey0c", "mild_Es", "mild_active_comp",
@@ -6455,6 +6551,7 @@ _SHEAR_SIG_KEYS = (
     "shear_link_dia", "shear_link_s", "shear_fywk",
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max",
+    capacity.MED_MAX_ON_KEY, *capacity.MED_MAX_KEYS.values(),
     "torsion_on", "torsion_method", "torsion_design_basis",
     "torsion_member_scope", capacity.TORSION_CASE_AUTHORITIES_KEY,
     "torsion_T", "torsion_tef", "torsion_nu_v",
@@ -7936,6 +8033,11 @@ def build_inputs(host=st):
                 "will be NOT ASSESSED unless a separately applicable method is "
                 "substantiated."
             )
+    med_max_values = _member_moment_inputs(
+        mvt_shared,
+        case_frames[load_cases.PLASTIC_TABLE_KEY],
+        disabled=not (shear_on or torsion_on),
+    )
     if "_capacity_steel_pending_material_id" in st.session_state:
         st.session_state["capacity_steel_material_id"] = st.session_state.pop(
             "_capacity_steel_pending_material_id"
@@ -8933,6 +9035,7 @@ def build_inputs(host=st):
                 shear_fywk=shear_fywk,
                 strut_cot_min=strut_cot_min,
                 strut_cot_max=strut_cot_max,
+                **med_max_values,
                 torsion_on=torsion_on,
                 torsion_method=(combined_method if combined_on else torsion_method),
                 torsion_design_basis=torsion_design_basis,
@@ -10538,6 +10641,65 @@ def run_analysis(
     return result
 
 
+def _concrete_route_chord(inp, out, shear_result, nominal):
+    """Tension chord of the concrete shear route with the shift ``a_l = d``.
+
+    EN 1992-1-1 6.2.2(5) and 9.2.1.3(2), and DS/EN 1992-1-1:2023 8.2.2(10): when
+    no shear reinforcement is required, the tension chord carries the moment
+    increased by ``|VEd|*d``, capped only by an engineer-entered ``MEd,max``. The
+    torsion truss carries the chords when torsion acts, so no result is made then.
+    Returns ``None`` when the route does not apply.
+    """
+    if nominal.valid is not True or nominal.route != "concrete":
+        return None
+    torsion_t = inp.get("torsion_T") or 0.0
+    if inp.get("torsion_on") is True and abs(float(torsion_t)) > 0.0:
+        return None
+    v_ed = shear_result.get("v_ed")
+    d_mm = shear_result.get("d")
+    axis = shear_result.get("axis")
+    tension_low = shear_result.get("tension_low")
+    if (
+        axis not in {"x", "y"}
+        or type(tension_low) is not bool
+        or v_ed is None
+        or d_mm is None
+        or not math.isfinite(float(d_mm))
+        or float(d_mm) <= 0.0
+    ):
+        return None
+    model_2023 = shear_result.get("model_2023") is True
+    m_origin = inp["Mx_pl"] if axis == "x" else inp["My_pl"]
+    m_signed = shear_result["m_ed_2023"] if model_2023 else m_origin
+    shift = shear_result["moment_reference_shift"] if model_2023 else 0.0
+    off_signed = inp["My_pl"] if axis == "x" else inp["Mx_pl"]
+    m_ed = combined.chord_applied_moment(m_signed, tension_low)
+    m_ed_max = capacity.chord_med_max(inp, axis, tension_low)
+    base = dict(
+        axis=axis, tension_low=tension_low, model_2023=model_2023,
+        m_ed_signed=m_signed, moment_reference_shift=shift, m_off=off_signed,
+    )
+    pl = out.get("plastic")
+    if pl is None or pl.get("util") is None:
+        return dict(
+            base, status="NOT ASSESSED", ok=None, util=None, valid=False,
+            reason="the plastic bending analysis is required for the tension chord",
+        )
+    m_rd, exact = _shear_face_mrd(
+        inp, axis, tension_low, m_off=off_signed, moment_reference_shift=shift
+    )
+    if not exact:
+        return dict(
+            base, status="NOT ASSESSED", ok=None, util=None, valid=False,
+            reason="the bending resistance of the tension chord face is not solved",
+        )
+    check = combined.concrete_route_chord_check(
+        m_ed, m_rd, float(v_ed), float(d_mm) / 1000.0,
+        m_ed_max=m_ed_max, model_2023=model_2023,
+    )
+    return dict(base, **check, valid=True, reason=None)
+
+
 def _run_uniaxial_capacity_checks(inp, out):
     """Shear, torsion and the combined M-V-T checks for ``inp``; mutates ``out``.
 
@@ -10898,9 +11060,9 @@ def _run_uniaxial_capacity_checks(inp, out):
             _add_angle_objective("shared shear-torsion strut", _crush_629)
         for _cf in chord_faces:
             # The objective sees exactly the reported chord utilisation. The 2005
-            # shear shift is capped per 6.2.3(7); the 2023 NVd force from (8.50) is
-            # not capped because Sector does not establish the support/load-specific
-            # condition in (8.53).
+            # shear shift is capped per 6.2.3(7) only by an engineer-entered
+            # MEd,max; the 2023 NVd force from (8.50) is not capped because Sector
+            # does not establish the support/load-specific condition in (8.53).
             if _cf["m_rd"] > 0.0 and (shear_live or tors_live):
                 face = "negative" if _cf["tension_low"] else "positive"
                 if links_model_2023:
@@ -10916,7 +11078,9 @@ def _run_uniaxial_capacity_checks(inp, out):
                         f["m_ed"], f["m_rd"],
                         _ftd_v_at(c) if f["gets_shift"] else 0.0,
                         _ftd_t_at(c), f["z_m"],
-                        cap_shear_force=True,
+                        m_ed_max=capacity.chord_med_max(
+                            inp, f["axis"], f["tension_low"]
+                        ),
                     )["util"]
                 _add_angle_objective(
                     f"{_cf['axis']}-axis {face} longitudinal chord",
@@ -11238,7 +11402,9 @@ def _run_uniaxial_capacity_checks(inp, out):
                             _cf["m_ed"], _cf["m_rd"],
                             longitudinal_shear_force if _cf["gets_shift"] else 0.0,
                             ftd_t_star, _cf["z_m"],
-                            cap_shear_force=True,
+                            m_ed_max=capacity.chord_med_max(
+                                inp, _cf["axis"], _cf["tension_low"]
+                            ),
                         )
                     fchk.update(valid=True, role="shear_axis",
                                 axis=_cf["axis"],
@@ -11452,6 +11618,13 @@ def _run_uniaxial_capacity_checks(inp, out):
                     nominal.status,
                     chord_status,
                 ))
+        concrete_chord = _concrete_route_chord(inp, out, shear_result, nominal)
+        shear_result["concrete_chord"] = concrete_chord
+        if concrete_chord is not None:
+            assessment_status = capacity.aggregate_assessment_status((
+                assessment_status,
+                concrete_chord["status"],
+            ))
         shear_result.update(
             nominal_resistance=nominal_payload,
             resistance_status=nominal.status,
@@ -14760,7 +14933,7 @@ def _render_shear_2023_chord_faces(chord_publication):
             "Signed Mface": (
                 f"{candidate.get('face_m_ed_signed', 0.0):.1f} kNm"
             ),
-            "NVd z": f"{candidate.get('mv', 0.0):.1f} kNm",
+            "NVd z/2": f"{candidate.get('mv', 0.0):.1f} kNm",
             "MEd,total": f"{candidate.get('m_total', 0.0):.1f} kNm",
             "MRd": f"{candidate.get('m_rd', 0.0):.1f} kNm",
             "Utilisation": _pct(candidate.get("util")),
@@ -14769,6 +14942,42 @@ def _render_shear_2023_chord_faces(chord_publication):
     if chord_rows:
         st.markdown("**Required 2023 longitudinal chord faces**")
         st.dataframe(chord_rows, hide_index=True, width="stretch")
+
+
+def _concrete_chord_panel(inp, chord):
+    """Show the tension chord of the concrete shear route (shift a_l = d)."""
+    st.markdown(r"**Tension chord with the moment shift $a_l = d$**")
+    if not capacity.concrete_route_chord_is_consistent(chord, inp):
+        st.caption("NOT ASSESSED: recalculate before you use the tension chord result.")
+        return
+    if chord.get("valid") is not True:
+        st.caption(f"NOT ASSESSED: {chord.get('reason') or 'no result'}.")
+        return
+    face = "bottom" if chord["axis"] == "x" else "left"
+    if not chord["tension_low"]:
+        face = "top" if chord["axis"] == "x" else "right"
+    cap = chord.get("m_ed_max")
+    cap_text = (
+        "no $M_{Ed,max}$ entered, so no limit applies"
+        if cap is None
+        else f"$M_{{Ed,max}}$ = {cap:.1f} kNm"
+        + (" limits the shift" if chord.get("capped") else "")
+    )
+    if chord.get("shear_term_selection") == "uncapped, MEd,max below MEd":
+        cap_text = r"the entered $M_{Ed,max}$ is less than $M_{Ed}$ and is not used"
+    st.markdown(
+        "| Quantity | Value |\n|---|---|\n"
+        f"| $M_{{Ed}}$ on the {face} chord | {chord['m_ed']:.2f} kNm |\n"
+        f"| $\\lvert V_{{Ed}} \\rvert \\cdot d$ | {chord['v_ed']:.2f} x {chord['d']:.3f} = "
+        f"{chord['mv_uncapped']:.2f} kNm |\n"
+        f"| $M_{{Ed}} + \\Delta M$ | {chord['m_total']:.2f} kNm |\n"
+        f"| $M_{{Rd}}$ of the chord face | {chord['m_rd']:.2f} kNm |\n"
+        f"| Utilisation | {chord['util']:.3f} ({chord['status']}) |"
+    )
+    st.caption(
+        f"{chord['clause']}: the tension reinforcement carries the moment "
+        f"increased by $|V_{{Ed}}| \\cdot d$; {cap_text}."
+    )
 
 
 @_publication_calculation
@@ -15113,6 +15322,8 @@ def shear_view(inp, results, *, global_results=None):
             r"The concrete route governs because $|V_{Ed}|\leq V_{Rd,c}$. "
             "Provided-link resistance and link detailing are reported separately."
         )
+    if nominal_valid and sh.get("concrete_chord") is not None:
+        _concrete_chord_panel(inp, sh["concrete_chord"])
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
                  "prestress initial strain)" if sh.get("n_prestress") else "")
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
@@ -15547,7 +15758,8 @@ def shear_view(inp, results, *, global_results=None):
         else:
             chord_force_note_2023 = chord_force_note_2005 = (
                 " The concrete route is selected, so no shear-induced "
-                "longitudinal chord force is applied."
+                "longitudinal chord force is applied to the link truss. The "
+                "tension chord check with the moment shift a_l = d applies."
             )
         if links.get("model_2023"):
             st.caption(
@@ -15667,8 +15879,14 @@ def shear_view(inp, results, *, global_results=None):
                 )
             if ch.get("capped"):
                 st.caption(
-                    "Shear shift is capped at section MRd under 6.2.3(7); the "
-                    "strut-angle objective uses the same capped demand."
+                    "The entered member maximum moment MEd,max limits the shear "
+                    "shift (6.2.3(7)); the strut-angle objective uses the same "
+                    "limited demand."
+                )
+            elif ch.get("m_ed_max") is None and not ch.get("chord_formula"):
+                st.caption(
+                    "No member maximum moment MEd,max is entered, so the shear "
+                    "shift has no 6.2.3(7) limit."
                 )
             if fell_back:
                 fallback_axis = fallback.get("axis", "?")
@@ -17291,8 +17509,8 @@ def combined_view(inp, results):
         )
         if lg["capped"]:
             st.caption(
-                "Shear shift is capped at section $M_{Rd}$ under 6.2.3(7), used here "
-                "because a cross-section calculation has no member peak moment."
+                "The entered member maximum moment $M_{Ed,max}$ limits the shear "
+                "shift (6.2.3(7))."
             )
         if fell_back:
             fallback_axis = fallback.get("axis", "?")

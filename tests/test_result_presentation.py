@@ -2321,7 +2321,6 @@ def _bind_link_chord_publication_fixture(shear, inp, *, mx_factor=0.0):
         force,
         0.0,
         links["res"]["z"] / 1000.0,
-        cap_shear_force=True,
     )
     chord.update(
         valid=True,
