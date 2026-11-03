@@ -15788,14 +15788,14 @@ def shear_view(inp, results, *, global_results=None):
                         "otherwise govern."
                         if ch.get("theta_mode") == "utilisation" else "")
             shear_term = (
-                r"N_{Vd}\,z" if links.get("model_2023")
+                r"N_{Vd}\,z/2" if links.get("model_2023")
                 else r"\Delta F_{td}\,z"
             )
             if links.get("model_2023"):
                 st.caption(
                     f"Governing chord: {face_desc}. The signed face bending term "
                     f"is {ch.get('face_m_ed_signed', 0.0):.1f} kN\u00b7m; "
-                    rf"$M_{{Ed,total}}=\max(M_{{face}}+N_{{Vd}}z,0)"
+                    rf"$M_{{Ed,total}}=\max(M_{{face}}+N_{{Vd}}z/2,0)"
                     rf"+F_{{td,T}}z/2=\max({ch.get('face_m_ed_signed', 0.0):.1f}"
                     rf"+{ch['mv']:.1f},0)+{ch['mt']:.1f}="
                     f"{ch['m_total']:.1f}$ kN\u00b7m. Resistance: $M_{{Rd}} = "
