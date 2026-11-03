@@ -113,6 +113,12 @@ def seconds_for(key, durations):
     return float(durations["modules"].get(module, durations["default_seconds"]))
 
 
+def module_seconds(key, durations):
+    """Return the mean CI duration of all tests in the module of a node."""
+    module = key.split("::", 1)[0]
+    return float(durations["module_means"].get(module, durations["default_seconds"]))
+
+
 def node_groups(item):
     return sorted({str(mark.args[0] if mark.args else mark.kwargs.get("name", "default"))
                    for mark in item.iter_markers("xdist_group")})
@@ -464,7 +470,7 @@ def merge_shards(inputs, output):
 
 def refresh_durations(inputs, destination):
     """Write the duration table from the JUnit evidence of downloaded core shards."""
-    tests, small = {}, {}
+    tests, small, everything = {}, {}, {}
     for directory in sorted(inputs.iterdir()):
         if not re.search(r"-core-[0-9]{2}$", directory.name):
             continue
@@ -473,14 +479,18 @@ def refresh_durations(inputs, destination):
         for case in ET.parse(directory / "test-results.xml").getroot().iter("testcase"):
             node = nodes[(case.get("classname"), case.get("name"))]
             seconds = float(case.get("time") or 0.0)
+            everything.setdefault(node.split("::", 1)[0], []).append(seconds)
             if seconds >= 1.0:
                 tests[node] = round(seconds, 1)
             else:
                 small.setdefault(node.split("::", 1)[0], []).append(seconds)
     require(tests, "no core shard timing evidence")
     modules = {module: round(sum(values) / len(values), 3) for module, values in sorted(small.items())}
-    write_json(destination, {"schema_version": 1, "default_seconds": 2.0, "modules": modules,
-                             "tests": dict(sorted(tests.items()))})
+    means = {module: round(sum(values) / len(values), 3) for module, values in sorted(everything.items())}
+    value = {"schema_version": 1, "default_seconds": 2.0, "modules": modules, "module_means": means,
+             "tests": dict(sorted(tests.items()))}
+    # The refresh replaces the checked-in table, so it must overwrite the file.
+    Path(destination).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8", newline="\n")
     return 0
 
 
