@@ -364,8 +364,38 @@ def test_duration_refresh_reads_core_junit_through_the_collected_identities(tmp_
         next(tree.getroot().iter("testcase")).set("time", "12.34")
         tree.write(directory / "test-results.xml")
     destination = tmp_path / "durations.json"
+    destination.write_text("stale table")
     assert shards.refresh_durations(inputs, destination) == 0
     data = json.loads(destination.read_text())
     assert data["tests"] == {GROUPED: 12.3}
     assert data["modules"] == {"tests/test_a.py": 0.01}
+    assert data["module_means"] == {"tests/test_a.py": 0.01, "tests/test_report.py": 12.34}
     assert shards.load_durations(destination)["default_seconds"] == 2.0
+
+
+def test_slow_marker_follows_the_duration_table_and_the_group_suffix():
+    import conftest
+
+    durations = shards.load_durations()
+    limit = conftest.SLOW_SECONDS
+    plain = next(key for key, seconds in durations["tests"].items() if "@" not in key and seconds >= limit)
+    grouped = next(key for key, seconds in durations["tests"].items()
+                   if "@" in key and "[" not in key and seconds >= limit)
+    base, group = grouped.rsplit("@", 1)
+    light = next(name for name, seconds in durations["module_means"].items() if seconds < limit)
+    heavy = next(name for name, seconds in durations["module_means"].items()
+                 if seconds >= limit and durations["modules"].get(name, limit) < limit)
+    assert base not in durations["tests"]
+
+    def item(nodeid, *groups, real=False):
+        marks = [SimpleNamespace(args=(name,), kwargs={}) for name in groups]
+        added = []
+        return SimpleNamespace(nodeid=nodeid, added=added, add_marker=added.append,
+                               iter_markers=lambda name, marks=marks: marks,
+                               get_closest_marker=lambda name, real=real: real and name == "real_image_export")
+    items = [item(plain), item(base, group), item(light + "::test_not_in_the_table"),
+             item(heavy + "::test_not_in_the_table"), item("tests/test_new_module.py::test_x"),
+             item(light + "::test_real_export", real=True)]
+    conftest.pytest_collection_modifyitems(None, items)
+    assert [[mark.name for mark in entry.added] for entry in items] == [
+        ["slow"], ["slow"], [], ["slow"], ["slow"], ["slow"]]

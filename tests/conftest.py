@@ -4,6 +4,27 @@ from __future__ import annotations
 
 import pytest
 
+from tools.qa_core_shards import load_durations, module_seconds, node_row, seconds_for
+
+# A test is marked ``slow`` when its CI duration in tools/qa_shard_durations.json,
+# or the mean CI duration of all tests in its module, reaches this many seconds.
+# Tests of one module share report and native-run caches: CI charges the shared
+# cost to the first test that runs, but a test alone can pay all of it. Every
+# serial real-image export test is slow too. ``-m "not slow"`` selects the fast
+# local tier; CI ignores the marker and runs every test.
+SLOW_SECONDS = 1.0
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    """Mark slow tests from the shard duration table before marker selection."""
+    durations = load_durations()
+    for item in items:
+        node, _ = node_row(item)
+        seconds = max(seconds_for(node, durations), module_seconds(node, durations))
+        if item.get_closest_marker("real_image_export") or seconds >= SLOW_SECONDS:
+            item.add_marker(pytest.mark.slow)
+
 
 @pytest.fixture(autouse=True)
 def _isolate_autosave(tmp_path, monkeypatch):
