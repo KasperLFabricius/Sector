@@ -564,16 +564,12 @@ def _member_moment_inputs(box, plastic_cases, *, disabled):
         False,
         capacity.MED_MAX_ON_KEY,
         disabled=disabled,
-        help=r"EN 1992-1-1:2004, 6.2.3(7): $M_{Ed}/z + \Delta F_{td}$ should be "
-             r"taken not greater than $M_{Ed,max}/z$, where $M_{Ed,max}$ is the "
-             "maximum moment along the member. Sector applies the same limit "
-             "to the moment shift $a_l = d$ of the concrete shear route "
-             "(9.2.1.3(2) and DS/EN 1992-1-1:2023, 8.2.2(10)). Without this "
-             "input, Sector applies no limit. Enter magnitudes about the same "
-             "reference point as the case moments. The DS/EN 1992-1-1:2023 "
-             "links route does not use this input. Sector does not establish "
-             "the condition of Formula (8.53), so the chord force $N_{Vd}$ "
-             "has no limit.",
+        help=r"EN 1992-1-1:2004, 6.2.3(7): $M_{Ed}/z + \Delta F_{td} \le "
+             r"M_{Ed,max}/z$, with $M_{Ed,max}$ the maximum member moment. "
+             "Sector applies this limit to the shift $a_l = d$ of the "
+             "concrete route (9.2.1.3(2), DS/EN 1992-1-1:2023 8.2.2(10)). "
+             "Enter the moments about the case-moment reference point. The "
+             "DS/EN 1992-1-1:2023 links route does not use them.",
     )
     copy_help = (
         "Copy the largest moment of each sign from the Plastic/capacity "
@@ -1000,13 +996,12 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
         mp.pivot_c_default(preset),
         "conc_pivot_c",
         disabled=locked,
-        help="EN 1992-1-1:2004, 6.1(6) and Figure 6.1: when the full section "
-             "is in compression, Sector limits the strain at "
+        help="EN 1992-1-1:2004, 6.1(6) and Figure 6.1: with the full section "
+             "in compression, Sector limits the strain at "
              "(1 - eps_c2/eps_cu2) h from the more compressed face to eps_c2. "
-             "The EN 1992-1-1:2004 presets set this limit. The "
-             "DS/EN 1992-1-1:2023 preset clears it, because 8.1.1(3) limits "
-             "only eps_cu. Clear it for an EN 1992-1-1:2004 preset only to "
-             "reproduce a legacy ECROSS calculation.",
+             "The DS/EN 1992-1-1:2023 preset clears this limit (8.1.1(3) "
+             "limits only eps_cu). Clear it on a 2004 preset only to "
+             "reproduce ECROSS results.",
     )
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n,
@@ -11569,7 +11564,8 @@ def _run_uniaxial_capacity_checks(inp, out):
                     chord_status,
                 ))
         concrete_chord = capacity.concrete_route_chord(
-            inp, out.get("plastic"), shear_result, nominal
+            inp, out.get("plastic"), shear_result, nominal,
+            torsion_result=out.get("torsion"),
         )
         shear_result["concrete_chord"] = concrete_chord
         if concrete_chord is not None:
@@ -14896,9 +14892,11 @@ def _render_shear_2023_chord_faces(chord_publication):
         st.dataframe(chord_rows, hide_index=True, width="stretch")
 
 
-def _concrete_chord_panel(inp, sh):
+def _concrete_chord_panel(inp, sh, torsion_result=None):
     """Show the tension chord of the concrete shear route (shift a_l = d)."""
-    publication = presentation.concrete_route_chord_publication_assessment(inp, sh)
+    publication = presentation.concrete_route_chord_publication_assessment(
+        inp, sh, torsion_result=torsion_result
+    )
     if publication["required"] is not True:
         return
     st.markdown(r"**Tension chord with the moment shift $a_l = d$**")
@@ -14925,19 +14923,38 @@ def _concrete_chord_panel(inp, sh):
     )
     if chord.get("shear_term_selection") == "uncapped, MEd,max below MEd":
         cap_text = r"the entered $M_{Ed,max}$ is less than $M_{Ed}$ and is not used"
-    st.markdown(
+    rows = (
         "| Quantity | Value |\n|---|---|\n"
         f"| $M_{{Ed}}$ | {chord['m_ed']:.2f} kNm |\n"
         f"| $\\lvert V_{{Ed}} \\rvert \\cdot d$ | {chord['v_ed']:.2f} x {chord['d']:.3f} = "
         f"{chord['mv_uncapped']:.2f} kNm |\n"
-        f"| $M_{{Ed}} + \\Delta M$ | {chord['m_total']:.2f} kNm |\n"
+        f"| $M_{{Ed}} + \\lvert V_{{Ed}} \\rvert \\cdot d$ | "
+        f"{chord['m_ed'] + chord['mv_uncapped']:.2f} kNm |\n"
+    )
+    if chord.get("capped") and cap is not None:
+        rows += f"| Limited to $M_{{Ed,max}}$ | {cap:.2f} kNm |\n"
+    if chord.get("has_torsion"):
+        rows += (
+            f"| $F_{{td,T}} \\cdot z/2$ | {chord['ftd_t']:.2f} x {chord['z']:.3f}/2 = "
+            f"{chord['mt']:.2f} kNm |\n"
+        )
+    rows += (
+        f"| $M_{{Ed,total}}$ | {chord['m_total']:.2f} kNm |\n"
         f"| $M_{{Rd}}$ | {chord['m_rd']:.2f} kNm |\n"
         f"| Utilisation | {chord['util']:.3f} ({chord['status']}) |"
     )
+    st.markdown(rows)
     st.caption(
         f"{chord['clause']}: the {face} tension reinforcement carries the "
         f"moment increased by $|V_{{Ed}}| \\cdot d$; {cap_text}."
     )
+    if chord.get("has_torsion"):
+        st.caption(
+            "EN 1992-1-1:2004, 6.3.2(3): with torsion, the same chord also "
+            r"carries half of the torsion longitudinal force $F_{td,T}$ on the "
+            "lever arm $z$ of the links route. The $M_{Ed,max}$ limit does not "
+            "apply to this share."
+        )
 
 
 @_publication_calculation
@@ -15283,7 +15300,7 @@ def shear_view(inp, results, *, global_results=None):
             "Provided-link resistance and link detailing are reported separately."
         )
     if nominal_valid and nominal_route == "concrete":
-        _concrete_chord_panel(inp, sh)
+        _concrete_chord_panel(inp, sh, torsion_result=results.get("torsion"))
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
                  "prestress initial strain)" if sh.get("n_prestress") else "")
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
@@ -15619,7 +15636,7 @@ def shear_view(inp, results, *, global_results=None):
                         f"{_TAU}Rd,sy",
                         f"Compression stress {_SIGMA}cd",
                         f"Limit {_NU} fcd",
-                        "Additional chord force NVd",
+                        "Additional tensile axial force from shear NVd",
                     ],
                     "Value": [
                         f"{lk['theta_deg']:.1f}{_DEG}",
@@ -15847,9 +15864,10 @@ def shear_view(inp, results, *, global_results=None):
                 if inp.get(capacity.MED_MAX_ON_KEY) is True:
                     st.caption(
                         "Sector does not use the entered member maximum moment "
-                        "MEd,max for the DS/EN 1992-1-1:2023 chord force NVd. "
-                        "Sector does not establish the condition of Formula "
-                        "(8.53)."
+                        "MEd,max for the DS/EN 1992-1-1:2023 chord force Ftd. "
+                        "Formula (8.53) limits Ftd only at a direct intermediate "
+                        "support or in the region of a concentrated load. Sector "
+                        "does not establish this condition."
                     )
             elif ch.get("m_ed_max") is None:
                 st.caption(

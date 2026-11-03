@@ -1211,9 +1211,9 @@ def validate_fixture_fatigue_note_link(reader, page_texts):
     """Require the final overview link to reach its exact fatigue note heading."""
     overview = validate_results_overview_pagination(page_texts)
     source = reader.pages[overview[-1] - 1]
-    cells = _fixture_text_positions(source, "Note 28")
+    cells = _fixture_text_positions(source, "Note 29")
     if len(cells) != 1:
-        raise AssertionError("expected one fatigue overview Note 28 link label")
+        raise AssertionError("expected one fatigue overview Note 29 link label")
     x, y, _size = cells[0]
     links = []
     for ref in source.get("/Annots", ()):
@@ -1224,25 +1224,25 @@ def validate_fixture_fatigue_note_link(reader, page_texts):
         if left - 0.1 <= x <= right + 0.1 and bottom - 0.1 <= y <= top + 0.1:
             links.append(annotation)
     if len(links) != 1:
-        raise AssertionError("fatigue overview must have one link at Note 28")
+        raise AssertionError("fatigue overview must have one link at Note 29")
     dest = links[0].get("/Dest")
     if not isinstance(dest, (list, tuple)) or len(dest) != 5 or dest[1] != "/XYZ":
         raise AssertionError("fatigue note destination must locate its heading")
-    heading = "Note 28. Fatigue: Road traffic."
+    heading = "Note 29. Fatigue: Road traffic."
     targets = [
         (index, pos)
         for index, page in enumerate(reader.pages)
         for pos in _fixture_text_positions(page, heading)
     ]
     if len(targets) != 1:
-        raise AssertionError("expected exactly one fatigue Note 28 heading")
+        raise AssertionError("expected exactly one fatigue Note 29 heading")
     target_index, (hx, hy, _size) = targets[0]
     if dest[0] != reader.pages[target_index].indirect_reference:
         raise AssertionError("fatigue overview link reaches the wrong note page")
     if (dest[2] is None or dest[3] is None
             or abs(float(dest[2]) - hx) > 1.0
             or not 0 <= float(dest[3]) - hy <= 20.0):
-        raise AssertionError("fatigue overview link misses the Note 28 heading")
+        raise AssertionError("fatigue overview link misses the Note 29 heading")
 
 
 def validate_fixture_settings_heading(reader):
@@ -1465,7 +1465,7 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         "The table shows one governing row per engineering check type.",
         "The table shows one governing row for each engineering check type.",
     )
-    final_row = "Fatigue Road traffic PASS 46.2 % <= 100 % Note 28"
+    final_row = "Fatigue Road traffic PASS 46.2 % <= 100 % Note 29"
     normalized_pages = [" ".join(page_text.split()) for page_text in page_texts]
     overview_indexes = [
         index
@@ -1508,10 +1508,10 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
             "the results-overview final row and governing note are out of reading order"
         )
 
-    note_heading = "Note 28. Fatigue: Road traffic."
+    note_heading = "Note 29. Fatigue: Road traffic."
     full_text = "\n".join(page_texts)
     if full_text.count(note_heading) != 1:
-        raise AssertionError("expected exactly one fatigue Note 28 heading")
+        raise AssertionError("expected exactly one fatigue Note 29 heading")
     note_page = next(text for text in page_texts if note_heading in text)
     note_tail = note_page.split(note_heading, 1)[1]
     note_body = re.split(r"(?m)^(?:Note \d+\.|Project: QA-REFERENCE)", note_tail, maxsplit=1)[0]
@@ -1523,7 +1523,7 @@ def validate_results_overview_pagination(page_texts: list[str]) -> tuple[int, ..
         "max yield/proof utilisation 20.8 %",
     ):
         if expected not in note_body:
-            raise AssertionError("fatigue Note 28 is missing its independent criterion evidence")
+            raise AssertionError("fatigue Note 29 is missing its independent criterion evidence")
 
     overview_text = " ".join(
         " ".join(page_texts[index].split()) for index in overview_indexes

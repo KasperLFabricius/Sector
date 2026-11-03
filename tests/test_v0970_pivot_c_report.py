@@ -32,15 +32,20 @@ import result_presentation  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 H_M = 0.600
-PIVOT_LABEL = "Concentric compression (pivot C, 6.1(6) and Figure 6.1)"
+PIVOT_LABEL = (
+    "Concentric compression (pivot C, EN 1992-1-1:2004, 6.1(6) and Figure 6.1)"
+)
+ROW_2004 = "Pivot C strain limit (EN 1992-1-1:2004, 6.1(6) and Figure 6.1) \u03b5c2"
 
 
-def _run(pivot_c):
+def _run(pivot_c, preset=None):
     from streamlit.testing.v1 import AppTest
     from app_case_inputs import CALCULATION_RUN_TIMEOUT, apply_widget_changes
     from app_workflow_navigation import goto_page
 
     at = AppTest.from_file(APP, default_timeout=120).run()
+    if preset is not None:
+        apply_widget_changes(at, (("selectbox", "conc_preset", preset),))
     if not pivot_c:
         apply_widget_changes(at, (("checkbox", "conc_pivot_c", False),))
     apply_widget_changes(at, (
@@ -106,7 +111,7 @@ def test_report_documents_pivot_c_when_it_is_on(pivot_on, profile):
         # The calculation basis (theory) section is an Audit section.
         assert "Pivot C (EN 1992-1-1:2004, 6.1(6) and Figure 6.1)" in text
         assert "The limit is on in this calculation." in text
-    assert "Pivot C strain limit (6.1(6) and Figure 6.1) \u03b5c2 On" in text
+    assert f"{ROW_2004} On" in text
     assert PIVOT_LABEL in text
     assert "from the more compressed face" in text
     assert "6.1(6))" not in text
@@ -121,8 +126,26 @@ def test_report_states_that_pivot_c_is_off(pivot_off):
         for item in point["curvature_candidates"]
     )
     standard = _text(inp, out, "Standard")
-    assert "Pivot C strain limit (6.1(6) and Figure 6.1) \u03b5c2 Off" in standard
+    assert f"{ROW_2004} Off" in standard
     assert PIVOT_LABEL not in standard
     audit = _text(inp, out, "Audit")
     assert "The limit is off in this calculation" in audit
     assert PIVOT_LABEL not in audit
+
+
+def test_2023_report_states_that_the_limit_is_off_and_names_the_edition():
+    # DS/EN 1992-1-1:2023 8.1.1(3) limits only eps_cu, so the 2023 preset clears
+    # the pivot C limit. The row names the edition and does not cite a bare
+    # 2004 clause number (in the 2023 edition, 6.1 is a durability clause).
+    from sector import codes
+
+    inp, out = _run(False, preset=codes.EC2_2023.label)
+    assert inp["concrete"].pivot_c is False
+    standard = _text(inp, out, "Standard")
+    assert (
+        "Pivot C strain limit \u03b5c2 Off (DS/EN 1992-1-1:2023, 8.1.1(3) "
+        "limits only \u03b5cu)"
+    ) in standard
+    assert "(6.1(6) and Figure 6.1)" not in standard
+    audit = _text(inp, out, "Audit")
+    assert "DS/EN 1992-1-1:2023, 8.1.1(3) limits only \u03b5cu, so the" in audit

@@ -1253,7 +1253,32 @@ def _scientific_equation_markup(text):
     )
 
 
-_PIVOT_C_MODE_LABEL = "Concentric compression (pivot C, 6.1(6) and Figure 6.1)"
+_PIVOT_C_CLAUSE = "EN 1992-1-1:2004, 6.1(6) and Figure 6.1"
+_PIVOT_C_MODE_LABEL = f"Concentric compression (pivot C, {_PIVOT_C_CLAUSE})"
+_PIVOT_C_2023_NOTE = (
+    "DS/EN 1992-1-1:2023, 8.1.1(3) limits only eps<sub>cu</sub>"
+)
+
+
+def _pivot_c_material_row(concrete, is_2023):
+    """Material-table row with the pivot C state and the edition that applies."""
+
+    pivot_c_on = getattr(concrete, "pivot_c", False) is True
+    if not is_2023:
+        return [
+            f"Pivot C strain limit ({_PIVOT_C_CLAUSE})",
+            "eps<sub>c2</sub>",
+            "On" if pivot_c_on else "Off",
+        ]
+    # The 2023 preset clears the limit; a user setting can still apply the
+    # EN 1992-1-1:2004 rule, and the row then names that edition.
+    return [
+        "Pivot C strain limit",
+        "eps<sub>c2</sub>",
+        f"On, user setting ({_PIVOT_C_CLAUSE}); {_PIVOT_C_2023_NOTE}"
+        if pivot_c_on
+        else f"Off ({_PIVOT_C_2023_NOTE})",
+    ]
 
 
 def _concrete_candidate_location(candidate):
@@ -4825,9 +4850,7 @@ class ReportBuilder:
                  ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} &#8240;"],
                  ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} &#8240;"],
                  ["Exponent", "n", _fmt(c.n, 3)],
-                 ["Pivot C strain limit (6.1(6) and Figure 6.1)",
-                  "eps<sub>c2</sub>",
-                  "On" if getattr(c, "pivot_c", False) is True else "Off"],
+                 _pivot_c_material_row(c, is_2023),
         ])
         if fcd is not None:
             rows.append(
@@ -5776,6 +5799,12 @@ class ReportBuilder:
                     if pivot_c_on
                     else "The limit is off in this calculation, so kappa<sub>C</sub> "
                          "is not a candidate."
+                )
+                + (
+                    " " + _PIVOT_C_2023_NOTE + ", so the DS/EN 1992-1-1:2023 "
+                    "preset clears this limit."
+                    if material_2023
+                    else ""
                 )
             )
             self._p("The compression depth c is solved from axial equilibrium and "
@@ -8029,7 +8058,7 @@ class ReportBuilder:
     def _concrete_route_chord(self, sh):
         """Tension chord of the concrete shear route with the shift a_l = d."""
         publication = presentation.concrete_route_chord_publication_assessment(
-            self.inp, sh
+            self.inp, sh, torsion_result=self.out.get("torsion")
         )
         if publication["required"] is not True:
             return
@@ -8069,20 +8098,38 @@ class ReportBuilder:
             + ": without shear reinforcement, the tension reinforcement carries "
               "the moment increased by |V<sub>Ed</sub>| d. " + cap_text
         )
-        self._table(
-            [
-                ["Quantity", "Value"],
-                ["M<sub>Ed</sub> on the shear tension face",
-                 f"{_fmt(chord['m_ed'], 2)} kNm"],
-                ["|V<sub>Ed</sub>| d",
-                 f"{_fmt(chord['v_ed'], 2)} &#183; {_fmt(chord['d'], 3)} = "
-                 f"{_fmt(chord['mv_uncapped'], 2)} kNm"],
-                ["M<sub>Ed</sub> + &#916;M", f"{_fmt(chord['m_total'], 2)} kNm"],
-                ["M<sub>Rd</sub> of the face", f"{_fmt(chord['m_rd'], 2)} kNm"],
-                ["Utilisation", f"{_pct(chord['util'])} ({chord['status']})"],
-            ],
-            [70 * mm, 80 * mm],
-        )
+        has_torsion = chord.get("has_torsion") is True
+        if has_torsion:
+            self._small(
+                "EN 1992-1-1:2004, 6.3.2(3): with torsion, the same chord also "
+                "carries half of the torsion longitudinal force F<sub>td,T</sub> "
+                "(Formula (6.28)) on the lever arm z of the links route. The "
+                "M<sub>Ed,max</sub> limit does not apply to this share."
+            )
+        rows = [
+            ["Quantity", "Value"],
+            ["M<sub>Ed</sub> on the shear tension face",
+             f"{_fmt(chord['m_ed'], 2)} kNm"],
+            ["|V<sub>Ed</sub>| d",
+             f"{_fmt(chord['v_ed'], 2)} &#183; {_fmt(chord['d'], 3)} = "
+             f"{_fmt(chord['mv_uncapped'], 2)} kNm"],
+            ["M<sub>Ed</sub> + |V<sub>Ed</sub>| d",
+             f"{_fmt(chord['m_ed'] + chord['mv_uncapped'], 2)} kNm"],
+        ]
+        if chord.get("capped") and cap is not None:
+            rows.append(["Limited to M<sub>Ed,max</sub>", f"{_fmt(cap, 2)} kNm"])
+        if has_torsion:
+            rows.append([
+                "F<sub>td,T</sub> z/2",
+                f"{_fmt(chord['ftd_t'], 2)} &#183; {_fmt(chord['z'], 3)}/2 = "
+                f"{_fmt(chord['mt'], 2)} kNm",
+            ])
+        rows.extend([
+            ["M<sub>Ed,total</sub>", f"{_fmt(chord['m_total'], 2)} kNm"],
+            ["M<sub>Rd</sub> of the face", f"{_fmt(chord['m_rd'], 2)} kNm"],
+            ["Utilisation", f"{_pct(chord['util'])} ({chord['status']})"],
+        ])
+        self._table(rows, [70 * mm, 80 * mm])
 
     def _shear_2005(self, sh, res):
         bw_src = "user input" if sh["bw_user"] else "derived (minimum solid width)"
@@ -8334,7 +8381,7 @@ class ReportBuilder:
                  f"{_fmt(lk['sigma_cd'], 3)} MPa"],
                 ["Compression-field limit", "nu f<sub>cd</sub>",
                  f"{_fmt(lk['nu_fcd'], 3)} MPa"],
-                ["Additional chord force", "N<sub>Vd</sub>",
+                ["Additional tensile axial force from shear", "N<sub>Vd</sub>",
                  f"{_fmt(links['longitudinal_shear_force'], 1)} kN"],
             ])
         else:
@@ -8597,10 +8644,11 @@ class ReportBuilder:
             if model_2023:
                 notes.append("The acting axial force is already included in the conditional bending resistance for each face.")
                 notes.append(
-                    "Sector does not limit N<sub>Vd</sub> with an entered member "
-                    "maximum moment M<sub>Ed,max</sub>. Formula (8.53) applies "
-                    "only at a direct intermediate support or in the region of a "
-                    "concentrated load. Sector does not establish this condition."
+                    "Sector does not limit the chord force F<sub>td</sub> with an "
+                    "entered member maximum moment M<sub>Ed,max</sub>. Formula "
+                    "(8.53) applies only at a direct intermediate support or in "
+                    "the region of a concentrated load. Sector does not establish "
+                    "this condition."
                 )
             if fell_back:
                 fallback_axis = fallback.get("axis", "?")

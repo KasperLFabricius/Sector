@@ -384,7 +384,8 @@ def test_entered_med_max_limits_the_shift_through_the_app():
     assert chord["status"] == "PASS"
     row = _rows(inp, out)[CHECK]
     assert row["status"] == "PASS"
-    assert "MEd,max = 420.0 kNm limits the shift" in row["note"]
+    # P1-10: the label "MEd + |VEd| d" keeps the uncapped value.
+    assert "MEd + |VEd| d = 466.0 kNm, limited to MEd,max = 420.0 kNm" in row["note"]
 
 
 def test_2023_links_chord_states_that_med_max_is_not_used():
@@ -427,9 +428,222 @@ def test_2023_links_chord_states_that_med_max_is_not_used():
     entered.selectbox(key="view").set_value("Shear").run()
     captions = " ".join(str(item.value) for item in entered.caption)
     assert "Sector does not use the entered member maximum moment MEd,max" in captions
+    # P1-12: (8.53) limits the chord force Ftd; NVd is the additional tensile
+    # axial force from shear (8.50).
+    assert "chord force Ftd" in captions
+    assert "Formula (8.53) limits Ftd only at a direct intermediate support" in captions
+    assert "chord force NVd" not in captions
+    from app_workflow_navigation import goto_widget_owner
+
+    goto_widget_owner(entered, capacity.MED_MAX_ON_KEY)
+    help_text = entered.checkbox(key=capacity.MED_MAX_ON_KEY).help
+    # The help stays within 50 words (test_user_copy); the (8.53) statement is
+    # in the caption above and in the report.
+    assert "DS/EN 1992-1-1:2023 links route does not use them" in help_text
+    assert "N_{Vd}" not in help_text and "chord force" not in help_text
     text = _pdf_text(
         entered.session_state["result_input_snapshot"],
         entered.session_state["results"],
         "Standard",
     )
     assert "Formula (8.53) applies only at a direct intermediate support" in text
+    assert "Sector does not limit the chord force Ftd" in text
+    assert "Additional tensile axial force from shear NVd" in text
+
+
+# ---------------------------------------------------------------------------
+# Torsion share on the a_l = d chord (EN 1992-1-1:2004 6.3.2(3), Formula (6.28)).
+#
+# Hand calculation, default section with closed links and cot(theta) = 1.0
+# (cot_min = cot_max = 1.0, so the member angle is fixed):
+#   tef = A/u = 240000/2000 = 120 mm >= 2 x 50 mm (6.3.2(1)).
+#   Ak = (400 - 120)(600 - 120) = 134400 mm2, uk = 2 (280 + 480) = 1520 mm.
+#   Ftd,T = TEd uk cot(theta) / (2 Ak) = 20e6 x 1520 x 1.0 / 268800 = 113.10 kN.
+#   z (face-aligned plastic lever arm at N = 0) = MRd / (As fyd) = 510.9 mm.
+#   Torsion share on the chord: Ftd,T z/2 = 113.10 x 0.5109 / 2 = 28.89 kNm.
+#   MEd = 360 kNm: 360 + 120 x 0.55 = 426.0 kNm, 426.0/441.4 = 0.965 PASS;
+#   with the torsion share 426.0 + 28.9 = 454.9 kNm, 454.9/441.4 = 1.031 FAIL.
+# ---------------------------------------------------------------------------
+
+T_ED, M_ED_T = 20.0, 360.0
+T_EF = 240000.0 / 2000.0
+A_K = (B - T_EF) * (H - T_EF)
+U_K = 2.0 * ((B - T_EF) + (H - T_EF))
+FTD_T = T_ED * 1.0e6 * U_K * 1.0 / (2.0 * A_K) / 1000.0
+Z_T = MRD * 1.0e6 / (AS * FYD)
+MT = FTD_T * Z_T / 1000.0 / 2.0
+M_SHIFT_T = M_ED_T + V_ED * D / 1000.0
+
+
+def _torsion_app(t_ed, *, links=True, m_x=M_ED_T):
+    at = _fresh()
+    at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
+        "PL-01": {
+            capacity.TORSION_CASE_DESIGN_BASIS_KEY: (
+                capacity.TORSION_DESIGN_EQUILIBRIUM
+            ),
+            capacity.TORSION_CASE_MEMBER_SCOPE_KEY: capacity.TORSION_MEMBER_CLOSED,
+        }
+    }
+    at.session_state["torsion_design_basis"] = capacity.TORSION_DESIGN_EQUILIBRIUM
+    at.session_state["torsion_member_scope"] = capacity.TORSION_MEMBER_CLOSED
+    at.run()
+    _set(at, ("checkbox", "shear_on", True), ("checkbox", "torsion_on", True))
+    changes = [
+        ("number_input", "strut_cot_min", 1.0),
+        ("number_input", "strut_cot_max", 1.0),
+    ]
+    if links:
+        changes.insert(0, ("checkbox", "shear_links", True))
+    _set(at, *changes)
+    _calculate(
+        at,
+        ("number_input", "shear_V", V_ED),
+        ("number_input", "pl_Mx", m_x),
+        ("number_input", "torsion_T", t_ed),
+    )
+    assert not at.exception
+    return at
+
+
+@pytest.fixture(scope="module")
+def torsion_app():
+    return _torsion_app(T_ED)
+
+
+@pytest.fixture()
+def torsion_case(torsion_app):
+    return (
+        copy.deepcopy(torsion_app.session_state["result_input_snapshot"]),
+        copy.deepcopy(torsion_app.session_state["results"]),
+    )
+
+
+def test_torsion_hand_values():
+    assert A_K == pytest.approx(134400.0)
+    assert U_K == pytest.approx(1520.0)
+    assert FTD_T == pytest.approx(113.10, abs=0.01)
+    assert Z_T == pytest.approx(510.9, abs=0.1)
+    assert MT == pytest.approx(28.89, abs=0.01)
+    assert M_SHIFT_T / MRD < 1.0 < (M_SHIFT_T + MT) / MRD
+
+
+def test_torsion_share_turns_the_chord_from_pass_to_fail(torsion_case):
+    without = _torsion_app(0.0)
+    plain = without.session_state["results"]["shear"]["concrete_chord"]
+    assert plain["has_torsion"] is False and plain["mt"] == 0.0
+    assert plain["m_total"] == pytest.approx(M_SHIFT_T)
+    assert plain["status"] == "PASS"
+
+    inp, out = torsion_case
+    tube = out["torsion"]["tube"]
+    assert tube["Ak"] * 1.0e6 == pytest.approx(A_K)
+    assert tube["uk"] * 1.0e3 == pytest.approx(U_K)
+    chord = out["shear"]["concrete_chord"]
+    assert chord["has_torsion"] is True and chord["valid"] is True
+    assert chord["mv"] == pytest.approx(V_ED * D / 1000.0)
+    assert chord["ftd_t"] == pytest.approx(FTD_T, rel=1.0e-6)
+    assert chord["z"] * 1000.0 == pytest.approx(Z_T, rel=1.0e-3)
+    assert chord["mt"] == pytest.approx(MT, rel=1.0e-3)
+    assert chord["m_total"] == pytest.approx(M_SHIFT_T + MT, rel=1.0e-4)
+    assert chord["util"] == pytest.approx((M_SHIFT_T + MT) / MRD, rel=1.0e-3)
+    assert chord["status"] == "FAIL"
+    assert out["shear"]["assessment_status"] == "FAIL"
+    publication = result_presentation.concrete_route_chord_publication_assessment(
+        inp, out["shear"], torsion_result=out["torsion"]
+    )
+    assert publication["valid"] is True
+    row = _rows(inp, out)[CHECK]
+    assert row["status"] == "FAIL"
+    assert f"MEd + |VEd| d = {M_SHIFT_T:.1f} kNm" in row["note"]
+    assert f"torsion share Ftd,T z/2 = {MT:.1f} kNm" in row["note"]
+    assert f"total = {M_SHIFT_T + MT:.1f} kNm" in row["note"]
+    text = _pdf_text(inp, out, "Standard")
+    assert f"{CHECK} PL-01 FAIL {100.0 * (M_SHIFT_T + MT) / MRD:.1f} %" in text
+    assert "carries half of the torsion longitudinal force" in text
+    assert f"{MT:.2f} kNm" in text
+
+
+def test_shear_view_shows_the_torsion_share(torsion_app):
+    from app_workflow_navigation import goto_page
+
+    goto_page(torsion_app, "Analysis")
+    torsion_app.selectbox(key="view").set_value("Shear").run()
+    visible = " ".join(
+        str(item.value)
+        for item in (*torsion_app.markdown, *torsion_app.caption)
+    )
+    assert "F_{td,T} \\cdot z/2" in visible
+    assert f"{MT:.2f} kNm" in visible
+    assert "(FAIL)" in visible
+
+
+def test_chord_without_the_torsion_share_is_not_published(torsion_case):
+    # Codex case: the retained chord omits Ftd,T z/2 with consistent arithmetic
+    # (426.0 kNm, 96.5 % PASS) while the input keeps TEd = 20 kNm.
+    inp, out = torsion_case
+    m_rd = out["shear"]["concrete_chord"]["m_rd"]
+    out["shear"]["concrete_chord"].update(
+        ftd_t=0.0, z=None, mt=0.0, m_total=M_SHIFT_T, util=M_SHIFT_T / m_rd,
+        ok=True, status="PASS",
+    )
+    out["shear"]["assessment_status"] = "PASS"
+    out["shear"]["assessment_ok"] = True
+    assert result_presentation.concrete_route_chord_publication_assessment(
+        inp, out["shear"], torsion_result=out["torsion"]
+    )["valid"] is False
+    assert result_presentation.shear_publication_input_is_current(
+        inp, out["shear"], plastic_result=out.get("plastic"),
+        torsion_result=out["torsion"], validate_directions=False,
+    )[0] is False
+    rows = _rows(inp, out)
+    assert rows["Shear without links"]["status"] == "NOT ASSESSED"
+    assert all(row["status"] != "PASS" for row in rows.values() if row["check"] != "Shear Vx")
+
+
+def test_stale_torsion_action_is_not_published(torsion_case):
+    inp, out = torsion_case
+    inp["torsion_T"] = 10.0
+    assert result_presentation.concrete_route_chord_publication_assessment(
+        inp, out["shear"], torsion_result=out["torsion"]
+    )["valid"] is False
+    # Without any torsion result (neither passed nor on the face candidate),
+    # the torsion share cannot be rebuilt.
+    inp["torsion_T"] = T_ED
+    for candidate in out["shear"].get("face_candidates") or ():
+        candidate["torsion"] = None
+    assert result_presentation.concrete_route_chord_publication_assessment(
+        inp, out["shear"], torsion_result=None
+    )["valid"] is False
+
+
+def test_torsion_without_closed_links_is_not_assessed():
+    at = _torsion_app(T_ED, links=False)
+    inp = at.session_state["result_input_snapshot"]
+    out = at.session_state["results"]
+    chord = out["shear"]["concrete_chord"]
+    assert chord["valid"] is False and chord["status"] == "NOT ASSESSED"
+    assert chord["util"] is None and chord["has_torsion"] is True
+    assert chord["reason"] == capacity.CONCRETE_CHORD_TORSION_UNAVAILABLE
+    assert out["shear"]["assessment_status"] == "NOT ASSESSED"
+    row = _rows(inp, out)[CHECK]
+    assert row["status"] == "NOT ASSESSED"
+    assert "torsion longitudinal force F_td,T" in row["note"]
+    text = _pdf_text(inp, out, "Standard")
+    assert "NOT ASSESSED: the torsion longitudinal force F_td,T" in text
+
+
+def test_zero_moment_chord_prints_zero():
+    # MEd = 0 on the top face: chord_applied_moment(0, False) is +0.0, so the
+    # chord prints 0.00 kNm (review item R8).
+    at = _fresh().run()
+    _set(at, ("checkbox", "shear_on", True))
+    _calculate(at, ("number_input", "shear_V", V_ED), ("number_input", "pl_Mx", 0.0))
+    assert not at.exception
+    inp = at.session_state["result_input_snapshot"]
+    out = at.session_state["results"]
+    chord = out["shear"]["concrete_chord"]
+    assert chord["m_ed"] == 0.0 and math.copysign(1.0, chord["m_ed"]) == 1.0
+    text = _pdf_text(inp, out, "Standard")
+    assert "shear tension face 0.00 kNm" in text
+    assert "-0.00" not in text

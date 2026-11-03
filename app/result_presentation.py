@@ -2216,12 +2216,141 @@ def _concrete_route_chord_required(inp, shear_result):
     return selection.valid is True and selection.route == "concrete"
 
 
-def _current_concrete_route_chord(inp, shear_result):
+def _current_shear_face_lever_arm(inp, axis, tension_low):
+    """Rebuild the shear lever arm ``z`` (mm) of one face, as the links route does."""
+
+    outer = inp.get("outer")
+    holes = inp.get("holes") or ()
+    bars = inp.get("bars")
+    if not isinstance(outer, (list, tuple)) or not isinstance(bars, (list, tuple)):
+        return None
+    component = "vy" if axis == "x" else "vx"
+    try:
+        if inp.get("shear_section_form") == shear_core.SHEAR_SECTION_CIRCULAR:
+            circular = shear_core.resolve_circular_shear_geometry(
+                bw_mm=inp.get(f"shear_{component}_bw"),
+                hoop_diameter_mm=inp.get("shear_hoop_diameter"),
+                fitted_z_mm=inp.get(f"shear_{component}_fitted_z"),
+            )
+            if circular.get("valid") is not True:
+                return None
+            z_mm = float(circular["fitted_z_mm"])
+        else:
+            _area, cx, cy = capacity.gross_area_centroid(outer, holes)
+            _asl, cg, _ids = shear_core.tension_reinforcement_selection(
+                bars,
+                axis,
+                tension_low,
+                cy if axis == "x" else cx,
+            )
+            d_mm = shear_core.effective_depth(outer, axis, tension_low, cg)
+            z_mm, _source = _publication_solver_result(
+                capacity.shear_lever_arm,
+                inp,
+                axis,
+                tension_low,
+                d_mm,
+            )
+    except (
+        capacity.CapacityInputError,
+        capacity.CapacityResultError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
+        return None
+    z_mm = _publication_metric(z_mm)
+    return z_mm if z_mm is not None and z_mm > 0.0 else None
+
+
+def _current_concrete_chord_torsion_force(inp, torsion_result):
+    """Rebuild ``F_td,T`` of the concrete-route chord from the current input.
+
+    The current ``TEd`` must equal the retained torsion action, the current input
+    must keep the torsion check live (closed links, valid tube, permitted angle),
+    and the retained web-tube force must follow from the current input at the
+    retained member angle. Returns the force in kN, or ``None``.
+    """
+
+    share = capacity.concrete_route_chord_torsion(torsion_result)
+    if share["valid"] is not True:
+        return None
+    entered = _publication_metric(inp.get("torsion_T"))
+    signed_hint = _publication_metric(
+        inp.get("torsion_T_signed", inp.get("torsion_T"))
+    )
+    retained = _publication_metric(torsion_result.get("t_ed"))
+    retained_signed = _publication_metric(torsion_result.get("t_ed_signed"))
+    p_ed = _publication_metric(inp.get("P_pl"))
+    if (
+        entered is None
+        or signed_hint is None
+        or retained is None
+        or retained_signed is None
+        or p_ed is None
+    ):
+        return None
+    magnitude = abs(entered)
+    if not (
+        math.isclose(retained, magnitude, rel_tol=1.0e-12, abs_tol=1.0e-12)
+        and math.isclose(
+            retained_signed,
+            math.copysign(magnitude, signed_hint),
+            rel_tol=1.0e-12,
+            abs_tol=1.0e-12,
+        )
+    ):
+        return None
+    try:
+        context = capacity.build_torsion_context(
+            inp,
+            -p_ed + capacity.prestress_axial(inp),
+        )
+    except (
+        capacity.CapacityInputError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
+        return None
+    subtubes = context.get("subtubes") if isinstance(context, Mapping) else None
+    asw_over_s = (
+        _publication_metric(context.get("asw_over_s_t"))
+        if isinstance(context, Mapping)
+        else None
+    )
+    applicability = (
+        context.get("angle_applicability") if isinstance(context, Mapping) else None
+    )
+    if (
+        not isinstance(context, Mapping)
+        or context.get("applicability_blocked") is True
+        or context.get("closed_links_present") is not True
+        or asw_over_s is None
+        or asw_over_s <= 0.0
+        or not isinstance(subtubes, (list, tuple))
+        or not subtubes
+        or not all(
+            isinstance(tube, Mapping) and tube.get("valid") is True
+            for tube in subtubes
+        )
+        or not isinstance(applicability, Mapping)
+        or applicability.get("applicable") is not True
+    ):
+        return None
+    return _current_torsion_longitudinal_force(inp, share["cot"], torsion_result)
+
+
+def _current_concrete_route_chord(inp, shear_result, torsion_result=None):
     """Rebuild the ``a_l = d`` tension chord from the current input alone.
 
     ``MEd`` comes from the current section forces, ``|VEd|`` from the current
     shear action, ``d`` from the current geometry, ``MRd`` from the current face
-    resistance and ``MEd,max`` from the current member input. The retained chord
+    resistance and ``MEd,max`` from the current member input. With torsion,
+    ``F_td,T`` comes from the current ``TEd`` and ``z`` from the current face
+    (see :func:`_current_concrete_chord_torsion_force`). The retained chord
     operands are not used.
     """
 
@@ -2277,6 +2406,20 @@ def _current_concrete_route_chord(inp, shear_result):
         )
         if exact is not True or not math.isfinite(d_mm) or d_mm <= 0.0:
             return None
+        has_torsion = capacity.concrete_route_chord_torsion_requested(
+            calculation_input
+        )
+        ftd_t, z_m = 0.0, None
+        if has_torsion:
+            ftd_t = _current_concrete_chord_torsion_force(
+                calculation_input, torsion_result
+            )
+            z_mm = _current_shear_face_lever_arm(
+                calculation_input, axis, tension_low
+            )
+            if ftd_t is None or z_mm is None:
+                return None
+            z_m = z_mm / 1000.0
         check = combined_core.concrete_route_chord_check(
             combined_core.chord_applied_moment(m_signed, tension_low),
             m_rd,
@@ -2284,6 +2427,8 @@ def _current_concrete_route_chord(inp, shear_result):
             d_mm / 1000.0,
             m_ed_max=m_ed_max,
             model_2023=model_2023,
+            ftd_t=ftd_t,
+            z=z_m,
         )
     except (
         capacity.CapacityInputError,
@@ -2301,6 +2446,7 @@ def _current_concrete_route_chord(inp, shear_result):
         m_ed_signed=m_signed,
         moment_reference_shift=shift,
         m_off=m_off,
+        has_torsion=has_torsion,
         **check,
         valid=True,
         reason=None,
@@ -2324,15 +2470,37 @@ def _concrete_chord_value_matches(retained, expected):
     return retained == expected
 
 
-def concrete_route_chord_publication_assessment(inp, shear_result):
+def _concrete_chord_torsion_result(shear_result, torsion_result):
+    """Return the torsion result that belongs to this shear face."""
+
+    face_candidates = shear_result.get("face_candidates")
+    if isinstance(face_candidates, list):
+        matching = [
+            candidate
+            for candidate in face_candidates
+            if isinstance(candidate, Mapping)
+            and candidate.get("tension_low") is shear_result.get("tension_low")
+            and isinstance(candidate.get("torsion"), Mapping)
+        ]
+        if len(matching) == 1:
+            return matching[0]["torsion"]
+    return torsion_result
+
+
+def concrete_route_chord_publication_assessment(
+    inp, shear_result, *, torsion_result=None
+):
     """Reconcile the ``a_l = d`` tension chord of the concrete shear route.
 
     EN 1992-1-1 6.2.2(5) and 9.2.1.3(2), and DS/EN 1992-1-1:2023 8.2.2(10),
     make this chord a required check when the concrete route is selected. The
     retained record must then exist and agree with a rebuild from the current
-    input (``MEd``, ``|VEd|``, ``d``, ``MRd`` and ``MEd,max``). A missing, stale
-    or edited record gives ``valid=False``, so no surface publishes it (fail
-    closed). A retained NOT ASSESSED record stays NOT ASSESSED.
+    input (``MEd``, ``|VEd|``, ``d``, ``MRd``, ``MEd,max`` and, with torsion,
+    ``TEd`` with the torsion share ``F_td,T z/2``). A missing, stale or edited
+    record gives ``valid=False``, so no surface publishes it (fail closed). A
+    retained NOT ASSESSED record stays NOT ASSESSED. ``torsion_result`` is the
+    torsion result of the same calculation; a face candidate of a directional
+    result supplies its own.
 
     Returns ``{"required", "valid", "chord", "reason"}``. ``required`` is
     ``None`` when the retained route cannot be read.
@@ -2378,7 +2546,11 @@ def concrete_route_chord_publication_assessment(inp, shear_result):
         ):
             return {"required": True, "valid": True, "chord": retained, "reason": None}
         return unavailable
-    expected = _current_concrete_route_chord(inp, shear_result)
+    expected = _current_concrete_route_chord(
+        inp,
+        shear_result,
+        _concrete_chord_torsion_result(shear_result, torsion_result),
+    )
     if expected is None or set(retained) != set(expected):
         return unavailable
     if not all(
@@ -2389,7 +2561,7 @@ def concrete_route_chord_publication_assessment(inp, shear_result):
     return {"required": True, "valid": True, "chord": retained, "reason": None}
 
 
-def _concrete_route_chord_rejection(inp, shear_result):
+def _concrete_route_chord_rejection(inp, shear_result, torsion_result=None):
     """Return why the required ``a_l = d`` chord blocks publication, or ``None``.
 
     The chord is a required part of the concrete route. A missing or stale chord,
@@ -2397,7 +2569,9 @@ def _concrete_route_chord_rejection(inp, shear_result):
     status, suppresses the complete shear direction.
     """
 
-    chord = concrete_route_chord_publication_assessment(inp, shear_result)
+    chord = concrete_route_chord_publication_assessment(
+        inp, shear_result, torsion_result=torsion_result
+    )
     if chord["required"] is not True:
         return None
     if chord["valid"] is not True:
@@ -2582,7 +2756,7 @@ def directional_shear_publication_evidence_is_current(
                         str(longitudinal_status),
                     ))
             concrete_chord = concrete_route_chord_publication_assessment(
-                candidate_input, candidate_shear
+                candidate_input, candidate_shear, torsion_result=torsion
             )
             if concrete_chord["valid"] is not True:
                 return False, unavailable_reason
@@ -2925,7 +3099,9 @@ def _single_shear_publication_input_is_current(
                 provided is not None and provided.valid is True
             ):
                 return False, direction_reason or concrete_reason
-            chord_reason = _concrete_route_chord_rejection(inp, shear_result)
+            chord_reason = _concrete_route_chord_rejection(
+                inp, shear_result, torsion_result
+            )
             if chord_reason is not None:
                 return False, chord_reason
             return True, None
@@ -2943,7 +3119,9 @@ def _single_shear_publication_input_is_current(
         )
         if concrete_current is not True:
             return False, concrete_reason
-        chord_reason = _concrete_route_chord_rejection(inp, shear_result)
+        chord_reason = _concrete_route_chord_rejection(
+            inp, shear_result, torsion_result
+        )
         if chord_reason is not None:
             return False, chord_reason
         return True, None
@@ -6779,10 +6957,12 @@ def _summary_row(
     return row
 
 
-def _concrete_route_chord_summary_row(inp, direction, suffix):
+def _concrete_route_chord_summary_row(inp, direction, suffix, torsion_result=None):
     """Summary row of the ``a_l = d`` tension chord on the concrete shear route."""
 
-    publication = concrete_route_chord_publication_assessment(inp, direction)
+    publication = concrete_route_chord_publication_assessment(
+        inp, direction, torsion_result=torsion_result
+    )
     chord = publication.get("chord")
     check = f"Shear{suffix} tension chord (a_l = d)"
     keys = {"overview_key": "shear:concrete_chord", "overview_parent": "shear"}
@@ -6807,17 +6987,29 @@ def _concrete_route_chord_summary_row(inp, direction, suffix):
             inp,
             **keys,
         )
+    # The label "MEd + |VEd| d" always carries the uncapped value. A limit by the
+    # entered MEd,max and the torsion share get their own labels.
     note = report_notation.text(
-        "{}; MEd + |VEd| d = {:.1f} kNm; face MRd = {:.1f} kNm",
+        "{}; MEd + |VEd| d = {:.1f} kNm",
         str(chord.get("clause") or "-"),
-        float(chord["m_total"]),
-        float(chord["m_rd"]),
+        float(chord["m_ed"]) + float(chord["mv_uncapped"]),
     )
     if chord.get("capped") is True and chord.get("m_ed_max") is not None:
         note += report_notation.text(
-            "; the entered MEd,max = {:.1f} kNm limits the shift",
+            ", limited to MEd,max = {:.1f} kNm",
             float(chord["m_ed_max"]),
         )
+    if chord.get("has_torsion") is True:
+        note += report_notation.text(
+            "; torsion share Ftd,T z/2 = {:.1f} kNm (EN 1992-1-1:2004, "
+            "6.3.2(3)); total = {:.1f} kNm",
+            float(chord["mt"]),
+            float(chord["m_total"]),
+        )
+    note += report_notation.text(
+        "; face MRd = {:.1f} kNm",
+        float(chord["m_rd"]),
+    )
     return _summary_row(
         check,
         "plastic",
@@ -8684,7 +8876,7 @@ def result_summary_rows(inp, results, *, stale=False):
                 and selected_route == "concrete"
             ):
                 rows.append(_concrete_route_chord_summary_row(
-                    inp, direction, suffix,
+                    inp, direction, suffix, torsion_result=shear_torsion,
                 ))
             if not links_selected:
                 return
