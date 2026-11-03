@@ -1,4 +1,4 @@
-"""Run complete primary-test shards and combine their exact-run evidence."""
+"""Run duration-balanced pytest shards and combine their exact-run evidence."""
 
 from __future__ import annotations
 
@@ -16,26 +16,31 @@ import time
 import tomllib
 import xml.etree.ElementTree as ET
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-SHARDS = ("report", "combined", "native", "other")
-MODULES = {
-    "report": (
-        "tests/test_report.py",
-        "tests/test_report_real_route_matrix.py",
-        "tests/test_result_presentation.py",
-    ),
-    "combined": ("tests/test_combined.py", "tests/test_shear.py"),
-    "native": (
-        "tests/test_torsion.py",
-        "tests/test_reproducible_example.py",
-        "tests/test_report_profile_integration.py",
-    ),
-}
+# Every suite is split into a fixed number of jobs. The assignment of a test
+# to a job is computed from the collected inventory, so new tests and modules
+# join a shard without a manual list.
+SUITES = {"core": 12, "branch": 4}
+SHARDS = (*(f"{suite}-{index:02d}" for suite, count in SUITES.items() for index in range(1, count + 1)), "real")
+DURATIONS = ROOT / "tools" / "qa_shard_durations.json"
+# A module's ungrouped tests are cut into contiguous units of about this many
+# seconds, so that module-scoped fixtures are recomputed in few workers.
+CHUNK_SECONDS = 600.0
 WORKERS = tuple(f"gw{number}" for number in range(4))
 FILES = (".coverage", "test-results.xml", *(f"collection-{worker}.json" for worker in WORKERS))
+REAL_TESTS = (
+    ("viz", ("tests/test_viz.py",)),
+    ("report", ("tests/test_report_rendered.py::test_issued_report_renders_every_page_and_retains_expected_content",)),
+    ("manual", ("tests/test_manual_rendered.py::test_issued_manual_renders_every_page_and_retains_navigation",)),
+)
+REAL_RENDERS = (("report", "tools/report_render_fixture.py"), ("manual", "tools/manual_render_fixture.py"))
+REAL_FILES = (".coverage", *(f"test-results-real-{name}.xml" for name, _ in REAL_TESTS))
+REAL_PHASES = (*(name for name, _ in REAL_TESTS), *(f"render-{name}" for name, _ in REAL_RENDERS))
 _deselected = []
 
 
@@ -84,23 +89,94 @@ def source_digest():
     return hashlib.sha256(json.dumps(values, sort_keys=True).encode()).hexdigest()
 
 
-def shard_for_node(node):
-    module = node.split("::", 1)[0]
-    require(module.startswith("tests/") and module.endswith(".py"), "node is outside the test inventory")
-    owners = [shard for shard, paths in MODULES.items() if module in paths]
-    require(len(owners) <= 1, "module belongs to multiple shards")
-    return owners[0] if owners else "other"
-
-
-def selection(shard):
+def shard_position(shard):
     require(shard in SHARDS, "unknown shard")
-    if shard != "other":
-        return list(MODULES[shard])
-    return ["tests", *(f"--ignore={path}" for paths in MODULES.values() for path in paths)]
+    require(shard != "real", "the real-image shard has no balanced position")
+    suite, index = shard.split("-")
+    return suite, int(index)
+
+
+def suite_shards(suite):
+    return [shard for shard in SHARDS if shard.startswith(suite + "-")]
+
+
+def load_durations(path=DURATIONS):
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    require(data.get("schema_version") == 1, "unknown shard duration schema")
+    return data
+
+
+def seconds_for(key, durations):
+    if key in durations["tests"]:
+        return float(durations["tests"][key])
+    module = key.split("::", 1)[0]
+    return float(durations["modules"].get(module, durations["default_seconds"]))
+
+
+def module_seconds(key, durations):
+    """Return the mean CI duration of all tests in the module of a node."""
+    module = key.split("::", 1)[0]
+    return float(durations["module_means"].get(module, durations["default_seconds"]))
+
+
+def node_groups(item):
+    return sorted({str(mark.args[0] if mark.args else mark.kwargs.get("name", "default"))
+                   for mark in item.iter_markers("xdist_group")})
+
+
+def node_row(item):
+    """Return the reference identity and xdist group of a collected item."""
+    group = "_".join(node_groups(item))
+    node = item.nodeid
+    if group and not node.endswith("@" + group):
+        node += "@" + group
+    return node, group
+
+
+def assign(rows, count, durations=None):
+    """Map each (node, group) row to a shard number from 1 to count.
+
+    A whole xdist group is one unit; the other tests form contiguous module
+    units. The units are placed longest first on the least-loaded shard.
+    """
+    durations = durations if durations is not None else load_durations()
+    units, groups, chunks = [], {}, {}
+    for position, (node, group) in enumerate(rows):
+        if group:
+            unit = groups.get(group)
+            if unit is None:
+                unit = groups[group] = [position, 0.0, []]
+                units.append(unit)
+        else:
+            module = node.split("::", 1)[0]
+            unit = chunks.get(module)
+            if unit is None or unit[1] >= CHUNK_SECONDS:
+                unit = chunks[module] = [position, 0.0, []]
+                units.append(unit)
+        unit[1] += seconds_for(node, durations)
+        unit[2].append(node)
+    loads = [0.0] * count
+    owners = {}
+    for _, seconds, nodes in sorted(units, key=lambda unit: (-unit[1], unit[0])):
+        index = min(range(count), key=lambda number: (loads[number], number))
+        loads[index] += seconds
+        owners.update(dict.fromkeys(nodes, index + 1))
+    return owners
 
 
 def pytest_deselected(items):
     _deselected.extend(item.nodeid for item in items)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config, items):
+    shard = os.environ.get("SECTOR_QA_SHARD")
+    if not shard:
+        return
+    suite, index = shard_position(shard)
+    rows = [node_row(item) for item in items]
+    owners = assign(rows, SUITES[suite])
+    items[:] = [item for item, (node, _) in zip(items, rows) if owners[node] == index]
 
 
 def pytest_collection_finish(session):
@@ -109,11 +185,7 @@ def pytest_collection_finish(session):
     if worker is None:
         reference = os.environ.get("SECTOR_QA_REFERENCE_OUTPUT")
         if reference:
-            nodes = []
-            for item in session.items:
-                groups = sorted({str(mark.args[0] if mark.args else mark.kwargs.get("name", "default"))
-                                 for mark in item.iter_markers("xdist_group")})
-                nodes.append({"nodeid": item.nodeid, "groups": groups})
+            nodes = [{"nodeid": item.nodeid, "groups": node_groups(item)} for item in session.items]
             write_json(reference, {"nodes": nodes, "deselected": _deselected})
         return
     if not destination:
@@ -123,6 +195,21 @@ def pytest_collection_finish(session):
         "worker": worker, "selected": [item.nodeid for item in session.items],
         "deselected": _deselected,
     })
+
+
+def contract():
+    with (ROOT / "quality-coverage-gate.toml").open("rb") as stream:
+        return tomllib.load(stream)
+
+
+def suite_command(suite):
+    """Return the pytest selection, marker filter and coverage options of a suite."""
+    data = contract()
+    if suite == "core":
+        return ["tests", "-m", "not real_image_export", *(f"--cov={target}" for target in data["coverage"]["targets"])]
+    require(suite == "branch", "unknown suite")
+    branch = data["branch_coverage"]
+    return [*branch["tests"], *(f"--cov={target}" for target in branch["targets"]), "--cov-branch"]
 
 
 def run_shard(shard, output):
@@ -135,26 +222,48 @@ def run_shard(shard, output):
     )
     require(not temporary.exists(), "shard basetemp already exists")
     environment = dict(os.environ)
+    # A shard selects its tests only from its own variables, never from a caller's.
+    for name in ("SECTOR_QA_SHARD", "SECTOR_QA_SHARD_OUTPUT", "SECTOR_QA_REFERENCE_OUTPUT"):
+        environment.pop(name, None)
     environment["COVERAGE_FILE"] = str(output / ".coverage")
-    environment["SECTOR_QA_SHARD_OUTPUT"] = str(output)
-    with (ROOT / "quality-coverage-gate.toml").open("rb") as stream:
-        targets = tomllib.load(stream)["coverage"]["targets"]
-    command = [sys.executable, "-m", "pytest", *selection(shard), "-n", "4", "--dist", "loadgroup",
-               "-m", "not real_image_export", "--basetemp", str(temporary),
-               *(f"--cov={target}" for target in targets), "--cov-report=",
-               f"--junitxml={output / 'test-results.xml'}", "-p", "tools.qa_core_shards"]
     started = time.monotonic()
-    result = subprocess.run(command, cwd=ROOT, env=environment, check=False)
+    if shard == "real":
+        temporary.mkdir(parents=True)
+        commands, phases = [], {}
+        for name, selection in REAL_TESTS:
+            command = [sys.executable, "-m", "pytest", *selection, "-n", "0", "-m", "real_image_export",
+                       "--basetemp", str(temporary / f"real-{name}"),
+                       *(f"--cov={target}" for target in contract()["coverage"]["targets"]),
+                       "--cov-append", "--cov-report=", f"--junitxml={output / f'test-results-real-{name}.xml'}"]
+            commands.append(command)
+            phases[name] = subprocess.run(command, cwd=ROOT, env=environment, check=False).returncode
+        for name, script in REAL_RENDERS:
+            command = [sys.executable, script, "--output", str(output / name)]
+            commands.append(command)
+            phases[f"render-{name}"] = subprocess.run(command, cwd=ROOT, env=environment, check=False).returncode
+        exit_code = max(phases.values(), key=abs)
+        names = REAL_FILES
+        details = {"commands": commands, "phases": phases}
+    else:
+        suite, _ = shard_position(shard)
+        environment["SECTOR_QA_SHARD_OUTPUT"] = str(output)
+        environment["SECTOR_QA_SHARD"] = shard
+        command = [sys.executable, "-m", "pytest", *suite_command(suite), "-n", "4", "--dist", "loadgroup",
+                   "--basetemp", str(temporary), "--cov-report=",
+                   f"--junitxml={output / 'test-results.xml'}", "-p", "tools.qa_core_shards"]
+        exit_code = subprocess.run(command, cwd=ROOT, env=environment, check=False).returncode
+        names = FILES
+        details = {"command": command}
     after = source_digest()
     files = {name: {"sha256": sha(output / name), "size": (output / name).stat().st_size}
-             for name in FILES if (output / name).is_file()}
+             for name in names if (output / name).is_file()}
     write_json(output / "manifest.json", {
-        "schema_version": 1, **binding, "shard": shard, "command": command,
-        "exit_code": result.returncode, "seconds": time.monotonic() - started,
+        "schema_version": 1, **binding, "shard": shard, **details,
+        "exit_code": exit_code, "seconds": time.monotonic() - started,
         "source_before": before, "source_after": after, "files": files,
     })
     require(before == after, "source changed during shard execution")
-    return result.returncode
+    return exit_code
 
 
 def junit_key(node):
@@ -163,24 +272,33 @@ def junit_key(node):
     return ".".join(names[:-1]), junitxml.bin_xml_escape(names[-1])
 
 
-def read_shard(directory, shard, binding, expected_source_digest):
+def read_manifest(directory, shard, binding, expected_source_digest, names):
     require(directory.is_dir() and not directory.is_symlink(), f"missing shard directory: {shard}")
     manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
     require(manifest.get("schema_version") == 1 and manifest.get("shard") == shard, "shard manifest identity differs")
     require(all(manifest.get(key) == value for key, value in binding.items()), "shard run/attempt/source identity differs")
     require(manifest.get("source_before") == manifest.get("source_after") == expected_source_digest, "shard source bytes differ")
     require(type(manifest.get("exit_code")) is int, "shard exit status is absent or malformed")
-    require(set(manifest.get("files", {})) == set(FILES), "shard evidence inventory differs")
-    require({path.name for path in directory.iterdir()} == {*FILES, "manifest.json"}, "unexpected shard evidence")
-    for name in FILES:
+    require(set(manifest.get("files", {})) == set(names), "shard evidence inventory differs")
+    for name in names:
         path = directory / name
         require(path.is_file() and not path.is_symlink(), "shard evidence is not a regular file")
         require(manifest["files"][name] == {"sha256": sha(path), "size": path.stat().st_size}, "shard evidence hash or size differs")
+    return manifest
+
+
+def outcomes(cases):
+    return {kind: sum(case.find(kind) is not None for case in cases) for kind in ("failure", "error", "skipped")}
+
+
+def read_shard(directory, shard, binding, expected_source_digest, expected_nodes):
+    manifest = read_manifest(directory, shard, binding, expected_source_digest, FILES)
+    require({path.name for path in directory.iterdir()} == {*FILES, "manifest.json"}, "unexpected shard evidence")
     collections = [json.loads((directory / f"collection-{worker}.json").read_text()) for worker in WORKERS]
     selected = collections[0]["selected"]
     require(isinstance(selected, list) and selected and all(isinstance(node, str) for node in selected), "invalid shard collection")
     require(len(selected) == len(set(selected)), "duplicate collected node")
-    require(all(shard_for_node(node) == shard for node in selected), "node collected in wrong shard")
+    require(set(selected) == set(expected_nodes), "shard collection differs from its balanced assignment")
     for worker, collection in zip(WORKERS, collections):
         require(collection.get("worker") == worker and collection.get("selected") == selected
                 and collection.get("deselected") == collections[0].get("deselected"), "worker collections disagree")
@@ -190,90 +308,190 @@ def read_shard(directory, shard, binding, expected_source_digest):
     cases = list(tree.getroot().iter("testcase"))
     actual = Counter((case.get("classname"), case.get("name")) for case in cases)
     require(actual == expected, "shard JUnit does not cover its complete collection exactly once")
-    outcomes = {kind: sum(case.find(kind) is not None for case in cases) for kind in ("failure", "error", "skipped")}
-    return manifest, selected, tree, outcomes
+    return manifest, selected, tree, outcomes(cases)
 
 
-def collect_reference(output, binding):
-    destination = output / "expected-core-collection.json"
-    temporary = Path(os.environ["RUNNER_TEMP"]) / f"sector-core-reference-{binding['run_id']}-{binding['run_attempt']}"
+def read_real(directory, binding, expected_source_digest):
+    manifest = read_manifest(directory, "real", binding, expected_source_digest, REAL_FILES)
+    require({path.name for path in directory.iterdir()} == {*REAL_FILES, *(name for name, _ in REAL_RENDERS), "manifest.json"},
+            "unexpected real-image evidence")
+    require(all((directory / name).is_dir() and not (directory / name).is_symlink() for name, _ in REAL_RENDERS),
+            "real-image render evidence is not a directory")
+    phases = manifest.get("phases")
+    require(isinstance(phases, dict) and set(phases) == set(REAL_PHASES)
+            and all(type(value) is int for value in phases.values()), "real-image phase inventory differs")
+    counts = {}
+    for name, _ in REAL_TESTS:
+        cases = list(ET.parse(directory / f"test-results-real-{name}.xml").getroot().iter("testcase"))
+        require(cases, f"real-image phase {name} ran no test")
+        counts[name] = {"count": len(cases), **outcomes(cases)}
+    return manifest, counts
+
+
+def collect_reference(output, binding, suite):
+    destination = output / f"expected-{suite}-collection.json"
+    temporary = Path(os.environ["RUNNER_TEMP"]) / f"sector-{suite}-reference-{binding['run_id']}-{binding['run_attempt']}"
     require(not destination.exists() and not temporary.exists(), "reference collection destination already exists")
     environment = dict(os.environ)
     environment.pop("SECTOR_QA_SHARD_OUTPUT", None)
+    environment.pop("SECTOR_QA_SHARD", None)
     environment["SECTOR_QA_REFERENCE_OUTPUT"] = str(destination.resolve())
-    command = [sys.executable, "-m", "pytest", "tests", "-n", "0", "--collect-only", "-q",
-               "--dist", "loadgroup", "-m", "not real_image_export",
-               "--basetemp", str(temporary), "-p", "tools.qa_core_shards"]
-    with (output / "core-reference-collection.log").open("xb") as log:
+    selection = [token for token in suite_command(suite) if not token.startswith("--cov")]
+    command = [sys.executable, "-m", "pytest", *selection, "-n", "0", "--collect-only", "-q",
+               "--dist", "loadgroup", "--basetemp", str(temporary), "-p", "tools.qa_core_shards"]
+    with (output / f"{suite}-reference-collection.log").open("xb") as log:
         result = subprocess.run(command, cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT, check=False)
-    require(result.returncode == 0, "complete reference collection failed")
-    reference = json.loads(destination.read_text(encoding="utf-8"))["nodes"]
-    nodes, groups = [], {}
-    for row in reference:
-        node = row["nodeid"]
-        names = row["groups"]
+    require(result.returncode == 0, f"complete {suite} reference collection failed")
+    rows = []
+    for row in json.loads(destination.read_text(encoding="utf-8"))["nodes"]:
+        node, names = row["nodeid"], row["groups"]
         require(isinstance(node, str) and isinstance(names, list) and names == sorted(set(names)), "invalid reference node or group")
-        shard = shard_for_node(node)
-        if names:
-            group = "_".join(names)
-            groups.setdefault(group, set()).add(shard)
-            node += "@" + group
-        nodes.append(node)
+        group = "_".join(names)
+        rows.append((node + "@" + group if group else node, group))
+    nodes = [node for node, _ in rows]
     require(nodes and len(nodes) == len(set(nodes)), "reference contains duplicate nodes")
-    require(all(len(shards) == 1 for shards in groups.values()), "shared xdist group crosses shards")
-    return nodes
+    return rows
 
 
-def merge_shards(inputs, output):
-    import coverage
-
-    binding = identity()
-    before = source_digest()
-    expected_names = {shard: f"sector-core-{binding['run_id']}-{binding['run_attempt']}-{shard}" for shard in SHARDS}
-    require(inputs.is_dir() and {path.name for path in inputs.iterdir()} == set(expected_names.values()), "missing, duplicate or foreign shard artifacts")
-    output.mkdir(parents=True, exist_ok=True)
-    evidence_copy = output / "core-shards"
-    require(not evidence_copy.exists(), "core evidence destination already exists")
-    shutil.copytree(inputs, evidence_copy)
-    require(not (ROOT / ".coverage").exists(), "pre-existing coverage data would contaminate the union")
+def merge_suite(suite, inputs, output, binding, before, names):
+    rows = collect_reference(output, binding, suite)
+    owners = assign(rows, SUITES[suite])
+    shards = suite_shards(suite)
     joined = ET.Element("testsuites")
-    nodes = []
-    data_files = []
-    summaries = []
-    for shard in SHARDS:
-        directory = inputs / expected_names[shard]
-        manifest, selected, tree, outcomes = read_shard(directory, shard, binding, before)
+    nodes, data_files, summaries, located = [], [], [], {}
+    for index, shard in enumerate(shards, 1):
+        directory = inputs / names[shard]
+        expected = [node for node, owner in owners.items() if owner == index]
+        manifest, selected, tree, counts = read_shard(directory, shard, binding, before, expected)
         nodes.extend(selected)
+        located.update(dict.fromkeys(selected, shard))
         root = tree.getroot()
         require(root.tag in {"testsuites", "testsuite"}, "invalid JUnit root")
         joined.extend(list(root) if root.tag == "testsuites" else [root])
         data_files.append(str(directory / ".coverage"))
         summaries.append({"shard": shard, "count": len(selected), "exit_code": manifest["exit_code"],
-                          "manifest_sha256": sha(directory / "manifest.json"), **outcomes})
+                          "seconds": manifest.get("seconds"), "manifest_sha256": sha(directory / "manifest.json"), **counts})
     require(len(nodes) == len(set(nodes)), "test node appears in multiple shards")
-    require(Counter(nodes) == Counter(collect_reference(output, binding)), "shards do not cover the complete core reference inventory")
-    require(len(data_files) == len(set(data_files)) == 4, "coverage requires four distinct data inputs")
-    destination = output / "test-results.xml"
-    require(not destination.exists(), "combined JUnit already exists")
-    ET.ElementTree(joined).write(destination, encoding="utf-8", xml_declaration=True)
-    input_hashes = {path: sha(path) for path in data_files}
+    require(Counter(nodes) == Counter(node for node, _ in rows), f"shards do not cover the complete {suite} reference inventory")
+    groups = {}
+    for node, group in rows:
+        if group:
+            groups.setdefault(group, set()).add(located[node])
+    require(all(len(owners) == 1 for owners in groups.values()), "shared xdist group crosses shards")
     for path in data_files:
-        raw = coverage.CoverageData(basename=path)
-        raw.read()
-        require(raw.measured_files() and not raw.has_arcs(), "core coverage must contain line data, not branch data")
-    measured = coverage.Coverage(data_file=str(ROOT / ".coverage"))
+        raw = coverage_data(path)
+        if suite == "core":
+            require(raw.measured_files() and not raw.has_arcs(), "core coverage must contain line data, not branch data")
+        else:
+            require(raw.measured_files() and raw.has_arcs(), "decision-branch coverage must contain branch data")
+    return joined, nodes, data_files, summaries
+
+
+def coverage_data(path):
+    import coverage
+
+    raw = coverage.CoverageData(basename=path)
+    raw.read()
+    return raw
+
+
+def combine(destination, data_files):
+    import coverage
+
+    input_hashes = {path: sha(path) for path in data_files}
+    measured = coverage.Coverage(data_file=str(destination))
     measured.combine(data_paths=data_files, strict=True, keep=True)
     measured.save()
     require(all(sha(path) == digest for path, digest in input_hashes.items()), "raw coverage input changed during combination")
+    return measured
+
+
+def write_junit(element, destination):
+    require(not destination.exists(), "combined JUnit already exists")
+    ET.ElementTree(element).write(destination, encoding="utf-8", xml_declaration=True)
+
+
+def merge_shards(inputs, output):
+    binding = identity()
+    before = source_digest()
+    names = {shard: f"sector-core-{binding['run_id']}-{binding['run_attempt']}-{shard}" for shard in SHARDS}
+    require(inputs.is_dir() and {path.name for path in inputs.iterdir()} == set(names.values()), "missing, duplicate or foreign shard artifacts")
+    output.mkdir(parents=True, exist_ok=True)
+    evidence_copy = output / "core-shards"
+    require(not evidence_copy.exists(), "core evidence destination already exists")
+    shutil.copytree(inputs, evidence_copy)
+    require(not (ROOT / ".coverage").exists(), "pre-existing coverage data would contaminate the union")
+    branch_data = output / "branch.coverage"
+    require(not branch_data.exists(), "pre-existing branch coverage data would contaminate the union")
+
+    real_directory = inputs / names["real"]
+    real_manifest, real_counts = read_real(real_directory, binding, before)
+    real_coverage = str(real_directory / ".coverage")
+    raw = coverage_data(real_coverage)
+    require(raw.measured_files() and not raw.has_arcs(), "real-image coverage must contain line data, not branch data")
+    for name in (*(f"test-results-real-{name}.xml" for name, _ in REAL_TESTS), *(name for name, _ in REAL_RENDERS)):
+        destination = output / name
+        require(not destination.exists(), "real-image evidence destination already exists")
+        (shutil.copytree if (real_directory / name).is_dir() else shutil.copy2)(real_directory / name, destination)
+
+    core, core_nodes, core_data, core_summaries = merge_suite("core", inputs, output, binding, before, names)
+    write_junit(core, output / "test-results.xml")
+    combine(ROOT / ".coverage", [*core_data, real_coverage])
+
+    branch, branch_nodes, branch_files, branch_summaries = merge_suite("branch", inputs, output, binding, before, names)
+    write_junit(branch, output / "test-results-branches.xml")
+    measured = combine(branch_data, branch_files)
+    results = output / "branch-coverage.json"
+    require(not results.exists(), "branch coverage results already exist")
+    measured.json_report(outfile=str(results))
     require(source_digest() == before, "source changed during evidence merge")
-    failed = any(row["exit_code"] != 0 or any(row[kind] for kind in ("failure", "error", "skipped")) for row in summaries)
+
+    def failed(rows):
+        return any(row["exit_code"] != 0 or any(row[kind] for kind in ("failure", "error", "skipped")) for row in rows)
+
+    real_failed = real_manifest["exit_code"] != 0 or any(row["failure"] or row["error"] for row in real_counts.values())
+    summary = {
+        "total_nodes": len(core_nodes), "branch_nodes": len(branch_nodes),
+        "real_tests": sum(row["count"] for row in real_counts.values()),
+        "all_core_passed": not failed(core_summaries), "all_branch_passed": not failed(branch_summaries),
+        "all_real_passed": not real_failed,
+    }
     write_json(output / "core-shard-summary.json", {
-        **binding, "source_digest": before, "shards": summaries, "total_nodes": len(nodes),
-        "coverage_inputs": [{"path": path, "sha256": sha(path)} for path in data_files],
-        "combined_coverage_sha256": sha(ROOT / ".coverage"), "all_core_passed": not failed,
+        **binding, "source_digest": before, **summary, "shards": core_summaries,
+        "branch_shards": branch_summaries, "real": {"phases": real_manifest["phases"], "tests": real_counts},
+        "coverage_inputs": [{"path": path, "sha256": sha(path)} for path in (*core_data, real_coverage)],
+        "combined_coverage_sha256": sha(ROOT / ".coverage"),
+        "branch_coverage_inputs": [{"path": path, "sha256": sha(path)} for path in branch_files],
+        "combined_branch_coverage_sha256": sha(branch_data),
     })
-    print(json.dumps({"total_nodes": len(nodes), "shards": summaries, "all_core_passed": not failed}))
-    return int(failed)
+    print(json.dumps({**summary, "seconds": {row["shard"]: round(row["seconds"] or 0) for row in (*core_summaries, *branch_summaries)}}))
+    return int(not (summary["all_core_passed"] and summary["all_branch_passed"] and summary["all_real_passed"]))
+
+
+def refresh_durations(inputs, destination):
+    """Write the duration table from the JUnit evidence of downloaded core shards."""
+    tests, small, everything = {}, {}, {}
+    for directory in sorted(inputs.iterdir()):
+        if not re.search(r"-core-[0-9]{2}$", directory.name):
+            continue
+        selected = json.loads((directory / "collection-gw0.json").read_text())["selected"]
+        nodes = {junit_key(node): node for node in selected}
+        for case in ET.parse(directory / "test-results.xml").getroot().iter("testcase"):
+            node = nodes[(case.get("classname"), case.get("name"))]
+            seconds = float(case.get("time") or 0.0)
+            everything.setdefault(node.split("::", 1)[0], []).append(seconds)
+            if seconds >= 1.0:
+                tests[node] = round(seconds, 1)
+            else:
+                small.setdefault(node.split("::", 1)[0], []).append(seconds)
+    require(tests, "no core shard timing evidence")
+    modules = {module: round(sum(values) / len(values), 3) for module, values in sorted(small.items())}
+    means = {module: round(sum(values) / len(values), 3) for module, values in sorted(everything.items())}
+    value = {"schema_version": 1, "default_seconds": 2.0, "modules": modules, "module_means": means,
+             "tests": dict(sorted(tests.items()))}
+    # The refresh replaces the checked-in table, so it must overwrite the file.
+    Path(destination).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8", newline="\n")
+    return 0
 
 
 def main(argv=None):
@@ -285,9 +503,16 @@ def main(argv=None):
     merge = commands.add_parser("merge")
     merge.add_argument("--input", type=Path, required=True)
     merge.add_argument("--output", type=Path, required=True)
+    durations = commands.add_parser("durations")
+    durations.add_argument("--input", type=Path, required=True)
+    durations.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     try:
-        return run_shard(args.shard, args.output) if args.command == "run" else merge_shards(args.input, args.output)
+        if args.command == "run":
+            return run_shard(args.shard, args.output)
+        if args.command == "merge":
+            return merge_shards(args.input, args.output)
+        return refresh_durations(args.input, args.output)
     except (OSError, ValueError, KeyError, TypeError, ET.ParseError) as exc:
         print(f"Core shard gate failed: {exc}", file=sys.stderr)
         return 2

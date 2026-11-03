@@ -18,3 +18,123 @@ timeout_seconds = 15
 report_path = "qa-artifacts/dependency-audit.json"
 cache_path = ".qa-cache/pip-audit"
 ignored_vulnerabilities = []
+
+# Owner-approved exception (2026-11-03). It accepts only these advisory IDs at
+# these locked versions and ends after 2026-11-30.
+[audit.advisory_exception]
+approved = "Owner approval in the coordinating session on 2026-11-03"
+reason = "Pillow 13 needs Streamlit 1.66. The module updates are planned for the 0.97.1 dependency refresh."
+expires = 2026-11-30
+
+[audit.advisory_exception.packages.certifi]
+version = "2026.6.17"
+advisories = [
+    "PYSEC-2026-4320",
+]
+
+[audit.advisory_exception.packages.filelock]
+version = "3.32.2"
+advisories = [
+    "CVE-2026-112907",
+    "CVE-2026-112908",
+    "CVE-2026-112909",
+    "CVE-2026-112910",
+    "CVE-2026-112911",
+    "CVE-2026-112913",
+    "CVE-2026-112915",
+    "CVE-2026-112935",
+    "CVE-2026-112936",
+    "CVE-2026-112938",
+    "CVE-2026-112939",
+    "CVE-2026-112940",
+]
+
+[audit.advisory_exception.packages.gitpython]
+version = "3.1.62"
+advisories = [
+    "CVE-2026-110855",
+    "CVE-2026-110856",
+    "CVE-2026-110857",
+    "CVE-2026-110858",
+    "CVE-2026-110859",
+    "CVE-2026-114145",
+]
+
+[audit.advisory_exception.packages.msgpack]
+version = "1.2.1"
+advisories = [
+    "CVE-2026-114613",
+]
+
+[audit.advisory_exception.packages.pillow]
+version = "12.3.0"
+advisories = [
+    "CVE-2026-112390",
+    "CVE-2026-112391",
+    "CVE-2026-112393",
+    "CVE-2026-112395",
+    "CVE-2026-112399",
+    "CVE-2026-112400",
+    "CVE-2026-112401",
+    "CVE-2026-112404",
+    "CVE-2026-112406",
+    "CVE-2026-112891",
+    "CVE-2026-112892",
+    "CVE-2026-112893",
+    "CVE-2026-112894",
+    "CVE-2026-112895",
+    "CVE-2026-112897",
+    "CVE-2026-112899",
+    "CVE-2026-112900",
+    "CVE-2026-96638",
+    "CVE-2026-96640",
+    "CVE-2026-96778",
+    "GHSA-78g4-xqwv-q3g8",
+    "PYSEC-2026-4326",
+    "PYSEC-2026-4327",
+    "PYSEC-2026-4328",
+    "PYSEC-2026-4329",
+    "PYSEC-2026-4330",
+    "PYSEC-2026-4331",
+    "PYSEC-2026-4332",
+    "PYSEC-2026-4333",
+    "PYSEC-2026-4334",
+    "PYSEC-2026-4335",
+    "PYSEC-2026-4336",
+    "PYSEC-2026-4337",
+    "PYSEC-2026-4338",
+    "PYSEC-2026-4339",
+    "PYSEC-2026-4340",
+    "PYSEC-2026-4341",
+    "PYSEC-2026-4342",
+    "PYSEC-2026-4343",
+]
+
+[audit.advisory_exception.packages.pypdf]
+version = "6.19.0"
+advisories = [
+    "CVE-2026-113786",
+    "CVE-2026-113789",
+    "CVE-2026-113790",
+    "CVE-2026-113791",
+    "CVE-2026-113792",
+    "CVE-2026-113793",
+    "CVE-2026-113794",
+    "CVE-2026-113795",
+    "CVE-2026-115572",
+    "CVE-2026-115580",
+    "CVE-2026-115585",
+    "CVE-2026-119203",
+    "CVE-2026-119204",
+    "CVE-2026-119205",
+    "CVE-2026-119206",
+    "CVE-2026-119207",
+    "CVE-2026-119208",
+    "CVE-2026-119209",
+]
+
+[audit.advisory_exception.packages.setuptools]
+version = "83.0.0"
+advisories = [
+    "GHSA-xmj3-9gf7-h52w",
+]
