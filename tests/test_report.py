@@ -5028,7 +5028,7 @@ def test_report_omits_unused_material_sections():
     inp = _inp()
     txt = _pdf_text(_build_report_with_selection({}, inp, _out(), figures=False))
     assert "Design yield" in txt
-    assert "Initial prestrain" not in txt
+    assert "Prestrain after all losses" not in txt
     # Tendons only -> prestress is reported, mild steel is omitted.
     import sector.material_presets as mp
     inp2 = _inp()
@@ -5036,7 +5036,10 @@ def test_report_omits_unused_material_sections():
     inp2["tendons"] = [(0.0, -0.12, 5.0e-4)]
     inp2["prestress"] = mp.build_prestress(**list(mp.PRESTRESS_PRESETS.values())[0])
     txt2 = _pdf_text(_build_report_with_selection({}, inp2, _out(), figures=False))
-    assert "Initial prestrain" in txt2
+    # TA-04 (0.97.0): the entered prestrain IS = sigma_pm/Ep is the strain
+    # after all losses; the row label states that meaning.
+    assert "Prestrain after all losses" in txt2
+    assert "Initial prestrain" not in txt2
     assert "Design yield" not in txt2
     # No mild bars -> no compression bar-strain split (would be a spurious eps_s,c row).
     assert "Most-compressed bar" not in txt2
@@ -10880,6 +10883,45 @@ def test_report_combined_zero_2023_chord_candidates_stays_not_assessed(
     assert "SHEAR-LONGITUDINAL" not in text
 
 
+def _assert_dkna_scheduler_combined_hand_check(aggregate):
+    """Hand check of the DK NA 6.3.2(6) sums of the "dkna" PL-GOV case (TB-04).
+
+    V acting alone uses the section with its installed links,
+    max(VRd,c, VRd), with VRd = min(VRd,s, VRd,max) at the angle of largest
+    resistance. Links: Asw/s = 2 x 78.54/150 = 1.0472 mm, fywd = 500/1.2 =
+    416.67 MPa, a = Asw/s fywd = 436.33 N/mm. With nu = 0.7 - 35/200 = 0.525
+    and fcd = 35/1.45 = 24.14 MPa, b = bw nu fcd gives
+    cot* = sqrt(b/a - 1) = 4.06 (Vx, bw = 600 mm) and 3.26 (Vy, bw = 400 mm),
+    both above 2.5, so cot = 2.5 and VRd = VRd,s = a z 2.5.
+    Plastic lever arms at N = M = 0 (independent strain-compatibility
+    calculation, parabola-rectangle concrete, fyd = 458.3 MPa):
+    Vx z = 220.2 mm -> VRd = 240.2 kN, r_v = 45/240.2 = 0.1873;
+    Vy z = 421.3 mm (top face in tension governs) -> VRd = 459.5 kN,
+    r_v = 80/459.5 = 0.1741.
+    With r_m = 0.2497 and r_t = 1.5584: Vx 1.9954 > Vy 1.9822, so Vx governs.
+    Before TB-04 the concrete resistances 118.6 kN and 94.3 kN gave 2.187 (Vx)
+    and 2.656 (Vy).
+    """
+    a_links = 2.0 * math.pi * 5.0**2 / 150.0 * 500.0 / 1.2
+    directions = aggregate["directions"]
+    hand_vrd = {"vx": a_links * 220.2 * 2.5 / 1000.0, "vy": a_links * 421.3 * 2.5 / 1000.0}
+    hand_ved = {"vx": 45.0, "vy": 80.0}
+    for component, item in directions.items():
+        shear = item["action_alone"]["v"]
+        assert shear["evidence"]["nominal_route"] == "links"
+        assert shear["evidence"]["cot"] == pytest.approx(2.5)
+        assert shear["resistance"] == pytest.approx(hand_vrd[component], rel=5e-4)
+        assert item["r_v"] == pytest.approx(
+            hand_ved[component] / hand_vrd[component], rel=5e-4
+        )
+        assert item["dkna_sum"] == pytest.approx(
+            item["r_n"] + item["r_m"] + item["r_v"] + item["r_t"]
+        )
+    assert directions["vx"]["dkna_sum"] == pytest.approx(1.9954, abs=5e-4)
+    assert directions["vy"]["dkna_sum"] == pytest.approx(1.9822, abs=5e-4)
+    assert directions["vx"]["dkna_sum"] > directions["vy"]["dkna_sum"]
+
+
 @pytest.mark.xdist_group("native-scheduler-report")
 @result_presentation.publication_calculation_scope()
 def test_report_publishes_only_governing_transverse_family_worked_examples(native_scheduler_report_cases, tmp_path):
@@ -10979,11 +11021,15 @@ def test_report_publishes_only_governing_transverse_family_worked_examples(nativ
     contexts = _assert_native_scheduler_contexts(inp, out)
     assert set(contexts) == {"PL-LOW", "PL-GOV"}
     selected = result_presentation.worked_example_selection(inp, out)
+    # TB-04 (0.97.0): in the DK NA 6.3.2(6) sum, V acting alone uses the section
+    # with its installed links, so the combined family is governed by Vx while
+    # the shear family stays with Vy (hand check in the helper below).
     assert {family:selected["families"][family] for family in ("shear", "torsion", "combined")} == {
         "shear":{"case_id":"PL-GOV","component":"vy"},
         "torsion":{"case_id":"PL-GOV","component":None},
-        "combined":{"case_id":"PL-GOV","component":"vy"},
+        "combined":{"case_id":"PL-GOV","component":"vx"},
     }
+    _assert_dkna_scheduler_combined_hand_check(contexts["PL-GOV"][1]["combined"])
     for family in ("shear", "combined"):
         aggregate = contexts["PL-GOV"][1][family]
         assert aggregate["biaxial"] is True
@@ -11647,8 +11693,11 @@ def test_report_keeps_only_governing_biaxial_combined_worked_block(native_schedu
     inp, out = native_scheduler_report_cases("dkna")
     before = pickle.dumps((inp, out))
     contexts = _assert_native_scheduler_contexts(inp, out)
+    # TB-04 (0.97.0): with V acting alone on the linked section, Vx governs the
+    # DK NA sum (1.9954 against 1.9822; hand check in the helper).
+    _assert_dkna_scheduler_combined_hand_check(contexts["PL-GOV"][1]["combined"])
     assert out["worked_example_selection"]["families"]["combined"] == {
-        "case_id":"PL-GOV", "component":"vy",
+        "case_id":"PL-GOV", "component":"vx",
     }
     builder = sector_report.ReportBuilder(io.BytesIO(), {}, inp, out, figures=False, profile="Audit")
     actual_contexts = builder._case_contexts("plastic")
@@ -11659,7 +11708,7 @@ def test_report_keeps_only_governing_biaxial_combined_worked_block(native_schedu
     assert len(matching) == 1
     builder.inp, builder.out = matching[0]
     assert builder.inp.get("_report_case_current") is True
-    assert builder._selected_family("combined", builder.inp)["component"] == "vy"
+    assert builder._selected_family("combined", builder.inp)["component"] == "vx"
     assert builder.out["combined"]["biaxial"] is True
     assert set(builder.out["combined"]["directions"]) == {"vx", "vy"}
     assert result_presentation.combined_bending_assessment_blocker(builder.out, builder.inp) is None
@@ -11681,11 +11730,11 @@ def test_report_keeps_only_governing_biaxial_combined_worked_block(native_schedu
     assert len(screen_blocks) == 1
     assert all(f"{chr(0x2211)}(SEd/SRd)" in text for text in screen_blocks)
 
-    assert "Vy,Ed + TEd" in screen_blocks[0]
-    assert "Vx,Ed + TEd" not in screen_blocks[0]
+    assert "Vx,Ed + TEd" in screen_blocks[0]
+    assert "Vy,Ed + TEd" not in screen_blocks[0]
     pdf = _build_report_with_selection({}, inp, out, figures=False, profile="Audit")
     (tmp_path / "native-biaxial-worked-block.pdf").write_bytes(pdf)
-    assert "Governingdirectionalworkedexample:Vy,Ed+TEd" in "".join(_pdf_text(pdf).split())
+    assert "Governingdirectionalworkedexample:Vx,Ed+TEd" in "".join(_pdf_text(pdf).split())
     assert pickle.dumps((inp, out)) == before
 
 

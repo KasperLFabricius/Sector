@@ -2199,24 +2199,43 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
     assert not latest["bars"]
     assert len(latest["tendons"]) == 1
     assert latest["tendons"][0] == pytest.approx((0.0, -0.25, 1000.0))
+    # TA-04 (0.97.0): IS = sigma_pm/Ep is the tendon strain under prestress
+    # alone after all losses. The entered value stays the effective prestrain.
+    assert latest["tendon_effective_prestrain"] == pytest.approx(
+        [500.0 / 195_000.0], rel=1e-12
+    )
+    # The elastic model bonds the tendon with eps_p(0) = IS - eps_c,p at nl.
+    # Independent hand check: prestress alone cracks this no-tension section.
+    # The concrete resultant must act at the tendon, 50 mm above the soffit,
+    # so the triangular stress block has x = 3 x 50 = 150 mm (the displaced
+    # duct concrete also acts at 50 mm and does not move the resultant).
+    # C = k (b x^2/2 - Ap (x - 50)) = k (3.375e6 - 1.0e5) = 500 kN gives
+    # k = 0.152672 MPa/mm and sigma_c,p = k (x - 50) = 15.2672 MPa at the
+    # tendon. eps_c,p = -15.2672/(200000/6.85) = -5.22901e-4 (phi = 0, nl = ns).
+    stress_gradient_cracked = 500.0 * 1000.0 / (300.0 * 150.0**2 / 2.0 - 1000.0 * 100.0)
+    eps_c_p = -stress_gradient_cracked * 100.0 / (200_000.0 / 6.85)
+    bond_strain = 500.0 / 195_000.0 - eps_c_p
+    assert bond_strain == pytest.approx(3.0870033e-3, rel=1e-7)
     tendon = latest["tendon_materials"][0]
     assert tendon.Es == pytest.approx(195_000.0)
-    assert tendon.IS == pytest.approx(500.0 / 195_000.0, rel=1e-12)
+    assert tendon.IS == pytest.approx(bond_strain, rel=1e-8)
     assert results["prestress_initial"]["elements"][0][
         "locked_in_stress_mpa"
     ] == pytest.approx(500.0, rel=1e-12)
 
     n_mult, prestress_stress = sector_app._elastic_solver_inputs(latest, results)
     assert n_mult == pytest.approx([0.975], rel=1e-12)
-    assert prestress_stress == pytest.approx([500_000.0], rel=1e-12)
+    locked_stress = 195_000.0 * bond_strain
+    assert prestress_stress == pytest.approx([locked_stress * 1000.0], rel=1e-8)
 
-    # Independent Stage-I equilibrium in N and mm. The transformed tendon
-    # replaces its occupied concrete area, so its added area is (Ep/Ec - 1)Ap.
+    # Independent Stage-I equilibrium in N and mm with the locked-in stress
+    # sigma_p(0) = Ep eps_p(0) = 601.97 MPa. The transformed tendon replaces
+    # its occupied concrete area, so its added area is (Ep/Ec - 1)Ap.
     added_area = (6.85 * 0.975 - 1.0) * 1000.0
     stress_intercept, stress_gradient = np.linalg.solve(
         [[300.0 * 600.0 + added_area, -250.0 * added_area],
          [-250.0 * added_area, 300.0 * 600.0**3 / 12.0 + 250.0**2 * added_area]],
-        [-500.0 * 1000.0, 500.0 * 1000.0 * 250.0],
+        [-locked_stress * 1000.0, locked_stress * 1000.0 * 250.0],
     )
     expected_sigma_ct = stress_intercept + 300.0 * stress_gradient
     elastic_results = (
@@ -2225,7 +2244,7 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
     )
     for elastic in elastic_results:
         assert elastic["sigma_ct"] == pytest.approx(
-            expected_sigma_ct, rel=1e-12
+            expected_sigma_ct, rel=1e-8
         )
         assert elastic["lambda_cr"] == 0.0
         assert elastic["cracked"] is True
@@ -3485,7 +3504,25 @@ def test_slab_density_tendon_uses_nominal_physical_axes_in_native_2005_check():
     assert operands["nearest_neighbour_spacing"] == pytest.approx(300.0)
     assert operands["selected_candidate"] == "formula-7.14"
     # Current net-concrete model and full-precision automatic material values.
-    assert tendon["wk"] == pytest.approx(3.395850571343649)
+    # TA-03 (0.97.0): Formula (7.9) uses alpha_e = Ep/Ecm also in the
+    # long-term state (7.3.4(2)); the creep ratio nl sets only the cracked
+    # state. C35/45 automatic Ecm = 22 (43/10)^0.3 = 34.077 GPa, so
+    # alpha_e = 195/34.077 = 5.7223 (was nl Ep/Es = 22.889). Hand check of the
+    # change with sr,max = 297.0095 mm, kt = 0.4, fct,eff = 3.20996 MPa:
+    # dwk = sr,max kt fct,eff (22.889 - 5.7223)/Ep = 0.03357 mm, so
+    # wk = 3.39585 + 0.03357 = 3.42942 mm.
+    mean = tendon["mean_strain_operands"]
+    assert mean["alpha_e"] == pytest.approx(195.0 / 34.07714619918933, rel=1e-9)
+    assert tendon["wk"] == pytest.approx(
+        tendon["sr_max"]
+        * (
+            mean["sigma_s"]
+            - mean["kt"] * mean["fctm"] / mean["rho_p_eff"]
+            * (1.0 + mean["alpha_e"] * mean["rho_p_eff"])
+        )
+        / 195_000.0
+    )
+    assert tendon["wk"] == pytest.approx(3.429423430042389)
     assert operands["nearest_neighbour_spacing"] != pytest.approx(15.625)
     assert operands["nearest_neighbour_spacing"] != pytest.approx(31.25)
 
@@ -5399,7 +5436,8 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
             fatigue_inputs.DETAIL_CATALOG_KEY:
                 fatigue_inputs.default_catalog(),
             "fatigue_on": True,
-            "fatigue_gamma_c": 1.595,
+            # A value that differs from every basis default, so a leak shows.
+            "fatigue_gamma_c": 1.65,
             "fatigue_source": "Previous project",
         },
     )
@@ -5422,7 +5460,9 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
     assert fatigue_inputs.spectrum_records(
         at.session_state[fatigue_inputs.SPECTRUM_TABLE_KEY]
     ) == []
-    assert at.session_state["fatigue_gamma_c"] == pytest.approx(1.50)
+    # TA-05 (0.97.0): the default fatigue basis is DS/EN 1992-1-1 DK NA:2024,
+    # whose 2.4.2.4(1) multiplies Table 2.1Na gamma_c = 1.45 by 1.1 = 1.595.
+    assert at.session_state["fatigue_gamma_c"] == pytest.approx(1.595)
     assert at.session_state[fatigue_inputs.BASIS_KEY] == (
         fatigue_inputs.default_basis()
     )
@@ -5446,7 +5486,7 @@ def test_loading_nonfatigue_project_clears_prior_fatigue_state():
         payload["tables"][fatigue_inputs.SPECTRUM_TABLE_KEY]["rows"] == []
     )
     assert payload["scalars"]["fatigue_on"] is False
-    assert payload["scalars"]["fatigue_gamma_c"] == pytest.approx(1.50)
+    assert payload["scalars"]["fatigue_gamma_c"] == pytest.approx(1.595)
 
 
 def test_loading_project_without_heightened_check_clears_prior_dk_state():

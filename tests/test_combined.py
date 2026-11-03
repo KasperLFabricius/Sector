@@ -1581,7 +1581,19 @@ def test_app_combined_mv_independent_uses_max():
     assert row["Status"] == "NOT ASSESSED"
 
 
-@pytest.mark.parametrize("shear_force", (60.0, 100.0))
+# DK NA 6.3.2(6) hand check of the default 400 x 600 section with M = 275 kNm and
+# T = 40 kNm (TB-04, 0.97.0). V acting alone uses the section with its installed
+# links: Asw/s = 2 x 78.54/150 = 1.0472 mm, fywd = 500/1.2 = 416.67 MPa, so
+# a = 436.33 N/mm; b = bw nu fcd = 400 x 0.525 x 24.14 = 5069 N/mm and
+# cot* = sqrt(b/a - 1) = 3.26 > 2.5 give VRd = VRd,s = a z 2.5. The top face
+# in tension governs with the plastic lever arm z = 421.3 mm (independent
+# strain-compatibility check: x = 47.1 mm, T = C = 368.4 kN), so
+# VRd = 436.33 x 421.3 x 2.5 = 459.5 kN for every VEd. MRd = 441.41 kNm and
+# TRd = 115.50 kNm give r_m = 0.6230 and r_t = 0.3463.
+_SEPARATE_MV_V_ALONE_KN = 1.0471975511965979 * (500.0 / 1.2) * 421.3 * 2.5 / 1000.0
+
+
+@pytest.mark.parametrize("shear_force", (60.0, 320.0))
 def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass(shear_force):
     at = _fresh()
     at.run()
@@ -1615,21 +1627,30 @@ def test_app_separate_mv_toggle_cannot_turn_same_actions_into_pass(shear_force):
     expected_sum = (separate["r_n"] + separate["r_t"]
                     + max(separate["r_m"], separate["r_v"]))
     assert separate["dkna_sum"] == pytest.approx(expected_sum)
+    v_alone = separate["action_alone"]["v"]
+    assert v_alone["resistance"] == pytest.approx(_SEPARATE_MV_V_ALONE_KN, rel=5e-4)
+    assert v_alone["evidence"]["nominal_route"] == "links"
+    assert v_alone["evidence"]["cot"] == pytest.approx(2.5)
+    assert separate["r_m"] == pytest.approx(275.0 / 441.41, rel=1e-4)
+    assert separate["r_t"] == pytest.approx(40.0 / 115.50, rel=1e-4)
     if shear_force == 60.0:
-        # Both possible shear faces use concrete at V=60; the lower action-alone
-        # resistance is 94.306565842 kN. With M=275 and T=40, max(M,V)+T is
-        # below one, while M+V+T exceeds it. The favourable assumption is still
-        # CONDITIONAL and can never certify a PASS.
-        assert separate["action_alone"]["v"]["resistance"] == pytest.approx(
-            94.30656584213839
-        )
+        # r_v = 60/459.5 = 0.1306. M + V + T = 0.6230 + 0.1306 + 0.3463 = 1.0999
+        # exceeds one, while max(M, V) + T = 0.6230 + 0.3463 = 0.9693 is below
+        # one. The favourable assumption is CONDITIONAL and never certifies PASS.
+        assert simultaneous["dkna_sum"] == pytest.approx(1.0999, abs=5e-4)
+        assert separate["r_m"] > separate["r_v"]
+        assert separate["dkna_sum"] == pytest.approx(0.9693, abs=5e-4)
         assert separate["dkna_sum"] < 1.0
         assert separate["dkna_limit_satisfied"] is True
         assert separate["dkna_status"] == "CONDITIONAL"
         assert separate["dkna_ok"] is None
     else:
-        # Preserve the original 275/100/40 case: it exceeds one even under the
-        # favourable assumption with the current action-alone denominators.
+        # V governs max(M, V): r_v = 320/459.5 = 0.6964 > r_m = 0.6230, and
+        # max(M, V) + T = 0.6964 + 0.3463 = 1.0427 exceeds one even under the
+        # favourable assumption. (Before TB-04 the 275/100/40 case exceeded one
+        # only because VRd,c = 136.0 kN of one face set the V term.)
+        assert separate["r_v"] > separate["r_m"]
+        assert separate["dkna_sum"] == pytest.approx(1.0427, abs=5e-4)
         assert separate["dkna_sum"] > 1.0
         assert separate["dkna_limit_satisfied"] is False
         assert separate["dkna_status"] == "FAIL"
@@ -6141,9 +6162,14 @@ def test_app_combined_transverse_shear_credit():
     r = at.session_state["results"]
     assert r["shear"]["nominal_resistance"]["route"] == "concrete"
     assert r["shear"]["links"]["longitudinal_shear_force"] == pytest.approx(0.0)
-    assert r["combined"]["action_alone"]["v"]["evidence"][
-        "nominal_route"
-    ] == "concrete"
+    # TB-04 (0.97.0): in the DK NA 6.3.2(6) sum, V acting alone uses the
+    # section with its installed links, max(VRd,c, VRd), although VEd <= VRd,c
+    # keeps the concrete route for the shear check itself. Hand check above
+    # _SEPARATE_MV_V_ALONE_KN: VRd = 1.0472 x 416.67 x 421.3 x 2.5 = 459.5 kN.
+    v_alone = r["combined"]["action_alone"]["v"]
+    assert v_alone["evidence"]["nominal_route"] == "links"
+    assert v_alone["resistance"] > r["shear"]["res"]["vrd_c"]
+    assert v_alone["resistance"] == pytest.approx(_SEPARATE_MV_V_ALONE_KN, rel=5e-4)
     assert r["combined"]["r_v"] == pytest.approx(
         r["combined"]["action_alone"]["v"]["demand"]
         / r["combined"]["action_alone"]["v"]["resistance"]
