@@ -864,7 +864,17 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("V<sub>Rd</sub>", "governing design shear resistance", "kN"),
         ("utilisation", "demand divided by resistance"),
     ),
+    # Without an evaluated 6.2.3(7) limit, the 2005 demand is the plain sum.
     ("shear.chord.demand", "2005"): _result(
+        "M<sub>Ed,total</sub>", "kNm",
+        ("M<sub>Ed,total</sub>", "total longitudinal-chord demand", "kNm"),
+        ("M<sub>Ed</sub>", "bending demand on the chord", "kNm"),
+        ("Delta F<sub>td</sub>", "shear-induced longitudinal tension", "kN"),
+        ("F<sub>td,T</sub>", "distributed torsion longitudinal force", "kN"),
+        ("z", "internal lever arm", "m"),
+    ),
+    # With an entered MEd,max that is not below MEd, 6.2.3(7) limits the shear term.
+    ("shear.chord.demand", "2005-capped"): _result(
         "M<sub>Ed,total</sub>", "kNm",
         ("M<sub>Ed,total</sub>", "total longitudinal-chord demand", "kNm"),
         ("M<sub>Ed</sub>", "bending demand on the chord", "kNm"),
@@ -915,6 +925,15 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("M<sub>Ed,total</sub>", "total longitudinal-chord demand", "kNm"),
         ("M<sub>Ed</sub>", "bending demand on the chord", "kNm"),
         ("Delta F<sub>td</sub>", "shear-induced longitudinal tension", "kN"),
+        ("F<sub>td,T</sub>", "distributed torsion longitudinal force", "kN"),
+        ("z", "internal lever arm", "m"),
+    ),
+    ("combined.chord.demand", "capped"): _result(
+        "M<sub>Ed,total</sub>", "kNm",
+        ("M<sub>Ed,total</sub>", "total longitudinal-chord demand", "kNm"),
+        ("M<sub>Ed</sub>", "bending demand on the chord", "kNm"),
+        ("Delta F<sub>td</sub>", "shear-induced longitudinal tension", "kN"),
+        ("M<sub>Ed,max</sub>", "entered maximum moment along the member", "kNm"),
         ("F<sub>td,T</sub>", "distributed torsion longitudinal force", "kN"),
         ("z", "internal lever arm", "m"),
     ),
@@ -1217,9 +1236,9 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
 
 
 def _validate_catalogue() -> None:
-    if len(_CONTRACTS) != 145:
+    if len(_CONTRACTS) != 147:
         raise RuntimeError(
-            f"Expected 145 report equation contracts, got {len(_CONTRACTS)}."
+            f"Expected 147 report equation contracts, got {len(_CONTRACTS)}."
         )
     for (key, variant), contract in _CONTRACTS.items():
         if contract.publication_scope not in {"supported", "deferred"}:

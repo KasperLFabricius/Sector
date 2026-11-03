@@ -366,7 +366,11 @@ def test_member_and_detailing_outputs_match_independent_equations(
     assert shear["res"]["vrd_c"] == pytest.approx(expected["vrd_c_kn"])
     assert shear["links"]["res"]["cot"] == pytest.approx(expected["cot_theta"])
     selection = shear["links"]["member_angle_selection"]
-    assert selection["objective_count"] == 9
+    # 0.97.0 P1-13: VEd <= VRd,c with live torsion, so the concrete-route
+    # a_l = d chord with its torsion share is the tenth objective. It does not
+    # govern, so the angle and the utilisation are unchanged.
+    assert selection["objective_count"] == 10
+    assert "concrete-route a_l = d tension chord" in selection["objective_labels"]
     assert selection["governing_objectives"] == ("shared shear-torsion strut",)
     assert selection["utilisation"] == pytest.approx(expected["member_utilisation"])
     assert expected["neighbor_utilisation"] > expected["member_utilisation"]
@@ -385,6 +389,12 @@ def test_member_and_detailing_outputs_match_independent_equations(
                        * candidate["z"] / 2.0) / candidate["m_rd"]
         assert candidate["util"] == pytest.approx(utilisation)
         assert utilisation < expected["member_utilisation"]
+    concrete_chord = shear["concrete_chord"]
+    concrete_utilisation = (
+        concrete_chord["m_ed"] + concrete_chord["mv"] + concrete_chord["mt"]
+    ) / concrete_chord["m_rd"]
+    assert concrete_chord["util"] == pytest.approx(concrete_utilisation)
+    assert concrete_utilisation < expected["member_utilisation"]
     assert shear["links"]["res"]["vrd_s"] == pytest.approx(expected["vrd_s_kn"])
     assert shear["links"]["res"]["vrd_max"] == pytest.approx(expected["vrd_max_kn"])
     assert shear["links"]["util"] == pytest.approx(

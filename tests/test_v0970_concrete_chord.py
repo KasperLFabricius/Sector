@@ -475,7 +475,8 @@ MT = FTD_T * Z_T / 1000.0 / 2.0
 M_SHIFT_T = M_ED_T + V_ED * D / 1000.0
 
 
-def _torsion_app(t_ed, *, links=True, m_x=M_ED_T):
+def _torsion_app(t_ed, *, links=True, m_x=M_ED_T, v_ed=V_ED, cot=1.0, link_s=None,
+                 combined_on=False, med_max=None):
     at = _fresh()
     at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
         "PL-01": {
@@ -488,17 +489,30 @@ def _torsion_app(t_ed, *, links=True, m_x=M_ED_T):
     at.session_state["torsion_design_basis"] = capacity.TORSION_DESIGN_EQUILIBRIUM
     at.session_state["torsion_member_scope"] = capacity.TORSION_MEMBER_CLOSED
     at.run()
-    _set(at, ("checkbox", "shear_on", True), ("checkbox", "torsion_on", True))
-    changes = [
-        ("number_input", "strut_cot_min", 1.0),
-        ("number_input", "strut_cot_max", 1.0),
-    ]
+    toggles = [("checkbox", "shear_on", True), ("checkbox", "torsion_on", True)]
+    if combined_on:
+        toggles.append(("checkbox", "combined_on", True))
+    _set(at, *toggles)
+    changes = []
     if links:
-        changes.insert(0, ("checkbox", "shear_links", True))
-    _set(at, *changes)
+        changes.append(("checkbox", "shear_links", True))
+    if link_s is not None:
+        changes.append(("number_input", "shear_link_s", link_s))
+    if cot is not None:
+        changes += [
+            ("number_input", "strut_cot_min", cot),
+            ("number_input", "strut_cot_max", cot),
+        ]
+    if med_max is not None:
+        changes += [
+            ("checkbox", capacity.MED_MAX_ON_KEY, True),
+            ("number_input", capacity.MED_MAX_KEYS[("x", True)], med_max),
+        ]
+    if changes:
+        _set(at, *changes)
     _calculate(
         at,
-        ("number_input", "shear_V", V_ED),
+        ("number_input", "shear_V", v_ed),
         ("number_input", "pl_Mx", m_x),
         ("number_input", "torsion_T", t_ed),
     )
@@ -647,3 +661,143 @@ def test_zero_moment_chord_prints_zero():
     text = _pdf_text(inp, out, "Standard")
     assert "shear tension face 0.00 kNm" in text
     assert "-0.00" not in text
+
+
+# ---------------------------------------------------------------------------
+# Codex 4451751710: every chord surface states the demand form that the result
+# applied. EN 1992-1-1:2004 6.2.3(7) limits the shift term only when an entered
+# MEd,max was evaluated.
+#
+# Hand calculation, default section with closed links and cot(theta) = 1.0,
+# VEd = 200 kN, Mx = 300 kNm, TEd = 10 kNm, combined M-V-T check on:
+#   dFtd = 0.5 VEd cot(theta) = 100 kN (Formula (6.18), vertical links),
+#   dFtd z = 100 x 0.5109 = 51.09 kNm.
+#   Ftd,T = TEd uk cot(theta) / (2 Ak) = 10e6 x 1520 / 268800 = 56.55 kN,
+#   Ftd,T z/2 = 56.55 x 0.5109 / 2 = 14.45 kNm.
+#   Without MEd,max: MEd,total = 300 + 51.09 + 14.45 = 365.54 kNm.
+#   With MEd,max = 320 kNm: 300 + min(51.09, 320 - 300) + 14.45 = 334.45 kNm.
+# ---------------------------------------------------------------------------
+
+DELTA, DOT = chr(0x394), chr(0xB7)
+V_ED_C, M_ED_C, T_ED_C, MED_MAX_C = 200.0, 300.0, 10.0, 320.0
+DFTD_C = 0.5 * V_ED_C * 1.0
+DFTD_Z_C = DFTD_C * Z_T / 1000.0
+FTD_T_C = T_ED_C * 1.0e6 * U_K * 1.0 / (2.0 * A_K) / 1000.0
+MT_C = FTD_T_C * Z_T / 1000.0 / 2.0
+CAPPED_FORM = f"MEd,total = MEd + min({DELTA}Ftd{DOT}z, MEd,max - MEd) + Ftd,T{DOT}z/2"
+PLAIN_FORM = f"MEd,total = MEd + {DELTA}Ftd{DOT}z + Ftd,T{DOT}z/2"
+
+
+def test_chord_form_hand_values():
+    assert DFTD_Z_C == pytest.approx(51.09, abs=0.01)
+    assert FTD_T_C == pytest.approx(56.55, abs=0.01)
+    assert MT_C == pytest.approx(14.45, abs=0.01)
+    assert M_ED_C + DFTD_Z_C + MT_C == pytest.approx(365.54, abs=0.01)
+    assert M_ED_C + min(DFTD_Z_C, MED_MAX_C - M_ED_C) + MT_C == pytest.approx(334.45, abs=0.01)
+
+
+@pytest.fixture(scope="module", params=[None, MED_MAX_C], ids=["no_med_max", "med_max_320"])
+def chord_form_case(request):
+    at = _torsion_app(T_ED_C, m_x=M_ED_C, v_ed=V_ED_C, combined_on=True, med_max=request.param)
+    return (
+        request.param,
+        copy.deepcopy(at.session_state["result_input_snapshot"]),
+        copy.deepcopy(at.session_state["results"]),
+    )
+
+
+def test_report_renders_the_applied_chord_demand_form(chord_form_case):
+    from sector import combined
+
+    med_max, inp, out = chord_form_case
+    chord = out["shear"]["links"]["chord"]
+    capped = med_max is not None
+    shift = min(DFTD_Z_C, MED_MAX_C - M_ED_C) if capped else DFTD_Z_C
+    assert combined.chord_cap_evaluated(chord) is capped
+    assert chord["m_total"] == pytest.approx(M_ED_C + shift + MT_C, abs=0.01)
+    text = _pdf_text(inp, out, "Audit")
+    if capped:
+        shear_term = f"min({DFTD_Z_C:.1f}, {MED_MAX_C:.0f} - {M_ED_C:.0f})"
+        # Links-route shear chord and combined M-V-T chord.
+        assert text.count(CAPPED_FORM) == 2
+        assert PLAIN_FORM not in text
+    else:
+        shear_term = f"{DFTD_Z_C:.1f}"
+        assert text.count(PLAIN_FORM) == 2
+        assert f"min({DELTA}Ftd" not in text
+    subst = f"{M_ED_C:.0f} + {shear_term} + {MT_C:.1f} kNm (z = {Z_T / 1000.0:.3f} m"
+    assert f"{subst})" in text
+    assert f"{subst}, {DELTA}Ftd = {DFTD_C:.0f} kN, Ftd,T = {FTD_T_C:.1f} kN)" in text
+
+
+# ---------------------------------------------------------------------------
+# P1-13: the member strut-angle objective includes the a_l = d chord with its
+# torsion share (owner decision TB-02: the objective uses the rule of the
+# published chord checks).
+#
+# Reviewer case: default section, closed links of diameter 10 mm (two legs,
+# Asw = 157.08 mm2) at s = 400 mm, fywd = 500/1.20 = 416.67 MPa, cot(theta) in
+# [1.0, 2.5], VEd = 120 kN, Mx = 310 kNm, TEd = 30 kNm, z = 510.9 mm.
+#   Links (6.2.3(3)): VRd,s = (Asw/s) z fywd cot = 0.3927 x 510.9 x 416.67 cot
+#     = 83.60 cot kN; utilisation 120 / (83.60 cot) = 1.4354 / cot.
+#   a_l = d chord: MEd + |VEd| d = 310 + 120 x 0.55 = 376.0 kNm;
+#     Ftd,T = 30e6 x 1520 cot / 268800 = 169.64 cot kN, Ftd,T z/2 = 43.34 cot kNm;
+#     utilisation (376.0 + 43.34 cot) / 441.4.
+#   Equal utilisations: 43.34 cot^2 + 376.0 cot - 633.6 = 0, cot = 1.4446.
+#   On the 0.001 grid: cot = 1.444 gives max(0.9941, 0.9936) = 0.9941 and
+#   cot = 1.445 gives max(0.9934, 0.9937) = 0.9937, so cot = 1.445.
+#   The angle cot = 1.659 without this chord gives (376.0 + 71.9) / 441.4 =
+#   1.015, so the chord check gives FAIL there.
+# ---------------------------------------------------------------------------
+
+T_ED_R, M_ED_R, S_R = 30.0, 310.0, 400.0
+FYWD = 500.0 / 1.20
+VRDS_PER_COT = 2.0 * math.pi * 5.0 ** 2 / S_R * Z_T * FYWD / 1000.0
+FTD_T_PER_COT = T_ED_R * 1.0e6 * U_K / (2.0 * A_K) / 1000.0
+MT_PER_COT = FTD_T_PER_COT * Z_T / 1000.0 / 2.0
+M_SHIFT_R = M_ED_R + V_ED * D / 1000.0
+
+
+def _link_util(cot):
+    return V_ED / (VRDS_PER_COT * cot)
+
+
+def _chord_util(cot):
+    return (M_SHIFT_R + MT_PER_COT * cot) / MRD
+
+
+def test_member_angle_hand_values():
+    assert VRDS_PER_COT == pytest.approx(83.60, abs=0.01)
+    assert MT_PER_COT == pytest.approx(43.34, abs=0.01)
+    a, b, c = MT_PER_COT, M_SHIFT_R, -V_ED * MRD / VRDS_PER_COT
+    crossing = (-b + math.sqrt(b * b - 4.0 * a * c)) / (2.0 * a)
+    assert crossing == pytest.approx(1.4446, abs=1.0e-4)
+    grid = [1.444, 1.445, 1.446]
+    best = min(grid, key=lambda cot: max(_link_util(cot), _chord_util(cot)))
+    assert best == 1.445
+    assert max(_link_util(1.445), _chord_util(1.445)) == pytest.approx(0.9937, abs=1.0e-4)
+    assert _chord_util(1.659) == pytest.approx(1.015, abs=1.0e-3)
+
+
+def test_member_angle_keeps_the_concrete_route_chord_with_torsion_within_resistance():
+    at = _torsion_app(T_ED_R, m_x=M_ED_R, cot=None, link_s=S_R)
+    inp = copy.deepcopy(at.session_state["result_input_snapshot"])
+    out = copy.deepcopy(at.session_state["results"])
+    selection = out["shear"]["links"]["member_angle_selection"]
+    assert selection["cot"] == pytest.approx(1.445, abs=1.0e-9)
+    assert selection["utilisation"] == pytest.approx(_chord_util(1.445), rel=1.0e-4)
+    assert "concrete-route a_l = d tension chord" in selection["objective_labels"]
+    assert selection["governing_objectives"] == ("concrete-route a_l = d tension chord",)
+    chord = out["shear"]["concrete_chord"]
+    assert chord["status"] == "PASS"
+    assert chord["mt"] == pytest.approx(MT_PER_COT * 1.445, rel=1.0e-3)
+    assert chord["util"] == pytest.approx(_chord_util(1.445), rel=1.0e-3)
+    # The validator copy rebuilds the same selection from the retained input.
+    rebuilt = result_presentation._current_member_angle_selection(
+        inp, out["shear"], out["torsion"]
+    )
+    assert rebuilt == selection
+    rows = _rows(inp, out)
+    assert rows[CHECK]["status"] == "PASS"
+    assert rows["Shear with links"]["status"] == "PASS"
+    assert out["shear"]["assessment_status"] == "PASS"

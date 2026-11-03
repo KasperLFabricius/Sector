@@ -3574,6 +3574,51 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
                     )["util"]
                 ),
             )
+    if concrete_route_applicable and torsion_live and links_valid:
+        # The a_l = d chord of the concrete route carries Ftd,T z/2 (6.3.2(3)),
+        # so the native objective includes it (TB-02). Rebuild its operands,
+        # face resistance and lever arm from the current input.
+        try:
+            concrete_chord = capacity.concrete_route_chord_operands(
+                calculation_input, _shear_payload
+            )
+            if concrete_chord is None:
+                return None
+            concrete_mrd, concrete_exact = capacity.concrete_route_chord_face_mrd(
+                calculation_input,
+                concrete_chord,
+                solver=lambda *args, **kwargs: _publication_solver_result(
+                    capacity.shear_face_mrd, *args, **kwargs
+                ),
+            )
+            concrete_z = _publication_metric(link_context.get("z_mm"))
+        except (
+            capacity.CapacityInputError,
+            capacity.CapacityResultError,
+            KeyError,
+            TypeError,
+            ValueError,
+            OverflowError,
+        ):
+            return None
+        if concrete_exact is True and concrete_mrd > 0.0:
+            if concrete_z is None or concrete_z <= 0.0:
+                return None
+
+            def concrete_chord_util(
+                cot, operands=concrete_chord, m_rd=concrete_mrd,
+                z_m=concrete_z / 1000.0,
+            ):
+                force = torsion_force(cot)
+                if not math.isfinite(force) or force < 0.0:
+                    return math.inf
+                return capacity.concrete_route_chord_demand(
+                    operands, m_rd, ftd_t=force, z=z_m
+                )["util"]
+
+            add_objective(
+                "concrete-route a_l = d tension chord", concrete_chord_util
+            )
     if not objectives:
         return None
     expected = dataclasses.asdict(

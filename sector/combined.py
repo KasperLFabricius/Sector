@@ -412,6 +412,20 @@ def shear_term_cap(
     return mv, capped, "MEd,max cap" if capped else "uncapped"
 
 
+def chord_cap_evaluated(check) -> bool:
+    """Return True when a chord result evaluated the 6.2.3(7) ``MEd,max`` limit.
+
+    The limit is evaluated when an entered ``MEd,max`` exists and is not below
+    ``MEd`` (see :func:`shear_term_cap`). The demand is then
+    ``MEd + min(shear term, MEd,max - MEd) [+ Ftd,T*z/2]``. Otherwise it is the
+    plain sum. Reports and views use this to show the form that was applied.
+    """
+    return (
+        check.get("m_ed_max") is not None
+        and check.get("shear_term_selection") in {"MEd,max cap", "uncapped"}
+    )
+
+
 def longitudinal_check(
     m_ed: float,
     m_rd: float,

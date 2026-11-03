@@ -1365,7 +1365,8 @@ def provided_link_shear_publication_assessment(
         allowed_label = re.compile(
             r"(?:shear link yielding|shear strut crushing|shared closed stirrup|"
             r"shared shear-torsion strut|torsion sub-tube [1-9][0-9]*|"
-            r"[xy]-axis (?:negative|positive) (?:longitudinal|off-axis) chord)"
+            r"[xy]-axis (?:negative|positive) (?:longitudinal|off-axis) chord|"
+            r"concrete-route a_l = d tension chord)"
         )
         if not all((
             len(labels) == objective_count,
@@ -1855,33 +1856,18 @@ def concrete_route_chord(
     """
     if nominal.valid is not True or nominal.route != "concrete":
         return None
-    v_ed = shear_result.get("v_ed")
-    d_mm = shear_result.get("d")
-    axis = shear_result.get("axis")
-    tension_low = shear_result.get("tension_low")
-    if (
-        axis not in {"x", "y"}
-        or type(tension_low) is not bool
-        or v_ed is None
-        or d_mm is None
-        or not math.isfinite(float(d_mm))
-        or float(d_mm) <= 0.0
-    ):
+    operands = concrete_route_chord_operands(inp, shear_result)
+    if operands is None:
         return None
-    model_2023 = shear_result.get("model_2023") is True
-    m_origin = inp["Mx_pl"] if axis == "x" else inp["My_pl"]
-    m_signed = shear_result["m_ed_2023"] if model_2023 else m_origin
-    shift = shear_result["moment_reference_shift"] if model_2023 else 0.0
-    off_signed = inp["My_pl"] if axis == "x" else inp["Mx_pl"]
-    combined = _module("combined")
-    m_ed = combined.chord_applied_moment(m_signed, tension_low)
-    m_ed_max = chord_cap_in_reference(
-        chord_med_max(inp, axis, tension_low), shift, tension_low
-    )
+    axis = operands["axis"]
+    tension_low = operands["tension_low"]
+    model_2023 = operands["model_2023"]
     has_torsion = concrete_route_chord_torsion_requested(inp)
     base = dict(
         axis=axis, tension_low=tension_low, model_2023=model_2023,
-        m_ed_signed=m_signed, moment_reference_shift=shift, m_off=off_signed,
+        m_ed_signed=operands["m_ed_signed"],
+        moment_reference_shift=operands["moment_reference_shift"],
+        m_off=operands["m_off"],
         has_torsion=has_torsion,
     )
     pl = plastic_result
@@ -1890,9 +1876,7 @@ def concrete_route_chord(
             base, status="NOT ASSESSED", ok=None, util=None, valid=False,
             reason="the plastic bending analysis is required for the tension chord",
         )
-    m_rd, exact = shear_face_mrd(
-        inp, axis, tension_low, m_off=off_signed, moment_reference_shift=shift
-    )
+    m_rd, exact = concrete_route_chord_face_mrd(inp, operands)
     if not exact:
         return dict(
             base, status="NOT ASSESSED", ok=None, util=None, valid=False,
@@ -1921,11 +1905,82 @@ def concrete_route_chord(
                 reason=CONCRETE_CHORD_TORSION_ARM_UNAVAILABLE,
             )
         ftd_t, z_m = share["ftd_t"], z_mm / 1000.0
-    check = combined.concrete_route_chord_check(
-        m_ed, m_rd, float(v_ed), float(d_mm) / 1000.0,
-        m_ed_max=m_ed_max, model_2023=model_2023, ftd_t=ftd_t, z=z_m,
-    )
+    check = concrete_route_chord_demand(operands, m_rd, ftd_t=ftd_t, z=z_m)
     return dict(base, **check, valid=True, reason=None)
+
+
+def concrete_route_chord_operands(inp, shear_result):
+    """Angle-independent operands of the ``a_l = d`` tension chord.
+
+    The producer :func:`concrete_route_chord` and the member strut-angle
+    objective use the same operands, so the selected angle and the published
+    chord use the same rule (owner decision TB-02). Returns ``None`` when the
+    shear result has no usable face. ``v_ed`` is in kN and ``d_m`` in m.
+    """
+    if not isinstance(shear_result, Mapping):
+        return None
+    v_ed = shear_result.get("v_ed")
+    d_mm = shear_result.get("d")
+    axis = shear_result.get("axis")
+    tension_low = shear_result.get("tension_low")
+    if (
+        axis not in {"x", "y"}
+        or type(tension_low) is not bool
+        or v_ed is None
+        or d_mm is None
+        or not math.isfinite(float(d_mm))
+        or float(d_mm) <= 0.0
+    ):
+        return None
+    model_2023 = shear_result.get("model_2023") is True
+    m_origin = inp["Mx_pl"] if axis == "x" else inp["My_pl"]
+    m_signed = shear_result["m_ed_2023"] if model_2023 else m_origin
+    shift = shear_result["moment_reference_shift"] if model_2023 else 0.0
+    off_signed = inp["My_pl"] if axis == "x" else inp["Mx_pl"]
+    combined = _module("combined")
+    return dict(
+        axis=axis,
+        tension_low=tension_low,
+        model_2023=model_2023,
+        m_ed_signed=m_signed,
+        moment_reference_shift=shift,
+        m_off=off_signed,
+        m_ed=combined.chord_applied_moment(m_signed, tension_low),
+        m_ed_max=chord_cap_in_reference(
+            chord_med_max(inp, axis, tension_low), shift, tension_low
+        ),
+        v_ed=float(v_ed),
+        d_m=float(d_mm) / 1000.0,
+    )
+
+
+def concrete_route_chord_face_mrd(inp, operands, solver=None):
+    """Bending resistance of the shear tension face of the ``a_l = d`` chord.
+
+    Returns ``(m_rd, exact)`` from :func:`shear_face_mrd`, conditional on the
+    coexisting off-axis moment. ``solver`` replaces :func:`shear_face_mrd` for a
+    caller that caches solves; the arguments are the same.
+    """
+    return (solver or shear_face_mrd)(
+        inp,
+        operands["axis"],
+        operands["tension_low"],
+        m_off=operands["m_off"],
+        moment_reference_shift=operands["moment_reference_shift"],
+    )
+
+
+def concrete_route_chord_demand(operands, m_rd, *, ftd_t=0.0, z=None):
+    """Check of the ``a_l = d`` chord with the torsion share ``Ftd,T*z/2``.
+
+    ``ftd_t`` (kN) depends on the strut angle; the other operands do not. The
+    6.2.3(7) ``MEd,max`` limit applies to ``MEd + |VEd|*d`` only.
+    """
+    return _module("combined").concrete_route_chord_check(
+        operands["m_ed"], m_rd, operands["v_ed"], operands["d_m"],
+        m_ed_max=operands["m_ed_max"], model_2023=operands["model_2023"],
+        ftd_t=ftd_t, z=z,
+    )
 
 
 def longitudinal_chord_assessment(

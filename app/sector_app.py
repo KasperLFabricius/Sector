@@ -11044,6 +11044,29 @@ def _run_uniaxial_capacity_checks(inp, out):
                         f["m_ed"], f["m_rd"], 0.0, _ftd_t_at(c), f["z_m"]
                     )["util"],
                 )
+        # The a_l = d tension chord of the concrete shear route (6.2.2(5) and
+        # 9.2.1.3(2)) also carries Ftd,T z/2 when torsion is live (6.3.2(3)), so
+        # it depends on the angle. It joins the objective with the same operands,
+        # lever arm and MEd,max limit as capacity.concrete_route_chord (TB-02).
+        if concrete_route_applicable and tors_live and links_valid:
+            concrete_chord = capacity.concrete_route_chord_operands(
+                inp, out.get("shear")
+            )
+            concrete_mrd, concrete_exact = (
+                capacity.concrete_route_chord_face_mrd(inp, concrete_chord)
+                if concrete_chord is not None
+                else (0.0, False)
+            )
+            if concrete_exact and concrete_mrd > 0.0:
+                _add_angle_objective(
+                    "concrete-route a_l = d tension chord",
+                    lambda c, f=concrete_chord, m_rd=concrete_mrd,
+                    z=link_ctx["z_mm"] / 1000.0: (
+                        capacity.concrete_route_chord_demand(
+                            f, m_rd, ftd_t=_ftd_t_at(c), z=z
+                        )["util"]
+                    ),
+                )
         cot_star = None
         member_angle_selection = None
         if band is not None and utils:
@@ -15819,10 +15842,6 @@ def shear_view(inp, results, *, global_results=None):
                         + _THETA + " backs off the band edge when the chord would "
                         "otherwise govern."
                         if ch.get("theta_mode") == "utilisation" else "")
-            shear_term = (
-                r"N_{Vd}\,z/2" if links.get("model_2023")
-                else r"\Delta F_{td}\,z"
-            )
             if links.get("model_2023"):
                 st.caption(
                     f"Governing chord: {face_desc}. The signed face bending term "
@@ -15845,9 +15864,7 @@ def shear_view(inp, results, *, global_results=None):
             else:
                 st.caption(
                     f"Governing chord: {face_desc}. "
-                    rf"$M_{{Ed,total}}$ includes ${shear_term}$ and half the perimeter "
-                    r"torsion share: "
-                    f"${ch['m_ed']:.1f} + {ch['mv']:.1f} + {ch['mt']:.1f} = "
+                    f"${_ui_chord_demand_2005(ch)}="
                     f"{ch['m_total']:.1f}$ kN\u00b7m. Resistance: $M_{{Rd}} = "
                     f"{ch['m_rd']:.1f}$ kN\u00b7m "
                     + _ui_chord_mrd_label(ch["axis"], ch.get("m_off", 0.0),
@@ -15920,6 +15937,28 @@ def shear_view(inp, results, *, global_results=None):
         st.plotly_chart(viz.truss_figure(lk["theta_deg"], lk["z"], links["legs"],
                                          links["dia"], links["s"]), width="stretch")
 
+
+
+def _ui_chord_demand_2005(chord):
+    """LaTeX chord demand with or without the 6.2.3(7) MEd,max limit.
+
+    The limit appears only when the retained result evaluated it
+    (``sector.combined.chord_cap_evaluated``), with the operands that it used.
+    The caller appends ``=`` and the total.
+    """
+    if combined.chord_cap_evaluated(chord):
+        m_ed = f"{chord['m_ed']:.1f}"
+        subtrahend = f"({m_ed})" if float(chord["m_ed"]) < 0.0 else m_ed
+        return (
+            r"M_{Ed,total}=M_{Ed}+\min(\Delta F_{td}z,\,M_{Ed,max}-M_{Ed})"
+            r"+F_{td,T}z/2="
+            f"{m_ed}+\\min({chord['mv_uncapped']:.1f},\\,"
+            f"{chord['m_ed_max']:.1f}-{subtrahend})+{chord['mt']:.1f}"
+        )
+    return (
+        r"M_{Ed,total}=M_{Ed}+\Delta F_{td}z+F_{td,T}z/2="
+        f"{chord['m_ed']:.1f}+{chord['mv']:.1f}+{chord['mt']:.1f}"
+    )
 
 
 def _ui_chord_mrd_label(axis, m_off, conditional):
@@ -16948,6 +16987,15 @@ def _render_base_en_combined(c):
                 angle_valid=concrete.get("angle_valid") is True,
             )
         )
+        if combined.chord_cap_evaluated(lg):
+            st.caption(
+                "EN 1992-1-1, 6.2.3(7): the shear term is "
+                f"$\\min(\\Delta F_{{td}}z,\\,M_{{Ed,max}}-M_{{Ed}})"
+                f"=\\min({float(lg['mv_uncapped']):.3f},\\,"
+                f"{float(lg['m_ed_max']):.3f}-{float(lg['m_ed']):.3f})"
+                f"={float(lg['mv']):.3f}$ kN\u00b7m with the entered member maximum "
+                "moment MEd,max."
+            )
         st.caption(
             "Overall longitudinal reinforcement assessment: "
             f"{_pct(longitudinal['util'])} ({longitudinal['status']}); "
@@ -17474,9 +17522,7 @@ def combined_view(inp, results):
             )
         st.caption(
             f"Governing chord: {face_desc} about the {ax_lbl}-axis. "
-            r"$M_{Ed,total}$ includes bending, shear shift and half the perimeter "
-            "torsion share: "
-            f"${lg['m_ed']:.1f} + {lg['mv']:.1f} + {lg['mt']:.1f} = {lg['m_total']:.1f}$ "
+            f"${_ui_chord_demand_2005(lg)}={lg['m_total']:.1f}$ "
             f"kN\u00b7m versus $M_{{Rd}} = {lg['m_rd']:.1f}$ kN\u00b7m "
             + _ui_chord_mrd_label(ax_lbl, lg.get("m_off", 0.0),
                                   lg.get("conditional", True))

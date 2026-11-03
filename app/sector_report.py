@@ -61,6 +61,7 @@ import result_presentation as presentation
 import section_fields
 from app import engineer_messages
 from sector import capacity
+from sector import combined as combined_core
 from sector import codes as ec2_codes
 from sector import detailing
 from sector import shear_inputs
@@ -1258,6 +1259,37 @@ _PIVOT_C_MODE_LABEL = f"Concentric compression (pivot C, {_PIVOT_C_CLAUSE})"
 _PIVOT_C_2023_NOTE = (
     "DS/EN 1992-1-1:2023, 8.1.1(3) limits only eps<sub>cu</sub>"
 )
+
+
+def _chord_demand_2005_formula(capped_form):
+    """EN 1992-1-1 chord demand with or without the 6.2.3(7) MEd,max limit."""
+    shear_term = (
+        "min(&#916;F<sub>td</sub>&#183;z, M<sub>Ed,max</sub> - M<sub>Ed</sub>)"
+        if capped_form
+        else "&#916;F<sub>td</sub>&#183;z"
+    )
+    return (
+        "M<sub>Ed,total</sub> = M<sub>Ed</sub> + " + shear_term
+        + " + F<sub>td,T</sub>&#183;z/2"
+    )
+
+
+def _chord_demand_2005_substitution(chord, capped_form, extra=None):
+    """Substitute the retained operands into the applied chord demand form."""
+    m_ed = _fmt(chord["m_ed"], 1)
+    # A negative subtrahend keeps its sign readable: 15.0 - (-10.0).
+    subtrahend = f"({m_ed})" if float(chord["m_ed"]) < 0.0 else m_ed
+    shear_term = (
+        f"min({_fmt(chord['mv_uncapped'], 1)}, {_fmt(chord['m_ed_max'], 1)} - "
+        f"{subtrahend})"
+        if capped_form
+        else _fmt(chord["mv"], 1)
+    )
+    arm = f"z = {_fmt(chord['z'], 3)} m"
+    return (
+        f"{m_ed} + {shear_term} + {_fmt(chord['mt'], 1)} kNm"
+        f"  ({arm}" + (f", {extra}" if extra else "") + ")"
+    )
 
 
 def _pivot_c_material_row(concrete, is_2023):
@@ -8575,33 +8607,30 @@ class ReportBuilder:
                 ch.get("tension_low", True), ch.get("axis")
             )
             if model_2023:
-                chord_formula = (
+                self._formula(
                     "M<sub>Ed,total</sub> = max(M<sub>face</sub> + "
                     "(N<sub>Vd</sub>/2)&#183;z, 0) + "
-                    "F<sub>td,T</sub>&#183;z/2"
-                )
-                chord_ref = "DS/EN 1992-1-1:2023, 8.2.3(8), Formulae (8.50)-(8.52)"
+                    "F<sub>td,T</sub>&#183;z/2",
+                    equation_key="shear.chord.demand",
+                    equation_variant="2023",
+                    ref="DS/EN 1992-1-1:2023, 8.2.3(8), Formulae (8.50)-(8.52)",
+                    subst=(
+                        f"max({_fmt(ch.get('face_m_ed_signed', ch['m_ed']), 1)} + "
+                        f"{_fmt(ch['mv'], 1)}, 0) + {_fmt(ch['mt'], 1)} kNm "
+                        f" (z = {_fmt(ch['z'], 3)} m)"
+                    ),
+                    result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
             else:
-                chord_formula = (
-                    "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
-                    "min(&#916;F<sub>td</sub>&#183;z, M<sub>Ed,max</sub> - "
-                    "M<sub>Ed</sub>) + F<sub>td,T</sub>&#183;z/2"
-                )
-                chord_ref = "EN 1992-1-1 6.2.3(7) + 6.3.2"
-            self._formula(
-                chord_formula,
-                equation_key="shear.chord.demand",
-                equation_variant="2023" if model_2023 else "2005",
-                ref=chord_ref,
-                subst=(
-                    f"max({_fmt(ch.get('face_m_ed_signed', ch['m_ed']), 1)} + "
-                    f"{_fmt(ch['mv'], 1)}, 0) + {_fmt(ch['mt'], 1)} kNm "
-                    f" (z = {_fmt(ch['z'], 3)} m)"
-                    if model_2023
-                    else f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
-                         f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)"
-                ),
-                result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
+                # 6.2.3(7): show the MEd,max limit only when the retained
+                # result evaluated it, with the operands that it used.
+                capped_form = combined_core.chord_cap_evaluated(ch)
+                self._formula(
+                    _chord_demand_2005_formula(capped_form),
+                    equation_key="shear.chord.demand",
+                    equation_variant="2005-capped" if capped_form else "2005",
+                    ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
+                    subst=_chord_demand_2005_substitution(ch, capped_form),
+                    result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
             fallback = chord_publication.get("fallback")
             fell_back = fallback is not None
             chord_status = str(
@@ -9490,15 +9519,17 @@ class ReportBuilder:
             self._p("This force is distributed around the perimeter. Half acts on this chord.")
             self._p("Each contribution is converted to an equivalent moment with lever arm z. It is checked against M<sub>Rd</sub> "
                     + _report_chord_mrd_label(ax, lg.get("m_off", 0.0), lg.get("conditional", True)) + ".")
+            capped_form = combined_core.chord_cap_evaluated(lg)
             self._formula(
-                "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
-                "&#916;F<sub>td</sub>&#183;z + F<sub>td,T</sub>&#183;z/2",
+                _chord_demand_2005_formula(capped_form),
                 equation_key="combined.chord.demand",
+                equation_variant="capped" if capped_form else None,
                 ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
-                subst=f"{_fmt(lg['m_ed'], 1)} + {_fmt(lg['mv'], 1)} + "
-                      f"{_fmt(lg['mt'], 1)} kNm  (z = {_fmt(lg['z'], 3)} m, "
-                      f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
-                      f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
+                subst=_chord_demand_2005_substitution(
+                    lg, capped_form,
+                    f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
+                    f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN",
+                ),
                 result=(
                     f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm"
                 ),

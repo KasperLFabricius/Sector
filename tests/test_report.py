@@ -9726,12 +9726,15 @@ def test_native_combined_report_rejects_incomplete_root_candidate_inventory(
     assert (failed["axis"], failed["tension_low"]) == ("x", False)
     assert failed["m_total"] / failed["m_rd"] == pytest.approx(failed["util"])
     # Frozen native V=30 kN / T=180 kNm regression, separate from the 123.9% unit vector.
-    assert failed["util"] == pytest.approx(2.059941571055692)
+    # 0.97.0 P1-13: the a_l = d chord with torsion joins the member-angle objective
+    # (cot 1.491 -> 1.453); this chord is Ftd,T z/2 with Ftd,T proportional to cot:
+    # 2.059941571055692 x 1.453 / 1.491.
+    assert failed["util"] == pytest.approx(2.007441383463394)
     rows = result_presentation.multi_case_summary_rows(inp, out)
     target = next(row for row in rows
                   if row.get("overview_key") == "combined:longitudinal")
     assert (target["case"], target["status"], target["result"]) == (
-        "PL-01", "FAIL", "206.0 %",
+        "PL-01", "FAIL", "200.7 %",
     )
 
     def row_pattern(row):
