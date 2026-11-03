@@ -8,6 +8,7 @@ import pytest
 import tomllib
 import yaml
 
+from tools import qa_core_shards
 from tools.verify_coverage_gate import (
     BASELINE_ENV,
     BASELINE_EXPRESSION,
@@ -15,13 +16,9 @@ from tools.verify_coverage_gate import (
     CHECKOUT_ACTION,
     CHECKOUT_STEP_NAME,
     COVERAGE_STEP_NAME,
-    MANUAL_RENDER_COMMAND,
-    MANUAL_RENDER_STEP_NAME,
     QA_UPLOAD_ACTION,
     QA_UPLOAD_SETTINGS,
     QA_UPLOAD_STEP_NAME,
-    REPORT_RENDER_COMMAND,
-    REPORT_RENDER_STEP_NAME,
     VALIDATOR_STEP_NAME,
     CoverageGateContractError,
     CORE_DOWNLOAD_STEP_NAME,
@@ -78,18 +75,14 @@ def test_exact_contract_and_workflow_are_aligned():
         "--baseline-ref $env:SECTOR_COVERAGE_BASELINE_REF"
     )
     assert "qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts" in command
-    assert "parallel core shards ($phaseExit)" in command
+    assert "parallel test shards ($phaseExit)" in command
     assert _workflow()["jobs"]["core"] == expected_core_job()
+    assert expected_core_job()["strategy"]["matrix"]["shard"] == list(qa_core_shards.SHARDS)
     assert _workflow()["jobs"]["preflight"] == expected_preflight_job()
-    assert command.count("-n 0") == 3
-    assert command.count("--cov-append") == 3
-    assert "--cov-branch" not in command
-    assert "--cov=app" in command
-    assert "--cov=sector" in command
+    assert "python -m pytest" not in command and "python -m pytest" not in branch_command
     assert "coverage report --show-missing --skip-covered --fail-under=90" in command
-    assert "--dist loadgroup" in branch_command
-    assert branch_command.count("--cov-branch") == 1
     assert "--results qa-artifacts/branch-coverage.json" in branch_command
+    assert qa_core_shards.suite_command("branch")[-1] == "--cov-branch"
     assert len(data["branch_coverage"]["targets"]) == 6
     assert {
         "tests/test_design_standards.py",
@@ -565,60 +558,22 @@ def test_filtered_trigger_or_command_drift_is_rejected():
     workflow = _workflow()
     _step(workflow, BRANCH_COVERAGE_STEP_NAME)["run"] = _step(
         workflow, BRANCH_COVERAGE_STEP_NAME
-    )["run"].replace("--cov-branch", "", 1)
+    )["run"].replace("branch-coverage.json", "other.json", 1)
     with pytest.raises(CoverageGateContractError, match="branch coverage command"):
         validate_workflow(_contract(), _workflow_text(workflow))
 
 
-def test_real_render_and_upload_evidence_identity_is_pinned():
+def test_upload_evidence_identity_is_pinned_and_rendering_moved_to_the_real_shard():
     workflow = _workflow()
 
-    assert _step(workflow, REPORT_RENDER_STEP_NAME) == {
-        "name": REPORT_RENDER_STEP_NAME,
-        "if": "always()",
-        "run": REPORT_RENDER_COMMAND,
-    }
-    assert _step(workflow, MANUAL_RENDER_STEP_NAME) == {
-        "name": MANUAL_RENDER_STEP_NAME,
-        "if": "always()",
-        "run": MANUAL_RENDER_COMMAND,
-    }
     assert _step(workflow, QA_UPLOAD_STEP_NAME) == {
         "name": QA_UPLOAD_STEP_NAME,
         "if": "always()",
         "uses": QA_UPLOAD_ACTION,
         "with": QA_UPLOAD_SETTINGS,
     }
-
-
-@pytest.mark.parametrize(
-    ("step_name", "mutation"),
-    [
-        (REPORT_RENDER_STEP_NAME, "remove"),
-        (REPORT_RENDER_STEP_NAME, "rename"),
-        (REPORT_RENDER_STEP_NAME, "mask"),
-        (REPORT_RENDER_STEP_NAME, "destination"),
-        (MANUAL_RENDER_STEP_NAME, "remove"),
-        (MANUAL_RENDER_STEP_NAME, "rename"),
-        (MANUAL_RENDER_STEP_NAME, "mask"),
-        (MANUAL_RENDER_STEP_NAME, "destination"),
-    ],
-)
-def test_real_render_evidence_mutations_are_rejected(step_name, mutation):
-    workflow = _workflow()
-    steps = workflow["jobs"]["test"]["steps"]
-    step = _step(workflow, step_name)
-    if mutation == "remove":
-        steps.remove(step)
-    elif mutation == "rename":
-        step["name"] += " renamed"
-    elif mutation == "mask":
-        step["if"] = "success()"
-    else:
-        step["run"] = step["run"].replace("qa-artifacts/", "temporary/")
-
-    with pytest.raises(CoverageGateContractError, match="evidence|contain one"):
-        validate_workflow(_contract(), _workflow_text(workflow))
+    assert not any("render_fixture" in step.get("run", "") for step in workflow["jobs"]["test"]["steps"])
+    assert "real" in workflow["jobs"]["core"]["strategy"]["matrix"]["shard"]
 
 
 @pytest.mark.parametrize(
@@ -642,8 +597,6 @@ def test_complete_qa_artifact_upload_cannot_be_masked_or_narrowed(field, value):
     [
         COVERAGE_STEP_NAME,
         BRANCH_COVERAGE_STEP_NAME,
-        REPORT_RENDER_STEP_NAME,
-        MANUAL_RENDER_STEP_NAME,
     ],
 )
 def test_every_qa_evidence_producer_must_precede_the_upload(step_name):

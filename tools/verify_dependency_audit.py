@@ -11,6 +11,7 @@ import sys
 import tomllib
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,10 @@ AUDIT_KEYS = {
     "cache_path",
     "ignored_vulnerabilities",
 }
+# An owner-approved, dated exception may accept exact advisory IDs at exact
+# locked versions. Any other advisory, version or a past end date fails.
+EXCEPTION_KEY = "advisory_exception"
+EXCEPTION_KEYS = {"approved", "reason", "expires", "packages"}
 SANITISED_ENVIRONMENT = {
     "PIP_CERT",
     "PIP_CONFIG_FILE",
@@ -75,12 +80,27 @@ class DependencyAuditError(ValueError):
 
 
 @dataclass(frozen=True)
+class AdvisoryException:
+    """Exact advisories accepted at exact locked versions until a date."""
+
+    expires: date
+    advisories: tuple[tuple[str, str, frozenset[str]], ...]
+
+    def accepted(self, name: str, version: str) -> frozenset[str]:
+        for package, pinned, identifiers in self.advisories:
+            if (package, pinned) == (name, version):
+                return identifiers
+        return frozenset()
+
+
+@dataclass(frozen=True)
 class AuditPolicy:
     """Validated settings that form the dependency-audit identity."""
 
     requirements: tuple[str, ...]
     report_path: str
     cache_path: str
+    exception: AdvisoryException | None = None
 
 
 @dataclass(frozen=True, order=True)
@@ -123,13 +143,49 @@ def read_policy(path: Path) -> dict[str, Any]:
         raise DependencyAuditError(f"cannot read dependency-audit policy: {exc}") from exc
 
 
-def _snapshot(policy: Mapping[str, Any], root: Path) -> AuditPolicy:
+def _advisory_exception(value: object, today: date) -> AdvisoryException | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping) or set(value) != EXCEPTION_KEYS:
+        raise DependencyAuditError("advisory exception settings differ")
+    _nonblank(value.get("approved"), "advisory_exception.approved")
+    _nonblank(value.get("reason"), "advisory_exception.reason")
+    expires = value.get("expires")
+    if type(expires) is not date:
+        raise DependencyAuditError("advisory_exception.expires must be a TOML date")
+    if today > expires:
+        raise DependencyAuditError(f"advisory exception expired on {expires.isoformat()}")
+    packages = value.get("packages")
+    if not isinstance(packages, Mapping) or not packages:
+        raise DependencyAuditError("advisory_exception.packages must be a non-empty table")
+    rows = []
+    for package, row in packages.items():
+        if not isinstance(row, Mapping) or set(row) != {"version", "advisories"}:
+            raise DependencyAuditError(f"advisory exception for {package} differs")
+        identifiers = row.get("advisories")
+        if (
+            not isinstance(identifiers, list)
+            or not identifiers
+            or len(identifiers) != len(set(identifiers))
+        ):
+            raise DependencyAuditError(f"advisory exception for {package} needs unique IDs")
+        rows.append((
+            _canonicalise(_nonblank(package, "advisory exception package")),
+            _nonblank(row.get("version"), f"advisory exception {package} version"),
+            frozenset(_nonblank(item, f"advisory exception {package} ID") for item in identifiers),
+        ))
+    return AdvisoryException(expires, tuple(sorted(rows, key=lambda row: row[0])))
+
+
+def _snapshot(
+    policy: Mapping[str, Any], root: Path, today: date | None = None
+) -> AuditPolicy:
     if set(policy) != {"schema_version", "audit"}:
         raise DependencyAuditError("dependency-audit top-level keys differ")
     if policy.get("schema_version") != 1:
         raise DependencyAuditError("dependency-audit schema_version must remain 1")
     audit = policy.get("audit")
-    if not isinstance(audit, Mapping) or set(audit) != AUDIT_KEYS:
+    if not isinstance(audit, Mapping) or set(audit) - {EXCEPTION_KEY} != AUDIT_KEYS:
         raise DependencyAuditError("dependency-audit setting inventory differs")
 
     raw_requirements = audit.get("requirements")
@@ -168,7 +224,10 @@ def _snapshot(policy: Mapping[str, Any], root: Path) -> AuditPolicy:
     cache = _relative_file(audit.get("cache_path"), "audit.cache_path", root)
     if report in requirements or cache in requirements or report == cache:
         raise DependencyAuditError("audit output/cache paths collide with locked inputs")
-    return AuditPolicy(requirements, report, cache)
+    exception = _advisory_exception(
+        audit.get(EXCEPTION_KEY), today or datetime.now(UTC).date()
+    )
+    return AuditPolicy(requirements, report, cache, exception)
 
 
 def validate_policy(
@@ -176,11 +235,13 @@ def validate_policy(
     root: Path = ROOT,
     *,
     baseline: Mapping[str, Any] | None = None,
+    today: date | None = None,
 ) -> AuditPolicy:
-    candidate = _snapshot(policy, root)
+    candidate = _snapshot(policy, root, today)
     if baseline is None:
         return candidate
-    accepted = _snapshot(baseline, root)
+    # The end date binds the candidate; an accepted baseline is not re-dated.
+    accepted = _snapshot(baseline, root, date.min)
     if len(candidate.requirements) < len(accepted.requirements):
         raise DependencyAuditError("accepted lock inventory shrank")
     if candidate.requirements[: len(accepted.requirements)] != accepted.requirements:
@@ -362,7 +423,9 @@ def audit_command(policy: AuditPolicy, root: Path = ROOT) -> list[str]:
     return command
 
 
-def _report_dependencies(payload: object) -> tuple[LockedDependency, ...]:
+def _report_dependencies(
+    payload: object, exception: AdvisoryException | None = None
+) -> tuple[LockedDependency, ...]:
     if not isinstance(payload, Mapping) or set(payload) != {"dependencies", "fixes"}:
         raise DependencyAuditError("audit report top-level schema differs")
     if payload.get("fixes") != []:
@@ -383,11 +446,12 @@ def _report_dependencies(payload: object) -> tuple[LockedDependency, ...]:
         vulns = row.get("vulns")
         if not isinstance(vulns, list):
             raise DependencyAuditError(f"dependency[{index}].vulns must be an array")
-        if vulns:
-            identifiers = [
-                item.get("id", "unknown") if isinstance(item, Mapping) else "malformed"
-                for item in vulns
-            ]
+        identifiers = [
+            item.get("id", "unknown") if isinstance(item, Mapping) else "malformed"
+            for item in vulns
+        ]
+        accepted = exception.accepted(name, version) if exception else frozenset()
+        if not set(identifiers) <= accepted:
             raise DependencyAuditError(
                 f"vulnerable dependency {name}=={version}: {identifiers}"
             )
@@ -395,12 +459,16 @@ def _report_dependencies(payload: object) -> tuple[LockedDependency, ...]:
     return tuple(sorted(dependencies))
 
 
-def validate_report(path: Path, expected: Sequence[LockedDependency]) -> None:
+def validate_report(
+    path: Path,
+    expected: Sequence[LockedDependency],
+    exception: AdvisoryException | None = None,
+) -> None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise DependencyAuditError(f"cannot read audit JSON report: {exc}") from exc
-    actual = _report_dependencies(payload)
+    actual = _report_dependencies(payload, exception)
     canonical = tuple(sorted(expected))
     if actual != canonical:
         expected_map = {item.name: item.version for item in canonical}
@@ -446,12 +514,19 @@ def execute_policy(
         capture_output=True,
         text=True,
     )
-    if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip()
+    detail = completed.stderr.strip() or completed.stdout.strip()
+    # pip-audit exits 1 when it reports advisories; only a dated exception may
+    # then accept the report, and only for its exact advisories.
+    if completed.returncode != 0 and (policy.exception is None or completed.returncode != 1):
         raise DependencyAuditError(
             f"dependency audit failed with exit code {completed.returncode}: {detail}"
         )
-    validate_report(report, expected)
+    try:
+        validate_report(report, expected, policy.exception)
+    except DependencyAuditError as exc:
+        if completed.returncode == 0:
+            raise
+        raise DependencyAuditError(f"{exc}; audit exit code 1: {detail}") from exc
 
 
 def _workflow(text: str) -> Mapping[str, Any]:
@@ -602,6 +677,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (OSError, DependencyAuditError) as exc:
         print(f"dependency audit policy failed: {exc}", file=sys.stderr)
         return 2
+    if snapshot.exception is not None:
+        count = sum(len(row[2]) for row in snapshot.exception.advisories)
+        print(f"owner-approved advisory exception: {count} advisory IDs until "
+              f"{snapshot.exception.expires.isoformat()}")
     print("locked dependency audit policy is complete and enforced")
     return 0
 

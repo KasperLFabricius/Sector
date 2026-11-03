@@ -5568,7 +5568,6 @@ def _exercise_native_torsion_summary_variants(bundle, variants, mutate, tmp_path
     )
 
 
-@pytest.mark.xdist_group("native-member-report")
 def test_native_torsion_summary_rejects_scope_declaration_variants(native_member_report_cases, tmp_path):
     variants = [(kind, flag) for kind in (
         "canonical-blocked", "missing", "non-mapping", "contradictory-applicable", "incomplete-applicable",
@@ -5602,7 +5601,6 @@ def test_native_torsion_summary_rejects_scope_declaration_variants(native_member
     _exercise_native_torsion_summary_variants(native_member_report_cases["two-face"], variants, mutate, tmp_path, "scope")
 
 
-@pytest.mark.xdist_group("native-member-report")
 def test_native_torsion_summary_rejects_route_declaration_variants(native_member_report_cases, tmp_path):
     variants = ("stale-blocker", "malformed-blocker", "lowercase-status", "missing-route-entry", "wrong-route",
                 "stale-reason", "text-ted", "boolean-ted", "nonfinite-ted")

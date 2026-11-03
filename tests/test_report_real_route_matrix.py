@@ -437,7 +437,6 @@ def _verify_native_members(inp, out, *, combined):
             ) == (True, None)
 
 
-@pytest.mark.xdist_group("native-member-report")
 @result_presentation.publication_calculation_scope()
 def test_normal_report_routes_cover_the_complete_equation_catalogue(
     monkeypatch, tmp_path, native_member_report_cases,

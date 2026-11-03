@@ -41,15 +41,28 @@ jobs:
     needs: preflight
     name: Primary pytest (${{ matrix.shard }})
     runs-on: windows-latest
-    timeout-minutes: 240
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         shard:
-        - report
-        - combined
-        - native
-        - other
+        - core-01
+        - core-02
+        - core-03
+        - core-04
+        - core-05
+        - core-06
+        - core-07
+        - core-08
+        - core-09
+        - core-10
+        - core-11
+        - core-12
+        - branch-01
+        - branch-02
+        - branch-03
+        - branch-04
+        - real
     steps:
     - name: Check out source
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
@@ -149,16 +162,6 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $baseTemp = Join-Path $env:RUNNER_TEMP (
-            "sector-pytest-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
-          )
-          if (Test-Path -LiteralPath $baseTemp) {
-            throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
-          }
-          New-Item -ItemType Directory -Path $baseTemp | Out-Null
-          $vizTemp = Join-Path $baseTemp "real-viz"
-          $reportTemp = Join-Path $baseTemp "real-report"
-          $manualTemp = Join-Path $baseTemp "real-manual"
           $phaseFailures = @()
           if ("${{ steps.core_download.outcome }}" -ne "success") {
             $phaseFailures += "core artifact download"
@@ -167,50 +170,7 @@ jobs:
           python tools/qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts
           $phaseExit = $LASTEXITCODE
           if ($phaseExit -ne 0) {
-            $phaseFailures += "parallel core shards ($phaseExit)"
-          }
-
-          python -m pytest tests/test_viz.py -n 0 `
-            -m "real_image_export" `
-            --basetemp $vizTemp `
-            --cov=app `
-            --cov=sector `
-            --cov-append `
-            --cov-report= `
-            --junitxml=qa-artifacts/test-results-real-viz.xml
-          $phaseExit = $LASTEXITCODE
-          if ($phaseExit -ne 0) {
-            $phaseFailures += "serial real-viz ($phaseExit)"
-          }
-
-          python -m pytest `
-            tests/test_report_rendered.py::test_issued_report_renders_every_page_and_retains_expected_content `
-            -n 0 `
-            -m "real_image_export" `
-            --basetemp $reportTemp `
-            --cov=app `
-            --cov=sector `
-            --cov-append `
-            --cov-report= `
-            --junitxml=qa-artifacts/test-results-real-report.xml
-          $phaseExit = $LASTEXITCODE
-          if ($phaseExit -ne 0) {
-            $phaseFailures += "serial real-report ($phaseExit)"
-          }
-
-          python -m pytest `
-            tests/test_manual_rendered.py::test_issued_manual_renders_every_page_and_retains_navigation `
-            -n 0 `
-            -m "real_image_export" `
-            --basetemp $manualTemp `
-            --cov=app `
-            --cov=sector `
-            --cov-append `
-            --cov-report= `
-            --junitxml=qa-artifacts/test-results-real-manual.xml
-          $phaseExit = $LASTEXITCODE
-          if ($phaseExit -ne 0) {
-            $phaseFailures += "serial real-manual ($phaseExit)"
+            $phaseFailures += "parallel test shards ($phaseExit)"
           }
 
           python -m coverage xml -o qa-artifacts/coverage.xml
@@ -233,83 +193,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $branchTemp = Join-Path $env:RUNNER_TEMP (
-            "sector-branch-pytest-{0}-{1}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
-          )
-          if (Test-Path -LiteralPath $branchTemp) {
-            throw "Branch-coverage pytest basetemp must be previously nonexistent: $branchTemp"
-          }
-          New-Item -ItemType Directory -Path $branchTemp | Out-Null
-
-          python -m pytest `
-            tests/test_design_standards.py `
-            tests/test_heightened_crack_control.py `
-            tests/test_load_cases.py `
-            tests/test_modelled_direction.py `
-            tests/test_result_presentation.py `
-            tests/test_session_state_migrations.py `
-            tests/test_publication_currentness_edges.py `
-            tests/test_publication_companion.py `
-            tests/test_publication_review.py `
-            tests/test_publication_participants.py `
-            tests/test_table_field_definitions.py `
-            tests/test_shear.py::test_app_case_local_detailing_does_not_inherit_another_case_result `
-            tests/test_shear.py::test_app_circular_vx_torsion_rejects_invalid_off_axis_arm_then_recovers `
-            tests/test_shear.py::test_app_unknown_2023_duct_geometry_blocks_no_links_kernel_and_recovers `
-            tests/test_shear.py::test_app_shear_links_use_the_plastic_lever_arm `
-            tests/test_shear.py::test_app_links_with_a_degenerate_plastic_arm_are_not_assessed `
-            tests/test_shear.py::test_app_shear_links_outside_permitted_bounds_are_not_assessed `
-            tests/test_shear.py::test_app_invalid_strut_angle_caption_omits_hostile_optional_operands `
-            tests/test_shear.py::test_app_angle_gate_cannot_bypass_unavailable_link_arm `
-            tests/test_shear.py::test_2023_ductility_class_mismatch_is_fail_closed_but_concrete_stays_current `
-            tests/test_report.py::test_report_withholds_verdict_for_preserved_non_governing_fallback `
-            tests/test_report.py::test_retained_report_base_en_keeps_biaxial_directions_without_dkna_aggregate `
-            tests/test_report.py::test_retained_report_base_en_missing_biaxial_direction_fails_closed `
-            tests/test_report.py::test_base_en_2005_component_rendering_rejects_invalid_utilisations `
-            tests/test_report.py::test_report_omits_hostile_optional_strut_angle_operands `
-            tests/test_report.py::test_retained_report_shear_links_out_of_limits_are_not_assessed `
-            tests/test_report.py::test_native_base_en_report_retains_physical_rows_without_dkna_aggregate `
-            tests/test_report.py::test_native_base_en_report_rejects_unsupported_2023_combined_marker `
-            tests/test_report.py::test_native_torsion_summary_keeps_resistance_and_detailing_separate `
-            tests/test_report.py::test_report_current_unavailable_shear_demand_rejects_changed_actions `
-            tests/test_report.py::test_native_report_rejects_isolated_consumed_transverse_terms `
-            tests/test_report.py::test_report_includes_minimum_reinforcement_and_clear_spacing_evidence `
-            tests/test_report.py::test_report_explains_one_sided_transverse_spacing_screen `
-            tests/test_report.py::test_report_keeps_failed_2005_no_bar_result_in_minimum_area_format `
-            tests/test_report.py::test_report_marks_failed_and_invalid_plastic_assessments_explicitly `
-            tests/test_combined.py::test_app_base_en_biaxial_view_keeps_only_directional_physical_checks `
-            tests/test_combined.py::test_app_base_en_missing_biaxial_direction_fails_closed `
-            tests/test_combined.py::test_biaxial_shear_with_torsion_keeps_two_screens_and_no_three_way_claim `
-            tests/test_combined.py::test_biaxial_combined_keeps_directional_failure_without_aggregate_verdict `
-            tests/test_combined.py::test_app_biaxial_unavailable_prerequisite_retains_selected_separate_route `
-            -n 4 `
-            --dist loadgroup `
-            --basetemp $branchTemp `
-            --cov=load_cases `
-            --cov=app.modelled_direction `
-            --cov=result_presentation `
-            --cov=session_state_migrations `
-            --cov=sector.design_standards `
-            --cov=sector.heightened_crack_control `
-            --cov-branch `
-            --cov-report=json:qa-artifacts/branch-coverage.json `
-            --junitxml=qa-artifacts/test-results-branches.xml
-          if ($LASTEXITCODE -ne 0) {
-            throw "Decision-branch test matrix failed ($LASTEXITCODE)"
-          }
-
           python tools/verify_coverage_gate.py quality-coverage-gate.toml --results qa-artifacts/branch-coverage.json
           if ($LASTEXITCODE -ne 0) {
             throw "Decision-branch coverage floor failed ($LASTEXITCODE)"
           }
-
-      - name: Render report fixture with real figures
-        if: always()
-        run: python tools/report_render_fixture.py --output qa-artifacts/report
-
-      - name: Render manual fixture with real figures
-        if: always()
-        run: python tools/manual_render_fixture.py --output qa-artifacts/manual
 
       - name: Upload QA diagnostics
         if: always()
