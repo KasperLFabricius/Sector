@@ -157,6 +157,9 @@ def test_real_image_workflow_runs_every_marked_family_in_a_fresh_serial_process(
     monkeypatch.setattr(qa_core_shards, "identity", lambda: {"run_id": "1", "run_attempt": "1"})
     monkeypatch.setattr(qa_core_shards, "source_digest", lambda: "unchanged-fixture-source")
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "temporary"))
+    # The CI shard that runs this test exports its own selection variables.
+    monkeypatch.setenv("SECTOR_QA_SHARD", "core-12")
+    monkeypatch.setenv("SECTOR_QA_REFERENCE_OUTPUT", str(tmp_path / "reference.json"))
     for shard in core_job["strategy"]["matrix"]["shard"]:
         def capture(command, shard=shard, **kwargs):
             commands.setdefault(shard, []).append((command, kwargs["env"]))
@@ -193,7 +196,7 @@ def test_real_image_workflow_runs_every_marked_family_in_a_fresh_serial_process(
         assert command.count("--cov-append") == 1 and "--cov=app" in command and "--cov=sector" in command
         assert f"--junitxml={output.resolve() / f'test-results-real-{name}.xml'}" in command
         assert environment["COVERAGE_FILE"] == str(output.resolve() / ".coverage")
-        assert "SECTOR_QA_SHARD" not in environment
+        assert "SECTOR_QA_SHARD" not in environment and "SECTOR_QA_REFERENCE_OUTPUT" not in environment
         basetemp = Path(command[command.index("--basetemp") + 1])
         assert basetemp.name == f"real-{name}"
         temps.append(str(basetemp))

@@ -216,6 +216,9 @@ def run_shard(shard, output):
     )
     require(not temporary.exists(), "shard basetemp already exists")
     environment = dict(os.environ)
+    # A shard selects its tests only from its own variables, never from a caller's.
+    for name in ("SECTOR_QA_SHARD", "SECTOR_QA_SHARD_OUTPUT", "SECTOR_QA_REFERENCE_OUTPUT"):
+        environment.pop(name, None)
     environment["COVERAGE_FILE"] = str(output / ".coverage")
     started = time.monotonic()
     if shard == "real":
