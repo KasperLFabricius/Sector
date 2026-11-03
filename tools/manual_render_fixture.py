@@ -68,9 +68,10 @@ _MANUAL_CROPS = (
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # The footer has the current version and the 150-page count (0.97.0 chord
-        # and MEd,max text); the crop geometry is unchanged.
-        "d49ce7ed5214eb66b384d4d8ea6292dacb67e3b11307eede13e641ad0937a083",
+        # The footer has the current version and the 151-page count (0.97.0 chord
+        # and MEd,max text, then the SLS, prestress, fatigue and DK NA text and
+        # the five added status rows); the crop geometry is unchanged.
+        "eb5e7c5d78a37aa6c8fe999f6dd17ca9c022018b1a296221cf704f7dfa17ce0b",
     ),
 )
 
