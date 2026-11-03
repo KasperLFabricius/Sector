@@ -1191,6 +1191,18 @@ def test_fatigue_outputs_match_independent_equations(
     # TA-01: the corrected bound converges on the reference project.
     assert spectrum.concrete_search.converged is True
     assert results["fatigue"]["passed"] is True
+    # 0.97.0 decision: the published concrete damage is the search upper
+    # bound. The hand field maximum is the top-edge damage (check pack).
+    import fatigue_presentation
+
+    hand = expected_fatigue["concrete_damage"]
+    published = fatigue_presentation.concrete_damage_upper_bound(spectrum)
+    assert published == spectrum.concrete_search.upper_damage
+    assert hand * (1.0 - 1.0e-9) <= published <= hand + 1.0e-4 + 1.0e-3 * hand
+    assert spectrum.miner_damage == max(
+        reinforcement.damage, published,
+        *(item.damage for item in spectrum.reinforcement),
+    )
 
 def test_checking_pack_remains_a_qa_asset_outside_the_end_user_manual():
     pack = reproducible_example.checking_pack()

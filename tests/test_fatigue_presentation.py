@@ -229,6 +229,10 @@ def test_summary_rows_retain_each_independent_spectrum_and_governing_criterion()
         "concrete_fibres": 1,
         "governing": "R1 - Miner damage",
         "miner_damage": 0.60,
+        # 0.97.0 decision: the published concrete damage is the search upper
+        # bound; here R1 gives the maximum Miner damage.
+        "miner_damage_concrete_bound": False,
+        "concrete_damage_upper_bound": 0.011,
         "yield_utilisation": 0.446,
         "utilisation": 0.60,
         "zero_cyclic_bins": 0,

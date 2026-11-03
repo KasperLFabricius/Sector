@@ -12456,7 +12456,7 @@ class ReportBuilder:
         rows = [[
             "Spectrum", "Status", "Governing",
             "Max Miner D", "Max yield / proof", "Governing util.",
-            "Search upper D",
+            "Concrete D, upper bound",
         ]]
         rows.extend([
             [
@@ -12466,7 +12466,7 @@ class ReportBuilder:
                 _fmt_sig(row["miner_damage"], 6),
                 _pct(row["yield_utilisation"]),
                 _pct(row["utilisation"]),
-                _fmt_sig(row["search_upper_damage"], 6),
+                _fmt_sig(row["concrete_damage_upper_bound"], 6),
             ]
             for row in summary_rows
         ])
@@ -12480,7 +12480,9 @@ class ReportBuilder:
         self._small(
             "Each spectrum has its own Miner sum. Governing utilization is the "
             "maximum applicable simplified screen, Miner range, yield/proof "
-            "stress or concrete result."
+            "stress or concrete result. "
+            + fatigue_presentation.CONCRETE_UPPER_BOUND_NOTE
+            + " Max Miner D includes this upper bound."
         )
         self._table(
             [["Spectrum", "Bins", "Steel elements", "Concrete fibers"],
@@ -12982,10 +12984,18 @@ class ReportBuilder:
                     )) == fatigue_core.CONCRETE_EQUIVALENT
                 )
                 self._h2("Concrete fatigue")
+                # The concrete damage of the section is the upper bound of the
+                # section search. A sampled damage at one point stays in the
+                # Audit detail with its own label.
+                point_damage_column = equivalent_method or audit_detail
                 rows = [[
                     "Fiber", "Source", "x", "y", "f<sub>cd,fat</sub>",
-                    (
-                        "Equivalent util." if equivalent_method else "Miner D"
+                    *(
+                        (
+                            "Equivalent util." if equivalent_method
+                            else "D at point",
+                        )
+                        if point_damage_column else ()
                     ),
                     "Stress util.", "Governing", "Util.", "Status",
                 ]]
@@ -12996,10 +13006,13 @@ class ReportBuilder:
                         _fmt(row["x_mm"], 1),
                         _fmt(row["y_mm"], 1),
                         _fmt(row["fcd_fat_mpa"], 3),
-                        (
-                            _pct(row["equivalent_utilisation"])
-                            if equivalent_method
-                            else _fmt_sig(row["damage"], 6)
+                        *(
+                            (
+                                _pct(row["equivalent_utilisation"])
+                                if equivalent_method
+                                else _fmt_sig(row["damage"], 6),
+                            )
+                            if point_damage_column else ()
                         ),
                         _pct(row["stress_utilisation"]),
                         row["governing"],
@@ -13010,8 +13023,13 @@ class ReportBuilder:
                 ])
                 self._table(
                     rows,
-                    [14 * mm, 18 * mm, 12 * mm, 12 * mm, 17 * mm,
-                     16 * mm, 18 * mm, 26 * mm, 13 * mm, 14 * mm],
+                    (
+                        [14 * mm, 18 * mm, 12 * mm, 12 * mm, 17 * mm,
+                         16 * mm, 18 * mm, 26 * mm, 13 * mm, 14 * mm]
+                        if point_damage_column
+                        else [16 * mm, 20 * mm, 13 * mm, 13 * mm, 18 * mm,
+                              19 * mm, 27 * mm, 15 * mm, 19 * mm]
+                    ),
                     font=5.4,
                     keep=False,
                     repeat_cols=2,
@@ -13019,6 +13037,12 @@ class ReportBuilder:
                 self._small(
                     "Coordinates in mm; f<sub>cd,fat</sub> in MPa. The selected "
                     "criterion and stress are evaluated at the same fixed fiber."
+                    + (
+                        " D at point is the Miner damage at that point only. "
+                        + fatigue_presentation.CONCRETE_UPPER_BOUND_NOTE
+                        if point_damage_column and not equivalent_method
+                        else ""
+                    )
                 )
                 result = fatigue_presentation.result_by_fibre(
                     spectrum, governing_fibre
@@ -13067,16 +13091,46 @@ class ReportBuilder:
                         else "INVALID"
                     )
                     self._h2("Bounded governing-fiber search")
+                    # Audit keeps the largest sampled value and its location
+                    # as the governing point of the search. Every profile
+                    # publishes the upper bound as the concrete result.
+                    sampled_header = (
+                        "x", "y",
+                        (
+                            "Largest sampled util. [%]"
+                            if equivalent_method else "Largest sampled D"
+                        ),
+                    ) if audit_detail else ()
+                    sampled_values = (
+                        f"{_fmt(1000.0 * fatigue_presentation.value(
+                            search, 'x_m', 0.0
+                        ), 2)} mm",
+                        f"{_fmt(1000.0 * fatigue_presentation.value(
+                            search, 'y_m', 0.0
+                        ), 2)} mm",
+                        (
+                            _pct(fatigue_presentation.value(
+                                search, "damage"
+                            ))
+                            if equivalent_method
+                            else _fmt_sig(fatigue_presentation.value(
+                                search, "damage"
+                            ), 6)
+                        ),
+                    ) if audit_detail else ()
+                    upper_bound = (
+                        fatigue_presentation.value(search, "upper_damage")
+                        if equivalent_method
+                        else fatigue_presentation.concrete_damage_upper_bound(
+                            spectrum
+                        )
+                    )
                     self._table(
                         [[
-                            "Status", "x", "y",
+                            "Status", *sampled_header,
                             (
-                                "Point util. [%]"
-                                if equivalent_method else "Point D"
-                            ),
-                            (
-                                "Upper util. [%]"
-                                if equivalent_method else "Upper D"
+                                "Util., upper bound [%]"
+                                if equivalent_method else "D, upper bound"
                             ),
                             (
                                 "Abs. gap [%]"
@@ -13085,29 +13139,11 @@ class ReportBuilder:
                             "Rel. gap", "Divisions", "Boxes", "Points",
                         ], [
                             search_status,
-                            f"{_fmt(1000.0 * fatigue_presentation.value(
-                                search, 'x_m', 0.0
-                            ), 2)} mm",
-                            f"{_fmt(1000.0 * fatigue_presentation.value(
-                                search, 'y_m', 0.0
-                            ), 2)} mm",
+                            *sampled_values,
                             (
-                                _pct(fatigue_presentation.value(
-                                    search, "damage"
-                                ))
+                                _pct(upper_bound)
                                 if equivalent_method
-                                else _fmt_sig(fatigue_presentation.value(
-                                    search, "damage"
-                                ), 6)
-                            ),
-                            (
-                                _pct(fatigue_presentation.value(
-                                    search, "upper_damage"
-                                ))
-                                if equivalent_method
-                                else _fmt_sig(fatigue_presentation.value(
-                                    search, "upper_damage"
-                                ), 6)
+                                else _fmt_sig(upper_bound, 6)
                             ),
                             (
                                 _pct(fatigue_presentation.value(
@@ -13129,9 +13165,26 @@ class ReportBuilder:
                                 search, "points_evaluated", "-"
                             ),
                         ]],
-                        [22 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm,
-                         16 * mm, 16 * mm, 22 * mm, 18 * mm, 18 * mm],
+                        (
+                            [22 * mm, 16 * mm, 16 * mm, 18 * mm, 18 * mm,
+                             16 * mm, 14 * mm, 20 * mm, 18 * mm, 18 * mm]
+                            if audit_detail
+                            else [22 * mm, 26 * mm, 24 * mm, 22 * mm,
+                                  28 * mm, 27 * mm, 27 * mm]
+                        ),
                         font=5.3,
+                    )
+                    self._small(
+                        (
+                            "The upper bound is the published concrete result."
+                            if equivalent_method
+                            else fatigue_presentation.CONCRETE_UPPER_BOUND_NOTE
+                        )
+                        + (
+                            " x and y give the location of the largest sampled "
+                            "value, that is the governing point of the search."
+                            if audit_detail else ""
+                        )
                     )
                 self._h2(
                     "Governing concrete fiber bin results - "
@@ -13193,7 +13246,7 @@ class ReportBuilder:
                     ),
                     (
                         "Cycle count" if equivalent_method
-                        else "Miner D"
+                        else "Bin D<sub>i</sub>"
                     ),
                     "Stress utilization",
                 ]]

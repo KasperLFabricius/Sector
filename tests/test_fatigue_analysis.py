@@ -541,6 +541,9 @@ def test_run_passes_exact_prepared_contract_and_returns_compact_summary():
                 converged=True,
                 passed=True,
                 miner_damage=0.72,
+                # 0.97.0 publication check: Max Miner D is recomputed
+                # from the retained component damages.
+                reinforcement=(SimpleNamespace(damage=0.72),),
                 yield_utilisation=0.40,
                 governing_domain="reinforcement",
                 governing_criterion="Miner damage",
@@ -553,6 +556,9 @@ def test_run_passes_exact_prepared_contract_and_returns_compact_summary():
                 converged=True,
                 passed=True,
                 miner_damage=0.10,
+                # 0.97.0 publication check: Max Miner D is recomputed
+                # from the retained component damages.
+                reinforcement=(SimpleNamespace(damage=0.10),),
                 yield_utilisation=0.91,
                 governing_domain="concrete",
                 governing_criterion="compressive stress",

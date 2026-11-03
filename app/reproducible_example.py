@@ -440,11 +440,19 @@ def checking_pack() -> str:
 
         Concrete fcd,fat=0.85 x 30/1.595 x (1-30/250)=14.06896552 MPa.
         The top fibre has max compressions 3.168208832 MPa and
-        2.464162425 MPa, producing total Miner damage 5.358432445e-12
-        and stress utilisation 3.168208832/14.06896552=0.2251913141.
-        The adaptive spatial bound converges: its upper bound exceeds the
-        largest sampled damage by at most 1e-4 + 1e-3 x that damage. The
-        verdict uses the upper bound. The spectrum verdict is PASS.
+        2.464162425 MPa, producing Miner damage 5.358432445e-12 at that
+        fibre and stress utilisation 3.168208832/14.06896552=0.2251913141.
+        The cracked stresses are proportional to the moment. Thus the stress
+        ratios 5/9 and 5/7 are the same at all points in compression, and the
+        damage increases with the compression. The largest damage in the
+        section is 5.358432445e-12 on the top edge.
+
+        The published concrete damage is the upper bound D,upper of the
+        adaptive section search. The search stops when D,upper minus the
+        largest sampled damage is not more than 1e-4 + 1e-3 x that damage.
+        Thus 5.358432445e-12 <= D,upper <= 1.000000054e-4. Max Miner D is
+        the larger of the R1 damage and D,upper. The verdict uses D,upper.
+        The spectrum verdict is PASS.
 
         ## Report completeness
 

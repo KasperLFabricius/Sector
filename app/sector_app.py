@@ -14492,7 +14492,7 @@ def _fatigue_concrete_panel(spectrum):
         row.get("equivalent_utilisation") is not None for row in rows
     )
     criterion_label = (
-        "Equivalent util. [%]" if equivalent_method else "Miner D"
+        "Equivalent util. [%]" if equivalent_method else "D at point"
     )
     st.caption(f"Method: {rows[0]['method']}")
     _fatigue_result_table([
@@ -14566,13 +14566,18 @@ def _fatigue_concrete_panel(spectrum):
     if search is not None:
         st.markdown("**Bounded governing-fibre search**")
         point_label = (
-            "Point util. [%]" if equivalent_method else "Point D"
+            "Largest sampled util. [%]"
+            if equivalent_method else "Largest sampled D"
         )
         upper_label = (
-            "Upper util. [%]" if equivalent_method else "Upper bound D"
+            "Util., upper bound [%]" if equivalent_method else "D, upper bound"
         )
         point_value = fatigue_presentation.value(search, "damage")
-        upper_value = fatigue_presentation.value(search, "upper_damage")
+        upper_value = (
+            fatigue_presentation.value(search, "upper_damage")
+            if equivalent_method
+            else fatigue_presentation.concrete_damage_upper_bound(spectrum)
+        )
         absolute_gap = fatigue_presentation.value(search, "absolute_gap")
         _fatigue_result_table([{
             "Status": (
@@ -14601,6 +14606,15 @@ def _fatigue_concrete_panel(spectrum):
             "Boxes": fatigue_presentation.value(search, "boxes_evaluated"),
             "Points": fatigue_presentation.value(search, "points_evaluated"),
         }], height=120)
+        st.caption(
+            (
+                "The upper bound is the published concrete result. "
+                if equivalent_method
+                else fatigue_presentation.CONCRETE_UPPER_BOUND_NOTE + " "
+            )
+            + "x and y give the location of the largest sampled value, that "
+            "is the governing point of the search."
+        )
 
     st.markdown("**Selected-fibre bin results**")
     detail_rows = []
@@ -14833,13 +14847,15 @@ def fatigue_view(inp, results, *, stale=False):
                 else 100.0 * row["utilisation"]
             ),
             "Zero-action bins": row["zero_cyclic_bins"],
-            "Search upper D": row["search_upper_damage"],
+            "Concrete D, upper bound": row["concrete_damage_upper_bound"],
         }
         for row in summary_rows
     ], height=360)
     st.caption(
         "Each spectrum is assessed independently. The governing utilisation is "
-        "the maximum applicable simplified screen, Miner stress-range, yield/proof-stress or concrete result."
+        "the maximum applicable simplified screen, Miner stress-range, yield/proof-stress or concrete result. "
+        + fatigue_presentation.CONCRETE_UPPER_BOUND_NOTE
+        + " Max Miner D includes this upper bound."
     )
 
     options = [row["spectrum"] for row in summary_rows]
@@ -14868,8 +14884,16 @@ def fatigue_view(inp, results, *, stale=False):
     m1.metric("Status", row["status"])
     m2.metric("Governing utilisation", viz.pct(row["utilisation"]))
     m3.metric(
-        "Max Miner D",
+        (
+            "Max Miner D (concrete, upper bound)"
+            if row["miner_damage_concrete_bound"]
+            else "Max Miner D"
+        ),
         fatigue_presentation.compact_number(row["miner_damage"]),
+        help=(
+            "Largest Miner damage of the spectrum. "
+            + fatigue_presentation.CONCRETE_UPPER_BOUND_NOTE
+        ),
     )
     m4.metric(
         "Max yield / proof utilisation",

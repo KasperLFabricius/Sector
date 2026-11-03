@@ -2853,8 +2853,14 @@ def analyse_fatigue_spectrum(
     )
     utilisation = governing[0]
     miner_candidates = [result.damage for result in steel_results]
-    if concrete_method in CONCRETE_MINER_METHODS:
-        miner_candidates.extend(result.damage for result in concrete_results)
+    if (
+        concrete_method in CONCRETE_MINER_METHODS
+        and concrete_search is not None
+    ):
+        # The published concrete damage is the upper bound of the section
+        # search. Far from the limit the largest sampled damage can be much
+        # lower than the field maximum, so it is not published as the damage.
+        miner_candidates.append(concrete_search.upper_damage)
     miner_damage = max(miner_candidates) if miner_candidates else None
     yield_utilisation = (
         max(result.yield_utilisation for result in steel_results)

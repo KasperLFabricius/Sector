@@ -870,10 +870,11 @@ def _fatigue_report_fixture():
             concrete_strength=concrete_strength,
             governing_domain=governing_domain,
             governing_criterion=governing_criterion,
+            # 0.97.0 decision: the published concrete damage is the upper
+            # bound of the section search (was the largest sampled damage).
             miner_damage=max(
                 damage,
-                concrete_damage,
-                search.damage,
+                search.upper_damage,
             ),
             yield_utilisation=reinforcement_utilisation,
         )
@@ -1012,7 +1013,11 @@ def test_report_includes_complete_grouped_fatigue_evidence():
     assert "66.000 MPa" in text and "73.000 MPa" in text
     assert "Concrete fatigue" in text
     assert "Bounded governing-fiber search" in text
-    assert "Upper D" in text
+    # 0.97.0 decision: the upper bound is the published concrete damage; the
+    # Audit keeps the largest sampled damage with its own label.
+    assert "D, upper bound" in text
+    assert "Largest sampled D" in text
+    assert "Concrete D, upper bound" in text
     assert "Fatigue total" in text
     assert "Bond factor / method" in text
     assert "bond transformation" in text

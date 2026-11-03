@@ -402,7 +402,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("fatigue.concrete.miner-sum", None): _result(
         "D", "dimensionless",
-        ("D", "total concrete Miner damage"),
+        ("D", "total concrete Miner damage at the selected point"),
         ("D<sub>i</sub>", "concrete Miner damage contribution from bin i"),
     ),
     ("fatigue.concrete.stress-utilisation", None): _result(
@@ -413,7 +413,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ("fatigue.concrete.utilisation", None): _result(
         "u", "dimensionless",
         ("u", "governing concrete fatigue utilization"),
-        ("D", "total concrete Miner damage"),
+        ("D", "total concrete Miner damage at the selected point"),
         ("u<sub>sigma</sub>", "concrete compressive-stress utilization"),
         ("u<sub>eq</sub>", "equivalent-amplitude concrete fatigue utilization"),
         (
