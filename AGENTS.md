@@ -18,7 +18,8 @@ caches, so one test alone can take the cost of the full module. The real-image
 export tests are always slow. A module that is not in the table is slow until
 the next refresh. The fast tier leaves out most report, publication, shear,
 torsion and native application tests: before you push, run the slow tests of
-each area that you changed.
+each area that you changed. Under a full local load, a native image-export test
+can fail. Run such a failure again alone before you examine it.
 
 Refresh the duration table from the shard evidence of a completed QA run.
 The table also sets the shard balance in CI, so commit the new table:
