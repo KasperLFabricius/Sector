@@ -45,3 +45,9 @@ Actions. Each one runs the full QA workflow.
 - A Streamlit update needs a review of `tests/native_callable_page_client.py`,
   which accepts one reviewed Streamlit release.
 - Update the exact Python pin in `.python-version` by hand.
+- pytest stays below 9.2 (`requirements-dev.in`, and an ignore entry in
+  `.github/dependabot.yml`). pytest 9.2 stores node IDs in a structured form,
+  so pytest-xdist 3.8 cannot add the `@group` suffix: the xdist groups split
+  and the shard merge gate fails with "shard collection differs from its
+  balanced assignment". Remove the cap and the ignore entry when a
+  pytest-xdist release supports pytest 9.2.

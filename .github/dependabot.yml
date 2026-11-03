@@ -20,6 +20,12 @@ updates:
         # release, so each Streamlit update comes as its own pull request.
         exclude-patterns:
           - streamlit
+    ignore:
+      # pytest 9.2 needs a pytest-xdist release that supports its node IDs
+      # (see the cap in requirements-dev.in).
+      - dependency-name: pytest
+        versions:
+          - ">=9.2"
   # One pull request for each action. The policy validators in tools/ and one
   # test pin the SHA of each action: an update also changes those constants
   # (see AGENTS.md).
