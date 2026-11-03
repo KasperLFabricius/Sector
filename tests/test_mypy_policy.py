@@ -255,6 +255,22 @@ def test_deleted_legacy_boundary_is_migrated_only_for_the_accepted_base():
         validate_policy(candidate, ROOT, baseline=baseline)
 
 
+def test_python_version_moves_to_3_14_only_from_the_accepted_3_13_base():
+    baseline = deepcopy(_policy())
+    baseline["tool"]["mypy"]["python_version"] = "3.13"
+    validate_policy(_policy(), ROOT, baseline=baseline)
+
+    for version in ("3.13", "3.15"):
+        candidate = deepcopy(_policy())
+        candidate["tool"]["mypy"]["python_version"] = version
+        with pytest.raises(MypyPolicyError, match="must remain 3.14"):
+            validate_policy(candidate, ROOT, baseline=baseline)
+
+    baseline["tool"]["mypy"]["python_version"] = "3.12"
+    with pytest.raises(MypyPolicyError, match="must remain 3.14"):
+        validate_policy(_policy(), ROOT, baseline=baseline)
+
+
 @pytest.mark.parametrize(
     "owned_file",
     (
