@@ -473,7 +473,8 @@ def test_pub_m01_provided_links_publish_their_own_pass_in_native_views(
     action_alone_shear = combined["action_alone"]["v"]
     # DK NA 6.3.2(6), TB-04: V acting alone uses the section with its installed
     # links, max(VRd,c, min(VRd,s, VRd,max)) = max(44.18, min(127.65, 271.28)).
-    # VRd,s does not depend on N, so it equals the provided-link resistance.
+    # The band is fixed at cot 1.206 and VRd,s does not depend on N, so it
+    # equals the provided-link resistance.
     assert action_alone_shear["resistance"] == pytest.approx(link_result["vrd_s"])
     assert action_alone_shear["resistance"] == pytest.approx(127.6538699949732)
     assert action_alone_shear["evidence"]["nominal_route"] == "links"
