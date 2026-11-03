@@ -476,7 +476,8 @@ M_SHIFT_T = M_ED_T + V_ED * D / 1000.0
 
 
 def _torsion_app(t_ed, *, links=True, m_x=M_ED_T, v_ed=V_ED, cot=1.0, link_s=None,
-                 combined_on=False, med_max=None):
+                 combined_on=False, med_max=None, check_util=True,
+                 combined_method=None):
     at = _fresh()
     at.session_state[capacity.TORSION_CASE_AUTHORITIES_KEY] = {
         "PL-01": {
@@ -493,11 +494,15 @@ def _torsion_app(t_ed, *, links=True, m_x=M_ED_T, v_ed=V_ED, cot=1.0, link_s=Non
     if combined_on:
         toggles.append(("checkbox", "combined_on", True))
     _set(at, *toggles)
+    if combined_method is not None:
+        _set(at, ("selectbox", "combined_method", combined_method))
     changes = []
     if links:
         changes.append(("checkbox", "shear_links", True))
     if link_s is not None:
         changes.append(("number_input", "shear_link_s", link_s))
+    if not check_util:
+        changes.append(("checkbox", "pl_check_util", False))
     if cot is not None:
         changes += [
             ("number_input", "strut_cot_min", cot),
@@ -801,3 +806,60 @@ def test_member_angle_keeps_the_concrete_route_chord_with_torsion_within_resista
     assert rows[CHECK]["status"] == "PASS"
     assert rows["Shear with links"]["status"] == "PASS"
     assert out["shear"]["assessment_status"] == "PASS"
+
+
+def test_member_angle_leaves_out_a_concrete_route_chord_without_the_plastic_result():
+    """P1-15: without the plastic utilisation the a_l = d chord is NOT ASSESSED.
+
+    Hand check: the remaining objectives are the link yielding check
+    VEd/(VRd,s per cot x cot) and the torsion checks TEd/(TRd per cot x cot).
+    All of them decrease with cot, so the minimax angle is the band maximum
+    cot = 2.5. The link check is then 120/(83.60 x 2.5) = 57.4 %.
+    """
+    assert _link_util(2.5) == pytest.approx(0.574, abs=1.0e-3)
+    at = _torsion_app(T_ED_R, m_x=M_ED, cot=None, link_s=S_R, check_util=False)
+    inp = copy.deepcopy(at.session_state["result_input_snapshot"])
+    out = copy.deepcopy(at.session_state["results"])
+    assert out["plastic"]["util"] is None
+    chord = out["shear"]["concrete_chord"]
+    assert chord["status"] == "NOT ASSESSED"
+    assert chord["reason"] == capacity.CONCRETE_CHORD_PLASTIC_REQUIRED
+    selection = out["shear"]["links"]["member_angle_selection"]
+    assert "concrete-route a_l = d tension chord" not in selection["objective_labels"]
+    assert selection["cot"] == pytest.approx(2.5, abs=1.0e-9)
+    rebuilt = result_presentation._current_member_angle_selection(
+        inp, out["shear"], out["torsion"]
+    )
+    assert rebuilt == selection
+    # The torsion verdict stays at the band maximum: 30/(21.99 x 2.5) = 54.6 %.
+    torsion = out["torsion"]
+    rows = {
+        row["check"]: row
+        for row in result_presentation.multi_case_summary_rows(inp, out)
+    }
+    assert rows["Torsion transverse/strut resistance"]["status"] == "PASS"
+    assert torsion["util"] < 1.0
+
+
+def test_base_en_combined_report_states_the_med_max_limit():
+    """P1-16: the Base-EN combined chord report states the MEd,max limit.
+
+    Hand check (chord form case above): dFtd z = 0.5 x 200 x 1.0 x 0.5109 =
+    51.1 kNm; with MEd,max = 320 kNm the shear shift is
+    min(51.1, 320 - 300) = 20.0 kNm.
+    """
+    from sector import codes
+
+    at = _torsion_app(
+        T_ED_C, m_x=M_ED_C, v_ed=V_ED_C, combined_on=True, med_max=MED_MAX_C,
+        combined_method=codes.EC2_2005.label,
+    )
+    inp = copy.deepcopy(at.session_state["result_input_snapshot"])
+    out = copy.deepcopy(at.session_state["results"])
+    text = " ".join(_pdf_text(inp, out, "Standard").split())
+    assert f"MEd,max = {MED_MAX_C:.1f} kNm (6.2.3(7))" in text
+    assert (
+        f"Without the limit, the shear shift is {DELTA}Ftd{DOT}z = {DFTD_Z_C:.1f} kNm."
+        in text
+    )
+    assert f"{MED_MAX_C - M_ED_C:.3f} kNm" in text

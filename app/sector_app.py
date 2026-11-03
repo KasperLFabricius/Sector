@@ -11048,7 +11048,11 @@ def _run_uniaxial_capacity_checks(inp, out):
         # 9.2.1.3(2)) also carries Ftd,T z/2 when torsion is live (6.3.2(3)), so
         # it depends on the angle. It joins the objective with the same operands,
         # lever arm and MEd,max limit as capacity.concrete_route_chord (TB-02).
-        if concrete_route_applicable and tors_live and links_valid:
+        # Without the plastic result the chord is NOT ASSESSED, so it stays out.
+        if (
+            concrete_route_applicable and tors_live and links_valid
+            and capacity.concrete_route_chord_plastic_available(pl)
+        ):
             concrete_chord = capacity.concrete_route_chord_operands(
                 inp, out.get("shear")
             )

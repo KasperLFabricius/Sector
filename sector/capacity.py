@@ -1768,6 +1768,21 @@ CONCRETE_CHORD_TORSION_UNAVAILABLE = (
 CONCRETE_CHORD_TORSION_ARM_UNAVAILABLE = (
     "the lever arm z for the torsion share of the tension chord is not available"
 )
+CONCRETE_CHORD_PLASTIC_REQUIRED = (
+    "the plastic bending analysis is required for the tension chord"
+)
+
+
+def concrete_route_chord_plastic_available(plastic_result):
+    """True when the ``a_l = d`` chord has the plastic result that it needs.
+
+    The producer :func:`concrete_route_chord` and the member strut-angle
+    objective use this one gate, so the objective contains the chord only
+    when the chord has a published result (TB-02).
+    """
+    return isinstance(plastic_result, Mapping) and (
+        plastic_result.get("util") is not None
+    )
 
 
 def _chord_real(value):
@@ -1870,11 +1885,10 @@ def concrete_route_chord(
         m_off=operands["m_off"],
         has_torsion=has_torsion,
     )
-    pl = plastic_result
-    if pl is None or pl.get("util") is None:
+    if not concrete_route_chord_plastic_available(plastic_result):
         return dict(
             base, status="NOT ASSESSED", ok=None, util=None, valid=False,
-            reason="the plastic bending analysis is required for the tension chord",
+            reason=CONCRETE_CHORD_PLASTIC_REQUIRED,
         )
     m_rd, exact = concrete_route_chord_face_mrd(inp, operands)
     if not exact:

@@ -3303,6 +3303,18 @@ def _current_shear_calculation_input(inp, shear_result):
     return action, calculation_input
 
 
+def _concrete_chord_lacks_plastic_result(shear_result):
+    """True when the retained ``a_l = d`` chord has no plastic result."""
+
+    chord = shear_result.get("concrete_chord")
+    return (
+        isinstance(chord, Mapping)
+        and chord.get("valid") is False
+        and chord.get("status") == "NOT ASSESSED"
+        and chord.get("reason") == capacity.CONCRETE_CHORD_PLASTIC_REQUIRED
+    )
+
+
 def _current_member_angle_selection(inp, shear_result, torsion_result):
     """Rebuild the exact current common-angle minimax selection."""
 
@@ -3574,10 +3586,15 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
                     )["util"]
                 ),
             )
-    if concrete_route_applicable and torsion_live and links_valid:
+    if (
+        concrete_route_applicable and torsion_live and links_valid
+        and not _concrete_chord_lacks_plastic_result(shear_result)
+    ):
         # The a_l = d chord of the concrete route carries Ftd,T z/2 (6.3.2(3)),
         # so the native objective includes it (TB-02). Rebuild its operands,
-        # face resistance and lever arm from the current input.
+        # face resistance and lever arm from the current input. A chord that
+        # the producer left NOT ASSESSED without the plastic result stays out,
+        # as in the producer objective.
         try:
             concrete_chord = capacity.concrete_route_chord_operands(
                 calculation_input, _shear_payload

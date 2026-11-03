@@ -8955,6 +8955,18 @@ class ReportBuilder:
                 font=7.2,
                 caption='Longitudinal chord demand and conditional resistance',
             )
+            if lg.get("capped"):
+                self._small(
+                    "The shear shift is limited so that bending plus shear does not "
+                    "exceed the entered member maximum moment M<sub>Ed,max</sub>"
+                    + (
+                        f" = {_fmt(lg.get('m_ed_max'), 1)} kNm"
+                        if lg.get("m_ed_max") is not None
+                        else ""
+                    )
+                    + " (6.2.3(7)). Without the limit, the shear shift is "
+                    f"&#916;F<sub>td</sub>&#183;z = {_fmt(lg.get('mv_uncapped'), 1)} kNm."
+                )
             self._small(viz.chord_angle_note(
                 lg.get("theta_mode"),
                 angle_valid=concrete.get("angle_valid") is True,
