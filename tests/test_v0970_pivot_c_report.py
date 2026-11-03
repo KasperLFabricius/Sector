@@ -1,6 +1,6 @@
 """Pivot C in the report: basis formula, material table and governing label.
 
-EN 1992-1-1:2004 6.1(5) and Figure 6.1: when the whole section is in
+EN 1992-1-1:2004 6.1(6) and Figure 6.1: when the whole section is in
 compression, the strain at (1 - eps_c2/eps_cu2) h from the more compressed face
 is limited to eps_c2. The curvature candidate is then
 
@@ -32,7 +32,7 @@ import result_presentation  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 H_M = 0.600
-PIVOT_LABEL = "Concentric compression (pivot C, 6.1(5) and Figure 6.1)"
+PIVOT_LABEL = "Concentric compression (pivot C, 6.1(6) and Figure 6.1)"
 
 
 def _run(pivot_c):
@@ -104,12 +104,12 @@ def test_report_documents_pivot_c_when_it_is_on(pivot_on, profile):
     text = _text(inp, out, profile)
     if profile == "Audit":
         # The calculation basis (theory) section is an Audit section.
-        assert "Pivot C (EN 1992-1-1:2004, 6.1(5) and Figure 6.1)" in text
+        assert "Pivot C (EN 1992-1-1:2004, 6.1(6) and Figure 6.1)" in text
         assert "The limit is on in this calculation." in text
-    assert "Pivot C strain limit (6.1(5) and Figure 6.1) \u03b5c2 On" in text
+    assert "Pivot C strain limit (6.1(6) and Figure 6.1) \u03b5c2 On" in text
     assert PIVOT_LABEL in text
     assert "from the more compressed face" in text
-    assert "6.1(5))" not in text
+    assert "6.1(6))" not in text
 
 
 def test_report_states_that_pivot_c_is_off(pivot_off):
@@ -121,7 +121,7 @@ def test_report_states_that_pivot_c_is_off(pivot_off):
         for item in point["curvature_candidates"]
     )
     standard = _text(inp, out, "Standard")
-    assert "Pivot C strain limit (6.1(5) and Figure 6.1) \u03b5c2 Off" in standard
+    assert "Pivot C strain limit (6.1(6) and Figure 6.1) \u03b5c2 Off" in standard
     assert PIVOT_LABEL not in standard
     audit = _text(inp, out, "Audit")
     assert "The limit is off in this calculation" in audit

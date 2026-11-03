@@ -75,7 +75,7 @@ def test_load_message_uses_one_edition_name():
     message = " ".join(project_io.SCHEMA28_METHOD_CHANGES)
     assert "2005 family" not in message
     assert "EN 1992-1-1:2004" in message
-    assert "6.1(5) and Figure 6.1" in message
+    assert "6.1(6) and Figure 6.1" in message
 
 
 def test_schema28_round_trip_keeps_method_inputs():

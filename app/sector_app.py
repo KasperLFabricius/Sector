@@ -1000,7 +1000,7 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
         mp.pivot_c_default(preset),
         "conc_pivot_c",
         disabled=locked,
-        help="EN 1992-1-1:2004, 6.1(5) and Figure 6.1: when the full section "
+        help="EN 1992-1-1:2004, 6.1(6) and Figure 6.1: when the full section "
              "is in compression, Sector limits the strain at "
              "(1 - eps_c2/eps_cu2) h from the more compressed face to eps_c2. "
              "The EN 1992-1-1:2004 presets set this limit. The "

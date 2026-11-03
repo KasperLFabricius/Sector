@@ -106,7 +106,7 @@ CONCRETE_HELP = {
 
 
 def pivot_c_default(preset) -> bool:
-    """Default of the pivot C strain limit (6.1(5) and Figure 6.1) for a preset.
+    """Default of the pivot C strain limit (6.1(6) and Figure 6.1) for a preset.
 
     The EN 1992-1-1:2004 edition presets apply it. DS/EN 1992-1-1:2023 8.1.1(3)
     has no such limit, and the two curve presets reproduce the legacy ECROSS laws.

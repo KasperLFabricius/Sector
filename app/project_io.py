@@ -69,7 +69,7 @@ MIGRATABLE_VERSIONS = (
 # earlier is calculated with them after load, and the load message lists them.
 SCHEMA28_METHOD_CHANGES = (
     "Bending resistance, EN 1992-1-1:2004 presets: when the full section is in "
-    "compression, Sector limits the strain at pivot C to eps_c2 (6.1(5) and "
+    "compression, Sector limits the strain at pivot C to eps_c2 (6.1(6) and "
     "Figure 6.1). You can clear this limit in the concrete panel to reproduce "
     "a legacy calculation.",
     "Shear chord, EN 1992-1-1:2004: only an entered member maximum moment "

@@ -1253,7 +1253,7 @@ def _scientific_equation_markup(text):
     )
 
 
-_PIVOT_C_MODE_LABEL = "Concentric compression (pivot C, 6.1(5) and Figure 6.1)"
+_PIVOT_C_MODE_LABEL = "Concentric compression (pivot C, 6.1(6) and Figure 6.1)"
 
 
 def _concrete_candidate_location(candidate):
@@ -4825,7 +4825,7 @@ class ReportBuilder:
                  ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} &#8240;"],
                  ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} &#8240;"],
                  ["Exponent", "n", _fmt(c.n, 3)],
-                 ["Pivot C strain limit (6.1(5) and Figure 6.1)",
+                 ["Pivot C strain limit (6.1(6) and Figure 6.1)",
                   "eps<sub>c2</sub>",
                   "On" if getattr(c, "pivot_c", False) is True else "Off"],
         ])
@@ -5764,7 +5764,7 @@ class ReportBuilder:
                         "strain limit in the element-wise minima.")
             pivot_c_on = getattr(self.inp.get("concrete"), "pivot_c", False) is True
             self._small(
-                "Pivot C (EN 1992-1-1:2004, 6.1(5) and Figure 6.1): when the "
+                "Pivot C (EN 1992-1-1:2004, 6.1(6) and Figure 6.1): when the "
                 "whole section is in compression (c &gt; h), Sector limits the "
                 "strain at (1 - eps<sub>c2</sub>/eps<sub>cu2</sub>) h from the "
                 "more compressed face to eps<sub>c2</sub>. This gives the "
