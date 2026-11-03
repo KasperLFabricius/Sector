@@ -581,3 +581,78 @@ def test_test_job_rejects_unapproved_execution_timeouts(timeout):
     workflow["jobs"]["test"]["timeout-minutes"] = timeout
     with pytest.raises(DependencyAuditError, match="Windows identity or timeout"):
         validate_workflow(_workflow_text(workflow))
+
+
+def _write_exception(path: Path, expires: str, version: str = "1.0", ids: str = '"ALPHA-1", "ALPHA-2"') -> None:
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write("\n".join((
+            "",
+            "[audit.advisory_exception]",
+            'approved = "Owner approval"',
+            'reason = "Planned dependency refresh"',
+            f"expires = {expires}",
+            "",
+            "[audit.advisory_exception.packages.alpha]",
+            f'version = "{version}"',
+            f"advisories = [{ids}]",
+            "",
+        )))
+
+
+def _vulnerable_runner(evidence: Path, identifiers: tuple[str, ...], code: int = 1):
+    def runner(command, **kwargs):
+        report = _report((
+            LockedDependency("alpha", "1.0"),
+            LockedDependency("beta", "2.0"),
+            LockedDependency("shared", "3.0"),
+        ))
+        report["dependencies"][0]["vulns"] = [
+            {"id": identifier, "fix_versions": ["9.0"], "aliases": []} for identifier in identifiers
+        ]
+        (evidence / "dependency-audit.json").write_text(json.dumps(report), encoding="utf-8")
+        return subprocess.CompletedProcess(command, code, "", "Found known vulnerabilities")
+    return runner
+
+
+@pytest.mark.parametrize(("identifiers", "version", "code", "accepted"), [
+    (("ALPHA-1", "ALPHA-2"), "1.0", 1, True),
+    (("ALPHA-1",), "1.0", 1, True),
+    (("ALPHA-1", "ALPHA-3"), "1.0", 1, False),
+    (("ALPHA-1",), "0.9", 1, False),
+    (("ALPHA-1",), "1.0", 2, False),
+])
+def test_dated_exception_accepts_only_its_exact_advisories_and_versions(
+    tmp_path, identifiers, version, code, accepted,
+):
+    root, policy_path = _temporary_repository(tmp_path)
+    (root / "qa-artifacts").mkdir()
+    _write_exception(policy_path, "2999-12-31", version)
+    runner = _vulnerable_runner(root / "qa-artifacts", identifiers, code)
+    if accepted:
+        execute_policy(policy_path, root, runner=runner)
+    else:
+        with pytest.raises(DependencyAuditError, match="vulnerable dependency|exit code 2"):
+            execute_policy(policy_path, root, runner=runner)
+
+
+def test_exception_ends_after_its_date_and_its_shape_is_exact(tmp_path):
+    from datetime import date
+
+    from tools.verify_dependency_audit import read_policy, validate_policy
+
+    root, policy_path = _temporary_repository(tmp_path)
+    _write_exception(policy_path, "2026-11-30")
+    policy = read_policy(policy_path)
+    assert validate_policy(policy, root, today=date(2026, 11, 30)).exception.expires == date(2026, 11, 30)
+    with pytest.raises(DependencyAuditError, match="expired on 2026-11-30"):
+        validate_policy(policy, root, today=date(2026, 12, 1))
+    for change in (
+        lambda value: value.pop("reason"),
+        lambda value: value.update(expires="2026-11-30"),
+        lambda value: value["packages"]["alpha"].update(advisories=[]),
+        lambda value: value["packages"]["alpha"].update(advisories=["ALPHA-1", "ALPHA-1"]),
+    ):
+        changed = deepcopy(policy)
+        change(changed["audit"]["advisory_exception"])
+        with pytest.raises(DependencyAuditError, match="advisory"):
+            validate_policy(changed, root, today=date(2026, 11, 1))
