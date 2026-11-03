@@ -3516,6 +3516,9 @@ def test_app_shear_is_saved_and_restored():
         at,
         ("selectbox", "shear_method", codes.EC2_2023.label),
         ("number_input", "shear_gamma_v", 1.25),
+        # The strut band is editable only with links or torsion, so a user
+        # turns on the shared links before entering cot(theta)_max.
+        ("checkbox", "shear_links", True),
         ("number_input", "strut_cot_max", 3.0),
         ("number_input", "shear_Vx", 123.0),
         ("number_input", "shear_vx_bw", 240.0),

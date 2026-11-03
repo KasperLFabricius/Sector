@@ -28,3 +28,17 @@ The table also sets the shard balance in CI, so commit the new table:
 gh run download <run-id> --pattern "sector-core-<run-id>-<attempt>-core-*" --dir qa-durations
 python tools/qa_core_shards.py durations --input qa-durations --output tools/qa_shard_durations.json
 ```
+
+## Dependency updates
+
+Dependabot opens weekly pull requests for the pip-compile locks and the GitHub
+Actions. Each one runs the full QA workflow.
+
+- An update of `actions/checkout` or `actions/setup-python` also needs the new
+  SHA in the pinned constants of `tools/verify_dependency_audit.py`,
+  `tools/verify_coverage_gate.py`, `tools/verify_mypy_policy.py` and
+  `tools/verify_ruff_policy.py`. Check the SHA against the release tag of the
+  action before you change the constants.
+- A Streamlit update needs a review of `tests/native_callable_page_client.py`,
+  which accepts one reviewed Streamlit release.
+- Update the exact Python pin in `.python-version` by hand.

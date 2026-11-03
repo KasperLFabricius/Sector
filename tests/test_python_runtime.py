@@ -42,7 +42,7 @@ def test_direct_driver_accepts_the_pinned_running_interpreter():
     "identity",
     [
         "CPython|3.14.0|64",
-        "CPython|3.14.0|64",
+        "CPython|3.13.15|64",
         "PyPy|3.14.10|64",
         "CPython|3.14.10|32",
         "",

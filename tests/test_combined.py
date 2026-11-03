@@ -2314,6 +2314,8 @@ def test_mvt_m04_contract_recomputes_pre_range_capacity_results():
     _set(
         at,
         ("radio", "mode", "Both"),
+        # Torsion enables the shared strut band before a user can edit it.
+        ("checkbox", "torsion_on", True),
         ("number_input", "strut_cot_max", 3.0),
     )
     _enable_all(at)
@@ -2398,6 +2400,8 @@ def test_mvt_m04_contract_recomputes_when_stored_input_and_result_are_both_old()
     _set(
         at,
         ("radio", "mode", "Both"),
+        # Torsion enables the shared strut band before a user can edit it.
+        ("checkbox", "torsion_on", True),
         ("number_input", "strut_cot_max", 3.0),
     )
     _enable_all(at)
@@ -2635,6 +2639,8 @@ def test_app_combined_view_renders():
 def test_app_combined_outside_permitted_range_withholds_all_verdicts():
     at = _fresh()
     at.run()
+    # Torsion enables the shared strut band before a user can edit it.
+    _set(at, ("checkbox", "torsion_on", True))
     from app_workflow_navigation import goto_widget_owner as native_widget_owner
     native_widget_owner(at, 'strut_cot_max')
     at.number_input(key="strut_cot_max").set_value(3.0).run()
