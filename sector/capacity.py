@@ -1759,76 +1759,6 @@ def chord_cap_in_reference(m_ed_max, reference_shift, tension_low):
     return m_ed_max + (reference_shift if tension_low else -reference_shift)
 
 
-def concrete_route_chord_is_consistent(
-    chord: object,
-    inp: Mapping[str, Any],
-) -> bool:
-    """Check one retained ``a_l = d`` chord result against its own operands.
-
-    The verdict must follow from the published operands and from the current
-    ``MEd,max`` input, so a stale or edited result cannot reach a report.
-    """
-    if not isinstance(chord, Mapping):
-        return False
-    status = chord.get("status")
-    if chord.get("valid") is not True:
-        return status == "NOT ASSESSED" and chord.get("util") is None
-    if chord.get("axis") not in {"x", "y"} or type(chord.get("tension_low")) is not bool:
-        return False
-    numbers = {}
-    for key in ("m_ed", "m_rd", "v_ed", "d", "mv", "m_total"):
-        value = chord.get(key)
-        if _is_boolean_scalar(value) or not isinstance(value, Real):
-            return False
-        number = float(value)
-        if not math.isfinite(number) or number < 0.0:
-            return False
-        numbers[key] = number
-    shift = chord.get("moment_reference_shift", 0.0)
-    if _is_boolean_scalar(shift) or not isinstance(shift, Real):
-        return False
-    m_ed_max = chord_cap_in_reference(
-        chord_med_max(inp, chord["axis"], chord["tension_low"]),
-        float(shift),
-        chord["tension_low"],
-    )
-    retained_cap = chord.get("m_ed_max")
-    if (m_ed_max is None) is not (retained_cap is None):
-        return False
-    if m_ed_max is not None and not math.isclose(
-        float(retained_cap), m_ed_max, rel_tol=1.0e-12, abs_tol=1.0e-12
-    ):
-        return False
-    mv, capped, _selection = _module("combined").shear_term_cap(
-        numbers["v_ed"] * numbers["d"], numbers["m_ed"], m_ed_max
-    )
-
-    def close(left: float, right: float) -> bool:
-        return math.isclose(left, right, rel_tol=1.0e-9, abs_tol=1.0e-9)
-
-    if not (
-        close(numbers["mv"], mv)
-        and chord.get("capped") is capped
-        and close(numbers["m_total"], numbers["m_ed"] + mv)
-    ):
-        return False
-    util = chord.get("util")
-    if _is_boolean_scalar(util) or not isinstance(util, Real):
-        return False
-    expected_util = (
-        numbers["m_total"] / numbers["m_rd"]
-        if numbers["m_rd"] > 0.0
-        else math.inf if numbers["m_total"] > 0.0 else 0.0
-    )
-    if not (
-        float(util) == expected_util
-        or (math.isfinite(expected_util) and close(float(util), expected_util))
-    ):
-        return False
-    expected_status = "PASS" if float(util) <= 1.0 + 1.0e-9 else "FAIL"
-    return status == expected_status and chord.get("ok") is (expected_status == "PASS")
-
-
 def concrete_route_chord(inp, plastic_result, shear_result, nominal):
     """Tension chord of the concrete shear route with the shift ``a_l = d``.
 
@@ -1837,7 +1767,9 @@ def concrete_route_chord(inp, plastic_result, shear_result, nominal):
     increased by ``|VEd|*d``, capped only by an engineer-entered ``MEd,max``. With
     torsion the check is also made; the link-truss chord check carries the torsion
     share (their combination on one chord follows review item TB-06). Returns
-    ``None`` when the route does not apply.
+    ``None`` when the route does not apply. The publication validator
+    ``result_presentation.concrete_route_chord_publication_assessment`` rebuilds
+    this record from the current input before any surface shows it.
     """
     if nominal.valid is not True or nominal.route != "concrete":
         return None

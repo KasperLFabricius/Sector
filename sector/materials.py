@@ -276,7 +276,7 @@ class Concrete:
     eps_c2: float = EPS_C_PEAK   # strain at peak stress (parabola apex), fraction
     eps_cu2: float = EPS_CU      # ultimate (crushing) strain, fraction
     n: float = 2.0              # parabola-rectangle exponent
-    pivot_c: bool = False       # EN 1992-1-1 6.1(5) concentric-compression limit
+    pivot_c: bool = False       # pivot C: EN 1992-1-1 6.1(5) and Figure 6.1
 
     def __post_init__(self) -> None:
         if self.curve not in (1, 2):

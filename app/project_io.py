@@ -68,16 +68,18 @@ MIGRATABLE_VERSIONS = (
 # Sector 0.97.0 corrected these calculation methods. A project from schema 27 or
 # earlier is calculated with them after load, and the load message lists them.
 SCHEMA28_METHOD_CHANGES = (
-    "Bending resistance: for the EN 1992-1-1:2004 presets, a fully compressed "
-    "section has the concentric-compression strain limit of 6.1(5) (pivot C). "
-    "The concrete panel has an option to clear it for a legacy calculation.",
-    "Shear chord, 2005 family: only an entered member maximum moment MEd,max "
-    "limits the shear term of 6.2.3(7). Sector no longer uses the section "
-    "resistance MRd as that limit.",
+    "Bending resistance, EN 1992-1-1:2004 presets: when the full section is in "
+    "compression, Sector limits the strain at pivot C to eps_c2 (6.1(5) and "
+    "Figure 6.1). You can clear this limit in the concrete panel to reproduce "
+    "a legacy calculation.",
+    "Shear chord, EN 1992-1-1:2004: only an entered member maximum moment "
+    "MEd,max limits the shear term of 6.2.3(7). Sector no longer uses the "
+    "section resistance MRd as that limit.",
     "Shear chord, DS/EN 1992-1-1:2023: each chord receives NVd/2 in Formulae "
     "(8.51) and (8.52).",
     "Shear without shear reinforcement: the tension chord includes the moment "
-    "shift a_l = d (6.2.2(5), 9.2.1.3(2); 2023 8.2.2(10)).",
+    "shift a_l = d (EN 1992-1-1:2004, 6.2.2(5) and 9.2.1.3(2); "
+    "DS/EN 1992-1-1:2023, 8.2.2(10)).",
 )
 
 

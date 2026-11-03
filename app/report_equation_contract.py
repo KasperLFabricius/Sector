@@ -200,6 +200,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("kappa<sub>u</sub>", "governing ultimate curvature", "1/mm"),
         ("eps<sub>cu2</sub>", "ultimate concrete compressive strain"),
         ("c", "concrete compression depth", "mm"),
+        ("kappa<sub>C</sub>", "pivot C candidate when that limit is on and the section is fully compressed", "1/mm"),
         ("eps<sub>su,i</sub>", "ultimate strain of reinforcing bar i"),
         ("d<sub>s,i</sub>", "bar-i distance from the neutral axis", "mm"),
         ("eps<sub>pu,j</sub>", "ultimate total strain of tendon j"),

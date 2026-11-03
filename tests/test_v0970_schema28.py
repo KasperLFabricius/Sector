@@ -14,7 +14,7 @@ for path in (ROOT, ROOT / "app"):
 import project_io  # noqa: E402
 
 from app import reproducible_example  # noqa: E402
-from sector import capacity  # noqa: E402
+from sector import capacity, codes  # noqa: E402
 
 NEW_KEYS = ("conc_pivot_c", capacity.MED_MAX_ON_KEY, *capacity.MED_MAX_KEYS.values())
 
@@ -52,6 +52,30 @@ def test_schema27_project_loads_with_corrected_methods_and_message():
     assert "MEd,max" in message
     assert "NVd/2" in message
     assert "a_l = d" in message
+
+
+def test_schema27_project_with_the_2023_preset_loads_without_pivot_c():
+    # DS/EN 1992-1-1:2023 8.1.1(3) limits only eps_cu, so the migrated default
+    # of the pivot C limit is off for the 2023 concrete preset.
+    payload = json.loads(_schema27_text())
+    payload["scalars"]["conc_preset"] = codes.EC2_2023.label
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    _tables, scalars, info = project_io.parse_project_with_info(json.dumps(payload))
+    assert info["source_schema_version"] == 27
+    assert scalars["conc_preset"] == codes.EC2_2023.label
+    assert scalars["conc_pivot_c"] is False
+    assert scalars[capacity.MED_MAX_ON_KEY] is False
+    assert all(scalars[key] == 0.0 for key in capacity.MED_MAX_KEYS.values())
+
+
+def test_load_message_uses_one_edition_name():
+    message = " ".join(project_io.SCHEMA28_METHOD_CHANGES)
+    assert "2005 family" not in message
+    assert "EN 1992-1-1:2004" in message
+    assert "6.1(5) and Figure 6.1" in message
 
 
 def test_schema28_round_trip_keeps_method_inputs():

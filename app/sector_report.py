@@ -1253,6 +1253,30 @@ def _scientific_equation_markup(text):
     )
 
 
+_PIVOT_C_MODE_LABEL = "Concentric compression (pivot C, 6.1(5) and Figure 6.1)"
+
+
+def _concrete_candidate_location(candidate):
+    """Name the concrete point of one ultimate-curvature candidate."""
+
+    if candidate.get("mode") == "concrete_concentric_compression":
+        # EN 1992-1-1:2004 Figure 6.1, key C: the pivot is inside the section.
+        return (
+            "pivot C at (1 - eps<sub>c2</sub>/eps<sub>cu2</sub>) h from the "
+            "more compressed face"
+        )
+    return "extreme concrete fiber"
+
+
+def _curvature_candidate_location(candidate):
+    """Name the point of one ultimate-curvature candidate in the section."""
+
+    element = candidate.get("element_id")
+    if element:
+        return "element " + _html_escape(str(element))
+    return _concrete_candidate_location(candidate)
+
+
 def _curvature_selection_substitution(candidates, selected):
     """Summarise the retained candidate population without repeating its table."""
 
@@ -4801,6 +4825,9 @@ class ReportBuilder:
                  ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} &#8240;"],
                  ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} &#8240;"],
                  ["Exponent", "n", _fmt(c.n, 3)],
+                 ["Pivot C strain limit (6.1(5) and Figure 6.1)",
+                  "eps<sub>c2</sub>",
+                  "On" if getattr(c, "pivot_c", False) is True else "Off"],
         ])
         if fcd is not None:
             rows.append(
@@ -5727,6 +5754,7 @@ class ReportBuilder:
             self._p('<b>Plastic section capacity.</b> Plane sections remain plane. Concrete in compression follows the design curve in the material section. Reinforcement follows its design stress-strain law.')
             self._p('For each trial neutral axis, the strain plane is scaled to the governing curvature. This curvature is the first material limit reached:')
             self._formula("kappa<sub>u</sub> = min( eps<sub>cu2</sub>/c ,  "
+                           "kappa<sub>C</sub> ,  "
                            "min<sub>i</sub>[eps<sub>su,i</sub>/d<sub>s,i</sub>] ,  "
                            "min<sub>j</sub>[(eps<sub>pu,j</sub>-"
                            "eps<sub>p0,j</sub>)/d<sub>p,j</sub>] )",
@@ -5734,6 +5762,22 @@ class ReportBuilder:
                            ref=f"Concrete: {concrete_ref}; reinforcement: {steel_ref}")
             self._small("Each bar and tendon uses its assigned material law and "
                         "strain limit in the element-wise minima.")
+            pivot_c_on = getattr(self.inp.get("concrete"), "pivot_c", False) is True
+            self._small(
+                "Pivot C (EN 1992-1-1:2004, 6.1(5) and Figure 6.1): when the "
+                "whole section is in compression (c &gt; h), Sector limits the "
+                "strain at (1 - eps<sub>c2</sub>/eps<sub>cu2</sub>) h from the "
+                "more compressed face to eps<sub>c2</sub>. This gives the "
+                "candidate kappa<sub>C</sub> = eps<sub>c2</sub> / "
+                "(c - (1 - eps<sub>c2</sub>/eps<sub>cu2</sub>) h), where h is the "
+                "section depth normal to the neutral axis. "
+                + (
+                    "The limit is on in this calculation."
+                    if pivot_c_on
+                    else "The limit is off in this calculation, so kappa<sub>C</sub> "
+                         "is not a candidate."
+                )
+            )
             self._p("The compression depth c is solved from axial equilibrium and "
                     "the moments follow from the force resultants:")
             self._formula("F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> = N ;   "
@@ -6935,19 +6979,17 @@ class ReportBuilder:
             if governing_candidate is not None:
                 mode_labels = {
                     "concrete_crushing": "Concrete crushing",
-                    "concrete_concentric_compression": "Concentric compression (pivot C, 6.1(5))",
+                    "concrete_concentric_compression": _PIVOT_C_MODE_LABEL,
                     "bar_tension_rupture": "Bar tension rupture",
                     "bar_compression_rupture": "Bar compression rupture",
                     "tendon_tension_rupture": "Tendon tension rupture",
                 }
                 mode = governing_candidate.get("mode")
-                element = governing_candidate.get("element_id")
                 self._small(
                     "<b>Governing strain limit:</b> "
                     + _html_escape(mode_labels.get(mode, str(mode or "-")))
                     + "; "
-                    + ("element " + _html_escape(str(element))
-                       if element else "extreme concrete fiber")
+                    + _curvature_candidate_location(governing_candidate)
                 )
                 self._small(
                     "Sector governing-curvature minimum; the governing material "
@@ -7045,7 +7087,7 @@ class ReportBuilder:
         if candidates:
             mode_labels = {
                 "concrete_crushing": "Concrete crushing",
-                "concrete_concentric_compression": "Concentric compression (pivot C, 6.1(5))",
+                "concrete_concentric_compression": _PIVOT_C_MODE_LABEL,
                 "bar_tension_rupture": "Bar tension rupture",
                 "bar_compression_rupture": "Bar compression rupture",
                 "tendon_tension_rupture": "Tendon tension rupture",
@@ -7063,7 +7105,8 @@ class ReportBuilder:
                 for candidate in candidates:
                     candidate_rows.append([
                         mode_labels.get(candidate["mode"], candidate["mode"]),
-                        candidate.get("element_id") or "extreme concrete fiber",
+                        candidate.get("element_id")
+                        or _concrete_candidate_location(candidate),
                         _fmt(candidate["strain_limit"] * 1000.0, 6),
                         _fmt(candidate["distance_from_na_m"] * _MM, 4),
                         _fmt(candidate["curvature_per_m"], 8),
@@ -7078,7 +7121,6 @@ class ReportBuilder:
             if selected and governing_candidate is not None:
                 if self.profile.key != "Audit":
                     self._h2("Governing ultimate curvature")
-                    selected_element = governing_candidate.get("element_id")
                     self._small(
                         "<b>Selected candidate:</b> "
                         + _html_escape(mode_labels.get(
@@ -7086,11 +7128,7 @@ class ReportBuilder:
                             governing_candidate["mode"],
                         ))
                         + "; "
-                        + (
-                            "element " + _html_escape(str(selected_element))
-                            if selected_element
-                            else "extreme concrete fiber"
-                        )
+                        + _curvature_candidate_location(governing_candidate)
                         + "."
                     )
                 self._formula(
@@ -7990,14 +8028,17 @@ class ReportBuilder:
 
     def _concrete_route_chord(self, sh):
         """Tension chord of the concrete shear route with the shift a_l = d."""
-        chord = sh.get("concrete_chord")
-        if chord is None:
+        publication = presentation.concrete_route_chord_publication_assessment(
+            self.inp, sh
+        )
+        if publication["required"] is not True:
             return
         self._h2("Tension chord with the moment shift a<sub>l</sub> = d")
-        if not capacity.concrete_route_chord_is_consistent(chord, self.inp):
+        chord = publication["chord"]
+        if publication["valid"] is not True or not isinstance(chord, Mapping):
             self._small(
-                "NOT ASSESSED: Recalculate the shear check before you use the "
-                "tension chord result."
+                "NOT ASSESSED: The tension chord result is not current. "
+                "Recalculate the shear check before you use it."
             )
             return
         if chord.get("valid") is not True:
@@ -8555,6 +8596,12 @@ class ReportBuilder:
                 notes.append(f"This {demand_word} demand is part of the strut-angle objective. The selected angle moves away from the interval boundary when the chord would otherwise govern.")
             if model_2023:
                 notes.append("The acting axial force is already included in the conditional bending resistance for each face.")
+                notes.append(
+                    "Sector does not limit N<sub>Vd</sub> with an entered member "
+                    "maximum moment M<sub>Ed,max</sub>. Formula (8.53) applies "
+                    "only at a direct intermediate support or in the region of a "
+                    "concentrated load. Sector does not establish this condition."
+                )
             if fell_back:
                 fallback_axis = fallback.get("axis", "?")
                 fallback_face = "negative" if fallback.get("tension_low", True) else "positive"
@@ -8589,7 +8636,7 @@ class ReportBuilder:
         rows = [[
             "Face", "Chord", "Formula", "M<sub>face</sub>",
             "N<sub>Vd</sub>z/2", "M<sub>Ed,total</sub>",
-            "M<sub>Rd</sub>", "Utilization", "Status",
+            "M<sub>Rd</sub>", "Utilisation", "Status",
         ]]
         for candidate in chord_publication.get("candidates") or ():
             if candidate.get("role") != "shear_axis":

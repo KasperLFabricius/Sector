@@ -168,8 +168,9 @@ class DesignCode:
     # v_min = 0.035*k^1.5*sqrt(fck), the DK NA:2024
     # v_min = (0.051/gamma_c)*k^1.5*sqrt(fck), selected by ``shear_vmin_over_gamma_c``.
     shear_model: str = "2005"
-    # EN 1992-1-1:2004 6.1(5) limits the strain of concentric compression to
-    # eps_c2 (pivot C, Figure 6.1). DS/EN 1992-1-1:2023 8.1.1(3) limits only eps_cu.
+    # EN 1992-1-1:2004 6.1(5) and Figure 6.1 limit the strain at pivot C of a
+    # fully compressed section to eps_c2. DS/EN 1992-1-1:2023 8.1.1(3) limits
+    # only eps_cu.
     pivot_c: bool = True
     shear_crd_c: float = 0.18
     shear_k1: float = 0.15

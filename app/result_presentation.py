@@ -473,6 +473,10 @@ _SHEAR_REASON_MESSAGES = {
     'longitudinal chord evidence is unavailable': EngineerMessage(
         'SHEAR-LONGITUDINAL-EVIDENCE', 'The longitudinal chord evidence is unavailable.',
     ),
+    'the tension chord evidence of the concrete shear route is unavailable': EngineerMessage(
+        'SHEAR-CONCRETE-CHORD-EVIDENCE',
+        'The tension chord evidence of the concrete shear route is unavailable.',
+    ),
     'shear resistance is unavailable': EngineerMessage(
         'SHEAR-RESISTANCE-UNAVAILABLE', 'The shear resistance is unavailable.',
     ),
@@ -2186,6 +2190,234 @@ def concrete_shear_publication_input_is_current(inp, shear_result):
     return True, None
 
 
+_CONCRETE_CHORD_UNAVAILABLE = (
+    "the tension chord evidence of the concrete shear route is unavailable"
+)
+
+
+def _concrete_route_selection(inp, shear_result):
+    """Return the nominal shear selection of the retained result, or ``None``."""
+
+    try:
+        return capacity.select_nominal_shear_resistance(
+            shear_result,
+            links_selected=inp.get("shear_links") is True,
+        )
+    except (capacity.CapacityInputError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _concrete_route_chord_required(inp, shear_result):
+    """Return whether the retained shear selects the concrete route, or ``None``."""
+
+    selection = _concrete_route_selection(inp, shear_result)
+    if selection is None:
+        return None
+    return selection.valid is True and selection.route == "concrete"
+
+
+def _current_concrete_route_chord(inp, shear_result):
+    """Rebuild the ``a_l = d`` tension chord from the current input alone.
+
+    ``MEd`` comes from the current section forces, ``|VEd|`` from the current
+    shear action, ``d`` from the current geometry, ``MRd`` from the current face
+    resistance and ``MEd,max`` from the current member input. The retained chord
+    operands are not used.
+    """
+
+    action, calculation_input = _current_shear_calculation_input(
+        inp,
+        shear_result,
+    )
+    if action is None or calculation_input is None:
+        return None
+    axis = action["axis"]
+    tension_low = action["tension_low"]
+    model_2023 = action["model_2023"] is True
+    outer = calculation_input.get("outer")
+    holes = calculation_input.get("holes") or ()
+    bars = calculation_input.get("bars")
+    if (
+        not isinstance(outer, (list, tuple))
+        or not outer
+        or not isinstance(bars, (list, tuple))
+    ):
+        return None
+    try:
+        p_ed = float(calculation_input["P_pl"])
+        mx_ed = float(calculation_input["Mx_pl"])
+        my_ed = float(calculation_input["My_pl"])
+        _area, cx, cy = capacity.gross_area_centroid(outer, holes)
+        _n_pre, mx_pre, my_pre = capacity.prestress_resultants(
+            calculation_input, cx, cy
+        )
+        _asl, cg, _ids = shear_core.tension_reinforcement_selection(
+            bars, axis, tension_low, cy if axis == "x" else cx
+        )
+        d_mm = float(shear_core.effective_depth(outer, axis, tension_low, cg))
+        shift = (
+            p_ed * (cy if axis == "x" else cx) - (mx_pre if axis == "x" else my_pre)
+            if model_2023
+            else 0.0
+        )
+        m_signed = (mx_ed if axis == "x" else my_ed) + shift
+        m_off = my_ed if axis == "x" else mx_ed
+        m_ed_max = capacity.chord_cap_in_reference(
+            capacity.chord_med_max(calculation_input, axis, tension_low),
+            shift,
+            tension_low,
+        )
+        m_rd, exact = _publication_solver_result(
+            capacity.shear_face_mrd,
+            calculation_input,
+            axis,
+            tension_low,
+            m_off=m_off,
+            moment_reference_shift=shift,
+        )
+        if exact is not True or not math.isfinite(d_mm) or d_mm <= 0.0:
+            return None
+        check = combined_core.concrete_route_chord_check(
+            combined_core.chord_applied_moment(m_signed, tension_low),
+            m_rd,
+            float(action["expected_v"]),
+            d_mm / 1000.0,
+            m_ed_max=m_ed_max,
+            model_2023=model_2023,
+        )
+    except (
+        capacity.CapacityInputError,
+        capacity.CapacityResultError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
+        return None
+    return dict(
+        axis=axis,
+        tension_low=tension_low,
+        model_2023=model_2023,
+        m_ed_signed=m_signed,
+        moment_reference_shift=shift,
+        m_off=m_off,
+        **check,
+        valid=True,
+        reason=None,
+    )
+
+
+def _concrete_chord_value_matches(retained, expected):
+    if expected is None or type(expected) is bool:
+        return retained is expected
+    if isinstance(expected, str):
+        return isinstance(retained, str) and retained == expected
+    if isinstance(expected, Real):
+        if is_boolean_scalar(retained) or not isinstance(retained, Real):
+            return False
+        left, right = float(retained), float(expected)
+        return left == right or (
+            math.isfinite(left)
+            and math.isfinite(right)
+            and math.isclose(left, right, rel_tol=1.0e-9, abs_tol=1.0e-9)
+        )
+    return retained == expected
+
+
+def concrete_route_chord_publication_assessment(inp, shear_result):
+    """Reconcile the ``a_l = d`` tension chord of the concrete shear route.
+
+    EN 1992-1-1 6.2.2(5) and 9.2.1.3(2), and DS/EN 1992-1-1:2023 8.2.2(10),
+    make this chord a required check when the concrete route is selected. The
+    retained record must then exist and agree with a rebuild from the current
+    input (``MEd``, ``|VEd|``, ``d``, ``MRd`` and ``MEd,max``). A missing, stale
+    or edited record gives ``valid=False``, so no surface publishes it (fail
+    closed). A retained NOT ASSESSED record stays NOT ASSESSED.
+
+    Returns ``{"required", "valid", "chord", "reason"}``. ``required`` is
+    ``None`` when the retained route cannot be read.
+    """
+
+    unavailable = {
+        "required": True,
+        "valid": False,
+        "chord": None,
+        "reason": _CONCRETE_CHORD_UNAVAILABLE,
+    }
+    if not isinstance(inp, Mapping) or not isinstance(shear_result, Mapping):
+        return dict(unavailable, required=None)
+    required = _concrete_route_chord_required(inp, shear_result)
+    if required is None:
+        return dict(unavailable, required=None)
+    retained = shear_result.get("concrete_chord")
+    if required is False:
+        if retained is None:
+            return {"required": False, "valid": True, "chord": None, "reason": None}
+        return dict(unavailable, required=False)
+    if concrete_shear_publication_input_is_current(inp, shear_result)[0] is not True:
+        return unavailable
+    if not isinstance(retained, Mapping):
+        return unavailable
+    if retained.get("valid") is not True:
+        action, _reason = _current_shear_action_evidence(
+            inp,
+            shear_result,
+            _CONCRETE_CHORD_UNAVAILABLE,
+        )
+        reason = retained.get("reason")
+        if (
+            action is not None
+            and retained.get("valid") is False
+            and retained.get("status") == "NOT ASSESSED"
+            and retained.get("util") is None
+            and retained.get("ok") is None
+            and retained.get("axis") == action["axis"]
+            and retained.get("tension_low") is action["tension_low"]
+            and isinstance(reason, str)
+            and reason.strip()
+        ):
+            return {"required": True, "valid": True, "chord": retained, "reason": None}
+        return unavailable
+    expected = _current_concrete_route_chord(inp, shear_result)
+    if expected is None or set(retained) != set(expected):
+        return unavailable
+    if not all(
+        _concrete_chord_value_matches(retained.get(key), value)
+        for key, value in expected.items()
+    ):
+        return unavailable
+    return {"required": True, "valid": True, "chord": retained, "reason": None}
+
+
+def _concrete_route_chord_rejection(inp, shear_result):
+    """Return why the required ``a_l = d`` chord blocks publication, or ``None``.
+
+    The chord is a required part of the concrete route. A missing or stale chord,
+    or a retained overall shear status that is less severe than the chord
+    status, suppresses the complete shear direction.
+    """
+
+    chord = concrete_route_chord_publication_assessment(inp, shear_result)
+    if chord["required"] is not True:
+        return None
+    if chord["valid"] is not True:
+        return chord["reason"] or _CONCRETE_CHORD_UNAVAILABLE
+    retained_status = str(shear_result.get("assessment_status") or "").upper()
+    if not retained_status:
+        # Without a retained overall status, the reports show the status of the
+        # selected nominal route. That status must include the chord as well.
+        selection = _concrete_route_selection(inp, shear_result)
+        retained_status = str(
+            getattr(selection, "status", None) or "NOT ASSESSED"
+        ).upper()
+    if capacity.aggregate_assessment_status((
+        retained_status,
+        str(chord["chord"]["status"]),
+    )) != retained_status:
+        return _CONCRETE_CHORD_UNAVAILABLE
+    return None
+
+
 def directional_shear_publication_evidence_is_current(
     inp,
     shear_result,
@@ -2349,15 +2581,15 @@ def directional_shear_publication_evidence_is_current(
                         str(shear_status),
                         str(longitudinal_status),
                     ))
-            concrete_chord = candidate_shear.get("concrete_chord")
-            if concrete_chord is not None:
-                if not capacity.concrete_route_chord_is_consistent(
-                    concrete_chord, candidate_input
-                ):
-                    return False, unavailable_reason
+            concrete_chord = concrete_route_chord_publication_assessment(
+                candidate_input, candidate_shear
+            )
+            if concrete_chord["valid"] is not True:
+                return False, unavailable_reason
+            if concrete_chord["required"] is True:
                 shear_status = capacity.aggregate_assessment_status((
                     str(shear_status),
-                    str(concrete_chord["status"]),
+                    str(concrete_chord["chord"]["status"]),
                 ))
         else:
             shear_status = str(nominal.get("status") or "NOT ASSESSED").upper()
@@ -2693,6 +2925,9 @@ def _single_shear_publication_input_is_current(
                 provided is not None and provided.valid is True
             ):
                 return False, direction_reason or concrete_reason
+            chord_reason = _concrete_route_chord_rejection(inp, shear_result)
+            if chord_reason is not None:
+                return False, chord_reason
             return True, None
 
     try:
@@ -2703,7 +2938,15 @@ def _single_shear_publication_input_is_current(
     except (capacity.CapacityInputError, TypeError, ValueError, OverflowError):
         return True, None
     if raw_selection.valid is True and raw_selection.route == "concrete":
-        return concrete_shear_publication_input_is_current(inp, shear_result)
+        concrete_current, concrete_reason = (
+            concrete_shear_publication_input_is_current(inp, shear_result)
+        )
+        if concrete_current is not True:
+            return False, concrete_reason
+        chord_reason = _concrete_route_chord_rejection(inp, shear_result)
+        if chord_reason is not None:
+            return False, chord_reason
+        return True, None
     if raw_selection.valid is not True:
         concrete = shear_result.get("res") if isinstance(shear_result, Mapping) else None
         if isinstance(concrete, Mapping) and concrete.get("valid") is True:
@@ -6536,6 +6779,59 @@ def _summary_row(
     return row
 
 
+def _concrete_route_chord_summary_row(inp, direction, suffix):
+    """Summary row of the ``a_l = d`` tension chord on the concrete shear route."""
+
+    publication = concrete_route_chord_publication_assessment(inp, direction)
+    chord = publication.get("chord")
+    check = f"Shear{suffix} tension chord (a_l = d)"
+    keys = {"overview_key": "shear:concrete_chord", "overview_parent": "shear"}
+    if publication.get("valid") is not True or not isinstance(chord, Mapping):
+        return _summary_row(
+            check, "plastic", "NOT ASSESSED", "-", "-", None, "Shear",
+            result_reason(
+                publication.get("reason") or _CONCRETE_CHORD_UNAVAILABLE,
+                "shear",
+                context="concrete-route tension chord",
+            ),
+            inp,
+            **keys,
+        )
+    if chord.get("valid") is not True:
+        return _summary_row(
+            check, "plastic", "NOT ASSESSED", "-", "-", None, "Shear",
+            report_notation.text(
+                "The tension chord is not assessed: {}.",
+                str(chord.get("reason") or "-"),
+            ),
+            inp,
+            **keys,
+        )
+    note = report_notation.text(
+        "{}; MEd + |VEd| d = {:.1f} kNm; face MRd = {:.1f} kNm",
+        str(chord.get("clause") or "-"),
+        float(chord["m_total"]),
+        float(chord["m_rd"]),
+    )
+    if chord.get("capped") is True and chord.get("m_ed_max") is not None:
+        note += report_notation.text(
+            "; the entered MEd,max = {:.1f} kNm limits the shift",
+            float(chord["m_ed_max"]),
+        )
+    return _summary_row(
+        check,
+        "plastic",
+        str(chord["status"]),
+        _percent(chord["util"]),
+        "<= 100 %",
+        chord["util"],
+        "Shear",
+        note,
+        inp,
+        **keys,
+    )
+
+
 def _ordinary_crack_summary_row(inp, output):
     """Format one retained duration-specific output without deriving a verdict."""
     status = str(output.get("calculation_state") or "NOT ASSESSED")
@@ -8383,6 +8679,13 @@ def result_summary_rows(inp, results, *, stale=False):
                 overview_key="shear:without_links",
                 overview_parent="shear",
             ))
+            if (
+                selected_resistance.get("valid") is True
+                and selected_route == "concrete"
+            ):
+                rows.append(_concrete_route_chord_summary_row(
+                    inp, direction, suffix,
+                ))
             if not links_selected:
                 return
             links = direction.get("links")
