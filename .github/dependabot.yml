@@ -20,9 +20,9 @@ updates:
         # release, so each Streamlit update comes as its own pull request.
         exclude-patterns:
           - streamlit
-  # One pull request for each action. The policy validators in tools/ pin the
-  # SHAs of actions/checkout and actions/setup-python: an update of these two
-  # also changes those constants (see AGENTS.md).
+  # One pull request for each action. The policy validators in tools/ and one
+  # test pin the SHA of each action: an update also changes those constants
+  # (see AGENTS.md).
   - package-ecosystem: github-actions
     directory: /
     schedule:
