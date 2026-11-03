@@ -3374,7 +3374,7 @@ def test_2023_ductility_class_mismatch_is_fail_closed_but_concrete_stays_current
     )
 
     assert not at.exception
-    state = at.session_state.filtered_state
+    state = at.session_state.to_dict()
     results = copy.deepcopy(state["results"])
     inp = copy.deepcopy(state["result_input_snapshot"])
     shear_result = results["shear"]
@@ -3853,4 +3853,4 @@ def test_app_rejects_unsafe_active_gamma_v_before_a_shear_result(
         "gamma_V must be a positive finite real number" in item.value
         for item in at.error
     )
-    assert "shear" not in at.session_state.filtered_state.get("results", {})
+    assert "shear" not in at.session_state.to_dict().get("results", {})

@@ -10,8 +10,7 @@ from app_workflow_navigation import goto_input_stage, goto_page, goto_widget_own
 
 
 class State(dict):
-    @property
-    def filtered_state(self):
+    def to_dict(self):
         return self
 
 

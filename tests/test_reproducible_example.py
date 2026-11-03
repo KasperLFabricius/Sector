@@ -211,7 +211,7 @@ def test_reference_uniform_wall_respects_every_reinforcement_bound():
 def test_complete_example_retains_results_without_trace_payloads(
     calculated_example,
 ):
-    state = calculated_example.session_state.filtered_state
+    state = calculated_example.session_state.to_dict()
     results = state["results"]
     assert state["calculation_record"]["input_sha256"] == EXPECTED_LOADED_INPUT_SHA256
     assert set(results) == {
@@ -228,7 +228,7 @@ def test_complete_example_retains_results_without_trace_payloads(
 def test_plastic_elastic_and_crack_outputs_match_independent_oracles(
     calculated_example,
 ):
-    results = calculated_example.session_state.filtered_state["results"]
+    results = calculated_example.session_state.to_dict()["results"]
     plastic = results["plastic"]
     pure_mx = next(point for point in plastic["points"] if point["V"] == 90.0)
     expected_plastic = oracle.plastic_pure_mx()
@@ -350,7 +350,7 @@ def test_plastic_elastic_and_crack_outputs_match_independent_oracles(
 def test_member_and_detailing_outputs_match_independent_equations(
     calculated_example,
 ):
-    results = calculated_example.session_state.filtered_state["results"]
+    results = calculated_example.session_state.to_dict()["results"]
     shear = results["shear"]
     expected_ray = oracle.applied_ray(
         tuple((point["Mx"], point["My"]) for point in results["plastic"]["points"]),
@@ -435,8 +435,8 @@ def test_member_and_detailing_outputs_match_independent_equations(
 def test_pub_m01_provided_links_publish_their_own_pass_in_native_views(
     pub_m01_example,
 ):
-    results = pub_m01_example.session_state.filtered_state["results"]
-    inputs = pub_m01_example.session_state.filtered_state[
+    results = pub_m01_example.session_state.to_dict()["results"]
+    inputs = pub_m01_example.session_state.to_dict()[
         "result_input_snapshot"
     ]
     shear = results["shear"]
@@ -512,7 +512,7 @@ def test_pub_m01_report_profiles_publish_provided_link_pass_separately(
     pub_m01_example,
     profile,
 ):
-    state = pub_m01_example.session_state.filtered_state
+    state = pub_m01_example.session_state.to_dict()
     pdf = sector_report.build_report(
         {},
         state["result_input_snapshot"],
@@ -535,7 +535,7 @@ def test_pub_m01_matching_primary_plastic_fallback_reaches_native_views(
     pub_m01_example,
 ):
     at = pub_m01_example
-    state = at.session_state.filtered_state
+    state = at.session_state.to_dict()
     inp = state["result_input_snapshot"]
     baseline = copy.deepcopy(state["results"])
     fallback = copy.deepcopy(baseline)
@@ -573,7 +573,7 @@ def test_pub_m01_matching_primary_plastic_fallback_reaches_native_views(
 def test_pub_m01_matching_primary_plastic_fallback_reaches_actual_reports(
     pub_m01_example, profile, tmp_path,
 ):
-    state = pub_m01_example.session_state.filtered_state
+    state = pub_m01_example.session_state.to_dict()
     inp = state["result_input_snapshot"]
     out = copy.deepcopy(state["results"])
     selected = out["plastic_cases"][0]["results"]
@@ -615,7 +615,7 @@ def _pub_m01_unrelated_primary_result(state, operand="Mx_pl"):
 def test_pub_m01_primary_fallback_rejects_unrelated_plastic_actions(
     pub_m01_example, operand,
 ):
-    state = pub_m01_example.session_state.filtered_state
+    state = pub_m01_example.session_state.to_dict()
     inp, out = _pub_m01_unrelated_primary_result(state, operand)
     contexts = result_presentation._worked_case_contexts(inp, out, "plastic")
     assert contexts[0][3] is True
@@ -642,7 +642,7 @@ def test_pub_m01_primary_fallback_rejects_unrelated_plastic_actions(
 
 def test_pub_m01_unrelated_primary_is_withheld_in_native_views(pub_m01_example):
     at = pub_m01_example
-    state = at.session_state.filtered_state
+    state = at.session_state.to_dict()
     baseline = copy.deepcopy(state["results"])
     _inp, out = _pub_m01_unrelated_primary_result(state)
     try:
@@ -683,7 +683,7 @@ def test_pub_m01_unrelated_primary_is_withheld_in_actual_reports(
     pub_m01_example, profile, tmp_path,
 ):
     inp, out = _pub_m01_unrelated_primary_result(
-        pub_m01_example.session_state.filtered_state,
+        pub_m01_example.session_state.to_dict(),
     )
     pdf = sector_report.build_report({}, inp, out, figures=False, profile=profile)
     (tmp_path / f"unrelated-primary-{profile}.pdf").write_bytes(pdf)
@@ -983,7 +983,7 @@ def test_pub_m01_selected_link_nominal_route_rejects_stale_child_in_reports(
     profile,
 ):
     pub_m01_example = pub_m01_required_links_example
-    state = pub_m01_example.session_state.filtered_state
+    state = pub_m01_example.session_state.to_dict()
     results = copy.deepcopy(state["results"])
     _poison_selected_link_child(results)
     inp = state["result_input_snapshot"]
@@ -1009,7 +1009,7 @@ def test_pub_m01_stale_concrete_input_suppresses_old_worked_values_in_reports(
     pub_m01_example,
     profile,
 ):
-    state = pub_m01_example.session_state.filtered_state
+    state = pub_m01_example.session_state.to_dict()
     inp = copy.deepcopy(state["result_input_snapshot"])
     inp["concrete"] = dataclasses.replace(inp["concrete"], fck=80.0)
     shear = state["results"]["shear"]
@@ -1035,7 +1035,7 @@ def test_pub_m01_malformed_links_and_stale_concrete_suppress_all_shear_operands(
     pub_m01_example,
     profile,
 ):
-    state = pub_m01_example.session_state.filtered_state
+    state = pub_m01_example.session_state.to_dict()
     results = copy.deepcopy(state["results"])
     _poison_selected_link_child(results, require_selected=False)
     inp = copy.deepcopy(state["result_input_snapshot"])
@@ -1063,7 +1063,7 @@ def test_pub_m01_reports_bind_provided_links_to_current_input(
     profile,
     attack,
 ):
-    state = pub_m01_example.session_state.filtered_state
+    state = pub_m01_example.session_state.to_dict()
     inp = copy.deepcopy(state["result_input_snapshot"])
     if attack == "method":
         inp["shear_method"] = next(
@@ -1121,7 +1121,7 @@ def test_pub_m01_hostile_retained_link_evidence_fails_closed_in_reports(
     profile,
     attack,
 ):
-    state = pub_m01_example.session_state.filtered_state
+    state = pub_m01_example.session_state.to_dict()
     results = copy.deepcopy(state["results"])
     for shear in _pub_m01_shear_payloads(results):
         links = shear["links"]
@@ -1163,7 +1163,7 @@ def test_pub_m01_hostile_retained_link_evidence_fails_closed_in_reports(
 def test_fatigue_outputs_match_independent_equations(
     calculated_example,
 ):
-    results = calculated_example.session_state.filtered_state["results"]
+    results = calculated_example.session_state.to_dict()["results"]
     expected_fatigue = oracle.fatigue()
     spectrum = results["fatigue"]["spectra"][0]
     reinforcement = spectrum.reinforcement[0]
@@ -1256,7 +1256,7 @@ def test_manual_omits_reference_downloads_and_keeps_normal_controls():
 def test_tables_only_report_contains_every_main_calculation_chapter(
     calculated_example,
 ):
-    state = calculated_example.session_state.filtered_state
+    state = calculated_example.session_state.to_dict()
     pdf = sector_report.build_report(
         {},
         state["result_input_snapshot"],

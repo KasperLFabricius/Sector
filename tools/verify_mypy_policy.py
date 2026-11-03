@@ -250,8 +250,8 @@ def _snapshot(
         "files",
     }:
         raise MypyPolicyError("tool.mypy setting inventory differs")
-    if mypy.get("python_version") != "3.13":
-        raise MypyPolicyError("mypy python_version must remain 3.13")
+    if mypy.get("python_version") != "3.14":
+        raise MypyPolicyError("mypy python_version must remain 3.14")
     if mypy.get("strict") is not True:
         raise MypyPolicyError("strict mypy cannot be disabled")
     if mypy.get("incremental") is not False:

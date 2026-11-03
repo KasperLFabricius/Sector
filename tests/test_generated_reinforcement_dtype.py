@@ -17,7 +17,7 @@ def build_frame(*args, **kwargs):
                 if isinstance(node, ast.FunctionDef) and node.name == "_rebar_df")
     scope = {"pd": pd, "rebar_table": rebar_table}
     compiled = compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec")
-    code = next(value for value in compiled.co_consts if isinstance(value, CodeType))
+    code = next(value for value in compiled.co_consts if isinstance(value, CodeType) and value.co_name != "__annotate__")
     function = FunctionType(code, scope, argdefs=("bar",))
     function.__kwdefaults__ = {"size_mode": rebar_table.AREA_MODE,
                               "material_id": None, "diameters_mm": None}

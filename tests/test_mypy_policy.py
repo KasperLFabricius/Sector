@@ -58,7 +58,7 @@ def _write_policy(path: Path, files: tuple[str, ...] = INITIAL_FILES) -> None:
     file_rows = "\n".join(f'    "{item}",' for item in files)
     path.write_text(
         "[tool.mypy]\n"
-        'python_version = "3.13"\n'
+        'python_version = "3.14"\n'
         "strict = true\n"
         'follow_imports = "silent"\n'
         "incremental = false\n"
@@ -101,7 +101,7 @@ def test_live_strict_policy_workflow_and_boundaries_pass():
 
     assert tuple(policy["tool"]["mypy"]["files"]) == TYPED_BOUNDARY_FILES
     assert policy["tool"]["mypy"] == {
-        "python_version": "3.13",
+        "python_version": "3.14",
         "strict": True,
         "follow_imports": "silent",
         "incremental": False,

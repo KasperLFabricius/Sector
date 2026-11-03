@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_ci_uses_the_exact_source_pin():
-    assert (ROOT / ".python-version").read_text("ascii").strip() == "3.13.15"
+    assert (ROOT / ".python-version").read_text("ascii").strip() == "3.14.10"
     workflow = yaml.safe_load((ROOT / ".github/workflows/qa.yml").read_text("utf-8"))
     selectors = [
         step["with"]
@@ -41,10 +41,10 @@ def test_direct_driver_accepts_the_pinned_running_interpreter():
 @pytest.mark.parametrize(
     "identity",
     [
-        "CPython|3.13.0|64",
         "CPython|3.14.0|64",
-        "PyPy|3.13.15|64",
-        "CPython|3.13.15|32",
+        "CPython|3.14.0|64",
+        "PyPy|3.14.10|64",
+        "CPython|3.14.10|32",
         "",
     ],
 )
@@ -54,14 +54,14 @@ def test_direct_driver_rejects_incompatible_interpreters(monkeypatch, identity):
         "run",
         lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, identity, ""),
     )
-    with pytest.raises(portable.PortableBuildError, match="64-bit CPython 3.13.15"):
+    with pytest.raises(portable.PortableBuildError, match="64-bit CPython 3.14.10"):
         portable._validate_python(ROOT, Path(sys.executable))
 
 
-@pytest.mark.parametrize("pin", ["3.13", "3.13.15rc1", "3.14.0", "3.13.015", ""])
+@pytest.mark.parametrize("pin", ["3.14", "3.14.10rc1", "3.13.15", "3.14.010", ""])
 def test_driver_rejects_invalid_source_pin_before_probing(tmp_path, pin):
     (tmp_path / ".python-version").write_text(pin, encoding="ascii")
-    with pytest.raises(portable.PortableBuildError, match="exact Python 3.13 patch"):
+    with pytest.raises(portable.PortableBuildError, match="exact Python 3.14 patch"):
         portable._validate_python(tmp_path, tmp_path / "unavailable.exe")
 
 
@@ -117,5 +117,5 @@ def test_powershell_selector_checks_explicit_override_without_fallback(
     else:
         assert result.returncode != 0
         assert (
-            "SECTOR_PORTABLE_PYTHON must select 64-bit CPython 3.13.15" in result.stderr
+            "SECTOR_PORTABLE_PYTHON must select 64-bit CPython 3.14.10" in result.stderr
         )

@@ -119,11 +119,11 @@ def _route(app, page):
 
 def _assert_inputs(app, expected):
     assert encode(app.session_state["_latest_inputs"]) == expected
-    assert not app.session_state.filtered_state.get("results")
+    assert not app.session_state.to_dict().get("results")
 
 
 def _assert_preferences(app, enabled, minutes):
-    state = app.session_state.filtered_state
+    state = app.session_state.to_dict()
     assert state["autosave_on"] is enabled
     assert state["autosave_min"] == minutes
     assert state["_durable_input_scalars"]["autosave_on"] is enabled
@@ -158,7 +158,7 @@ def test_complete_inputs_and_preferences_survive_all_native_owner_pages(
     expected = encode(app.session_state["_latest_inputs"])
     assert expected is not None
     enabled, minutes = (False, 7) if loaded_custom else (True, 2)
-    state = app.session_state.filtered_state
+    state = app.session_state.to_dict()
     assert state["autosave_on"] is enabled
     assert state["autosave_min"] == minutes
     for page in PAGES:

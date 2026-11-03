@@ -1,0 +1,23 @@
+# Weekly update pull requests for the hash-locked pip-compile files and the
+# SHA-pinned GitHub Actions. Each update runs the full QA workflow. The exact
+# Python pin in .python-version is updated by hand.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

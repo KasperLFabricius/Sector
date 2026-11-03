@@ -5487,7 +5487,7 @@ def test_loading_project_without_heightened_check_clears_prior_dk_state():
     at.run()
 
     assert not at.exception
-    state = at.session_state.filtered_state
+    state = at.session_state.to_dict()
     expected_defaults = {
         "sls_heightened_on": False,
         "sls_heightened_reference_case": "",

@@ -46,7 +46,7 @@ def callback_for(state, *, original=False):
     tree = ast.parse(source)
     node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_record_input_event")
     code = compile(ast.Module(body=[node], type_ignores=[]), "callback", "exec")
-    function = next(c for c in code.co_consts if isinstance(c, CodeType))
+    function = next(c for c in code.co_consts if isinstance(c, CodeType) and c.co_name != "__annotate__")
     scope = {"__builtins__": __builtins__, "copy": copy, "st": SimpleNamespace(session_state=state),
              "project_io": SimpleNamespace(REPORT_PROFILE_KEY="report_profile"),
              "_PENDING_INPUT_EVENTS_KEY": "_pending_input_events", "_NON_REPLAYABLE_INPUT_EVENT_KEYS": frozenset(),
@@ -182,7 +182,7 @@ def test_genuine_edit_survives_interruption_until_original_commit():
     tree = ast.parse(source)
     node = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_commit_input_fragment")
     code = compile(ast.Module(body=[node], type_ignores=[]), "commit", "exec")
-    function = next(c for c in code.co_consts if isinstance(c, CodeType))
+    function = next(c for c in code.co_consts if isinstance(c, CodeType) and c.co_name != "__annotate__")
     snapshots = []
     autosaves = []
     def snapshot(inputs):

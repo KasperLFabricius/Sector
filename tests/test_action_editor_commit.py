@@ -98,7 +98,7 @@ def functions(state):
     for name in ('_record_input_event', '_snapshot_input_state', '_snapshot_completed_input_state'):
         node = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
         compiled = compile(ast.Module(body=[node], type_ignores=[]), str(path), 'exec')
-        code = next(value for value in compiled.co_consts if isinstance(value, CodeType))
+        code = next(value for value in compiled.co_consts if isinstance(value, CodeType) and value.co_name != "__annotate__")
         scope[name] = FunctionType(code, scope, argdefs=tuple(ast.literal_eval(value) for value in node.args.defaults))
     return scope
 
