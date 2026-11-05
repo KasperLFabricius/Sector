@@ -421,6 +421,49 @@ _GREEK = {"eps": "&#949;", "sigma": "&#963;", "lambda": "&#955;", "alpha": "&#94
 _GREEK_RE = re.compile(r"\b(" + "|".join(_GREEK) + r")\b")
 
 
+_MED_MAX_BELOW_MED = "uncapped, MEd,max below MEd"
+_MED_MAX_BELOW_MED_NOTE = (
+    "The entered M<sub>Ed,max</sub> is less than M<sub>Ed</sub>, so it is not used."
+)
+# A last contents page that is used up to this share of its frame is almost empty.
+_CONTENTS_SPARSE_SHARE = 0.35
+
+
+class _ReportContents(TableOfContents):
+    """Contents that close the row gaps if this removes an almost empty last page."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._normal_styles = list(self.levelStyles)
+
+    def _page_fill(self, available, full):
+        """Return the page count and the height used on the last contents page."""
+
+        pages, used = 1, 0.0
+        for row in self._table._rowHeights:
+            if used + row > available:
+                pages, used, available = pages + 1, 0.0, full
+            used += row
+        return pages, used
+
+    def wrap(self, availWidth, availHeight):
+        self.levelStyles = self._normal_styles
+        size = super().wrap(availWidth, availHeight)
+        full = self._frame._aH
+        pages, used = self._page_fill(availHeight, full)
+        if pages == 1 or used > _CONTENTS_SPARSE_SHARE * full:
+            return size
+        self.levelStyles = [
+            ParagraphStyle(f"{style.name}_closed", parent=style, spaceBefore=0)
+            for style in self._normal_styles
+        ]
+        closed = super().wrap(availWidth, availHeight)
+        if self._page_fill(availHeight, full)[0] < pages:
+            return closed
+        self.levelStyles = self._normal_styles
+        return super().wrap(availWidth, availHeight)
+
+
 class _LiteralReportText(str):
     """Escaped identity/description text that remains wrappable in tables."""
 
@@ -2825,7 +2868,7 @@ class ReportBuilder:
     def _contents(self):
         """Add profile-appropriate linked contents without a page-count target."""
 
-        contents = TableOfContents(
+        contents = _ReportContents(
             levelStyles=[self.s["toc_h1"], self.s["toc_h2"]],
             dotsMinLevel=0,
             rightColumnWidth=12 * mm,
@@ -8670,6 +8713,8 @@ class ReportBuilder:
                     "uncapped" if model_2023 or not ch.get("capped") else "capped"
                 )
                 notes.append(f"This {demand_word} demand is part of the strut-angle objective. The selected angle moves away from the interval boundary when the chord would otherwise govern.")
+            if not model_2023 and ch.get("shear_term_selection") == _MED_MAX_BELOW_MED:
+                notes.append(_MED_MAX_BELOW_MED_NOTE)
             if model_2023:
                 notes.append("The acting axial force is already included in the conditional bending resistance for each face.")
                 notes.append(
@@ -8967,6 +9012,8 @@ class ReportBuilder:
                     + " (6.2.3(7)). Without the limit, the shear shift is "
                     f"&#916;F<sub>td</sub>&#183;z = {_fmt(lg.get('mv_uncapped'), 1)} kNm."
                 )
+            elif lg.get("shear_term_selection") == _MED_MAX_BELOW_MED:
+                self._small(_MED_MAX_BELOW_MED_NOTE)
             self._small(viz.chord_angle_note(
                 lg.get("theta_mode"),
                 angle_valid=concrete.get("angle_valid") is True,
@@ -9597,6 +9644,8 @@ class ReportBuilder:
                     + (f" = {_fmt(lg.get('m_ed_max'), 1)} kNm" if lg.get("m_ed_max") is not None else "")
                     + " (6.2.3(7)).",
                 ]
+            elif lg.get("shear_term_selection") == _MED_MAX_BELOW_MED:
+                notes[0:0] = [_MED_MAX_BELOW_MED_NOTE]
             for note in notes:
                 self._small(note)
             self._chord_off_block(

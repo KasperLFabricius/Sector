@@ -863,3 +863,29 @@ def test_base_en_combined_report_states_the_med_max_limit():
         in text
     )
     assert f"{MED_MAX_C - M_ED_C:.3f} kNm" in text
+
+
+@pytest.mark.parametrize("method", [codes.EC2_2005.label, None])
+def test_combined_chord_states_that_a_med_max_below_med_is_not_used(method):
+    """P1-18: an entered MEd,max below MEd is not used, and the output says so.
+
+    Hand check: the shift keeps dFtd z = 51.1 kNm (chord form case above) because
+    MEd,max = 250 kNm is below MEd = 300 kNm.
+    """
+    extra = {} if method is None else {"combined_method": method}
+    at = _torsion_app(
+        T_ED_C, m_x=M_ED_C, v_ed=V_ED_C, combined_on=True, med_max=250.0, **extra,
+    )
+    inp = copy.deepcopy(at.session_state["result_input_snapshot"])
+    out = copy.deepcopy(at.session_state["results"])
+    text = " ".join(_pdf_text(inp, out, "Standard").split())
+    assert "The entered MEd,max is less than MEd, so it is not used." in text
+    assert text.count("is less than MEd, so it is not used.") == 2
+    from app_workflow_navigation import goto_page
+
+    goto_page(at, "Analysis")
+    for view in ("Shear", "M-V-T Combined"):
+        at.selectbox(key="view").set_value(view).run()
+        captions = " ".join(str(item.value) for item in at.caption)
+        assert "is less than" in captions, view
+        assert "is not used" in captions, view

@@ -15895,6 +15895,11 @@ def shear_view(inp, results, *, global_results=None):
                     "No member maximum moment MEd,max is entered, so the shear "
                     "shift has no 6.2.3(7) limit."
                 )
+            elif ch.get("shear_term_selection") == "uncapped, MEd,max below MEd":
+                st.caption(
+                    "The entered member maximum moment MEd,max is less than MEd "
+                    "and is not used."
+                )
             if fell_back:
                 fallback_axis = fallback.get("axis", "?")
                 fallback_face = (
@@ -17000,6 +17005,11 @@ def _render_base_en_combined(c):
                 f"={float(lg['mv']):.3f}$ kN\u00b7m with the entered member maximum "
                 "moment MEd,max."
             )
+        elif lg.get("shear_term_selection") == "uncapped, MEd,max below MEd":
+            st.caption(
+                "The entered member maximum moment MEd,max is less than MEd and "
+                "is not used."
+            )
         st.caption(
             "Overall longitudinal reinforcement assessment: "
             f"{_pct(longitudinal['util'])} ({longitudinal['status']}); "
@@ -17547,6 +17557,11 @@ def combined_view(inp, results):
             st.caption(
                 "The entered member maximum moment $M_{Ed,max}$ limits the shear "
                 "shift (6.2.3(7))."
+            )
+        elif lg.get("shear_term_selection") == "uncapped, MEd,max below MEd":
+            st.caption(
+                "The entered member maximum moment $M_{Ed,max}$ is less than "
+                "$M_{Ed}$ and is not used."
             )
         if fell_back:
             fallback_axis = fallback.get("axis", "?")
