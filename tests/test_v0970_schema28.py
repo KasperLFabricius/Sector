@@ -71,6 +71,35 @@ def test_schema27_project_with_the_2023_preset_loads_without_pivot_c():
     assert all(scalars[key] == 0.0 for key in capacity.MED_MAX_KEYS.values())
 
 
+def test_schema27_project_without_the_preset_gets_pivot_c_of_the_default_preset(
+    tmp_path, monkeypatch
+):
+    # Owner decision 1: pivot C is on by default for the Eurocode presets. The
+    # default concrete preset of the app is the 2005 edition with the DK NA.
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path / "autosave"))
+    payload = json.loads(_schema27_text())
+    del payload["scalars"]["conc_preset"]
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    text = json.dumps(payload)
+    _tables, scalars, info = project_io.parse_project_with_info(text)
+    assert info["source_schema_version"] == 27
+    assert "conc_preset" not in scalars
+    assert scalars["conc_pivot_c"] is True
+
+    app = pathlib.Path(__file__).resolve().parents[1] / "app" / "sector_app.py"
+    at = AppTest.from_file(str(app), default_timeout=120).run()
+    at.session_state["_pending_project"] = text
+    at.run()
+    assert not at.exception
+    assert at.session_state["conc_preset"] == "DS/EN 1992-1-1:2005 + DK NA:2024"
+    assert at.session_state["conc_pivot_c"] is True
+
+
 def test_load_message_uses_one_edition_name():
     message = " ".join(project_io.SCHEMA28_METHOD_CHANGES)
     assert "2005 family" not in message

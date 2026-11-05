@@ -98,7 +98,9 @@ def _schema28_defaults(scalars: dict) -> None:
 
     scalars.setdefault(
         "conc_pivot_c",
-        material_presets.pivot_c_default(scalars.get("conc_preset")),
+        material_presets.pivot_c_default(
+            scalars.get("conc_preset", material_presets.DEFAULT_CONCRETE_PRESET)
+        ),
     )
     scalars.setdefault(capacity.MED_MAX_ON_KEY, False)
     for key in capacity.MED_MAX_KEYS.values():

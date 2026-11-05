@@ -71,6 +71,8 @@ def _concrete_presets():
 
 
 CONCRETE_PRESETS = _concrete_presets()
+# The app and the project migration use this preset when none is entered.
+DEFAULT_CONCRETE_PRESET = "DS/EN 1992-1-1:2005 + DK NA:2024"
 
 CONCRETE_FIELDS = ["fck", "gamma_c", "alpha_cc", "eps_c2", "eps_cu2", "n"]
 
