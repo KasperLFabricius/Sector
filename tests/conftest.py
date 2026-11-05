@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 import os
-import tempfile
 
 
 import pytest
@@ -30,21 +29,22 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.hookimpl(hookwrapper=True)
-def pytest_fixture_setup(fixturedef):
+def pytest_fixture_setup(fixturedef, request):
     """Give each module or session fixture its own autosave folder.
 
     These fixtures run before ``_isolate_autosave``. A setup that takes longer than
     the autosave interval would otherwise write ``~/.sector/autosave.json``, and the
     next fixture app, also in another worker, would restore that project on launch.
-    A fixture that sets its own folder keeps it.
+    A fixture that sets its own folder keeps it. The folder stays after the setup,
+    because a persistent image worker can keep its launcher page there.
     """
     if fixturedef.scope == "function":
         yield
         return
     previous = os.environ.get("SECTOR_AUTOSAVE_DIR")
-    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
-        os.environ["SECTOR_AUTOSAVE_DIR"] = folder
-        yield
+    folder = str(request.config._tmp_path_factory.mktemp("fixture_autosave"))
+    os.environ["SECTOR_AUTOSAVE_DIR"] = folder
+    yield
     if os.environ.get("SECTOR_AUTOSAVE_DIR") == folder:
         if previous is None:
             del os.environ["SECTOR_AUTOSAVE_DIR"]
