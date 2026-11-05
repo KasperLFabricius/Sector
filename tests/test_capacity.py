@@ -1655,11 +1655,11 @@ def _pub_h01_longitudinal_fixture(utilisation=1.2392531643):
         "z": 0.243,
         "util": utilisation,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 4.213620,
-        "shear_headroom": max(m_rd - 80.0, 0.0),
+        "m_ed_max": None,
         "shear_term_selection": (
-            "zero-capacity uncapped demand" if m_rd <= 0.0 else "uncapped"
+            "uncapped"
         ),
     }
 
@@ -1742,9 +1742,9 @@ def _pub_h01_2005_torsion_candidates():
             "z": 0.243,
             "util": (m_ed + mt) / m_rd,
             "capped": False,
-            "cap_shear_force": True,
+            "cap_shear_force": False,
             "mv_uncapped": 0.0,
-            "shear_headroom": m_rd - m_ed,
+            "m_ed_max": None,
             "shear_term_selection": "uncapped",
         }
         if role == "shear_axis":
@@ -2171,7 +2171,7 @@ def test_combined_longitudinal_legacy_zero_demand_control_remains_complete():
         m_total=direct["m_ed"] + direct["mv"],
     )
     direct["m_rd"] = direct["m_total"] / 0.80
-    direct["shear_headroom"] = direct["m_rd"] - direct["m_ed"]
+    direct["m_ed_max"] = None
     direct["util"] = 0.80
     combined = {
         "longitudinal": direct,
@@ -2239,7 +2239,6 @@ def test_combined_longitudinal_2023_rejects_first_generation_headroom_cap():
         m_total=100.0,
         util=1.0,
         capped=True,
-        cap_shear_force=False,
         status="PASS",
         ok=True,
     )
@@ -2277,9 +2276,9 @@ def test_combined_longitudinal_first_generation_reconciles_headroom_cap_state():
         "status": "FAIL",
         "ok": False,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 48.6,
-        "shear_headroom": 20.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
 
@@ -2841,7 +2840,7 @@ def test_combined_longitudinal_malformed_parent_coverage_preserves_only_child_fa
             ok=False,
             m_rd=100.0,
             util=1.2392531643,
-            shear_headroom=20.0,
+            m_ed_max=None,
         )
     combined = {
         "longitudinal": direct,
@@ -2925,7 +2924,7 @@ def test_combined_longitudinal_incomplete_siblings_preserve_only_direct_failure(
             ok=False,
             m_rd=100.0,
             util=1.2392531643,
-            shear_headroom=20.0,
+            m_ed_max=None,
         )
     if child_state == "none_sibling":
         candidates[1] = None
@@ -3001,7 +3000,7 @@ def test_combined_longitudinal_malformed_candidate_container_preserves_only_fail
                 ok=False,
                 m_rd=100.0,
                 util=1.2392531643,
-                shear_headroom=20.0,
+                m_ed_max=None,
             )
         owner_torsion = 40.0
         owner_area = 500.0
@@ -3434,7 +3433,7 @@ def test_combined_longitudinal_unassessed_chord_retains_valid_partial_evidence()
         "ftd_t": 80.0 / 0.243,
         "util": 0.50,
         "mv_uncapped": 10.0,
-        "shear_headroom": 100.0,
+        "m_ed_max": None,
     }
     retained = {
         "status": "NOT ASSESSED",

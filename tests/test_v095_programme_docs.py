@@ -721,7 +721,11 @@ def test_pr_a05_acceptance_freezes_mapping_boundaries_and_fallback() -> None:
 
 def test_live_identity_is_v0966_and_uses_current_schema_27() -> None:
     assert __version__ == "0.96.9"
-    assert re.search(r"^VERSION\s*=\s*27$", _text(PROJECT_IO), re.MULTILINE)
+    # Sector 0.97.0 moved the live schema to 28; schema 27 stays migratable.
+    assert re.search(r"^VERSION\s*=\s*28$", _text(PROJECT_IO), re.MULTILINE)
+    assert re.search(
+        r"^PREVIOUS_VERSION\s*=\s*27$", _text(PROJECT_IO), re.MULTILINE
+    )
     assert _fixture()["programme_base"] == {
         "commit": BASE,
         "tree": TREE,
@@ -905,7 +909,10 @@ def test_upload_vectors_regenerate_with_the_documented_frozen_clock(
         # Current project saves retain all current fields; only this historical
         # reproduction removes these exact unpopulated defaults.
         historical = json.loads(text)
-        assert historical["version"] == recipe["schema_version"]
+        # Schema 28 (0.97.0) changed only the version number of an empty
+        # project; the frozen vector keeps its schema-27 identity.
+        assert historical["version"] == project_io.VERSION == 28
+        historical["version"] = recipe["schema_version"]
         for scalar, expected in recipe["post_dump_omitted_scalar_defaults"].items():
             actual = historical["scalars"][scalar]
             assert type(actual) is type(expected) and actual == expected

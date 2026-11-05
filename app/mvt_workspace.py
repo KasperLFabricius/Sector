@@ -21,6 +21,10 @@ _SHARED_KEYS = frozenset({
     "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max", "capacity_steel_material_id",
+    # Member maximum moment MEd,max (rendered on the shared page).
+    "shear_med_max_on", "shear_med_max_copy",
+    "shear_med_max_mx_pos", "shear_med_max_mx_neg",
+    "shear_med_max_my_pos", "shear_med_max_my_neg",
 })
 
 

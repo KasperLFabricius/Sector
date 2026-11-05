@@ -44,13 +44,13 @@ def _overview_pdf(*, font_size=11.5, settings_label="Neutral-axis sweep start",
     for line in lines:
         pdf.drawString(50, y, line)
         y -= 18
-    pdf.drawString(50, y, "Note 28")
-    pdf.linkAbsolute("", "note28", Rect=(49, y-1, 100, y+12))
+    pdf.drawString(50, y, "Note 29")
+    pdf.linkAbsolute("", "note29", Rect=(49, y-1, 100, y+12))
     pdf.drawString(50, y-18, "The table shows one governing row for each engineering check type.")
     pdf.showPage()
     pdf.setFont("Helvetica", 10.5)
-    pdf.bookmarkPage("note28", fit="XYZ", left=50, top=774.5)
-    pdf.drawString(50, 760, "Note 28. Fatigue: Road traffic.")
+    pdf.bookmarkPage("note29", fit="XYZ", left=50, top=774.5)
+    pdf.drawString(50, 760, "Note 29. Fatigue: Road traffic.")
     pdf.drawString(50, 742, "Source: Grouped action spectrum")
     pdf.drawString(50, 724, "governing: R1 - simplified stress-range screen")
     if clause_paragraphs:
@@ -59,7 +59,7 @@ def _overview_pdf(*, font_size=11.5, settings_label="Neutral-axis sweep start",
     else:
         pdf.drawString(50, 706, "max Miner D 1.7475 \u00d7 10-7; max yield/proof utilisation 20.8 %")
     if duplicate_note:
-        pdf.drawString(50, 680, "Note 28. Fatigue: Road traffic.")
+        pdf.drawString(50, 680, "Note 29. Fatigue: Road traffic.")
     pdf.setFont("Helvetica-Bold", font_size)
     pdf.drawString(50, 620, "3.9 Analysis settings")
     pdf.setFont("Helvetica", 10.5)
@@ -81,12 +81,12 @@ def test_reviewed_overview_row_note_link_and_settings_are_accepted():
 @pytest.mark.parametrize("old,new", [
     ("46.2 %", "20.8 %"), ("PASS", "FAIL"),
     ("<= 100 %", "<= 200 %"), ("Road traffic PASS", "Other spectrum PASS"),
-    ("Note 28\nThe table", "Note 27\nThe table"),
+    ("Note 29\nThe table", "Note 28\nThe table"),
     ("max yield/proof utilisation 20.8 %", "max yield/proof utilisation 46.2 %"),
     ("max Miner D 1.7475 \u00d7 10-7", "max Miner D 1.7475 \u00d7 10-6"),
     ("governing: R1 -", "governing: R2 -"),
     ("Check Action set Status Result Criterion Source / note", "Check Result"),
-    ("Note 28. Fatigue: Road traffic.", "Note 28. Other check: Road traffic."),
+    ("Note 29. Fatigue: Road traffic.", "Note 29. Other check: Road traffic."),
 ])
 def test_overview_rejects_wrong_row_and_wrong_linked_criterion(old, new):
     _reader, texts = _overview_pdf()
@@ -118,7 +118,7 @@ def test_correct_percentages_elsewhere_do_not_repair_a_wrong_row_or_note():
 @pytest.mark.parametrize("change", ["none", "missing-header", "gap", "row-after-note"])
 def test_overview_continuation_keeps_headers_order_and_contiguous_pages(change):
     _reader, texts = _overview_pdf()
-    final_row = "Fatigue Road traffic PASS 46.2 % <= 100 %\nNote 28\n"
+    final_row = "Fatigue Road traffic PASS 46.2 % <= 100 %\nNote 29\n"
     note = "The table shows one governing row for each engineering check type.\n"
     assert final_row in texts[0] and note in texts[0]
     first = texts[0].replace(final_row, "").replace(note, "")

@@ -52,10 +52,10 @@ def _concrete_presets():
     presets = {
         "Curve 1 (cubic)":
             {"curve": 1, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0,
-             "k_tc": 1.0, **base},
+             "k_tc": 1.0, "pivot_c": False, **base},
         "Curve 2 (parabola-rectangle)":
             {"curve": 2, "fck": _DEFAULT_FCK, "gamma_c": 1.0, "alpha_cc": 1.0,
-             "k_tc": 1.0, **base},
+             "k_tc": 1.0, "pivot_c": False, **base},
     }
     for label, code in codes.CODES.items():
         presets[label] = {
@@ -64,6 +64,7 @@ def _concrete_presets():
             "gamma_c": code.gamma_c,
             "alpha_cc": round(code.concrete_factor(_DEFAULT_FCK), 4),
             "k_tc": code.k_tc,
+            "pivot_c": bool(code.pivot_c),
             **base,
         }
     return presets
@@ -104,9 +105,18 @@ CONCRETE_HELP = {
 }
 
 
+def pivot_c_default(preset) -> bool:
+    """Default of the pivot C strain limit (6.1(6) and Figure 6.1) for a preset.
+
+    The EN 1992-1-1:2004 edition presets apply it. DS/EN 1992-1-1:2023 8.1.1(3)
+    has no such limit, and the two curve presets reproduce the legacy ECROSS laws.
+    """
+    return bool(CONCRETE_PRESETS.get(preset, {}).get("pivot_c", False))
+
+
 def build_concrete(curve, fck, gamma_c, alpha_cc,
                    eps_c2=_DEFAULT_EPS_C2, eps_cu2=_DEFAULT_EPS_CU2,
-                   n=_DEFAULT_N, k_tc=None) -> Concrete:
+                   n=_DEFAULT_N, k_tc=None, pivot_c=False) -> Concrete:
     """Build a :class:`~sector.materials.Concrete` from the panel parameters.
 
     ``eps_c2``/``eps_cu2`` are taken in per mille (the diagram's unit) and
@@ -117,7 +127,7 @@ def build_concrete(curve, fck, gamma_c, alpha_cc,
     return Concrete(fck=float(fck), gamma_c=float(gamma_c), curve=int(curve),
                     alpha_cc=float(alpha_cc),
                     eps_c2=float(eps_c2) / 1000.0, eps_cu2=float(eps_cu2) / 1000.0,
-                    n=float(n))
+                    n=float(n), pivot_c=bool(pivot_c))
 
 
 def strength_dependent_alpha_cc(preset, fck, k_tc=None):

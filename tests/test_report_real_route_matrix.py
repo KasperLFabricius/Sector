@@ -26,7 +26,7 @@ import sector_report
 import test_report as report_data
 
 from native_member_report_fixtures import (
-    native_member_report_cases, native_subdivided_report_case,
+    native_med_max_report_case, native_member_report_cases, native_subdivided_report_case,
 )
 from test_shear import pub_m01_signed_2023_cases
 from sector import detailing, design_standards
@@ -440,7 +440,7 @@ def _verify_native_members(inp, out, *, combined):
 @result_presentation.publication_calculation_scope()
 def test_normal_report_routes_cover_the_complete_equation_catalogue(
     monkeypatch, tmp_path, native_member_report_cases,
-    native_subdivided_report_case, pub_m01_signed_2023_cases,
+    native_subdivided_report_case, pub_m01_signed_2023_cases, native_med_max_report_case,
 ):
     calls: list[tuple[str, str | None]] = []
     original_formula = sector_report.ReportBuilder._formula
@@ -461,6 +461,8 @@ def test_normal_report_routes_cover_the_complete_equation_catalogue(
         scenarios[name] = factory()
     scenarios["S5-native-2005"] = copy.deepcopy(native_member_report_cases["biaxial"])
     scenarios["S5-native-2005-zero-bending"] = copy.deepcopy(native_member_report_cases["two-face"])
+    # EN 1992-1-1 6.2.3(7): an entered, binding MEd,max selects the capped chord forms.
+    scenarios["S5-native-2005-med-max"] = copy.deepcopy(native_med_max_report_case)
     for sign, label in ((1, "positive"), (-1, "negative")):
         native = pub_m01_signed_2023_cases[sign]
         scenarios["S6-native-2023-" + label] = copy.deepcopy((native["input"], native["results"]))
@@ -500,13 +502,15 @@ def test_normal_report_routes_cover_the_complete_equation_catalogue(
         "extra": sorted(covered - supported, key=repr),
         "deferred": sorted(deferred, key=repr),
     }, indent=2), encoding="utf-8")
-    assert len(catalogue) == 145 and len(supported) == 144
+    assert len(catalogue) == 147 and len(supported) == 146
     assert deferred == {("combined.chord.demand", "2023")}
     assert supported.isdisjoint(deferred) and supported | deferred == catalogue
     assert all(any(key.startswith(family + ".") for key, _ in actual["S0"])
                for family in ("shear", "torsion", "combined"))
     assert {("combined.chord.demand", None), ("combined.chord.utilisation", None)} <= actual["S5-native-2005"]
     assert ("torsion.minimum-reinforcement.screen", None) in actual["S5-native-2005-zero-bending"]
+    assert {("shear.chord.demand", "2005-capped"), ("combined.chord.demand", "capped")} <= actual["S5-native-2005-med-max"]
+    assert not {("shear.chord.demand", "2005-capped"), ("combined.chord.demand", "capped")} & actual["S5-native-2005"]
     for name in ("S6-native-2023-positive", "S6-native-2023-negative"):
         assert {("shear.chord.demand", "2023"), ("shear.2023.vrdc", None)} <= actual[name]
     assert {("torsion.subtube." + suffix, None) for suffix in (

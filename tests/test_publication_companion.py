@@ -377,8 +377,13 @@ def test_direct_rejects_unavailable_companion(direct_torsion_cases, demand, atta
     assert rows["shear:with_links"]["result"] == "-"
     assert rows["shear:with_links"]["util"] is None
     if demand == 30.0:
-        assert rows["shear:without_links"]["status"] == "PASS"
-        assert rows["shear:without_links"]["util"] == pytest.approx(out["shear"]["util"])
+        # Concrete route with live torsion: the a_l = d tension chord carries
+        # Ftd,T z/2 from the torsion result (EN 1992-1-1 6.3.2(3)) and joins
+        # the shear status (TB-03). Without a current torsion companion the
+        # chord cannot be verified, so the shear status is withheld too.
+        assert out["shear"]["concrete_chord"]["has_torsion"] is True
+        assert rows["shear:without_links"]["status"] == "NOT ASSESSED"
+        assert rows["shear:without_links"]["util"] is None
 
 
 @pytest.mark.parametrize("attack", ("missing", "invalid", "ambiguous"))

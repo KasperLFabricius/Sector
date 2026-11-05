@@ -476,7 +476,7 @@ def test_current_schema_round_trip_retains_selected_gamma_v_exactly():
     _loaded_tables, loaded = project_io.parse_project(text)
     payload = json.loads(text)
 
-    assert payload["version"] == 27
+    assert payload["version"] == project_io.VERSION
     assert payload["scalars"]["shear_gamma_v"] == pytest.approx(1.25)
     assert loaded["shear_gamma_v"] == pytest.approx(1.25)
 
@@ -493,7 +493,7 @@ def test_schema_26_active_2023_shear_migrates_to_explicit_default_gamma_v():
 
     assert loaded["shear_gamma_v"] == pytest.approx(1.40)
     assert info["source_schema_version"] == 26
-    assert info["target_schema_version"] == 27
+    assert info["target_schema_version"] == project_io.VERSION
     assert info["migrated"] is True
     assert len(info["migration_warnings"]) == 1
     assert "explicit gamma_V input at 1.40" in info["migration_warnings"][0]
@@ -1115,7 +1115,7 @@ def test_schema_27_serializes_exact_three_crack_width_inputs():
     payload = json.loads(project_io.dump_project(tables, scalars))
     elastic = payload["tables"][load_cases.ELASTIC_TABLE_KEY]
 
-    assert payload["version"] == 27
+    assert payload["version"] == project_io.VERSION
     assert tuple(elastic["columns"]) == load_cases.ELASTIC_COLUMNS
     assert project_io.LEGACY_SHARED_CRACK_WIDTH_KEY not in payload["scalars"]
     assert payload["scalars"][
@@ -1164,7 +1164,7 @@ def test_schema_25_blank_or_zero_shared_width_migrates_to_three_zeroes(shared):
 
     assert info["migrated"] is True
     assert info["source_schema_version"] == 25
-    assert info["target_schema_version"] == 27
+    assert info["target_schema_version"] == project_io.VERSION
     assert info["migration_warnings"] == ()
     assert scalars["sls_long_term_permitted_crack_width_mm"] == 0.0
     assert scalars["sls_short_term_permitted_crack_width_mm"] == 0.0
@@ -1257,7 +1257,7 @@ def test_schema_25_migration_does_not_mutate_source_and_resaves_current_keys():
     resaved = json.loads(
         project_io.dump_project(migrated_tables, migrated_scalars)
     )
-    assert resaved["version"] == 27
+    assert resaved["version"] == project_io.VERSION
     assert project_io.LEGACY_SHARED_CRACK_WIDTH_KEY not in resaved["scalars"]
     assert {
         "sls_long_term_permitted_crack_width_mm",
@@ -1853,7 +1853,7 @@ def test_retired_schemas_name_the_current_and_migratable_versions(version):
             ValueError,
             match=(
                 rf"unsupported Sector project schema {version}; only current "
-                r"schema 27 and migrations from schemas 25 and 26"
+                r"schema 28 and migrations from schemas 25, 26 and 27"
             ),
         ):
             reader(text)
@@ -1865,8 +1865,8 @@ def test_noncurrent_non_v23_schema_names_current_and_migratable_versions():
     with pytest.raises(
         ValueError,
         match=(
-            r"unsupported Sector project schema 22; only current schema 27 "
-            r"and migrations from schemas 25 and 26"
+            r"unsupported Sector project schema 22; only current schema 28 "
+            r"and migrations from schemas 25, 26 and 27"
         ),
     ):
         project_io.parse_project(text)
@@ -1883,7 +1883,7 @@ def test_schema_27_serialization_contains_no_retired_bridge_inputs():
 
     data = json.loads(project_io.dump_project(tables, scalars))
 
-    assert data["version"] == 27
+    assert data["version"] == project_io.VERSION
     assert set(data["tables"]) == set(project_io.PROJECT_TABLE_KEYS)
     assert not {
         "bridge_brittle_base",
@@ -2494,7 +2494,7 @@ def test_optional_document_roles_roundtrip_in_schema27(roles):
     tables, scalars = _current_project()
     scalars.update(roles)
     text = project_io.dump_project(tables, scalars)
-    assert json.loads(text)["version"] == 27
+    assert json.loads(text)["version"] == project_io.VERSION
     _, loaded = project_io.parse_project(text)
     for key in ("rep_checker", "rep_approver"):
         assert loaded.get(key, "") == roles.get(key, "")
@@ -2521,7 +2521,7 @@ def test_report_source_register_roundtrips_without_changing_schema(register):
     tables, scalars = _current_project()
     scalars["rep_source_register"] = register
     text = project_io.dump_project(tables, scalars)
-    assert json.loads(text)["version"] == 27
+    assert json.loads(text)["version"] == project_io.VERSION
     _, loaded = project_io.parse_project(text)
     assert loaded["rep_source_register"] == register
 

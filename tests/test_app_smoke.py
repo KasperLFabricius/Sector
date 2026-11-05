@@ -5205,8 +5205,11 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
     ] == 25
     expected_migration = {
         "source_schema_version": 25,
-        "target_schema_version": 27,
-        "warnings": [at.session_state["_project_migration_warnings"][0]],
+        "target_schema_version": project_io.VERSION,
+        "warnings": [
+            at.session_state["_project_migration_warnings"][0],
+            project_io.schema28_migration_warning(),
+        ],
         "migration_provenance": {
             "source_key": project_io.LEGACY_SHARED_CRACK_WIDTH_KEY,
             "shared_value_mm": 0.20,
@@ -5302,7 +5305,7 @@ def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
     )
     migration = at.session_state["_loaded_project_migration"]
     assert migration["source_schema_version"] == 26
-    assert migration["target_schema_version"] == 27
+    assert migration["target_schema_version"] == project_io.VERSION
     assert migration["migration_provenance"]["shear_gamma_v"] == {
         "defaulted": True,
         "value": 1.40,

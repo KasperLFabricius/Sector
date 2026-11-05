@@ -609,18 +609,21 @@ def test_manual_documents_both_2023_chords_and_the_exact_failed_fixture():
         block[1] for block in manual.manual_blocks() if block[0] == "md"
     )
 
+    # DS/EN 1992-1-1:2023 8.2.3(8): each chord gets (NVd + NEd)/2 in (8.51)/(8.52).
     assert r"N_{Vd}=|V_{Ed}|\cot\theta" in text
-    assert r"F_{td}=M_{Ed}/z+N_{Vd}+N_{Ed}/2" in text
-    assert r"F_{cd}=M_{Ed}/z-N_{Vd}+N_{Ed}/2" in text
-    chords = _prose_block_containing(r"F_{td}=M_{Ed}/z+N_{Vd}+N_{Ed}/2")
+    assert r"F_{td}=M_{Ed}/z+(N_{Vd}+N_{Ed})/2" in text
+    assert r"F_{cd}=M_{Ed}/z-(N_{Vd}+N_{Ed})/2" in text
+    chords = _prose_block_containing(r"F_{td}=M_{Ed}/z+(N_{Vd}+N_{Ed})/2")
     assert "$M_{Ed}$ is the moment magnitude" in chords
     assert "Positive $F_{cd}$ is compression" in chords
     assert "Negative $F_{cd}$ is" in chords and "tension in this chord" in chords
     assert "acting axial force and the moment about the other axis" in chords
     assert "does not add that action a second time" in chords
     assert 'checks the two physical faces with the correct bending sign for each face' in text
-    assert r"M_{Ed,total}=90+250\cdot0.5=215" in text
-    assert '$215/100=2.15$, which gives **FAIL**' in text
+    # DS/EN 1992-1-1:2023 (8.51): Ftd = 90/0.5 + 250/2 = 305 kN, so the
+    # equivalent moment is 90 + 125*0.5 = 152.5 kNm and 152.5/100 = 1.525.
+    assert r"M_{Ed,total}=90+(250/2)\cdot0.5=152.5" in text
+    assert '$152.5/100=1.525$, which gives **FAIL**' in text
     assert 'full longitudinal-chord assessment is **NOT ASSESSED**' in text
 
 
