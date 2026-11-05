@@ -651,6 +651,8 @@ def test_app_off_axis_chord_skipped_on_subdivided_section_disclosed_uniaxially()
     _valid_t_subdivision(at)
     _set(
         at,
+        # The shear geometry inputs are editable only with the shear check on.
+        ("checkbox", "shear_on", True),
         ("selectbox", "shear_section_form", shear.SHEAR_SECTION_CONSTANT),
         ("number_input", "shear_bw", 300.0),
     )
@@ -676,6 +678,8 @@ def test_app_incomplete_subtube_wall_mapping_withholds_combined_chord():
     _valid_t_subdivision(at, complete_cage=False)
     _set(
         at,
+        # The shear geometry inputs are editable only with the shear check on.
+        ("checkbox", "shear_on", True),
         ("selectbox", "shear_section_form", shear.SHEAR_SECTION_CONSTANT),
         ("number_input", "shear_bw", 300.0),
     )
@@ -697,6 +701,8 @@ def test_app_missing_torsion_authority_withholds_combined_chord(subdivided):
         _valid_t_subdivision(at)
         _set(
             at,
+            # The shear geometry inputs are editable only with the shear check on.
+            ("checkbox", "shear_on", True),
             ("selectbox", "shear_section_form", shear.SHEAR_SECTION_CONSTANT),
             ("number_input", "shear_bw", 300.0),
         )

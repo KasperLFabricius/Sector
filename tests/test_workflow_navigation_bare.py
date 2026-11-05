@@ -31,7 +31,7 @@ def test_applied_navigation_uses_page_identity_in_bare_python():
         "_PENDING_INPUT_EVENTS_KEY": "_pending_input_events",
     }
     compiled = compile(ast.Module(body=[function], type_ignores=[]), str(__file__), "exec")
-    code = next(value for value in compiled.co_consts if isinstance(value, CodeType))
+    code = next(value for value in compiled.co_consts if isinstance(value, CodeType) and value.co_name != "__annotate__")
     selected = FunctionType(code, namespace)()
     assert selected is workflow_navigation.BY_KEY["section"]
     assert state["_workflow_page"] == "section"

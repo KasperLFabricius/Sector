@@ -15,7 +15,7 @@ from tools import build_portable_windows as portable
 def _source_tree(root: Path) -> Path:
     files = {
         ".streamlit/config.toml": "[theme]\nbase = \"light\"\n",
-        ".python-version": "3.13.15\n",
+        ".python-version": "3.14.10\n",
         "LICENSE": "internal licence\n",
         "app/point_grid_frontend/LICENSE": "frontend licence\n",
         "app/publication_image_export_worker.py": "# worker\n",

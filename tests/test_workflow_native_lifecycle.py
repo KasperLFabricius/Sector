@@ -42,7 +42,7 @@ def test_calculate_from_inputs_runs_once_and_navigation_retains_snapshot(monkeyp
     assert accepted[0] == signature
     assert app.session_state["results"]["plastic"]
     assert app.session_state["result_sig"] == signature
-    assert "_workflow_calculate_request" not in app.session_state.filtered_state
+    assert "_workflow_calculate_request" not in app.session_state.to_dict()
     for page in ("materials", "actions", "settings", "report", "help", "project", "results"):
         _route(app, page)
         assert app.session_state["_latest_inputs"]["signature"] == signature
@@ -57,17 +57,17 @@ def test_project_replacement_cancels_queued_calculation_and_case_focus(monkeypat
     import project_io
 
     replacement = project_io.dump_project({}, {"rep_proj_no": "Replacement project"})
-    before_epoch = app.session_state.filtered_state.get("_project_context_epoch", 0)
+    before_epoch = app.session_state.to_dict().get("_project_context_epoch", 0)
     app.session_state["_workflow_calculate_request"] = {
         "signature": app.session_state["_latest_inputs"]["signature"],
-        "generation": app.session_state.filtered_state.get("_project_upload_generation", 0),
+        "generation": app.session_state.to_dict().get("_project_upload_generation", 0),
     }
     app.session_state["_actions_selected::plastic_cases_base"] = "old-project-case"
     app.session_state["_overview_selection"] = ("old-project",)
     app.session_state["_pending_project"] = replacement
     app.run()
     assert not app.exception
-    state = app.session_state.filtered_state
+    state = app.session_state.to_dict()
     assert "_workflow_calculate_request" not in state
     assert "_actions_selected::plastic_cases_base" not in state
     assert "_overview_selection" not in state

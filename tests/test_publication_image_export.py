@@ -1115,6 +1115,6 @@ def test_manual_figures_false_never_touches_exporter(monkeypatch) -> None:
 
 def test_declared_kaleido_floor_matches_the_process_server_api() -> None:
     requirements = (ROOT / "requirements.in").read_text(encoding="utf-8")
-    assert requirements.count("kaleido>=1.3,<2") == 1
-    assert requirements.count("choreographer>=1.3,<2") == 1
+    assert requirements.count("kaleido>=1.5,<2") == 1
+    assert requirements.count("choreographer>=1.4,<2") == 1
     assert "kaleido>=0.2.1" not in requirements

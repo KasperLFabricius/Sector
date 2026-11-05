@@ -201,7 +201,7 @@ def test_pyarrow_trim_removes_only_build_sources_and_test_payload():
         ("pyarrow/src/arrow/array.cc", "source-b", "DATA"),
         ("pyarrow/tests/data/sample.csv", "source-c", "DATA"),
         ("pyarrow/includes/lib.pxi", "source-d", "DATA"),
-        ("pyarrow/lib.cp313-win_amd64.pyd", "source-e", "BINARY"),
+        ("pyarrow/lib.cp314-win_amd64.pyd", "source-e", "BINARY"),
         ("pyarrow/arrow.dll", "source-f", "BINARY"),
         ("pyarrow/arrow.lib", "source-g", "BINARY"),
         ("pyarrow/config.py", "source-h", "DATA"),

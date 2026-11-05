@@ -42,7 +42,7 @@ def _run_header(source, timestamp):
         "time": time,
     }
     compiled = compile(ast.Module(body=[function], type_ignores=[]), str(__file__), "exec")
-    code = next(value for value in compiled.co_consts if isinstance(value, CodeType))
+    code = next(value for value in compiled.co_consts if isinstance(value, CodeType) and value.co_name != "__annotate__")
     FunctionType(code, namespace)()
     assert state == before
     assert panes[2].buttons[0]["key"] == "calculate"

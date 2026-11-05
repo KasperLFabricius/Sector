@@ -70,7 +70,7 @@ applicability.
 
 ## Running the app
 
-Use 64-bit CPython 3.13.15, as pinned in `.python-version`, in an isolated virtual
+Use 64-bit CPython 3.14.10, as pinned in `.python-version`, in an isolated virtual
 environment. Install the existing hash-locked requirements for that environment.
 
 ```
@@ -93,7 +93,7 @@ Download or clone the complete project, choose **Extract All** when using a ZIP,
 then double-click the root `BUILD.bat`. Do not run a BAT inside Explorer's ZIP
 preview because Windows may copy only that file to a temporary folder. The
 legacy `BUILD_SECTOR_PORTABLE.bat` name remains an alias. Building requires
-64-bit CPython 3.13.15 and enough disk space, but no administrator elevation or
+64-bit CPython 3.14.10 and enough disk space, but no administrator elevation or
 separately entered PowerShell command.
 
 The generated artifact is a complete ONEDIR folder and matching ZIP. Keep or

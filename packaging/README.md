@@ -8,7 +8,7 @@ Sector has one supported Windows packaging path: double-click the root
 1. Download or clone the complete Sector project.
 2. If it is a ZIP, choose **Extract All**. Do not run the BAT inside Explorer's
    ZIP preview.
-3. Install 64-bit CPython 3.13.15 and make it available through `python.exe` or the
+3. Install 64-bit CPython 3.14.10 and make it available through `python.exe` or the
    Windows `py` launcher. The exact supported patch comes from `.python-version`.
    For an isolated installation, set `SECTOR_PORTABLE_PYTHON` to its full
    `python.exe` path. An incompatible explicit override stops the build with a

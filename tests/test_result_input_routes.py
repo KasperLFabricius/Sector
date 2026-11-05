@@ -61,7 +61,7 @@ def reviewer(state):
     source = ast.parse((ROOT / "app" / "sector_app.py").read_text(encoding="utf-8"))
     node = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == "_review_overview_inputs")
     code = compile(ast.Module(body=[node], type_ignores=[]), "<actual overview input caller>", "exec")
-    function = next(c for c in code.co_consts if isinstance(c, types.CodeType))
+    function = next(c for c in code.co_consts if isinstance(c, types.CodeType) and c.co_name != "__annotate__")
     return types.FunctionType(function, {"__builtins__": builtins.__dict__,
         "st": types.SimpleNamespace(session_state=state), "result_workspace": workspace,
         "action_workspace": action_workspace, "load_cases": load_cases, "mvt_workspace": mvt_workspace,

@@ -23,7 +23,7 @@ def test_cleanup_preserves_live_controls_and_state(has_input_stage, builder_open
     main.type = "main"
     state = {"_qs_open": builder_open, "entered_geometry": "preserved"}
     at = NS(
-        _tree=NS(children={0: main}), session_state=NS(filtered_state=state), run=Mock(),
+        _tree=NS(children={0: main}), session_state=NS(to_dict=lambda: state), run=Mock(),
     )
 
     assert discard_retired_qs_fragment(at) is at

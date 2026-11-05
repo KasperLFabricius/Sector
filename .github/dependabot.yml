@@ -1,0 +1,35 @@
+# Weekly update pull requests for the hash-locked pip-compile files and the
+# SHA-pinned GitHub Actions. Each update runs the full QA workflow. The exact
+# Python pin in .python-version is updated by hand.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # Also refresh the transitive pins of the locks (pillow, certifi, ...).
+    allow:
+      - dependency-type: all
+    groups:
+      python-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+        # tests/native_callable_page_client.py accepts one reviewed Streamlit
+        # release, so each Streamlit update comes as its own pull request.
+        exclude-patterns:
+          - streamlit
+    ignore:
+      # pytest 9.2 needs a pytest-xdist release that supports its node IDs
+      # (see the cap in requirements-dev.in).
+      - dependency-name: pytest
+        versions:
+          - ">=9.2"
+  # One pull request for each action. The policy validators in tools/ and one
+  # test pin the SHA of each action: an update also changes those constants
+  # (see AGENTS.md).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

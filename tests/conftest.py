@@ -76,3 +76,19 @@ def _retain_callable_page_client():
         yield
     finally:
         patch.undo()
+
+
+@pytest.fixture(autouse=True)
+def _script_thread_state():
+    """Give direct native-callback tests the thread state of a script run.
+
+    Streamlit 1.66 runs each widget callback inside ``ThreadState.scoped()``,
+    which needs a state that ``ScriptRunContext.reset()`` sets in a script
+    thread. A test that calls the session-state lifecycle directly gets the
+    default ``FragmentThreadState`` here (no active script hash). AppTest runs
+    its scripts in their own threads, which this does not touch.
+    """
+    from streamlit.runtime.scriptrunner_utils.script_run_context import ThreadState
+
+    ThreadState.initialize()
+    yield
