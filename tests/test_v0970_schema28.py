@@ -100,6 +100,25 @@ def test_schema27_project_without_the_preset_gets_pivot_c_of_the_default_preset(
     assert at.session_state["conc_pivot_c"] is True
 
 
+def test_load_message_states_a_pivot_c_limit_that_the_file_clears():
+    # An edited file can clear the limit. The load keeps this explicit value, so
+    # the message must not state that the limit applies without this correction.
+    cleared = " does not apply it."
+    _tables, scalars, info = project_io.parse_project_with_info(_schema27_text())
+    assert scalars["conc_pivot_c"] is True
+    assert cleared not in " ".join(info["method_changes"])
+
+    payload = json.loads(_schema27_text())
+    payload["scalars"]["conc_pivot_c"] = False
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    _tables, scalars, info = project_io.parse_project_with_info(json.dumps(payload))
+    assert scalars["conc_pivot_c"] is False
+    assert cleared in " ".join(info["method_changes"])
+
+
 def test_load_message_uses_one_edition_name():
     message = " ".join(project_io.SCHEMA28_METHOD_CHANGES)
     assert "2005 family" not in message
