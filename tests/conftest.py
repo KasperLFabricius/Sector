@@ -1,6 +1,9 @@
 """Shared pytest fixtures."""
 
 from __future__ import annotations
+import os
+import tempfile
+
 
 import pytest
 
@@ -24,6 +27,29 @@ def pytest_collection_modifyitems(config, items):
         seconds = max(seconds_for(node, durations), module_seconds(node, durations))
         if item.get_closest_marker("real_image_export") or seconds >= SLOW_SECONDS:
             item.add_marker(pytest.mark.slow)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_fixture_setup(fixturedef):
+    """Give each module or session fixture its own autosave folder.
+
+    These fixtures run before ``_isolate_autosave``. A setup that takes longer than
+    the autosave interval would otherwise write ``~/.sector/autosave.json``, and the
+    next fixture app, also in another worker, would restore that project on launch.
+    A fixture that sets its own folder keeps it.
+    """
+    if fixturedef.scope == "function":
+        yield
+        return
+    previous = os.environ.get("SECTOR_AUTOSAVE_DIR")
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as folder:
+        os.environ["SECTOR_AUTOSAVE_DIR"] = folder
+        yield
+    if os.environ.get("SECTOR_AUTOSAVE_DIR") == folder:
+        if previous is None:
+            del os.environ["SECTOR_AUTOSAVE_DIR"]
+        else:
+            os.environ["SECTOR_AUTOSAVE_DIR"] = previous
 
 
 @pytest.fixture(autouse=True)
