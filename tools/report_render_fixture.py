@@ -117,13 +117,13 @@ _REPORT_CROPS = (
         "report contents",
         2,
         (0.10, 0.08, 0.92, 0.90),
-        "559a2b0ac8630a1e4b6512cb907a847bd7eb999e1e67a01e7a24a336df712ca7",
+        "e0979ec22222513235d5d71c17d9a2b97d5cdb1ef71f7a9761ac8301c2215e9d",
     ),
     RasterCrop(
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "08453aed8119dc77cd7ed6312255d9f9fa4773314cc1f2e0f709b6ebda92a6ac",
+        "bec0b95ccc4407939c17b23b8896d777bf7202c0333befe064f87e103730fdf3",
     ),
 )
 
