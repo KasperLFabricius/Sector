@@ -8,8 +8,8 @@ param(
 $ErrorActionPreference = "Stop"
 $sourceRoot = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
 $pythonVersion = (Get-Content -LiteralPath (Join-Path $sourceRoot ".python-version") -Raw).Trim()
-if ($pythonVersion -cnotmatch '^3\.13\.(0|[1-9][0-9]*)$') {
-    throw "The source .python-version must pin an exact Python 3.13 patch"
+if ($pythonVersion -cnotmatch '^3\.14\.(0|[1-9][0-9]*)$') {
+    throw "The source .python-version must pin an exact Python 3.14 patch"
 }
 
 function Test-SectorPython {
@@ -69,7 +69,7 @@ function Resolve-SectorPython {
         if (-not [string]::IsNullOrWhiteSpace([string]$command.Source)) {
             $candidates += [PSCustomObject]@{
                 Executable = [string]$command.Source
-                PrefixArguments = @("-3.13-64")
+                PrefixArguments = @("-3.14-64")
             }
         }
     }

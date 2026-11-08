@@ -63,6 +63,10 @@ def test_exact_issue_go_to_retains_raw_cell_and_corrects_only_selected_field(
         app.session_state[load_cases.ELASTIC_TABLE_KEY],
     )
     assert [message.code for message in errors] == [code]
+    # The status fragment draws Calculate before this run builds the inputs.
+    # Its 2 s refresh enables the button before a user can click it.
+    app.run()
+    assert not app.exception
     app.button(key="calculate").click().run()
     assert not app.exception
     assert app.session_state["_workflow_page"] == "results"
@@ -117,7 +121,7 @@ def test_exact_issue_go_to_retains_raw_cell_and_corrects_only_selected_field(
         if identity != table:
             pd.testing.assert_frame_equal(after[identity], before[identity])
     assert float(load_cases.normalise_table(app.session_state[table], table).iloc[2][field]) == 12.5
-    assert action_workspace.FOCUS_KEY not in app.session_state.filtered_state
+    assert action_workspace.FOCUS_KEY not in app.session_state.to_dict()
     _route(app, "settings")
     _route(app, "actions")
     assert [tab.label for tab in app.tabs] == ["Plastic", "Elastic", "Fatigue"]

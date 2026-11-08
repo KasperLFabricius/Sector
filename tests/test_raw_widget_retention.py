@@ -31,7 +31,8 @@ InputStage = host_module.InputStage
 def setup(monkeypatch):
     native = SessionState()
     context = SimpleNamespace(page_script_hash='owner', fragment_ids_this_run=None,
-                              widget_ids_this_run=set(), form_ids_this_run=set())
+                              widget_ids_this_run=set(), form_ids_this_run=set(),
+                              script_requests=None)
     context.shared = context
     monkeypatch.setattr(state_module, 'get_script_run_ctx', lambda: context)
     safe = SafeSessionState(native, lambda: None)

@@ -250,8 +250,11 @@ def _snapshot(
         "files",
     }:
         raise MypyPolicyError("tool.mypy setting inventory differs")
-    if mypy.get("python_version") != "3.13":
-        raise MypyPolicyError("mypy python_version must remain 3.13")
+    # The accepted base of the Python 3.14 refresh still names 3.13. Remove
+    # "3.13" once main itself names 3.14.
+    versions = {"3.13", "3.14"} if accepted_base else {"3.14"}
+    if mypy.get("python_version") not in versions:
+        raise MypyPolicyError("mypy python_version must remain 3.14")
     if mypy.get("strict") is not True:
         raise MypyPolicyError("strict mypy cannot be disabled")
     if mypy.get("incremental") is not False:

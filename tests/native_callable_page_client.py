@@ -1,4 +1,4 @@
-"""Mirror native callable-page client state omitted by Streamlit 1.59.2 AppTest."""
+"""Mirror native callable-page client state that Streamlit 1.66.1 AppTest does not send."""
 
 from __future__ import annotations
 
@@ -17,9 +17,11 @@ def _restore_completed_page_context(pages_manager, previous):
 def install_callable_page_client(monkeypatch):
     """Retain actual completed page context and emitted client routing per instance.
 
-    AppTest 1.59.2 retains the shutdown query string but omits the page hash.
-    A real browser sends both back on its next widget event. No application
-    state, widget payload, timeout, return value or run count changes here.
+    AppTest 1.66.1 restores the page that the previous run finished on, but
+    after ``switch_page()`` it requests that destination again on every later
+    run. A real browser sends the query string and the page that the previous
+    run finished on with its next widget event. No application state, widget
+    payload, timeout, return value or run count changes here.
     """
     import streamlit
     from streamlit.testing.v1 import app_test
@@ -43,8 +45,9 @@ def install_callable_page_client(monkeypatch):
         isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)
         and node.attr == "_page_hash" for node in ast.walk(tree)
     )
-    if (streamlit.__version__ != "1.59.2" or writes_page_hash
+    if (streamlit.__version__ != "1.66.1" or writes_page_hash
             or "pages_manager = PagesManager(" not in source
+            or "requested_page_hash = self._page_hash or self._finished_page_script_hash" not in source
             or 'script_runner.event_data[-1]["client_state"].query_string' not in source):
         raise AssertionError(
             "Review the callable-page AppTest protocol adapter for this Streamlit source."
@@ -53,11 +56,11 @@ def install_callable_page_client(monkeypatch):
     original_runner = app_test.LocalScriptRunner
 
     class NativePageClientRunner(original_runner):
-        def __init__(self, script_path, session_state, pages_manager, args=None, kwargs=None):
+        def __init__(self, script_path, session_state, pages_manager, args=None, kwargs=None, **options):
             active = owner.get()
             previous = getattr(active, "_sector_completed_page_hash", "") if active is not None else ""
             _restore_completed_page_context(pages_manager, previous)
-            super().__init__(script_path, session_state, pages_manager, args=args, kwargs=kwargs)
+            super().__init__(script_path, session_state, pages_manager, args=args, kwargs=kwargs, **options)
 
         def run(self, *args, **kwargs):
             active = owner.get()

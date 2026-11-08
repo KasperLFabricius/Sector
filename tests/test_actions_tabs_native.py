@@ -1,6 +1,6 @@
 """Native widget-protocol qualification for the three Actions tabs.
 
-AppTest 1.59.2 has no Tab setter. These checks send the same string_value and
+AppTest 1.66.1 has no Tab setter. These checks send the same string_value and
 string_value widget states as the browser. Browser click and keyboard selection
 remain separate acceptance checks.
 """
