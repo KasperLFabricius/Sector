@@ -633,7 +633,7 @@ def common_blocks():
     return [
         _heading("From section geometry to equilibrium"),
         _md(
-            'A plane cross-section represents the concrete outline, its voids, and the reinforcement at the chosen location. The supplied axial force and moments act about the section origin. Plane sections stay plane, so three coefficients define the strain field. Perfect bond makes each reinforcement element follow the section strain at its coordinates. A tendon also has its entered initial strain.'
+            'A plane cross-section represents the concrete outline, its voids, and the reinforcement at the chosen location. The supplied axial force and moments act about the section origin. Plane sections stay plane, so three coefficients define the strain field. Perfect bond makes each reinforcement element follow the section strain at its coordinates. A tendon also has its bond strain difference, which Sector derives from the prestrain IS.'
         ),
         _md(
             "For each trial strain field, the material laws give stresses. Concrete stresses act over an area. "
@@ -903,7 +903,7 @@ def plastic_blocks():
             'For this rectangle, calculate the geometry of each band:\n\n- Area: $A_i=b\\Delta s$.\n- Centroid: $y_i=(y_{lower}+y_{upper})/2$.\n\nThen calculate its force and moment:\n\n- $F_i=\\sigma_i A_i$.\n- $M_{x,i}=F_i y_i$.\n\nUse MPa and $\\text{mm}^{2}$ for force in N. Divide by 1000 for kN. The plateau carries $f_{cd}$ over its full area.\n\nThe plastic calculation uses the net concrete polygon before reinforcement-area deduction and adds reinforcement forces.'
         ),
         _md(
-            '3. **Calculate reinforcement forces.** Evaluate each bar at the strain plane and its assigned design law. For each tendon, add its initial strain to its tension-positive section strain. Then evaluate its law. Multiply the stress by the element area. Use its x and y coordinates as moment arms.'
+            '3. **Calculate reinforcement forces.** Evaluate each bar at the strain plane and its assigned design law. For each tendon, add its plastic bond strain difference (at $E_s/E_{cm}$, Material laws > Prestressing steel) to its tension-positive section strain. Then evaluate its law. Multiply the stress by the element area. Use its x and y coordinates as moment arms.'
         ),
         _md(
             '4. **Balance axial force.** Compare the sum of compression-positive forces with -N from the input table. If the trial force is too small, increase c. If it is too large, decrease c. Sector brackets the target and halves the depth interval at each iteration. The bracket can extend beyond the full section depth, which makes whole-section compression possible.'
@@ -1051,9 +1051,10 @@ def other_blocks():
                 'The elastic calculation uses the assigned modulus of each bar or tendon. The plastic calculation uses its assigned design stress-strain law and strain limits. The Active in compression (plastic) switch changes the plastic reinforcement response. Elastic steel stays linear in tension and compression.'
             ),
             _md(
-                "For a tendon with initial strain 0.005 and tension-positive section strain 0.001, the total material strain is 0.006. "
+                "For a tendon with bond strain difference 0.005 and tension-positive section strain 0.001, the total material strain is 0.006. "
                 "Evaluate the selected tendon law at that total strain. If the section strain is -0.001, the total becomes 0.004. "
-                "The initial strain is an input after the assumed losses. Each tendon can have its own assigned law and initial strain."
+                "Sector derives the bond strain difference from the prestrain IS, the tendon strain under prestress alone after all losses "
+                "(Material laws > Prestressing steel). Each tendon can have its own assigned law and prestrain."
             ),
         ],
     }

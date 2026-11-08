@@ -314,7 +314,12 @@ def test_standard_fatigue_population_tables_keep_only_governing_element_and_fibr
     assert [row[1] for row in audit_screens[1:]] == ["R1", "R2", "R3", "R4"]
     assert len(standard_concrete[1:]) == 1
     assert standard_concrete[1][0] in expected_fibres
-    assert [row[0] for row in audit_concrete[1:]] == [0, 1, 2, 3, 4]
+    # TA-01 (0.97.0): the concrete search stops when its upper bound is within
+    # 1e-4 + 1e-3 x best of the best sampled value. The fixture damage is far
+    # below 1 (upper bound 3.6e-8), so the first 4 x 4 boxes resolve it and the
+    # best point is section vertex 3. A search point on a vertex adds no fibre,
+    # so the population is the four section vertices.
+    assert [row[0] for row in audit_concrete[1:]] == [0, 1, 2, 3]
 
 
 def test_audit_miner_sums_keep_all_retained_bin_operands():
@@ -495,6 +500,11 @@ def test_fixture_retains_multiple_fatigue_candidates_for_depth_test():
     assert [row["element_id"] for row in fatigue_presentation.reinforcement_rows(
         spectrum
     )] == ["R1", "R2", "R3", "R4"]
+    # TA-01 (0.97.0): the concrete search stops when its upper bound is within
+    # 1e-4 + 1e-3 x best of the best sampled value. The fixture damage is far
+    # below 1 (upper bound 3.6e-8), so the first 4 x 4 boxes resolve it and the
+    # best point is section vertex 3. A search point on a vertex adds no fibre,
+    # so the population is the four section vertices.
     assert [row["fibre_index"] for row in fatigue_presentation.concrete_rows(
         spectrum
-    )] == [0, 1, 2, 3, 4]
+    )] == [0, 1, 2, 3]

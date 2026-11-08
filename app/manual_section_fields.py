@@ -18,7 +18,7 @@ def worked_field(family):
         section = Section.from_polygon(ex["outer"], ex["bars"], holes=ex["holes"],
                                        tendons_xy_area_mm2=ex["tendons"])
         point = solve_plastic(section, ex["concrete"], ex["steel"], ex["P"], 45, 45, 15,
-                              prestress=ex["prestress"])[0]
+                              prestress=ex["prestress_plastic"])[0]
         if not point.converged or not point.axial_reachable:
             raise ValueError("Manual plastic field did not converge")
         strain = (-point.strain_offset, -point.strain_gradient_x, -point.strain_gradient_y)

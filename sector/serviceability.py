@@ -950,6 +950,7 @@ def _crack_width(
     n_mult: Optional[np.ndarray] = None,
     reinforcement_types: Optional[Sequence[str]] = None,
     bond_ratio_xi: Optional[Union[float, Sequence[float]]] = None,
+    alpha_e_ratio: Optional[float] = None,
 ) -> CrackWidthEvaluation:
     """Evaluate EC2 crack width and retain an explicit scope disposition.
 
@@ -1064,6 +1065,7 @@ def _crack_width(
             section, cracked_state, n, fctm, es_arr, cover_arr, kt,
             k1, phi_arr, derived_phi, diameter_sources, n_mult=mult_arr,
             reinforcement_types=kinds, bond_ratio_xi=bond_ratio_xi,
+            alpha_e_ratio=alpha_e_ratio,
         )
 
     try:
@@ -1361,7 +1363,9 @@ def _crack_width(
             continue
         sigma_s = float(sigma[i])
         es_i = float(es_arr[i])
-        alpha_e_i = float(n) * float(mult_arr[i])
+        alpha_e_i = float(
+            n if alpha_e_ratio is None else alpha_e_ratio
+        ) * float(mult_arr[i])
         phi = float(phi_arr[i])
         if cover_arr is not None and math.isfinite(float(cover_arr[i])):
             c_i = float(cover_arr[i])
@@ -1510,6 +1514,7 @@ def _crack_width_2023_direct(
     mult_arr: np.ndarray,
     kinds: np.ndarray,
     bond_ratio_xi: Optional[Union[float, Sequence[float]]],
+    alpha_e_ratio: Optional[float] = None,
 ) -> CrackWidthEvaluation:
     """Uniform direct-tension implementation of 9.2.3 and Figure 9.3."""
 
@@ -1557,7 +1562,9 @@ def _crack_width_2023_direct(
             continue
         sigma_s = float(sigma[i])
         es_i = float(es_arr[i])
-        alpha_e_i = float(n) * float(mult_arr[i])
+        alpha_e_i = float(
+            n if alpha_e_ratio is None else alpha_e_ratio
+        ) * float(mult_arr[i])
         phi = float(phi_arr[i])
         if cover is not None and math.isfinite(float(cover[i])):
             c_i = float(cover[i])
@@ -1687,6 +1694,7 @@ def _crack_width_2023(
     *,
     reinforcement_types: np.ndarray,
     bond_ratio_xi: Optional[Union[float, Sequence[float]]],
+    alpha_e_ratio: Optional[float] = None,
 ) -> CrackWidthEvaluation:
     """EN 1992-1-1:2023 refined crack width (9.2.3), per bar, largest-wk governs.
 
@@ -1735,6 +1743,7 @@ def _crack_width_2023(
             mult_arr,
             kinds,
             bond_ratio_xi,
+            alpha_e_ratio,
         )
     if all_tension:
         return _not_assessed(
@@ -1877,7 +1886,9 @@ def _crack_width_2023(
             continue
         sigma_s = float(sigma[i])
         es_i = float(es_arr[i])
-        alpha_e_i = float(n) * float(mult_arr[i])
+        alpha_e_i = float(
+            n if alpha_e_ratio is None else alpha_e_ratio
+        ) * float(mult_arr[i])
         phi = _phi(i)
         if cover is not None and math.isfinite(float(cover[i])):
             c_i = float(cover[i])
@@ -2183,6 +2194,7 @@ def evaluate_crack_width(
     n_mult: Optional[np.ndarray] = None,
     reinforcement_types: Optional[Sequence[str]] = None,
     bond_ratio_xi: Optional[Union[float, Sequence[float]]] = None,
+    alpha_e_ratio: Optional[float] = None,
 ) -> CrackWidthEvaluation:
     """Evaluate crack width for an externally supplied cracked-section state.
 
@@ -2191,7 +2203,10 @@ def evaluate_crack_width(
     the instantaneous (short-term) state of the combined creep analysis, whose
     bar stress is ``s2 + RST1``. ``cracked_state`` supplies the neutral axis /
     strain gradient and the per-bar steel stress; the bar with the largest ``wk``
-    governs. See :func:`analyse_cracking` for the remaining parameters.
+    governs. ``alpha_e_ratio`` is Es/Ecm of the concrete term of Formula (7.9)
+    (7.3.4(2); 2023: (9.11)). Pass it whenever ``n`` is a long-term modular
+    ratio: without it the concrete term uses ``n``. See :func:`analyse_cracking`
+    for the remaining parameters.
     """
     section.require_valid_geometry()
     return _crack_width(section, cracked_state, n, fctm, Es, cover, kt,
@@ -2205,7 +2220,8 @@ def evaluate_crack_width(
                         include_hx_term=include_hx_term, coarse=coarse,
                         edition=edition, n_mult=n_mult,
                         reinforcement_types=reinforcement_types,
-                        bond_ratio_xi=bond_ratio_xi)
+                        bond_ratio_xi=bond_ratio_xi,
+                        alpha_e_ratio=alpha_e_ratio)
 
 
 def crack_width(
@@ -2234,6 +2250,7 @@ def crack_width(
     n_mult: Optional[np.ndarray] = None,
     reinforcement_types: Optional[Sequence[str]] = None,
     bond_ratio_xi: Optional[Union[float, Sequence[float]]] = None,
+    alpha_e_ratio: Optional[float] = None,
 ) -> Optional[CrackWidthResult]:
     """Convenience wrapper returning only the numerical crack-width result."""
 
@@ -2262,4 +2279,5 @@ def crack_width(
         n_mult=n_mult,
         reinforcement_types=reinforcement_types,
         bond_ratio_xi=bond_ratio_xi,
+        alpha_e_ratio=alpha_e_ratio,
     ).result

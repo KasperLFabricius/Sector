@@ -2978,6 +2978,18 @@ def test_app_incomplete_torsion_wall_evidence_blocks_dependent_mvt_and_recovers(
     accepted = at.session_state["results"]
     assert accepted["torsion"]["valid"] is True
     assert "combined" in accepted
+    # TB-04 (0.97.0): in the DK NA 6.3.2(6) sum, V acting alone uses the
+    # section with its installed links. cot* = sqrt(bw nu fcd/(Asw/s fywd) - 1)
+    # = sqrt(400 x 0.525 x 24.14/436.33 - 1) = 3.26 > 2.5, so VRd = VRd,s at
+    # cot 2.5 = 1.0472 x 416.67 x 334.96 x 2.5 = 365.4 kN (was VRd,c = 91.8 kN).
+    # The sum is 0.1315 + 50/365.4 + 0.3700 = 0.638 (was 1.046, FAIL).
+    links = accepted["shear"]["links"]["res"]
+    v_alone = accepted["combined"]["action_alone"]["v"]
+    assert v_alone["evidence"]["nominal_route"] == "links"
+    assert v_alone["resistance"] == pytest.approx(
+        links["asw_over_s"] * links["fywd"] * links["z"] * 2.5 / 1000.0
+    )
+    assert accepted["combined"]["dkna_sum"] == pytest.approx(0.6383, abs=5e-4)
 
     accepted_input, native_accepted, accepted_proof = _native_torsion_summary_snapshot(
         at, tmp_path, "walls-complete",
@@ -4539,5 +4551,22 @@ def _assert_native_torsion_assessed_components(proof):
     trows = [r for r in proof["rows"] if r["check"] == "Torsion transverse/strut resistance"]
     crows = [r for r in proof["rows"] if r["view"] == "M-V-T Combined" and r["util"] is not None]
     assert trows and crows
+    # A DK NA sum within the limit waits for the unverified torsion
+    # longitudinal provision and keeps its numerical result; above the limit
+    # it is FAIL. TB-04 (0.97.0) brings this member below the limit.
+    dkna = [r for r in crows if r["check"] == "Combined M-V-T - DK NA sum"]
+    longitudinal = next(
+        r for r in proof["rows"] if r["check"] == "Torsion longitudinal reinforcement"
+    )
+    for r in dkna:
+        assert r["result"] != "-" and r["util"] is not None
+        if r["util"] > 1.0:
+            assert r["status"] == "FAIL"
+        else:
+            assert longitudinal["status"] == "NOT ASSESSED"
+            assert r["status"] == "NOT ASSESSED"
+            assert r["note"].startswith(
+                "NOT ASSESSED: Verify that sufficient passive reinforcement remains"
+            )
     assert all(r["status"] in {"PASS", "FAIL"} and r["result"] != "-" and r["util"] is not None
-               for r in trows + crows)
+               for r in trows + crows if r not in dkna)

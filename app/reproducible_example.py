@@ -213,8 +213,8 @@ def project_scalars() -> dict:
         "fatigue_check_steel": True,
         "fatigue_check_concrete": True,
         "fatigue_concrete_method": "Explicit Palmgren-Miner spectrum",
-        "fatigue_gamma_c": 1.50,
-        "fatigue_gamma_s": 1.15,
+        "fatigue_gamma_c": 1.595,
+        "fatigue_gamma_s": 1.32,
         "fatigue_gamma_ff": 1.0,
         "fatigue_beta_cc_t0": 1.0,
         "fatigue_t0_days": 28.0,
@@ -361,19 +361,22 @@ def checking_pack() -> str:
         ## Cracked elastic and crack width
 
         With n=Es/Ec=6.0606060606, solve
-        b(0.150-y_na)^2/2+n sum[As(y_i-y_na)]=0. This gives
-        y_na=0.06034632684 m and Icr=0.000262414719934 m4. For Mx=55 kNm:
+        b(0.150-y_na)^2/2+sum[(n-1 or n)As(y_i-y_na)]=0. The compression
+        bars R3/R4 use (n-1)As, because the concrete they displace is not
+        counted twice (displaced-concrete area model). This gives
+        y_na=0.058654564093 m and Icr=0.00025948697407 m4. For Mx=55 kNm:
 
-        - curvature = 0.006351269727 1/m;
-        - top concrete compression = 18.7906837879 MPa;
-        - R1/R2 tension = 229.0856332160 MPa;
-        - R3/R4 compression = 75.7753136848 MPa.
+        - curvature = 0.00642292998575 1/m;
+        - top concrete compression = 19.3612761985 MPa;
+        - R1/R2 tension = 229.497151361 MPa;
+        - R3/R4 compression = 78.8034879552 MPa.
 
         The fine short-term DK crack branch has phi=25.23132522 mm,
         clear cover=17.38433739 mm, Ac,eff=15000 mm2, rho_p,eff=1/15,
-        sr,max=139.645079986 mm and eps_sm-eps_cm=0.000962424042.
-        Therefore wk=0.1343977823 mm, governed by R1. The retained comparison is
-        0.1343977823/0.20=0.6719889115, so the exact state is WITHIN
+        alpha_e=Es/Ecm=6.0606060606, sr,max=139.645079986 mm and
+        eps_sm-eps_cm=0.00096448163254.
+        Therefore wk=0.1346851147 mm, governed by R1. The retained comparison is
+        0.1346851147/0.20=0.6734255736, so the exact state is WITHIN
         USER-SPECIFIED LIMIT. Its source is User input - Analysis settings;
         no exposure, durability or owner limit is inferred.
 
@@ -417,30 +420,40 @@ def checking_pack() -> str:
           1.341758688 and 1.341109946. All four conditional chord objectives
           are lower at 1.295, proving the full member optimum on the 0.001 grid.
           Concrete shear credit gives zero longitudinal shear increment.
-        - DK NA combined interaction uses action-alone resistances: the positive
-          shear face governs with VRd=44.181297943 kN, while isolated torsion
-          balances yielding and crushing at c=1.385965124, TRd=15.965172124 kNm.
-          Combined sum=0.741235999+0.679020341+1.252726863
-          =2.672983203: FAIL.
+        - DK NA combined interaction uses action-alone resistances. For V
+          alone the installed links resist more than VRd,c: VRd,s=VRd,max at
+          c=sqrt(bw nu1 fcd/(Asw/s fywd)-1)=2.053263659 gives
+          VRd=217.335864142 kN on the negative shear face (shorter lever arm).
+          Isolated torsion balances yielding and crushing at c=1.385965124,
+          TRd=15.965172124 kNm. Combined sum=0.741235999+0.138035202
+          +1.252726863=2.131998065: FAIL.
 
         ## Fatigue
 
         Linear cracked response scales the 55 kNm state. At R1 the two ranges
-        are 229.085633216 x 4/55=16.660773325 MPa and x 2/55
-        =8.330386662 MPa. Detail F1 has N*=1000000, k1=5, k2=9 and
-        Delta sigma Rsk=162.5 MPa. Delta sigma Rd=162.5/1.15
-        =141.304347826 MPa, so both ranges use k2=9. Miner damage is
-        4.490112462e-10. The governing yield utilisation is
-        37.486739981/(550/1.15)=0.0783813654.
+        are 229.497151361 x 4/55=16.69070192 MPa and x 2/55
+        =8.345350959 MPa. Detail F1 has N*=1000000, k1=5, k2=9 and
+        Delta sigma Rsk=162.5 MPa. DS/EN 1992-1-1 DK NA:2024 2.4.2.4(1) gives
+        gamma_s,fat=1.20 x 1.1=1.32 and gamma_c,fat=1.45 x 1.1=1.595.
+        Delta sigma Rd=162.5/1.32=123.106060606 MPa, so both ranges use k2=9.
+        Miner damage is 1.57818185e-09. The governing yield utilisation is
+        37.5540793137/(550/1.32)=0.09012979035.
 
-        Concrete fcd,fat=0.85 x 30/1.50 x (1-30/250)=14.96 MPa.
-        The top fibre has max compressions 3.074839165 MPa and
-        2.391541573 MPa, producing total Miner damage 2.071598896e-12
-        and stress utilisation 3.074839165/14.96=0.2055373774.
-        The adaptive spatial bound stops not converged at depth 26 with
-        232 boxes, 1164 points and absolute gap 1.099792897e-8. Therefore the
-        spectrum verdict is FAIL because numerical convergence is required, even
-        though every retained element/fibre utilisation is below one.
+        Concrete fcd,fat=0.85 x 30/1.595 x (1-30/250)=14.06896552 MPa.
+        The top fibre has max compressions 3.168208832 MPa and
+        2.464162425 MPa, producing Miner damage 5.358432445e-12 at that
+        fibre and stress utilisation 3.168208832/14.06896552=0.2251913141.
+        The cracked stresses are proportional to the moment. Thus the stress
+        ratios 5/9 and 5/7 are the same at all points in compression, and the
+        damage increases with the compression. The largest damage in the
+        section is 5.358432445e-12 on the top edge.
+
+        The published concrete damage is the upper bound D,upper of the
+        adaptive section search. The search stops when D,upper minus the
+        largest sampled damage is not more than 1e-4 + 1e-3 x that damage.
+        Thus 5.358432445e-12 <= D,upper <= 1.000000054e-4. Max Miner D is
+        the larger of the R1 damage and D,upper. The verdict uses D,upper.
+        The spectrum verdict is PASS.
 
         ## Report completeness
 
@@ -471,9 +484,10 @@ def checking_pack() -> str:
         endpoint distances select the first endpoint in sweep order.
 
         Concrete fatigue uses 4 x 4 initial boxes, depth 26, at most 200000 boxes,
-        relative tolerance 1e-3 and absolute tolerance 1e-8. Empty or dominated
+        relative tolerance 1e-3 and absolute tolerance 1e-4 (relative to the
+        decision limit 1.0). Empty or dominated
         unresolved heaps converge; finite damage requires
-        upper-best <= 1e-8 + 1e-3 max(|best|,1e-12). A prior depth/box limit is not
+        upper-best <= 1e-4 + 1e-3 max(|best|,1e-12). A prior depth/box limit is not
         converged. Positive-infinite best damage is the explicit exception:
         upper=best=+infinity and converged=true with infinite recorded gaps.
 

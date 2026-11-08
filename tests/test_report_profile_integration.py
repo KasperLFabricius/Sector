@@ -344,7 +344,8 @@ def test_brief_retains_curve_specific_prestress_inputs():
     for expected in (
         "curve 6",
         "fp0.1k 1575.000 MPa", "fpk 1815.000 MPa",
-        "\u03b5p,0 4.800 \u2030",
+        # TA-04 (0.97.0): the prestrain field is IS = sigma_pm/Ep.
+        "IS 4.800 \u2030",
         "\u03b5ut 31.000 \u2030",
         "\u03b3y 1.080", "\u03b3u 1.160", "\u03b3E 1.030",
     ):
@@ -355,7 +356,7 @@ def test_brief_retains_curve_specific_prestress_inputs():
     for expected in (
         "curve 7",
         "fp0.1k 1685.000 MPa", "fpk 1915.000 MPa",
-        "\u03b5p,0 6.100 \u2030",
+        "IS 6.100 \u2030",
         "\u03b5ut 39.000 \u2030",
         "\u03b3y 1.110", "\u03b3u 1.210", "\u03b3E 1.020",
         "k 0.860",
@@ -1034,13 +1035,21 @@ def test_every_profile_retains_governing_statuses_and_engineering_values(tmp_pat
     # fixture builder checks the retained equilibrium and crack-width operands.
     expected = (
         "Plastic bending PL-QA-2 FAIL 220.8 %",
+        # TA-03 (0.97.0): alpha_e = Es/Ecm = 6.06 replaces nl = 15.15 in
+        # Formula (7.9): kt fct,eff/rho (1 + alpha_e rho) = 0.4 x 2.9/0.03333
+        # x 1.2020 = 41.83 MPa (was 52.38), eps_sm - eps_cm =
+        # (671.12 - 41.83)/200000 = 3.1465e-3, wk = 171.29 x 3.1465e-3 = 0.539 mm.
         "Crack width - Long-term EL-QA-1 "
-        "EXCEEDS USER-SPECIFIED LIMIT 0.530 mm",
+        "EXCEEDS USER-SPECIFIED LIMIT 0.539 mm",
         "Crack width - Short-term EL-QA-1 "
         "EXCEEDS USER-SPECIFIED LIMIT 0.659 mm",
         "Torsion PL-QA-1 FAIL FAIL",
         "Torsion transverse/strut resistance PL-QA-1 FAIL 170.5 %",
-        "Combined M-V-T - DK NA sum PL-QA-1 FAIL 391.1 %",
+        # TB-04 (0.97.0): V acting alone uses the linked section. At
+        # cot* = sqrt(200 x 0.55 x 20/436.33 - 1) = 2.0105, VRd,s = VRd,max =
+        # 436.33 x 247.0 x 2.0105 = 216.7 kN (was VRd,c = 33.9 kN), so
+        # r_v = 30/216.7 = 0.1385 and 1.4133 + 0.1385 + 1.6130 = 3.165.
+        "Combined M-V-T - DK NA sum PL-QA-1 FAIL 316.5 %",
         "Fatigue Road traffic PASS 46.2 %",
     )
     for profile in ("Brief", "Standard", "Audit"):
@@ -1177,7 +1186,7 @@ def test_brief_governing_register_contains_results_before_complete_inputs():
     summary = text[start:inputs]
     assert "Plastic bending PL-QA-2 FAIL 220.8 %" in summary
     assert re.search(r"Crack width - Long-\s*term EL-QA-1", summary)
-    assert "0.530 mm" in summary
+    assert "0.539 mm" in summary  # TA-03 (0.97.0), alpha_e = Es/Ecm
     assert "0.200 mm" in summary
     assert "Torsion transverse/strut resistance PL-QA-1 FAIL 170.5 %" in summary
 

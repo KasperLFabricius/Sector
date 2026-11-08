@@ -1792,9 +1792,11 @@ def test_exact_zero_cyclic_action_reuses_long_term_state_and_zero_damage():
     assert result.governing_criterion == "yield/proof stress"
 
 
-def test_concrete_search_bound_is_not_reported_as_evaluated_miner_damage(
+def test_concrete_search_bound_is_published_as_the_concrete_miner_damage(
     monkeypatch,
 ):
+    # 0.97.0 decision: the published concrete damage is the upper bound of
+    # the section search. The fixed fibres keep their own evaluated damage.
     section = _section()
 
     def bounded_search(candidate, states, _properties, **_kwargs):
@@ -1835,7 +1837,7 @@ def test_concrete_search_bound_is_not_reported_as_evaluated_miner_damage(
         ),
     )
 
-    assert result.miner_damage == 0.0
+    assert result.miner_damage == 0.25
     assert max(item.damage for item in result.concrete) == 0.0
     assert result.concrete_search is not None
     assert result.concrete_search.upper_damage == pytest.approx(0.25)
