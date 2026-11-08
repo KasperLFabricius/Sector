@@ -80,6 +80,9 @@ SCHEMA28_METHOD_CHANGES = (
     "Shear without shear reinforcement: the tension chord includes the moment "
     "shift a_l = d (EN 1992-1-1:2004, 6.2.2(5) and 9.2.1.3(2); "
     "DS/EN 1992-1-1:2023, 8.2.2(10)).",
+    "Shear without shear reinforcement, DS/EN 1992-1-1:2023: the bonded "
+    "tendons on the tension side are included in Asl and d (8.2.2(6), "
+    "Formula (8.36)). You can clear this option in the shear panel.",
 )
 
 
@@ -112,6 +115,15 @@ def _schema28_defaults(scalars: dict) -> None:
 
     scalars.setdefault("conc_pivot_c", _schema28_pivot_c_default(scalars))
     scalars.setdefault(capacity.MED_MAX_ON_KEY, False)
+    effective_shear_method = (
+        scalars.get("combined_method")
+        if scalars.get("combined_on") is True
+        else scalars.get("shear_method")
+    )
+    scalars.setdefault(
+        capacity.SHEAR_TENDONS_KEY,
+        capacity.shear_tendons_default(effective_shear_method),
+    )
     for key in capacity.MED_MAX_KEYS.values():
         scalars.setdefault(key, 0.0)
 
@@ -308,7 +320,8 @@ SCALAR_KEYS = [
     "shear_vx_fitted_z", "shear_vy_fitted_z", "shear_duct_case",
     "shear_vx_duct_sum", "shear_vy_duct_sum", "shear_vx_duct_largest",
     "shear_vy_duct_largest",
-    "shear_dlower", "shear_gamma_v", "shear_links", "shear_vx_link_legs",
+    "shear_dlower", "shear_gamma_v", capacity.SHEAR_TENDONS_KEY,
+    "shear_links", "shear_vx_link_legs",
     "shear_vy_link_legs", "shear_link_dia", "shear_link_s",
     "shear_fywk", "shear_vx_transverse_leg_spacing",
     "shear_vy_transverse_leg_spacing", "strut_cot_min",
@@ -372,6 +385,7 @@ _BOOLEAN_SCALAR_KEYS = frozenset({
     "qsv_qs_cover_to_edge",
     "conc_pivot_c",
     capacity.MED_MAX_ON_KEY,
+    capacity.SHEAR_TENDONS_KEY,
     "mild_active_comp",
     "pl_check_util",
     "pl_interaction",

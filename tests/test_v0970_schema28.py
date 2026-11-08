@@ -16,7 +16,12 @@ import project_io  # noqa: E402
 from app import reproducible_example  # noqa: E402
 from sector import capacity, codes  # noqa: E402
 
-NEW_KEYS = ("conc_pivot_c", capacity.MED_MAX_ON_KEY, *capacity.MED_MAX_KEYS.values())
+NEW_KEYS = (
+    "conc_pivot_c",
+    capacity.MED_MAX_ON_KEY,
+    *capacity.MED_MAX_KEYS.values(),
+    capacity.SHEAR_TENDONS_KEY,
+)
 
 
 def _schema27_text() -> str:
@@ -52,6 +57,10 @@ def test_schema27_project_loads_with_corrected_methods_and_message():
     assert "MEd,max" in message
     assert "NVd/2" in message
     assert "a_l = d" in message
+    # The reference project uses 2005 shear: the bonded tendons stay out of Asl
+    # and d (EN 1992-2 6.2.2(101) only permits them).
+    assert scalars[capacity.SHEAR_TENDONS_KEY] is False
+    assert "Formula (8.36)" in message
 
 
 def test_schema27_project_with_the_2023_preset_loads_without_pivot_c():
@@ -139,3 +148,46 @@ def test_schema28_round_trip_keeps_method_inputs():
     assert loaded["conc_pivot_c"] is False
     assert loaded[capacity.MED_MAX_ON_KEY] is True
     assert loaded["shear_med_max_mx_pos"] == 125.0
+
+
+def test_schema27_project_with_2023_shear_includes_the_tendons():
+    # DS/EN 1992-1-1:2023 8.2.2(6): d and rho_l include Ap, so the migrated
+    # default of the tendon option is on when the effective shear method is 2023.
+    payload = json.loads(_schema27_text())
+    payload["scalars"]["shear_method"] = codes.EC2_2023.label
+    payload["scalars"]["combined_on"] = False
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    _tables, scalars, info = project_io.parse_project_with_info(json.dumps(payload))
+    assert info["source_schema_version"] == 27
+    assert scalars[capacity.SHEAR_TENDONS_KEY] is True
+
+
+def test_schema28_round_trip_keeps_the_tendon_option():
+    tables = reproducible_example.project_tables()
+    for value in (True, False):
+        scalars = dict(reproducible_example.project_scalars())
+        scalars[capacity.SHEAR_TENDONS_KEY] = value
+        text = project_io.dump_project(tables, scalars)
+        assert json.loads(text)["scalars"][capacity.SHEAR_TENDONS_KEY] is value
+        _tables, loaded, info = project_io.parse_project_with_info(text)
+        assert info["method_changes"] == ()
+        assert loaded[capacity.SHEAR_TENDONS_KEY] is value
+
+
+def test_tendon_option_rejects_a_non_boolean_value():
+    import pytest
+
+    tables = reproducible_example.project_tables()
+    scalars = dict(reproducible_example.project_scalars())
+    scalars[capacity.SHEAR_TENDONS_KEY] = True
+    payload = json.loads(project_io.dump_project(tables, scalars))
+    payload["scalars"][capacity.SHEAR_TENDONS_KEY] = 1
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    with pytest.raises(ValueError):
+        project_io.parse_project_with_info(json.dumps(payload))
