@@ -32,10 +32,10 @@ def _materials():
     return concrete, steel
 
 
-def _scan_range(section, concrete, steel, axial, axis, m_off, step=0.5):
+def _scan_range(section, concrete, steel, axial, axis, m_off, step=0.5, **kw):
     """Smallest and largest own moment at companion ``m_off`` (or None)."""
     angles = np.arange(0.0, 360.0 + step, step)
-    states = [plastic.plastic_capacity_at_angle(section, concrete, steel, axial, a)
+    states = [plastic.plastic_capacity_at_angle(section, concrete, steel, axial, a, **kw)
               for a in angles]
 
     def own(state):
@@ -146,12 +146,19 @@ def test_companion_moment_beyond_the_capacity_gives_no_points():
 
 
 def test_axial_limits_are_the_trace_end_points():
+    # Hand values, elastic-perfectly plastic steel (futk = fytk): pure tension
+    # N_t = -6 x 314 x 550/1.2 = -863.5 kN. Squash load without the pivot C
+    # limit: fcd Ac + As fyd = (30/1.45) x 157500 + 863500 N = 4122.12 kN, with
+    # Ac = 0.6 x 0.15 + 0.15 x 0.45 = 0.1575 m2.
     section = _l_section()
     concrete, steel = _materials()
     fixed = plastic.solve_interaction(section, concrete, steel, 90.0, n_points=4)
     n_t, n_c = plastic.axial_limits(section, concrete, steel, 90.0)
     assert n_t == pytest.approx(fixed[0].axial, rel=1.0e-9)
     assert n_c == pytest.approx(fixed[-1].axial, rel=1.0e-9)
+    assert n_t == pytest.approx(-6.0 * 314.0 * 550.0 / 1.2 / 1000.0, rel=1.0e-6)
+    squash = (30.0 / 1.45 * 157500.0 + 6.0 * 314.0 * 550.0 / 1.2) / 1000.0
+    assert n_c == pytest.approx(squash, rel=1.0e-6)
 
 
 def test_angle_must_be_a_pure_axis_angle():
@@ -172,3 +179,64 @@ def test_symmetric_section_keeps_fixed_angle_trace():
     uniaxial = plastic.uniaxial_interaction(section, concrete, steel, 90.0, "x",
                                             n_points=8)
     assert [p.Mx for p in uniaxial] == pytest.approx([p.Mx for p in fixed])
+
+
+def _rectangle():
+    return Section.from_polygon(
+        corners=[(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        bars_xy_area_mm2=[(-0.15, -0.25, 314.0), (0.0, -0.25, 314.0),
+                          (0.15, -0.25, 314.0), (-0.15, 0.25, 314.0),
+                          (0.15, 0.25, 314.0)],
+    )
+
+
+def test_negative_held_moment_matches_the_scanned_range():
+    section = _rectangle()
+    concrete, steel = _materials()
+    upper, lower = _branches(section, concrete, steel, "x", -60.0)
+    assert upper and lower
+    for high, low in zip(upper, lower):
+        assert high.My == low.My == -60.0
+        oracle = _scan_range(section, concrete, steel, high.axial, "x", -60.0)
+        assert oracle is not None
+        assert (low.Mx, high.Mx) == pytest.approx(oracle, abs=1.0)
+
+
+def test_prestressed_section_matches_the_scanned_range():
+    from sector.materials import Prestress
+
+    section = Section.from_polygon(
+        corners=[(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        bars_xy_area_mm2=[(-0.15, 0.25, 314.0), (0.15, 0.25, 314.0)],
+        tendons_xy_area_mm2=[(-0.1, -0.24, 600.0), (0.12, -0.2, 300.0)],
+    )
+    concrete, steel = _materials()
+    strand = Prestress(fytk=1640.0, futk=1860.0, eut=0.035, gamma_y=1.2,
+                       gamma_u=1.2, gamma_E=1.0, Es=195000.0)
+    loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "x",
+                                             m_off=40.0, prestress=strand,
+                                             n_points=8)
+    assert loop.upper and loop.lower
+    for high, low in zip(loop.upper, loop.lower):
+        assert high.converged and low.converged
+        if high.My != 40.0:
+            continue
+        oracle = _scan_range(section, concrete, steel, high.axial, "x", 40.0,
+                             prestress=strand)
+        assert oracle is not None
+        assert (low.Mx, high.Mx) == pytest.approx(oracle, abs=1.0)
+
+
+def test_loop_equals_the_single_branches_and_gives_the_trace_ends():
+    section = _l_section()
+    concrete, steel = _materials()
+    loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "y",
+                                             m_off=100.0, n_points=8)
+    upper, lower = _branches(section, concrete, steel, "y", 100.0)
+    def flat(points):
+        return [value for p in points for value in (p.axial, p.Mx, p.My)]
+
+    assert flat(loop.upper) == pytest.approx(flat(upper), abs=1.0e-6)
+    assert flat(loop.lower) == pytest.approx(flat(lower), abs=1.0e-6)
+    n_t, n_c = plastic.axial_limits(section, concrete, steel, 0.0)
+    assert (loop.n_t, loop.n_c) == pytest.approx((n_t, n_c), rel=1.0e-9)

@@ -7649,28 +7649,19 @@ def build_inputs(host=st):
         capacity.SHEAR_TENDONS_KEY,
         disabled=not shear_on,
         help=(
-            "Bonded tendons on the tension side join the longitudinal "
-            "reinforcement Asl and the effective depth d of the concrete shear "
-            "resistance. EN 1992-1-1:2004 6.2.2(1) uses tension reinforcement "
-            "only. EN 1992-2 6.2.2(101) (bridges) permits the bonded prestressing "
-            "steel in Asl with a weighted mean d. Sector uses the area-weighted "
-            "mean. DS/EN 1992-1-1:2023 8.2.2(6) gives d by Formula (8.36) and "
-            "rho_l by Formula (8.37). Ap can be omitted from d and rho_l if "
-            "including Ap reduces the shear resistance through the smaller d, "
-            "provided that As alone resists MEd and NEd with the effect of "
-            "prestressing. Sector does not check this condition. Sector treats "
-            "each tendon as bonded, except when the web duct condition is "
-            "'Not grouted, soft-filled, or unbonded' or 'Duct details not "
-            "established'. The default follows the shear method: on for "
-            "DS/EN 1992-1-1:2023, off for the EN 1992-1-1:2004 presets."
+            "Adds the bonded tendons on the tension side to Asl and d of the "
+            "concrete shear resistance. EN 1992-1-1:2004 presets: area-weighted "
+            "mean d (EN 1992-2 6.2.2(101), bridges). DS/EN 1992-1-1:2023: "
+            "Formulae (8.36) and (8.37). The default follows the shear method. "
+            "Ungrouted or unknown duct conditions keep the tendons out."
         ),
     )
     if shear_on and _shear_2023 and not shear_include_tendons:
         mvt_shear.caption(
-            "DS/EN 1992-1-1:2023 8.2.2(6): Ap can be omitted from d and rho_l if "
-            "including Ap reduces the shear resistance through the smaller d, "
-            "provided that As alone resists MEd and NEd with the effect of "
-            "prestressing. Sector does not check this condition."
+            "DS/EN 1992-1-1:2023 8.2.2(6) lets you omit Ap from d and rho_l if "
+            "including Ap reduces the shear resistance through the smaller d. "
+            "As alone must then resist MEd and NEd with the effect of "
+            "prestressing. Sector does not check these conditions."
         )
     elif shear_on and not _shear_2023 and shear_include_tendons:
         mvt_shear.caption(
@@ -9876,43 +9867,31 @@ def _run_single_analysis(
             mx_companion = float(inp["Mx_pl"]) if nm_with_case else 0.0
             my_companion = float(inp["My_pl"]) if nm_with_case else 0.0
 
-            def branch(v, axis, m_off):
-                return plastic_core.uniaxial_interaction(
-                    inp["section"], inp["concrete"], inp["steel"], v, axis,
+            def diagram(axis, m_off):
+                return plastic_core.uniaxial_interaction_loop(
+                    inp["section"], inp["concrete"], inp["steel"], axis,
                     m_off=m_off, prestress=pre,
                     bar_materials=inp.get("bar_materials"),
                     tendon_materials=inp.get("tendon_materials"),
                 )
 
-            def axial_limits(v):
-                n_t, n_c = plastic_core.axial_limits(
-                    inp["section"], inp["concrete"], inp["steel"], v,
-                    prestress=pre,
-                    bar_materials=inp.get("bar_materials"),
-                    tendon_materials=inp.get("tendon_materials"),
-                )
-                # Tension-positive (squash load, tension limit).
-                return (-n_c, -n_t)
-
-            loop_x = (
-                branch(90.0, "x", my_companion)
-                + list(reversed(branch(270.0, "x", my_companion)))
-            )
-            loop_y = (
-                branch(0.0, "y", mx_companion)
-                + list(reversed(branch(180.0, "y", mx_companion)))
-            )
+            nm_x = diagram("x", my_companion)
+            nm_y = diagram("y", mx_companion)
+            loop_x = nm_x.upper + list(reversed(nm_x.lower))
+            loop_y = nm_y.upper + list(reversed(nm_y.lower))
             # The solver reports the axial compression-positive; negate it so the
             # diagram and the applied point are both tension-positive (matching N).
+            # The limits are (squash load, tension limit) of the two fixed-angle
+            # traces of each diagram.
             out["plastic"]["interaction"] = dict(
                 x=dict(N=[-q.axial for q in loop_x], M=[q.Mx for q in loop_x],
                        applied=(inp["P_pl"], inp["Mx_pl"]),
                        converged=all(q.converged for q in loop_x),
-                       companion=my_companion, limits=axial_limits(90.0)),
+                       companion=my_companion, limits=(-nm_x.n_c, -nm_x.n_t)),
                 y=dict(N=[-q.axial for q in loop_y], M=[q.My for q in loop_y],
                        applied=(inp["P_pl"], inp["My_pl"]),
                        converged=all(q.converged for q in loop_y),
-                       companion=mx_companion, limits=axial_limits(0.0)),
+                       companion=mx_companion, limits=(-nm_y.n_c, -nm_y.n_t)),
             )
     if inp["mode"] in ("Elastic", "Both") and reuse_elastic is not None:
         out["elastic"] = reuse_elastic
@@ -13408,11 +13387,9 @@ def plastic_view(inp, results):
     else:
         st.caption(
             "Each effective depth $d$ extends from the opposite extreme concrete fiber "
-            "to the centroid of the listed ordinary reinforcing bars. Four values "
-            "align with the section faces. They show the available depth for either "
-            "bending direction, including off-axis states. When the shear option "
-            "includes the bonded tendons in $A_{sl}$ and $d$, the shear result "
-            "gives that $d$."
+            "to the centroid of the listed ordinary bars. Four values align with the "
+            "section faces and cover either bending direction, including off-axis "
+            "states. With bonded tendons in $A_{sl}$, the shear result gives $d$."
         )
         st.dataframe(
             {
@@ -13570,12 +13547,10 @@ def interaction_view(inp, results):
                 applied=data.get("applied") if show_applied else None,
                 title=title, limits=data.get("limits")), width="stretch")
     st.caption(
-        "Each curve gives the capacity from pure tension to the squash load with "
-        "the moment about the other axis held at the value in the metric label: "
-        "the case value when the utilisation check is on, otherwise 0. A curve "
-        "ends at the last axial force where the section can carry that moment. "
-        "The marked point shows the applied action. Use the Plastic result for "
-        "the biaxial moment check. Hover for $N$ and $M$."
+        "Each curve holds the moment about the other axis at the value in the "
+        "metric label: the case value, or 0 when the utilisation check is off. A "
+        "curve ends where the section cannot carry that moment. The marked point "
+        "is the applied action."
     )
     with st.expander("Numerical N-M boundary (all points)", expanded=False):
         rows = presentation.nm_boundary_rows(d)
@@ -15606,12 +15581,18 @@ def shear_view(inp, results, *, global_results=None):
                            "Flexural fyd", f"{_GAMMA}V"],
               "Value": [f"{sh['d']:.1f} mm", f"{calculation_bw:.1f} mm ({bw_note})",
                         f"{res['z']:.1f} mm (0.9 d)",
-                        f"{sh['asl']:.1f} mm2",
+                        f"{sh['asl']:.1f} mm2"
+                        + (f" (includes tendons Ap = {sh['asl_tendon_area']:.1f} mm2)"
+                           if sh.get("asl_tendon_area") else ""),
                         f"{res['rho_l']:.4f}", f"{sh['m_ed_2023']:.3f} kNm",
                         a_cs_text, f"{res['k_vp']:.4f} (>= 0.1)",
                         f"{res['d_kvp']:.1f} mm", f"{res['ddg']:.1f} mm",
                         f"{res['tau_rdc']:.3f} MPa", f"{res['tau_min']:.3f} MPa",
-                        f"{res['fyd']:.1f} MPa", f"{res['gamma_v']:.2f}"]},
+                        f"{res['fyd']:.1f} MPa"
+                        + (" (fpd of the bonded tendons; 8.2.1(4))"
+                           if (sh.get("asl_split") or {}).get("rule")
+                           == capacity.SHEAR_ASL_TENDONS_ONLY else ""),
+                        f"{res['gamma_v']:.2f}"]},
             hide_index=True, width="stretch")
         st.caption(
             r"$k_{vp} = \max[1 + N_{Ed}/|V_{Ed}|\ d/(3a_{cs}),\,0.1]$, "

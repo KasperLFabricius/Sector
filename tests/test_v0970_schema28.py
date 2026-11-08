@@ -6,6 +6,8 @@ import json
 import pathlib
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 for path in (ROOT, ROOT / "app"):
     if str(path) not in sys.path:
@@ -168,11 +170,10 @@ def test_schema27_project_with_2023_shear_includes_the_tendons():
     tables, scalars, info = project_io.parse_project_with_info(json.dumps(payload))
     assert info["source_schema_version"] == 27
     assert scalars[capacity.SHEAR_TENDONS_KEY] is True
-    message = " ".join(info["method_changes"])
-    if len(tables["tendons_base"]) > 0:
-        assert "Formulae (8.36) and (8.37)" in message
-    else:
-        assert "Formulae (8.36) and (8.37)" not in message
+    # The reference project has no tendons, so nothing changes and the load
+    # message omits the tendon change (the case with tendons is tested below).
+    assert len(tables["tendons_base"]) == 0
+    assert project_io.SCHEMA28_TENDON_CHANGE not in " ".join(info["method_changes"])
 
 
 def test_schema27_project_takes_the_shear_method_from_combined():
@@ -240,4 +241,22 @@ def test_schema27_2023_project_with_tendons_states_the_tendon_change():
     text = _schema27_text(tendons=[(0.0, -200.0, 600.0)])
     _tables, scalars, info = project_io.parse_project_with_info(text)
     assert scalars[capacity.SHEAR_TENDONS_KEY] is False
+    assert project_io.SCHEMA28_TENDON_CHANGE not in " ".join(info["method_changes"])
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"shear_on": False},
+        {"shear_duct_case": "Not grouted, soft-filled, or unbonded"},
+    ],
+)
+def test_tendon_change_is_not_stated_when_it_changes_nothing(changes):
+    text = _schema27_text(
+        tendons=[(0.0, -200.0, 600.0)],
+        shear_method=codes.EC2_2023.label,
+        combined_on=False,
+        **changes,
+    )
+    _tables, _scalars, info = project_io.parse_project_with_info(text)
     assert project_io.SCHEMA28_TENDON_CHANGE not in " ".join(info["method_changes"])

@@ -124,7 +124,11 @@ def _schema28_tendon_change_applies(scalars: Mapping, tables: Mapping) -> bool:
 
     if scalars.get(capacity.SHEAR_TENDONS_KEY) is not True:
         return False
+    if scalars.get("shear_on") is not True:
+        return False
     if not capacity.shear_tendons_default(_schema28_effective_shear_method(scalars)):
+        return False
+    if not capacity.shear_tendons_bonded(scalars):
         return False
     tendons = rebar_table.normalise_table(tables.get("tendons_base"), "tendon")
     return len(tendons) > 0

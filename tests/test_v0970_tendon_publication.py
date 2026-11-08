@@ -173,7 +173,30 @@ def test_interaction_diagram_stores_its_companion_moment_and_limits(
     nm = at.session_state["results"]["plastic"]["interaction"]
     assert nm["x"]["companion"] == pytest.approx(30.0)
     assert nm["y"]["companion"] == pytest.approx(100.0)
+    # Consistency check of the stored data. The hand values of the axial
+    # limits are in tests/test_v0970_uniaxial_interaction.py.
     for axis in ("x", "y"):
         squash, tension = nm[axis]["limits"]
         assert squash < 0.0 < tension
         assert all(squash - 1.0e-6 <= n <= tension + 1.0e-6 for n in nm[axis]["N"])
+
+
+def test_strand_only_section_2023_publishes_with_fpd(monkeypatch, tmp_path):
+    # rho_l = Ap/(bw dp) = 600/(400 x 500) = 0.003 ((8.37) with As = 0);
+    # fyd of Formula (8.20) is fpd of the tendon material (8.2.1(4)).
+    inp, out = _calculate(include=True, strands_only=True,
+                          method=codes.EC2_2023.label,
+                          monkeypatch=monkeypatch, tmp_path=tmp_path)
+    sh, _rows = _assert_published(inp, out, "Shear without links")
+    assert (sh["d"], sh["asl"]) == pytest.approx((500.0, 600.0))
+    assert sh["res"]["rho_l"] == pytest.approx(600.0 / (sh["res"]["bw"] * 500.0))
+    material = (inp.get("tendon_materials") or [None])[0] or inp["prestress"]
+    assert sh["res"]["fyd"] == pytest.approx(material.fytk / material.gamma_y)
+
+
+def test_links_route_2023_publishes_with_the_tendon_depth(monkeypatch, tmp_path):
+    inp, out = _calculate(include=True, links=True, v=400.0,
+                          method=codes.EC2_2023.label,
+                          monkeypatch=monkeypatch, tmp_path=tmp_path)
+    rows = _shear_rows(inp, out)
+    assert rows["Shear with links"]["status"] in {"PASS", "FAIL"}, rows
