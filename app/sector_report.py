@@ -1201,6 +1201,11 @@ def _fmt(v, nd=3):
     return f"{v:.{nd}f}"
 
 
+def _scaled(value, factor):
+    """Scaled value, or None when the value is not available."""
+    return None if value is None else value * factor
+
+
 _GAMMA_V_REPORT_DECIMALS = 3
 
 
@@ -5271,7 +5276,7 @@ class ReportBuilder:
                 bond_rows.append([
                     row["element_id"],
                     _fmt(row["effective_strain"] * 1000.0, 4),
-                    _fmt(row["bond_strain_elastic"] * 1000.0, 4),
+                    _fmt(_scaled(row["bond_strain_elastic"], 1000.0), 4),
                     _fmt(row["bond_stress_elastic_mpa"], 2),
                     _fmt(row["bond_strain_plastic"] * 1000.0, 4),
                 ])
@@ -5282,6 +5287,11 @@ class ReportBuilder:
                 keep=False,
                 repeat_cols=1,
             )
+            if any(row["bond_strain_elastic"] is None for row in bond):
+                self._p(
+                    "The long-term bond state is not established. The elastic "
+                    "and fatigue models are off, so no result uses it."
+                )
 
         def labelled(values, formatter):
             return "; ".join(
@@ -9356,7 +9366,7 @@ class ReportBuilder:
                 f"{angle_note}."
             )
         self._p("The sectional actions use the shared edition <b>" + str(c["method"]) + "</b>.")
-        self._p("Each denominator in the DK NA interaction is the resistance to that action acting alone. The other external sectional actions are set to zero. For V this is the resistance of the section with its installed links, max(V<sub>Rd,c</sub>, V<sub>Rd</sub>), also when the shear check itself uses the concrete route (V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>).")
+        self._p("Each denominator in the DK NA interaction is the resistance to that action acting alone. The other external sectional actions are set to zero. For V this is the resistance of the section with its installed links: max(V<sub>Rd,c</sub>, V<sub>Rd</sub>) when V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>, also when the shear check itself uses the concrete route, and V<sub>Rd</sub> when V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>, where the section needs its links (EN 1992-1-1 6.2.3(1)).")
         governing_assessment_note = (
             presentation.combined_governing_assessment_note(c)
         )
@@ -11112,7 +11122,7 @@ class ReportBuilder:
             self._h2("Step 4 - combine the element stress components")
             self._formula(
                 "sigma<sub>total,i</sub> = sigma<sub>s2,i</sub> + "
-                "sigma<sub>RST1,i</sub> + sigma<sub>p0,i</sub>",
+                "sigma<sub>RST1,i</sub> + sigma<sub>p,i</sub><super>(0)</super>",
                 equation_key="elastic.combined.total-stress",
                 subst=(f"= {_fmt(element['reduced_long_mpa'], 9)} + "
                        f"{_fmt(element['rst1_mpa'], 9)} + "
@@ -11155,11 +11165,29 @@ class ReportBuilder:
             )
         )
         if ps is not None and self.inp.get("tendons"):
-            self._p("Tendon prestress is applied through the bond strain difference eps<sub>p</sub><super>(0)</super> (Initial prestress action). The entered N is the external force only.")
-            self._p("Equivalent prestress actions, with N positive in tension:")
-            self._p(f"N = {_fmt(ps['n_kn'], 3)} kN.")
-            self._p(f"M<sub>x</sub> = {_fmt(ps['mx_knm'], 3)} kN&#183;m.")
-            self._p(f"M<sub>y</sub> = {_fmt(ps['my_knm'], 3)} kN&#183;m.")
+            locked = (el.get("superposition") or {}).get("prestress_resultant")
+            self._p(
+                "Tendon prestress is applied through the bond strain difference "
+                "eps<sub>p</sub><super>(0)</super> (Initial prestress action). "
+                "The entered N is the external force only. N is positive in "
+                "tension."
+            )
+            if locked is not None:
+                self._p(
+                    "The elastic solver applies the locked-in tendon resultant "
+                    "of sigma<sub>p</sub><super>(0)</super> = E<sub>p</sub> "
+                    "eps<sub>p</sub><super>(0)</super> to the bonded section: "
+                    f"N = {_fmt(-locked['n'], 3)} kN, "
+                    f"M<sub>x</sub> = {_fmt(locked['mx'], 3)} kN&#183;m, "
+                    f"M<sub>y</sub> = {_fmt(locked['my'], 3)} kN&#183;m."
+                )
+            self._p(
+                "Under prestress alone the tendons then give the effective "
+                "prestress action, from sigma<sub>p,0</sub> = E<sub>p</sub> IS: "
+                f"N = {_fmt(ps['n_kn'], 3)} kN, "
+                f"M<sub>x</sub> = {_fmt(ps['mx_knm'], 3)} kN&#183;m, "
+                f"M<sub>y</sub> = {_fmt(ps['my_knm'], 3)} kN&#183;m."
+            )
             self._p("Section and materials gives the prestress-action calculation.")
         if self._selected_family("elastic", self.inp) is not None:
             self._elastic_worked(el)
@@ -13369,7 +13397,7 @@ class ReportBuilder:
                         )
                         + (
                             " x and y give the location of the largest sampled "
-                            "value, that is the governing point of the search."
+                            "value."
                             if audit_detail else ""
                         )
                     )

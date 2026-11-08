@@ -717,7 +717,9 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("sigma<sub>total,i</sub>", "combined total element stress", "MPa"),
         ("sigma<sub>s2,i</sub>", "reduced passive long-term stress", "MPa"),
         ("sigma<sub>RST1,i</sub>", "instantaneous response stress", "MPa"),
-        ("sigma<sub>p0,i</sub>", "locked-in prestress", "MPa"),
+        ("sigma<sub>p,i</sub><super>(0)</super>",
+         "locked-in bond stress E<sub>p</sub> eps<sub>p</sub><super>(0)</super>",
+         "MPa"),
     ),
     ("elastic.combined.difference-stress", None): _result(
         "sigma<sub>DIF,i</sub>", "MPa",

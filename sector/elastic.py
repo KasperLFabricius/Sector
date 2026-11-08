@@ -914,6 +914,7 @@ def bonded_prestress_stress(
     effective_stress: np.ndarray,
     *,
     n_mult: np.ndarray | None = None,
+    tendon_mask: np.ndarray | None = None,
     displace_concrete: bool = True,
     rel_tol: float = 1.0e-10,
     max_iter: int = 100,
@@ -923,25 +924,61 @@ def bonded_prestress_stress(
     The entered tendon prestrain ``IS`` is the tendon strain after all losses, so
     under prestress alone the tendon stress is ``Ep*IS`` (``effective_stress``,
     kN/m2 per element, zero for ordinary bars). In the bonded section model the
-    tendon also follows the concrete strain at its level, so the solver needs the
-    larger locked-in stress ``sigma_0 = Ep*IS - Ep*eps_c,p``, where ``eps_c,p`` is
-    the concrete strain at the tendon under that prestress at the modular ratio
-    ``n``. ``sigma_0/Ep`` is then the bond strain difference of EN 1992-1-1
-    Figure 6.1, which includes the decompression strain.
+    tendon also follows the concrete at its level: its stress is
+    ``sigma_0 + n*n_mult*s``, where ``s`` is the concrete stress plane at the
+    tendon (``Ec = 1``). The solver therefore needs the locked-in stress
+    ``sigma_0 = Ep*IS - Ep*eps_c,p``, where ``eps_c,p`` is the concrete strain at
+    the tendon under that prestress at the modular ratio ``n``. ``sigma_0/Ep`` is
+    then the bond strain difference of EN 1992-1-1 Figure 6.1, which includes the
+    decompression strain.
 
-    For one tendon in a linear section the tendon stress is ``sigma_0/(1 + k)``
-    with ``k = Ep*Ap*c > 0``. Each step therefore scales the locked-in stress by
-    ``effective/solved``, which is exact in that case and converges in a few
-    steps for coupled tendons and cracked states. A step that cannot be scaled
-    uses the residual. Raises ``ValueError`` when an elastic state or the fixed
-    point does not converge.
+    Direct solution: with the tendon forces fixed at ``Ap*Ep*IS``, the concrete
+    and the ordinary bars have the same equilibrium as in the bonded model, so
+    one solve with zero tendon stiffness gives the strain plane, and
+    ``sigma_0 = Ep*IS - n*n_mult*s`` at each tendon. A solve of the bonded model
+    then checks the tendon stresses. When the no-tension state takes another
+    crack pattern, residual steps correct ``sigma_0`` (for a fixed crack pattern
+    the tendon stress is ``(I + K)^-1 sigma_0`` with ``K`` similar to a positive
+    semi-definite matrix, so these steps converge). ``sigma_0`` is negative
+    where prestress alone elongates the concrete at a lightly stressed tendon by
+    more than ``IS``.
+
+    ``tendon_mask`` marks the tendons (default: the elements with a non-zero
+    effective stress). Raises ``ValueError`` when an elastic state or the
+    correction does not converge.
     """
     effective = np.asarray(effective_stress, dtype=float)
     scale = float(np.max(np.abs(effective))) if effective.size else 0.0
     if scale == 0.0:
         return effective.copy()
-    tendon = effective != 0.0
-    locked = effective.copy()
+    tendon = (
+        effective != 0.0
+        if tendon_mask is None
+        else np.asarray(tendon_mask, dtype=bool)
+    )
+    if tendon.shape != effective.shape:
+        raise ValueError("one tendon flag is required per element")
+    if np.any(effective[~tendon] != 0.0):
+        raise ValueError("an ordinary bar cannot carry an effective prestress")
+    bx, by, _ = section.bar_arrays()
+    multiplier = (
+        np.ones(effective.shape, dtype=float)
+        if n_mult is None
+        else np.asarray(n_mult, dtype=float)
+    )
+    free = solve_elastic_combined(
+        section, 0.0, 0.0, 0.0, n, 0.0, 0.0, 0.0, n,
+        displace_concrete=displace_concrete,
+        n_mult=np.where(tendon, 0.0, multiplier),
+        prestress_stress=np.where(tendon, effective, 0.0),
+    )
+    if not free.converged:
+        raise ValueError("the elastic state under prestress alone did not converge")
+    plane = free.long
+    concrete = plane.eps0 + plane.kx * bx + plane.ky * by
+    locked = np.where(tendon, effective - float(n) * multiplier * concrete, 0.0)
+    if not np.all(np.isfinite(locked)):
+        raise ValueError("the bonded prestress state is not finite")
     for _ in range(max_iter):
         state = solve_elastic_combined(
             section, 0.0, 0.0, 0.0, n, 0.0, 0.0, 0.0, n,
@@ -955,8 +992,5 @@ def bonded_prestress_stress(
         residual = np.where(tendon, effective - solved, 0.0)
         if float(np.max(np.abs(residual))) <= rel_tol * scale:
             return locked
-        with np.errstate(divide="ignore", invalid="ignore"):
-            ratio = np.where(tendon, effective / solved, 1.0)
-        scalable = tendon & np.isfinite(ratio) & (ratio > 0.0) & (solved * locked > 0.0)
-        locked = np.where(scalable, locked * ratio, locked + residual)
+        locked = locked + residual
     raise ValueError("the bonded prestress state did not converge")

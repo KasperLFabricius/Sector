@@ -894,8 +894,8 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
     elastic results: gamma_c and alpha_cc set the design strength fcd, which is a
     plastic-only quantity. fck stays editable -- it feeds the serviceability fctm
     (the Auto button) -- and so does the preset, which prefills fck.
-    ``lock_elastic`` (plastic-only mode) disables fctm and Ec, which only affect
-    the elastic results.
+    ``lock_elastic`` (plastic-only mode without tendons) disables fctm and Ec,
+    which then affect only the elastic results.
     """
     if heading:
         box.markdown("**Concrete**")
@@ -1086,6 +1086,8 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
                                       r"elastic analysis derives the modular "
                                       r"ratios $n=E_s/E_c$ and the crack-width "
                                       r"ratio $\alpha_e=E_s/E_{cm}$ from it. "
+                                      "The plastic model uses it for the "
+                                      "decompression strain of bonded tendons. "
                                       "Enter the short-term value; the creep "
                                       "coefficient sets the long-term state."
                                   ),
@@ -6507,9 +6509,11 @@ def _modular_ratio_readout(box, mild_entries, prestress_entries,
 # affected analysis on the next Calculate. Shared keys affect both analyses
 # (materials + mode); the per-analysis buckets hold keys that touch only that one.
 # Anything that could affect both stays shared, so a reused result is never stale.
-# n_l/n_s are derived from conc_Ec and el_phi, so those enter the elastic signature.
+# n_l/n_s are derived from conc_Ec and el_phi. conc_Ec also sets the plastic bond
+# strain of tendons (Es/Ecm), so it is shared; el_phi is in the elastic keys.
 _SHARED_SIG_KEYS = (
-    "conc_preset", "conc_fck", "conc_gamma_c", "conc_k_tc", "conc_alpha_cc",
+    "conc_preset", "conc_fck", "conc_Ec", "conc_gamma_c", "conc_k_tc",
+    "conc_alpha_cc",
     "conc_eps_c2", "conc_eps_cu2", "conc_n", "conc_pivot_c",
     "mild_preset", "mild_fytk", "mild_fyck", "mild_futk", "mild_eut",
     "mild_gamma_y", "mild_gamma_u", "mild_gamma_E", "mild_k",
@@ -6552,7 +6556,7 @@ _FATIGUE_RESULT_CONTRACT_TOKEN = (
     "simplified-reinforcement-stress-range-screen-v1",
 )
 _ELASTIC_CONTEXT_SIG_KEYS = (
-    "conc_Ec", "el_phi",
+    "el_phi",
     "sls_phi", "sls_bond", "sls_tendon_xi", "sls_code", "sls_member",
     LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
     SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
@@ -8523,11 +8527,13 @@ def build_inputs(host=st):
         or fatigue_on
     )
     lock_mats = mode == "Elastic" and not capacity_checks_on
-    # fctm also enters both generations of the minimum-reinforcement check.
+    # fctm also enters both generations of the minimum-reinforcement check, and
+    # Ec sets the decompression strain of bonded tendons in the plastic model.
     lock_elastic = (
         mode == "Plastic"
         and not minimum_reinforcement_on
         and not fatigue_on
+        and not tendons
     )
     if lock_mats:
         mat_tab.caption(
@@ -9145,13 +9151,17 @@ def _apply_bonded_prestrain(inp):
 
     * ``tendon_materials`` (elastic and fatigue): eps_c,p at the long-term
       modular ratio ``nl``, because prestress is a sustained action.
-    * ``tendon_materials_uls`` (plastic): eps_c,p at ``Es/Ecm``. The creep strain
-      under prestress does not recover in a short-term load to failure, so the
-      decompression strain uses the short-term modulus Ecm (Table 3.1).
+    * ``tendon_materials_uls`` (plastic): eps_c,p at ``Es/Ecm`` with the entered
+      short-term modulus ``Ec`` (``Ecm``). The creep strain under prestress does
+      not recover in a short-term load to failure.
 
-    ``tendon_effective_prestrain`` keeps the entered values for the effective
-    prestress force. When the bond state cannot be established, the input is
-    blocked with a message (fail closed).
+    eps_p(0) is negative for a lightly stressed tendon where prestress alone
+    elongates the concrete by more than ``IS``. ``tendon_effective_prestrain``
+    keeps the entered values for the effective prestress force. When the bond
+    state of an active model cannot be established, the input is blocked with a
+    message (fail closed). When only the long-term state fails and the elastic
+    and fatigue models are off, the plastic model continues and
+    ``tendon_bond_elastic_unavailable`` marks the missing state.
     """
     tendons = list(inp.get("tendons") or [])
     materials = list(inp.get("tendon_materials") or [])
@@ -9168,6 +9178,9 @@ def _apply_bonded_prestrain(inp):
         # Another input error already blocks the calculation.
         return
     inp["tendon_effective_prestrain"] = [float(item.IS) for item in materials]
+    elastic_needed = (
+        inp.get("mode") in ("Elastic", "Both") or bool(inp.get("fatigue_on"))
+    )
     try:
         sec = section_core.Section.from_polygon(
             corners=inp["outer"],
@@ -9183,28 +9196,39 @@ def _apply_bonded_prestrain(inp):
             + [float(item.Es) * float(item.IS) * 1000.0 for item in materials],
             dtype=float,
         )
-        laws = {}
-        for key, ratio in (
+        tendon_mask = np.asarray(
+            [False] * len(bar_laws) + [True] * len(materials), dtype=bool
+        )
+        ratios = (
+            ("tendon_materials_uls",
+             STEEL_REFERENCE_MODULUS / (float(inp["conc_Ec"]) * 1000.0)),
             ("tendon_materials", float(inp["nl"])),
-            (
-                "tendon_materials_uls",
-                STEEL_REFERENCE_MODULUS / codes.ecm(float(inp["concrete"].fck)),
-            ),
-        ):
-            locked = elastic_core.bonded_prestress_stress(
-                sec, ratio, effective, n_mult=n_mult
-            )
-            laws[key] = [
-                dataclasses.replace(
-                    item, IS=float(stress) / 1000.0 / float(item.Es)
-                )
-                for item, stress in zip(materials, locked[len(bar_laws):])
-            ]
+        )
     except (
-        AttributeError, TypeError, ValueError, OverflowError, ZeroDivisionError,
+        AttributeError, KeyError, TypeError, ValueError, OverflowError,
+        ZeroDivisionError,
     ):
         inp["material_error"] = _PRESTRESS_BOND_BLOCKER
         return
+    laws = {}
+    for key, ratio in ratios:
+        try:
+            locked = elastic_core.bonded_prestress_stress(
+                sec, ratio, effective, n_mult=n_mult, tendon_mask=tendon_mask
+            )
+            laws[key] = [
+                item.with_bond_strain(float(stress) / 1000.0 / float(item.Es))
+                for item, stress in zip(materials, locked[len(bar_laws):])
+            ]
+        except (
+            AttributeError, TypeError, ValueError, OverflowError,
+            ZeroDivisionError,
+        ):
+            if key == "tendon_materials" and not elastic_needed:
+                inp["tendon_bond_elastic_unavailable"] = True
+                continue
+            inp["material_error"] = _PRESTRESS_BOND_BLOCKER
+            return
     inp.update(laws)
 
 
@@ -9595,6 +9619,7 @@ def _section_and_material_results(inp):
     effective = inp.get("tendon_effective_prestrain")
     sls_laws = list(inp.get("tendon_materials") or [])
     uls_laws = list(capacity.plastic_tendon_materials(inp) or [])
+    elastic_unavailable = bool(inp.get("tendon_bond_elastic_unavailable"))
     if (
         effective is not None
         and len(effective) == len(sls_laws) == len(uls_laws)
@@ -9609,8 +9634,13 @@ def _section_and_material_results(inp):
                     if index < len(prestress_rows) else str(index + 1)
                 ),
                 effective_strain=float(value),
-                bond_strain_elastic=float(sls.IS),
-                bond_stress_elastic_mpa=float(sls.Es) * float(sls.IS),
+                bond_strain_elastic=(
+                    None if elastic_unavailable else float(sls.IS)
+                ),
+                bond_stress_elastic_mpa=(
+                    None if elastic_unavailable
+                    else float(sls.Es) * float(sls.IS)
+                ),
                 bond_strain_plastic=float(uls.IS),
             ))
     prestress_initial = dict(
@@ -13778,15 +13808,30 @@ def elastic_view(inp, results, *, global_results=None):
         )
         st.caption("Derived modular ratios - " + ratio_txt + ".")
 
-    # The tendon prestress is applied automatically from the initial strain, so N
-    # is the external force only; show the equivalent prestress action that was added.
+    # The tendon prestress is applied automatically from the prestrain, so N is
+    # the external force only. The solver applies the locked-in resultant of the
+    # bond strain difference to the bonded section; under prestress alone the
+    # tendons then give the effective prestress action of Initial prestress action.
     ps = e.get("prestress")
-    if ps is not None:
-        # ps[0] is the tendon tension resultant; the prestress precompresses the
-        # section, so as an axial action (tension-positive) it is a compression.
-        st.caption(f"Equivalent tendon-prestress action: $N={-ps[0]:.3f}$ kN, "
+    locked = (e.get("superposition") or {}).get("prestress_resultant")
+    if ps is not None and locked is not None:
+        # The resultants are tendon tension; the prestress precompresses the
+        # section, so as an axial action (tension-positive) N is a compression.
+        st.caption(
+            "Tendon prestress: the elastic solver applies the locked-in tendon "
+            "resultant of the bond strain difference, "
+            f"$N={-locked['n']:.3f}$ kN, $M_x$ = {locked['mx']:.3f} kNm, "
+            f"$M_y$ = {locked['my']:.3f} kNm, to the bonded section. Under "
+            "prestress alone the tendons then give the effective prestress "
+            f"action $N={-ps[0]:.3f}$ kN, $M_x$ = {ps[1]:.3f} kNm, "
+            f"$M_y$ = {ps[2]:.3f} kNm (Initial prestress action). The entered "
+            r"$N$ is the external force only; $N$ is tension-positive."
+        )
+    elif ps is not None:
+        st.caption(f"Effective tendon-prestress action: $N={-ps[0]:.3f}$ kN, "
                    f"$M_x$ = {ps[1]:.3f} kNm, $M_y$ = {ps[2]:.3f} kNm "
-                   r"(added to the external $N$ and $M$; $N$ is tension-positive).")
+                   r"(the entered $N$ is the external force only; $N$ is "
+                   "tension-positive).")
 
     _section_field_panel(inp, e, family="Elastic")
 
@@ -14643,8 +14688,7 @@ def _fatigue_concrete_panel(spectrum):
                 if equivalent_method
                 else fatigue_presentation.CONCRETE_UPPER_BOUND_NOTE + " "
             )
-            + "x and y give the location of the largest sampled value, that "
-            "is the governing point of the search."
+            + "x and y give the location of the largest sampled value."
         )
 
     st.markdown("**Selected-fibre bin results**")

@@ -20,7 +20,7 @@ prestressing steel (types 1-7) -- the full set of laws from the manual.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from numbers import Integral, Real
 
@@ -880,6 +880,25 @@ class Prestress:
             eut,
             "proof strain ey0t + fp0.1k/Ep",
         )
+
+    def with_bond_strain(self, strain: float) -> "Prestress":
+        """Copy of the law with the bond strain difference eps_p(0) as ``IS``.
+
+        The section models bond the tendon with eps_p(0) = IS - eps_c,p (EN
+        1992-1-1 Figure 6.1). The entered ``IS`` is never negative, but eps_p(0)
+        is negative for a lightly stressed tendon where prestress alone elongates
+        the concrete at its level by more than ``IS``. The tendon law then gives
+        zero stress until the total strain is positive. This copy accepts that
+        negative value; every other field keeps the validation of the law.
+        """
+        value = float(strain)
+        if not math.isfinite(value):
+            raise ValueError("the bond strain difference must be finite")
+        if value >= 0.0:
+            return replace(self, IS=value)
+        law = replace(self, IS=0.0)
+        object.__setattr__(law, "IS", value)
+        return law
 
     @property
     def rupture_strain(self) -> float:

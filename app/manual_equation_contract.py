@@ -134,7 +134,7 @@ MANUAL_EQUATION_CONTRACTS = (
         3, "manual.material.prestress-law", "C3-3",
         _terms(
             (r"\varepsilon_{p,j}", "total strain of tendon j", "1"),
-            (r"\varepsilon_{p,IS,j}", "locked-in strain of tendon j", "1"),
+            (r"\varepsilon^{(0)}_{p,j}", "bond strain difference of tendon j", "1"),
             (r"\kappa", "section curvature", "1/mm"),
             (r"s_{p,j}", "tendon-j coordinate normal to the neutral axis", "mm"),
             (r"s_{na}", "neutral-axis coordinate", "mm"),
@@ -163,7 +163,7 @@ MANUAL_EQUATION_CONTRACTS = (
             (r"s_{na}", "neutral-axis coordinate", "mm"),
             (r"s_{b,i}", "bar-i coordinate normal to the neutral axis", "mm"),
             (r"\varepsilon_{pu,j}", "ultimate strain of tendon j", "1"),
-            (r"\varepsilon_{p,IS,j}", "locked-in strain of tendon j", "1"),
+            (r"\varepsilon^{(0)}_{p,j}", "bond strain difference of tendon j", "1"),
             (r"s_{p,j}", "tendon-j coordinate normal to the neutral axis", "mm"),
             (r"i", "reinforcing-bar index", "1"),
             (r"j", "tendon index", "1"),

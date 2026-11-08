@@ -19,7 +19,7 @@ import manual_equation_location as location  # noqa: E402
 import manual_equation_source as source  # noqa: E402
 
 
-EXPECTED_CONTRACT_SEAL = '240830b38d2d9ad83f5096ac1ea7bfd3aadf14ad93bd9d9dfa7a29b4024a6c22'
+EXPECTED_CONTRACT_SEAL = '1a6ecb2f3e55b21500f74481640107679f3cb659dabbab65edfc6c1f830366a0'
 
 EXPECTED_ROWS = (
     ('C3-1', 6, ('\\sigma_c',), ('MPa',), 'stress law', ()),
@@ -119,8 +119,8 @@ def test_tendon_and_action_sign_identities_are_explicit():
     assert tendon[r"s_{p,j}"].meaning == (
         "tendon-j coordinate normal to the neutral axis"
     )
-    assert tendon[r"\varepsilon_{p,IS,j}"].meaning == (
-        "locked-in strain of tendon j"
+    assert tendon[r"\varepsilon^{(0)}_{p,j}"].meaning == (
+        "bond strain difference of tendon j"
     )
     shear = {term.markup: term for term in by_number["C8-3"].symbols}
     assert shear[r"N_{Ed}"].meaning.endswith("tension positive")

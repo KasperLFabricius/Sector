@@ -73,3 +73,74 @@ def test_without_tendons_the_stress_is_unchanged():
     effective = np.asarray([0.0])
     locked = bonded_prestress_stress(_section(), NL, effective)
     assert locked[0] == 0.0
+
+
+def test_two_tendon_cracked_section_matches_the_hand_fixed_point():
+    """Lightly stressed top tendon in the zone that prestress alone elongates.
+
+    Hand calculation (no-tension rectangle, legacy area model so that the
+    tendons displace no concrete): 400 x 800 mm, Ec = 30 GPa (n = 200/30),
+    bottom tendon 1500 mm2 at y = -330 mm with Ep IS = 1100 MPa, top tendon
+    300 mm2 at y = +330 mm with Ep IS = 100 MPa, Ep = 195 GPa.
+
+        P = 1650 + 30 = 1680 kN at y_R = (1650 (-330) + 30 (330))/1680 = -318.21 mm
+        a = 400 - 318.21 = 81.79 mm from the soffit (outside the kern h/6),
+        x = 3a = 245.36 mm, sigma_c = 2P/(b x) = 34.236 MPa,
+        eps(y) = -sigma_c/Ec (1 - (y + 400)/x)
+        bottom: eps = -8.1561e-4, sigma_0 = 1100 + 195000 x 8.1561e-4 = 1259.04 MPa
+        top:    eps = +2.25411e-3, sigma_0 = 100 - 195000 x 2.25411e-3 = -339.55 MPa
+
+    The top locked-in stress is negative: prestress alone elongates the concrete
+    at the top tendon by more than its IS.
+    """
+    ec = 30_000.0
+    n = 200_000.0 / ec
+    p1, p2 = 1500.0 * 1100.0, 300.0 * 100.0
+    y_r = (p1 * -330.0 + p2 * 330.0) / (p1 + p2)
+    x = 3.0 * (y_r + 400.0)
+    sigma_c = 2.0 * (p1 + p2) / (400.0 * x)
+
+    def strain(y):
+        return -sigma_c / ec * (1.0 - (y + 400.0) / x)
+
+    hand = np.asarray([1100.0 - EP * strain(-330.0), 100.0 - EP * strain(330.0)])
+    assert hand == pytest.approx([1259.04, -339.55], abs=0.01)
+    section = Section.from_polygon(
+        corners=[(-0.2, -0.4), (0.2, -0.4), (0.2, 0.4), (-0.2, 0.4)],
+        bars_xy_area_mm2=[(0.0, -0.33, 1500.0), (0.0, 0.33, 300.0)],
+    )
+    n_mult = np.asarray([EP / 200_000.0] * 2)
+    effective = np.asarray([1100.0e3, 100.0e3])
+    locked = bonded_prestress_stress(
+        section, n, effective, n_mult=n_mult, displace_concrete=False
+    )
+    assert locked / 1000.0 == pytest.approx(hand, rel=1.0e-6)
+    state = solve_elastic_combined(
+        section, 0.0, 0.0, 0.0, n, 0.0, 0.0, 0.0, n,
+        n_mult=n_mult, prestress_stress=locked, displace_concrete=False,
+    )
+    assert np.asarray(state.bar_stress_total) / 1000.0 == pytest.approx(
+        [1100.0, 100.0], rel=1.0e-8
+    )
+
+
+def test_tendon_with_zero_prestrain_has_zero_stress_under_prestress_alone():
+    # IS = 0 means no tendon stress under prestress alone (user decision), so
+    # the tendon mask, not the effective value, marks the tendons.
+    section = Section.from_polygon(
+        corners=[(-0.2, -0.4), (0.2, -0.4), (0.2, 0.4), (-0.2, 0.4)],
+        bars_xy_area_mm2=[(0.0, -0.33, 1500.0), (0.0, 0.33, 300.0)],
+    )
+    n_mult = np.asarray([EP / 200_000.0] * 2)
+    effective = np.asarray([1100.0e3, 0.0])
+    locked = bonded_prestress_stress(
+        section, NL, effective, n_mult=n_mult,
+        tendon_mask=np.asarray([True, True]),
+    )
+    state = solve_elastic_combined(
+        section, 0.0, 0.0, 0.0, NL, 0.0, 0.0, 0.0, NL,
+        n_mult=n_mult, prestress_stress=locked,
+    )
+    assert np.asarray(state.bar_stress_total) / 1000.0 == pytest.approx(
+        [1100.0, 0.0], abs=1.0e-6
+    )

@@ -32,15 +32,39 @@ def test_v_min_of_shear_example_follows_dk_na_formula():
 
 
 def test_crack_width_example_states_duration_and_short_term_values():
+    """Short-term crack widths of the manual beam (kt = 0.6, n = 6).
+
+    Hand calculation (EN 1992-1-1 7.3.4), 300 x 600 mm, As = 3 x 490.87 =
+    1472.6 mm2 at d = 550 mm, As' = 2 x 201.06 = 402.1 mm2 at 50 mm, M = 150 kNm:
+    cracked section 150 x^2 + 10846.3 x - 4960170 = 0 (displaced concrete
+    (n - 1) As'), x = 149.25 mm, I = 1.7713e9 mm4,
+    sigma_s = 6 x 150e6 x 400.75/1.7713e9 = 203.62 MPa.
+    hc,eff = min(2.5 x 50, (600 - 149.25)/3, 300) = 125 mm, rho = 1472.6/37500 =
+    0.03927, fct,eff = 0.3 x 40^(2/3) = 3.509 MPa:
+    eps_sm - eps_cm = (203.62 - 0.6 x 3.509/0.03927 x (1 + 6 x 0.03927))/200000
+    = 6.869e-4 (above 0.6 sigma_s/Es = 6.109e-4).
+    sr,max = k3 c + 0.8 x 0.5 x 0.425 x 25/0.03927 = k3 x 37.5 + 108.23 mm:
+    k3 = 3.4 gives 235.73 mm and wk = 0.162 mm; k3 = 3.4 (25/37.5)^(2/3) =
+    2.5947 (7.3.4(3) Note) gives 205.53 mm and wk = 0.141 mm.
+    The coarse-system (0.068 mm) and 2023 (0.149 mm) values are checks that the
+    manual text agrees with the program.
+    """
     text = _text()
     assert "$k_t=0.4$" in text and "$k_t=0.6$" in text
     assert "0.162, 0.141, 0.068 and 0.149 mm" in text
+    strain = (203.62 - 0.6 * 3.509 / 0.03927 * (1.0 + 6.0 * 0.03927)) / 200000.0
+    hand = {
+        "2005": (3.4 * 37.5 + 108.23) * strain,
+        "fine": (3.4 * (25.0 / 37.5) ** (2.0 / 3.0) * 37.5 + 108.23) * strain,
+    }
+    assert hand["2005"] == pytest.approx(0.162, abs=0.0005)
+    assert hand["fine"] == pytest.approx(0.141, abs=0.0005)
     ex = manual.example_beam()
     section = manual._section_of(ex)
     fct = fctm(ex["concrete"].fck)
     expected = {
-        "2005": ({}, 0.162),
-        "fine": ({"k3_cover_dependent": True}, 0.141),
+        "2005": ({}, hand["2005"]),
+        "fine": ({"k3_cover_dependent": True}, hand["fine"]),
         "coarse": ({"k3_cover_dependent": True, "coarse": True}, 0.068),
         "2023": ({"edition": "2023"}, 0.149),
     }
@@ -52,22 +76,32 @@ def test_crack_width_example_states_duration_and_short_term_values():
         assert result.crack.wk == pytest.approx(width, abs=0.0005)
 
 
+def _status_table_rows():
+    for block in manual.manual_blocks():
+        if (
+            isinstance(block, tuple)
+            and block[0] == "table"
+            and list(block[1]) == ["Status", "Meaning", "Next action"]
+        ):
+            return [str(row[0]) for row in block[2]]
+    raise AssertionError("the manual has no status table")
+
+
 def test_status_table_lists_every_displayed_status():
-    # MN-03: each status that a result view or report can show has a manual row.
+    # MN-03: each status that the Results Overview or a fatigue screen can show
+    # has a row in the manual status table ("A / B" rows list two statuses).
+    import result_presentation
+
     from sector import fatigue
 
-    rows = {row[0] for block in manual.manual_blocks()
-            if getattr(block, "kind", None) == "table"
-            for row in (getattr(block, "rows", None) or ())}
-    text = _text() if not rows else "\n".join(rows)
-    for status in (
-        "REVIEW",
+    listed = {
+        status.strip()
+        for row in _status_table_rows()
+        for status in row.split(" / ")
+    }
+    displayed = set(result_presentation.GOVERNING_OVERVIEW_STATUS_PRECEDENCE) | {
         "UNVERIFIED",
-        "PROVIDED AREA BELOW CALCULATED REQUIREMENT",
         fatigue.SIMPLIFIED_SCREEN_DETAILED,
         "NOT AVAILABLE",
-        "INVALID",
-        "NOT ASSESSED",
-        "NOT APPLICABLE",
-    ):
-        assert status in text
+    }
+    assert displayed <= listed, sorted(displayed - listed)

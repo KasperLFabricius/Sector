@@ -4,6 +4,10 @@ With VRd,c = 100 kN and valid links with VRd,s = 300 kN, the resistance to V act
 alone is 300 kN for every VEd. The term VEd/VRd is then monotonic in VEd: 95 kN
 gives 95/300 and 105 kN gives 105/300. Before 0.97.0 the term was 95/100 below
 VRd,c and 105/300 above it.
+
+Above VRd,c the section needs its links, so the resistance to V acting alone is
+VRd (EN 1992-1-1 6.2.3(1)) also when weak links give VRd < VRd,c. With VRd,s =
+60 kN: 95 kN gives 95/100 and 105 kN gives 105/60; the term increases with VEd.
 """
 
 from __future__ import annotations
@@ -13,11 +17,11 @@ import pytest
 from sector import capacity
 
 
-def _patch(monkeypatch, v_ed):
+def _patch(monkeypatch, v_ed, link_vrd=300.0):
     def fake_context(face_input, n_prestress, n_ed_comp):
-        payload = {"res": {"valid": True}, "v_ed": v_ed}
+        payload = {"res": {"valid": True, "vrd_c": 100.0}, "v_ed": v_ed}
         context = {
-            "build": lambda lo, hi: {"valid": True, "vrd": 300.0, "cot": 2.5},
+            "build": lambda lo, hi: {"valid": True, "vrd": link_vrd, "cot": 2.5},
             "cot_min": 1.0,
             "cot_max": 2.5,
         }
@@ -25,7 +29,7 @@ def _patch(monkeypatch, v_ed):
 
     def fake_selection(shear_payload, *, links_selected):
         route = "concrete" if shear_payload["v_ed"] <= 100.0 else "links"
-        resistance = 100.0 if route == "concrete" else 300.0
+        resistance = 100.0 if route == "concrete" else link_vrd
         return capacity.NominalShearResistanceSelection(
             valid=True, route=route, resistance=resistance,
             utilisation=shear_payload["v_ed"] / resistance, status="PASS",
@@ -48,3 +52,16 @@ def test_shear_alone_resistance_uses_links_when_they_resist_more(monkeypatch, v_
     assert record["valid"] is True
     assert record["resistance"] == pytest.approx(300.0)
     assert record["demand"] / record["resistance"] == pytest.approx(v_ed / 300.0)
+
+
+
+@pytest.mark.parametrize(("v_ed", "expected"), ((95.0, 100.0), (105.0, 60.0)))
+def test_shear_alone_resistance_with_weak_links_follows_the_shear_route(
+    monkeypatch, v_ed, expected
+):
+    _patch(monkeypatch, v_ed, link_vrd=60.0)
+    record = capacity._dkna_shear_action_alone(
+        {"shear_V": v_ed, "shear_axis": "x", "shear_face_y": "negative"}
+    )
+    assert record["valid"] is True
+    assert record["resistance"] == pytest.approx(expected)
