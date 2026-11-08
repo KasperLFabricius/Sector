@@ -2286,6 +2286,28 @@ def _bind_concrete_publication_fixture(shear, inp):
     return concrete["vrd_c"]
 
 
+def _bind_concrete_route_chord_fixture(shear, inp, plastic):
+    """Attach the a_l = d chord record that the producer retains on the concrete route.
+
+    The producer (``sector_app``) calls ``capacity.concrete_route_chord`` for every
+    shear result whose nominal route is the concrete route, and the publication
+    validator rejects a concrete-route result without this record. Call this
+    helper after the last edit of the shear fixture.
+    """
+
+    nominal = capacity.select_nominal_shear_resistance(
+        shear,
+        links_selected=inp.get("shear_links") is True,
+    )
+    assert nominal.valid is True
+    assert nominal.route == "concrete"
+    chord = capacity.concrete_route_chord(inp, plastic, shear, nominal)
+    assert chord is not None
+    assert chord["valid"] is True
+    shear["concrete_chord"] = chord
+    return chord
+
+
 def _bind_link_chord_publication_fixture(shear, inp, *, mx_factor=0.0):
     """Attach one current face/chord result to a complete shear fixture."""
 
@@ -2321,7 +2343,6 @@ def _bind_link_chord_publication_fixture(shear, inp, *, mx_factor=0.0):
         force,
         0.0,
         links["res"]["z"] / 1000.0,
-        cap_shear_force=True,
     )
     chord.update(
         valid=True,
@@ -2877,6 +2898,7 @@ def test_sparse_links_keep_capacity_pass_and_publish_detailing_failure_separatel
         transverse_detailing_on=True,
     )
     vrd_c = _bind_concrete_publication_fixture(shear, inp)
+    _bind_concrete_route_chord_fixture(shear, inp, _plastic())
     results = {
         "plastic": _plastic(),
         "shear": shear,
@@ -3166,6 +3188,7 @@ def test_out_of_range_links_keep_angle_free_concrete_route_and_no_link_verdict()
         assessment_reason=reason,
         angle_applicability=applicability,
     )
+    _bind_concrete_route_chord_fixture(shear, inp, _plastic())
 
     rows = presentation.result_summary_rows(
         inp, {"plastic": _plastic(), "shear": shear}
@@ -3458,6 +3481,7 @@ def test_shear_without_links_retains_concrete_screening_verdict():
     )
     _bind_concrete_publication_fixture(shear, inp)
     shear.pop("links")
+    _bind_concrete_route_chord_fixture(shear, inp, _plastic())
     rows = presentation.result_summary_rows(
         inp,
         {"plastic": _plastic(), "shear": shear},
@@ -3949,6 +3973,7 @@ def test_biaxial_shear_summary_keeps_directional_verdicts_and_limitation():
             assessment_status=nominal.status,
             assessment_ok=nominal.ok,
         )
+        _bind_concrete_route_chord_fixture(child, inp, _plastic())
         face = {
             "tension_low": True,
             "shear_status": nominal.status,

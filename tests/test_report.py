@@ -7898,7 +7898,7 @@ def _base_en_incomplete_failed_chord_out():
         cap_shear_force=False,
         capped=False,
         mv_uncapped=20.0,
-        shear_headroom=0.0,
+        m_ed_max=None,
         shear_term_selection="uncapped",
     )
     combined.update(
@@ -8364,9 +8364,10 @@ def test_base_en_2005_component_rendering_rejects_ambiguous_shear_cap(profile, t
         row for row in positive_rows
         if row[0] == "Combined longitudinal reinforcement"
     )[2:4] == ("FAIL", "150.0 %")
-    # The old 60 + 20 + 10 = 90 kNm / 60 kNm vector is ambiguous without
-    # its explicit uncapped choice, since the available shear headroom is zero.
+    # A vector capped by the former MRd rule (no flag, capped, no MEd,max) is not
+    # reproducible under 6.2.3(7) with an entered MEd,max only.
     combined["longitudinal"].pop("cap_shear_force")
+    combined["longitudinal"]["capped"] = True
     assert capacity._combined_longitudinal_candidate(combined["longitudinal"]) is None
     assert capacity.combined_longitudinal_assessment(combined)["status"] == "NOT ASSESSED"
     pdf, actual_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
@@ -8440,9 +8441,9 @@ def _pub_h01_report_combined(parent_state="stale_mapping"):
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 4.213620,
-        "shear_headroom": 20.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     for legacy_only_key in (
@@ -8573,7 +8574,7 @@ def _pub_h01_report_current_direct(
                 ok=True,
                 m_rd=direct["m_total"] / 0.80,
                 util=0.80,
-                shear_headroom=direct["m_total"] / 0.80 - direct["m_ed"],
+                m_ed_max=None,
             )
         combined.update(t_ed=40.0, asl_torsion=500.0)
     combined.update(
@@ -8777,9 +8778,9 @@ def _pub_h01_report_four_face_torsion():
             "z": 0.5,
             "util": 1.0 / 15.0,
             "capped": False,
-            "cap_shear_force": True,
+            "cap_shear_force": False,
             "mv_uncapped": 0.0,
-            "shear_headroom": 150.0,
+            "m_ed_max": None,
             "shear_term_selection": "uncapped",
         }
         if role == "shear_axis":
@@ -8882,9 +8883,9 @@ def test_pub_h01_2005_component_rendering_rejects_stale_longitudinal_operands(
         "z": 0.25,
         "util": 0.50,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 10.0,
-        "shear_headroom": 60.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     stale_formula = _pub_h01_report_zero_formula_628()
@@ -9006,8 +9007,8 @@ def test_pub_h01_2005_component_rendering_binds_operand_poison_controls(
         "biaxial": False, "off_util": 0.0, "off_not_evaluated": None,
         "m_ed": 40.0, "mv": 10.0, "mt": 0.0, "m_total": 50.0,
         "m_rd": 100.0, "ftd_v": 40.0, "ftd_t": 0.0, "z": 0.25,
-        "util": 0.50, "capped": False, "cap_shear_force": True,
-        "mv_uncapped": 10.0, "shear_headroom": 60.0,
+        "util": 0.50, "capped": False, "cap_shear_force": False,
+        "mv_uncapped": 10.0, "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     formula = _pub_h01_report_zero_formula_628()
@@ -9610,9 +9611,9 @@ def test_pub_h01_2005_component_rendering_retains_exact_longitudinal_failure(
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 4.213620,
-        "shear_headroom": 20.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     for legacy_only_key in (
@@ -9718,12 +9719,15 @@ def test_native_combined_report_rejects_incomplete_root_candidate_inventory(
     assert (failed["axis"], failed["tension_low"]) == ("x", False)
     assert failed["m_total"] / failed["m_rd"] == pytest.approx(failed["util"])
     # Frozen native V=30 kN / T=180 kNm regression, separate from the 123.9% unit vector.
-    assert failed["util"] == pytest.approx(2.059941571055692)
+    # 0.97.0 P1-13: the a_l = d chord with torsion joins the member-angle objective
+    # (cot 1.491 -> 1.453); this chord is Ftd,T z/2 with Ftd,T proportional to cot:
+    # 2.059941571055692 x 1.453 / 1.491.
+    assert failed["util"] == pytest.approx(2.007441383463394)
     rows = result_presentation.multi_case_summary_rows(inp, out)
     target = next(row for row in rows
                   if row.get("overview_key") == "combined:longitudinal")
     assert (target["case"], target["status"], target["result"]) == (
-        "PL-01", "FAIL", "206.0 %",
+        "PL-01", "FAIL", "200.7 %",
     )
 
     def row_pattern(row):
@@ -11877,7 +11881,7 @@ def test_report_withholds_verdict_for_preserved_non_governing_fallback(
         if mutation == "zero-substitute":
             altered.update(combined_core.longitudinal_check(
                 altered["m_ed"], 0.0, altered["ftd_v"], altered["ftd_t"],
-                altered["z"], cap_shear_force=True,
+                altered["z"],
             ))
         elif mutation == "missing-off-flag":
             altered.pop("off_not_evaluated")

@@ -1365,7 +1365,8 @@ def provided_link_shear_publication_assessment(
         allowed_label = re.compile(
             r"(?:shear link yielding|shear strut crushing|shared closed stirrup|"
             r"shared shear-torsion strut|torsion sub-tube [1-9][0-9]*|"
-            r"[xy]-axis (?:negative|positive) (?:longitudinal|off-axis) chord)"
+            r"[xy]-axis (?:negative|positive) (?:longitudinal|off-axis) chord|"
+            r"concrete-route a_l = d tension chord)"
         )
         if not all((
             len(labels) == objective_count,
@@ -1712,6 +1713,290 @@ def combined_longitudinal_chord_evidence_is_valid(
     )
 
 
+# Optional member input for the EN 1992-1-1 6.2.3(7) cap: the maximum moment along
+# the member per bending direction and sign (kNm, magnitude). The positive moment
+# tensions the low face (+Mx the bottom, +My the left), as in chord_applied_moment.
+MED_MAX_ON_KEY = "shear_med_max_on"
+MED_MAX_KEYS = {
+    ("x", True): "shear_med_max_mx_pos",
+    ("x", False): "shear_med_max_mx_neg",
+    ("y", True): "shear_med_max_my_pos",
+    ("y", False): "shear_med_max_my_neg",
+}
+
+
+def chord_med_max(inp: Mapping[str, Any], axis: str, tension_low: bool) -> float | None:
+    """Return the engineer-entered ``MEd,max`` for one chord face, or ``None``.
+
+    ``None`` means that no cap applies (EN 1992-1-1 6.2.3(7) needs the maximum
+    moment along the member, which a section calculation does not know).
+    """
+    if inp.get(MED_MAX_ON_KEY) is not True:
+        return None
+    value = inp.get(MED_MAX_KEYS[(axis, bool(tension_low))])
+    if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
+        return None
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or number <= 0.0:
+        # 0 (the field default) means "not entered". A zero cap would remove the
+        # whole shear term at a section with zero moment.
+        return None
+    return number
+
+
+def chord_cap_in_reference(m_ed_max, reference_shift, tension_low):
+    """Move an entered MEd,max to the moment reference of the chord check.
+
+    The 2023 chord moment is taken about the centre of the web (8.2.3(8)), which
+    adds ``reference_shift`` to the origin moment. MEd,max is entered about the
+    origin, so the same shift applies to it: ``+shift`` on the low face and
+    ``-shift`` on the high face, because the face moment is ``+M`` or ``-M``.
+    """
+    if m_ed_max is None:
+        return None
+    return m_ed_max + (reference_shift if tension_low else -reference_shift)
+
+
+CONCRETE_CHORD_TORSION_UNAVAILABLE = (
+    "the torsion longitudinal force F_td,T of the tension chord is not "
+    "available; closed links, a valid torsion tube and a permitted strut angle "
+    "are necessary"
+)
+CONCRETE_CHORD_TORSION_ARM_UNAVAILABLE = (
+    "the lever arm z for the torsion share of the tension chord is not available"
+)
+CONCRETE_CHORD_PLASTIC_REQUIRED = (
+    "the plastic bending analysis is required for the tension chord"
+)
+
+
+def concrete_route_chord_plastic_available(plastic_result):
+    """True when the ``a_l = d`` chord has the plastic result that it needs.
+
+    The producer :func:`concrete_route_chord` and the member strut-angle
+    objective use this one gate, so the objective contains the chord only
+    when the chord has a published result (TB-02).
+    """
+    return isinstance(plastic_result, Mapping) and (
+        plastic_result.get("util") is not None
+    )
+
+
+def _chord_real(value):
+    """Return a finite real number, or ``None``."""
+    if _is_boolean_scalar(value) or isinstance(value, (str, bytes)):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def concrete_route_chord_torsion_requested(inp):
+    """Return whether the input applies a torsion moment to the shear member."""
+    if inp.get("torsion_on") is not True:
+        return False
+    t_ed = _chord_real(inp.get("torsion_T"))
+    return t_ed is None or abs(t_ed) > 0.0
+
+
+def concrete_route_chord_torsion(torsion_result):
+    """Torsion longitudinal force on the shear tension chord, as on the links route.
+
+    The links route adds ``Ftd,T*z/2`` with ``Ftd,T = Asl,req*fyd/1000`` of the
+    primary (web) tube at the member strut angle (EN 1992-1-1 6.3.2(3), Formula
+    (6.28)). The force is available only when the torsion check is live: closed
+    links, a valid tube and a permitted strut angle. Returns ``{"valid", "ftd_t",
+    "cot", "reason"}``.
+    """
+    unavailable = {
+        "valid": False,
+        "ftd_t": None,
+        "cot": None,
+        "reason": CONCRETE_CHORD_TORSION_UNAVAILABLE,
+    }
+    if not isinstance(torsion_result, Mapping):
+        return unavailable
+    primary = torsion_result.get("primary")
+    if not isinstance(primary, Mapping):
+        return unavailable
+    applicability = torsion_result.get("angle_applicability")
+    asl_req = _chord_real(primary.get("asl_req"))
+    cot = _chord_real(primary.get("cot"))
+    fyd_long = _chord_real(torsion_result.get("fyd_long"))
+    asw_over_s = _chord_real(torsion_result.get("asw_over_s"))
+    if (
+        torsion_result.get("closed_links_present") is not True
+        or asw_over_s is None
+        or asw_over_s <= 0.0
+        or torsion_result.get("tube_valid") is not True
+        or primary.get("tube_valid") is not True
+        or not isinstance(applicability, Mapping)
+        or applicability.get("applicable") is not True
+        or asl_req is None
+        or asl_req < 0.0
+        or cot is None
+        or cot <= 0.0
+        or fyd_long is None
+        or fyd_long <= 0.0
+    ):
+        return unavailable
+    return {
+        "valid": True,
+        "ftd_t": asl_req * fyd_long / 1000.0,
+        "cot": cot,
+        "reason": None,
+    }
+
+
+def concrete_route_chord(
+    inp, plastic_result, shear_result, nominal, torsion_result=None
+):
+    """Tension chord of the concrete shear route with the shift ``a_l = d``.
+
+    EN 1992-1-1 6.2.2(5) and 9.2.1.3(2), and DS/EN 1992-1-1:2023 8.2.2(10): when
+    no shear reinforcement is required, the tension chord carries the moment
+    increased by ``|VEd|*d``, capped only by an engineer-entered ``MEd,max``. With
+    torsion, the same chord also carries the torsion share ``Ftd,T*z/2`` of the
+    links route (6.3.2(3)), with the lever arm ``z`` of the links route; the cap
+    does not apply to that share. Without a live torsion force or lever arm the
+    chord is NOT ASSESSED. Returns ``None`` when the route does not apply. The
+    publication validator
+    ``result_presentation.concrete_route_chord_publication_assessment`` rebuilds
+    this record from the current input before any surface shows it.
+    """
+    if nominal.valid is not True or nominal.route != "concrete":
+        return None
+    operands = concrete_route_chord_operands(inp, shear_result)
+    if operands is None:
+        return None
+    axis = operands["axis"]
+    tension_low = operands["tension_low"]
+    model_2023 = operands["model_2023"]
+    has_torsion = concrete_route_chord_torsion_requested(inp)
+    base = dict(
+        axis=axis, tension_low=tension_low, model_2023=model_2023,
+        m_ed_signed=operands["m_ed_signed"],
+        moment_reference_shift=operands["moment_reference_shift"],
+        m_off=operands["m_off"],
+        has_torsion=has_torsion,
+    )
+    if not concrete_route_chord_plastic_available(plastic_result):
+        return dict(
+            base, status="NOT ASSESSED", ok=None, util=None, valid=False,
+            reason=CONCRETE_CHORD_PLASTIC_REQUIRED,
+        )
+    m_rd, exact = concrete_route_chord_face_mrd(inp, operands)
+    if not exact:
+        return dict(
+            base, status="NOT ASSESSED", ok=None, util=None, valid=False,
+            reason="the bending resistance of the tension chord face is not solved",
+        )
+    ftd_t, z_m = 0.0, None
+    if has_torsion:
+        share = concrete_route_chord_torsion(torsion_result)
+        if share["valid"] is not True:
+            return dict(
+                base, status="NOT ASSESSED", ok=None, util=None, valid=False,
+                reason=share["reason"],
+            )
+        # The links route uses the shear lever arm of the same face for the
+        # torsion share (``link_ctx["z_mm"]``, retained as ``links.res.z``).
+        links = shear_result.get("links")
+        link_result = links.get("res") if isinstance(links, Mapping) else None
+        z_mm = (
+            _chord_real(link_result.get("z"))
+            if isinstance(link_result, Mapping)
+            else None
+        )
+        if z_mm is None or z_mm <= 0.0:
+            return dict(
+                base, status="NOT ASSESSED", ok=None, util=None, valid=False,
+                reason=CONCRETE_CHORD_TORSION_ARM_UNAVAILABLE,
+            )
+        ftd_t, z_m = share["ftd_t"], z_mm / 1000.0
+    check = concrete_route_chord_demand(operands, m_rd, ftd_t=ftd_t, z=z_m)
+    return dict(base, **check, valid=True, reason=None)
+
+
+def concrete_route_chord_operands(inp, shear_result):
+    """Angle-independent operands of the ``a_l = d`` tension chord.
+
+    The producer :func:`concrete_route_chord` and the member strut-angle
+    objective use the same operands, so the selected angle and the published
+    chord use the same rule (owner decision TB-02). Returns ``None`` when the
+    shear result has no usable face. ``v_ed`` is in kN and ``d_m`` in m.
+    """
+    if not isinstance(shear_result, Mapping):
+        return None
+    v_ed = shear_result.get("v_ed")
+    d_mm = shear_result.get("d")
+    axis = shear_result.get("axis")
+    tension_low = shear_result.get("tension_low")
+    if (
+        axis not in {"x", "y"}
+        or type(tension_low) is not bool
+        or v_ed is None
+        or d_mm is None
+        or not math.isfinite(float(d_mm))
+        or float(d_mm) <= 0.0
+    ):
+        return None
+    model_2023 = shear_result.get("model_2023") is True
+    m_origin = inp["Mx_pl"] if axis == "x" else inp["My_pl"]
+    m_signed = shear_result["m_ed_2023"] if model_2023 else m_origin
+    shift = shear_result["moment_reference_shift"] if model_2023 else 0.0
+    off_signed = inp["My_pl"] if axis == "x" else inp["Mx_pl"]
+    combined = _module("combined")
+    return dict(
+        axis=axis,
+        tension_low=tension_low,
+        model_2023=model_2023,
+        m_ed_signed=m_signed,
+        moment_reference_shift=shift,
+        m_off=off_signed,
+        m_ed=combined.chord_applied_moment(m_signed, tension_low),
+        m_ed_max=chord_cap_in_reference(
+            chord_med_max(inp, axis, tension_low), shift, tension_low
+        ),
+        v_ed=float(v_ed),
+        d_m=float(d_mm) / 1000.0,
+    )
+
+
+def concrete_route_chord_face_mrd(inp, operands, solver=None):
+    """Bending resistance of the shear tension face of the ``a_l = d`` chord.
+
+    Returns ``(m_rd, exact)`` from :func:`shear_face_mrd`, conditional on the
+    coexisting off-axis moment. ``solver`` replaces :func:`shear_face_mrd` for a
+    caller that caches solves; the arguments are the same.
+    """
+    return (solver or shear_face_mrd)(
+        inp,
+        operands["axis"],
+        operands["tension_low"],
+        m_off=operands["m_off"],
+        moment_reference_shift=operands["moment_reference_shift"],
+    )
+
+
+def concrete_route_chord_demand(operands, m_rd, *, ftd_t=0.0, z=None):
+    """Check of the ``a_l = d`` chord with the torsion share ``Ftd,T*z/2``.
+
+    ``ftd_t`` (kN) depends on the strut angle; the other operands do not. The
+    6.2.3(7) ``MEd,max`` limit applies to ``MEd + |VEd|*d`` only.
+    """
+    return _module("combined").concrete_route_chord_check(
+        operands["m_ed"], m_rd, operands["v_ed"], operands["d_m"],
+        m_ed_max=operands["m_ed_max"], model_2023=operands["model_2023"],
+        ftd_t=ftd_t, z=z,
+    )
+
+
 def longitudinal_chord_assessment(
     links: object,
     *,
@@ -2004,16 +2289,10 @@ def _combined_longitudinal_candidate(
         ):
             return None
 
+    # Every producer publishes the shear term as an equivalent chord force on z:
+    # delta_Ftd (6.18) on the 2005 route and the chord share NVd/2 of Formulae
+    # (8.51)/(8.52) on the 2023 route.
     mv_uncapped = operands["ftd_v"] * operands["z"]
-    shear_headroom = max(
-        operands["m_rd"]
-        - (
-            max(face_m_ed_number, 0.0)
-            if face_m_ed_number is not None
-            else operands["m_ed"]
-        ),
-        0.0,
-    )
     cap_shear_force = value.get("cap_shear_force", _MISSING)
     if chord_formula in {"8.51", "8.52"}:
         if (
@@ -2021,35 +2300,40 @@ def _combined_longitudinal_candidate(
             or value["capped"] is not False
         ):
             return None
+        n_vd = value.get("n_vd", _MISSING)
+        if n_vd is not _MISSING:
+            n_vd_number = _combined_longitudinal_finite_nonnegative(n_vd)
+            if n_vd_number is None or not _combined_longitudinal_close(
+                operands["ftd_v"], n_vd_number / 2.0
+            ):
+                return None
         expected_mv = mv_uncapped
         expected_capped = False
         expected_selection = "uncapped"
     else:
-        if cap_shear_force is _MISSING:
-            # Current first-generation producers retain the flag. Historic
-            # schema-27 evidence is unambiguous while the raw term is inside
-            # the available headroom, where capped and uncapped values agree.
-            if operands["m_rd"] > 0.0 and mv_uncapped > shear_headroom + 1.0e-9:
-                return None
-            cap_shear_force = True
-        elif type(cap_shear_force) is not bool:
+        # Only the engineer-entered member maximum MEd,max caps the 2005 shear
+        # shift (6.2.3(7)). Retained schema-27 evidence capped with MRd is not
+        # reproducible under that rule and is rejected.
+        m_ed_max = value.get("m_ed_max")
+        if cap_shear_force is _MISSING and value["capped"] is False and (
+            m_ed_max is None
+        ):
+            # Evidence without the flag that states no cap is unambiguous: the
+            # shear term below must then equal the uncapped term.
+            cap_shear_force = False
+        if type(cap_shear_force) is not bool:
             return None
-        if operands["m_rd"] <= 0.0:
-            expected_mv = mv_uncapped
-            expected_capped = False
-            expected_selection = "zero-capacity uncapped demand"
-        else:
-            expected_mv = (
-                min(mv_uncapped, shear_headroom)
-                if cap_shear_force
-                else mv_uncapped
+        if m_ed_max is not None:
+            m_ed_max = _combined_longitudinal_finite_nonnegative(m_ed_max)
+            if m_ed_max is None:
+                return None
+        if cap_shear_force is not (m_ed_max is not None):
+            return None
+        expected_mv, expected_capped, expected_selection = (
+            _module("combined").shear_term_cap(
+                mv_uncapped, operands["m_ed"], m_ed_max
             )
-            expected_capped = bool(
-                cap_shear_force and mv_uncapped > expected_mv + 1.0e-9
-            )
-            expected_selection = (
-                "capacity headroom cap" if expected_capped else "uncapped"
-            )
+        )
         if value["capped"] is not expected_capped:
             return None
 
@@ -2061,7 +2345,6 @@ def _combined_longitudinal_candidate(
         return None
     for key, expected in (
         ("mv_uncapped", mv_uncapped),
-        ("shear_headroom", shear_headroom),
     ):
         retained_operand = value.get(key, _MISSING)
         if retained_operand is _MISSING:
@@ -3388,10 +3671,13 @@ def provided_link_longitudinal_publication_assessment(
     )
     if retained_force is None or (retained_force > 0.0) is not shear_live:
         return unavailable
+    # 2005: each shifted chord carries delta_Ftd. 2023: the retained force is NVd
+    # (8.50) and Formulae (8.51)/(8.52) give each chord NVd/2.
+    chord_share = retained_force / 2.0 if model_2023 else retained_force
     if any(
         not _combined_longitudinal_close(
             float(candidate["ftd_v"]),
-            retained_force if candidate.get("gets_shift") is True else 0.0,
+            chord_share if candidate.get("gets_shift") is True else 0.0,
         )
         for candidate in shear_candidates
     ):

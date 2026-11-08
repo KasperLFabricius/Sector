@@ -17,7 +17,7 @@ from test_report_heading_layout import _LabeledBlock, _pdf, _page
 
 
 def test_equation_meanings_keep_controlled_keys_and_reference_symbols():
-    assert len(contracts._CONTRACTS) == 145
+    assert len(contracts._CONTRACTS) == 147
     meanings = [symbol.meaning for item in contracts._CONTRACTS.values()
                 for symbol in item.symbols]
     assert not any("neutralising" in text or "neutralisation" in text
