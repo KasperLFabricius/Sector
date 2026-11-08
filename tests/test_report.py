@@ -26,12 +26,6 @@ import fatigue_inputs  # noqa: E402
 import case_analysis  # noqa: E402
 import load_cases  # noqa: E402
 import material_catalog  # noqa: E402
-from native_member_report_fixtures import native_member_report_cases  # noqa: E402,F401
-from native_member_report_fixtures import native_formula_631_cases  # noqa: E402,F401
-from native_member_report_fixtures import native_base_en_report_case  # noqa: E402,F401
-from native_member_report_fixtures import native_subdivided_report_case  # noqa: E402,F401
-from native_member_report_fixtures import native_axial_compression_report_cases  # noqa: E402,F401
-from native_member_report_fixtures import native_scheduler_report_cases  # noqa: E402,F401
 import publication_image_export  # noqa: E402
 import result_presentation  # noqa: E402
 import sector_report  # noqa: E402
@@ -5590,8 +5584,38 @@ def test_brief_governing_depth_does_not_publish_worked_selection_register():
     assert out["worked_example_selection"] == selection_before
 
 
+_AUDIT_APPENDIX_SENTENCE = (
+    "The combined M-V-T chapter states the selected edition, the common "
+    "strut-angle basis and the applicable interaction expressions."
+)
+_AUDIT_APPENDIX_ORIGIN_BLOCKER = (
+    "The saved bending result cannot confirm that the M-M envelope "
+    "contains the origin. Recalculate before assessing M-V-T interaction."
+)
+
+
+def _audit_appendix_text(inp, payload):
+    builder = sector_report.ReportBuilder(
+        io.BytesIO(), {}, inp, payload, figures=False, profile="Audit",
+    )
+    builder._appendix()
+
+    def paragraph_text(flowables):
+        # The appendix keeps its heading and notes in a layout group.
+        # Inspect those paragraphs as well as top-level paragraphs.
+        for item in flowables:
+            if isinstance(item, sector_report.KeepTogether):
+                yield from paragraph_text(item._content)
+            elif hasattr(item, "getPlainText"):
+                yield item.getPlainText()
+
+    text = " ".join(paragraph_text(builder.flow))
+    assert "QA appendix - references and notes" in text
+    return text
+
+
 @result_presentation.publication_calculation_scope()
-def test_audit_appendix_claims_combined_method_only_for_assessable_case(native_scheduler_report_cases, tmp_path):
+def test_audit_appendix_rejects_legacy_owner_without_canonical_rows(tmp_path):
     inp = _inp()
     actions = [
         {
@@ -5629,84 +5653,68 @@ def test_audit_appendix_claims_combined_method_only_for_assessable_case(native_s
         ],
     }
     before = copy.deepcopy(out)
-    sentence = (
-        "The combined M-V-T chapter states the selected edition, the common "
-        "strut-angle basis and the applicable interaction expressions."
-    )
-
-    def appendix_text(payload):
-        builder = sector_report.ReportBuilder(
-            io.BytesIO(), {}, inp, payload, figures=False, profile="Audit",
-        )
-        builder._appendix()
-
-        def paragraph_text(flowables):
-            # The appendix keeps its heading and notes in a layout group.
-            # Inspect those paragraphs as well as top-level paragraphs.
-            for item in flowables:
-                if isinstance(item, sector_report.KeepTogether):
-                    yield from paragraph_text(item._content)
-                elif hasattr(item, "getPlainText"):
-                    yield item.getPlainText()
-
-        text = " ".join(paragraph_text(builder.flow))
-        assert "QA appendix - references and notes" in text
-        return text
-
-    assert sentence not in appendix_text(out)
+    assert _AUDIT_APPENDIX_SENTENCE not in _audit_appendix_text(inp, out)
     out["plastic_cases"][1]["results"]["plastic"]["util_valid"] = True
     # A legacy util_valid flag cannot repair absent canonical row fields or
     # signatures. Keep the exact old compound vector as a rejection control.
-    assert sentence not in appendix_text(out)
+    assert _AUDIT_APPENDIX_SENTENCE not in _audit_appendix_text(inp, out)
     out["plastic_cases"][1]["results"]["plastic"].pop("util_valid")
     assert out == before
 
     (tmp_path / "legacy-appendix-owner.pickle").write_bytes(pickle.dumps((inp, out)))
+
+
+# One test for each native report variant, so that xdist can spread the four
+# Audit report builds. The old test built the same four reports in one body.
+@pytest.mark.parametrize("variant", ["current", "mixed-PL-LOW", "mixed-PL-GOV", "legacy-bending"])
+@result_presentation.publication_calculation_scope()
+def test_audit_appendix_claims_combined_method_only_for_assessable_case(
+    native_scheduler_report_cases, variant, tmp_path,
+):
     inp, current = native_scheduler_report_cases("dkna")
     original = pickle.dumps((inp, current))
     contexts = _assert_native_scheduler_contexts(inp, current)
     assert set(contexts) == {"PL-LOW", "PL-GOV"}
     assert all(result_presentation.combined_bending_assessment_blocker(values[1], values[0]) is None
                for values in contexts.values())
-    assert sentence in appendix_text(current)
-    pdf = _build_report_with_selection({}, inp, current, figures=False, profile="Audit")
-    (tmp_path / "native-current-appendix.pdf").write_bytes(pdf)
-    assert sentence in " ".join(_pdf_text(pdf).split())
-
+    assert _AUDIT_APPENDIX_SENTENCE in _audit_appendix_text(inp, current)
     # One eligible case suffices; blocking either case must not suppress the
     # actual surviving chapter's method reference.
-    origin_blocker = (
-        "The saved bending result cannot confirm that the M-M envelope "
-        "contains the origin. Recalculate before assessing M-V-T interaction."
-    )
     assert all("valid" not in values[1]["combined"] for values in contexts.values())
-    for blocked_id in contexts:
+    if variant == "current":
+        pdf = _build_report_with_selection({}, inp, current, figures=False, profile="Audit")
+        (tmp_path / "native-current-appendix.pdf").write_bytes(pdf)
+        assert _AUDIT_APPENDIX_SENTENCE in " ".join(_pdf_text(pdf).split())
+    elif variant.startswith("mixed-"):
+        blocked_id = variant.removeprefix("mixed-")
+        assert blocked_id in contexts
         mixed = copy.deepcopy(current)
         entry = next(item for item in mixed["plastic_cases"] if item["name"] == blocked_id)
         entry["results"]["plastic"].pop("util_valid")
         mixed_before = pickle.dumps(mixed)
         mixed_contexts = _assert_native_scheduler_contexts(inp, mixed, require_component_current=False)
         for case_id, (case_inp, case_out) in mixed_contexts.items():
-            expected = origin_blocker if case_id == blocked_id else None
+            expected = _AUDIT_APPENDIX_ORIGIN_BLOCKER if case_id == blocked_id else None
             assert result_presentation.combined_bending_assessment_blocker(case_out, case_inp) == expected
-        assert sentence in appendix_text(mixed)
+        assert _AUDIT_APPENDIX_SENTENCE in _audit_appendix_text(inp, mixed)
         mixed_pdf = _build_report_with_selection({}, inp, mixed, figures=False, profile="Audit")
         (tmp_path / ("native-mixed-appendix-" + blocked_id + ".pdf")).write_bytes(mixed_pdf)
-        assert sentence in " ".join(_pdf_text(mixed_pdf).split())
+        assert _AUDIT_APPENDIX_SENTENCE in " ".join(_pdf_text(mixed_pdf).split())
         assert pickle.dumps(mixed) == mixed_before
-
-    rejected = copy.deepcopy(current)
-    for entry in rejected["plastic_cases"]:
-        entry["results"]["plastic"].pop("util_valid")
-    rejected_before = pickle.dumps(rejected)
-    rejected_contexts = _assert_native_scheduler_contexts(inp, rejected, require_component_current=False)
-    assert all(result_presentation.combined_bending_assessment_blocker(values[1], values[0]) == origin_blocker
-               for values in rejected_contexts.values())
-    assert sentence not in appendix_text(rejected)
-    rejected_pdf = _build_report_with_selection({}, inp, rejected, figures=False, profile="Audit")
-    (tmp_path / "native-legacy-bending-appendix.pdf").write_bytes(rejected_pdf)
-    assert sentence not in " ".join(_pdf_text(rejected_pdf).split())
-    assert pickle.dumps(rejected) == rejected_before
+    else:
+        assert variant == "legacy-bending"
+        rejected = copy.deepcopy(current)
+        for entry in rejected["plastic_cases"]:
+            entry["results"]["plastic"].pop("util_valid")
+        rejected_before = pickle.dumps(rejected)
+        rejected_contexts = _assert_native_scheduler_contexts(inp, rejected, require_component_current=False)
+        assert all(result_presentation.combined_bending_assessment_blocker(values[1], values[0]) == _AUDIT_APPENDIX_ORIGIN_BLOCKER
+                   for values in rejected_contexts.values())
+        assert _AUDIT_APPENDIX_SENTENCE not in _audit_appendix_text(inp, rejected)
+        rejected_pdf = _build_report_with_selection({}, inp, rejected, figures=False, profile="Audit")
+        (tmp_path / "native-legacy-bending-appendix.pdf").write_bytes(rejected_pdf)
+        assert _AUDIT_APPENDIX_SENTENCE not in " ".join(_pdf_text(rejected_pdf).split())
+        assert pickle.dumps(rejected) == rejected_before
     assert pickle.dumps((inp, current)) == original
 
 
@@ -6293,105 +6301,128 @@ def test_torsion_applicability_component_rendering_accepts_declared_positive(pro
     assert "APPLICABLE" in text
 
 
+# One test for each poisoned authority field, so that xdist can spread the
+# 27 report builds. The old loop asserted the same nine cases.
+_NATIVE_AUTHORITY_POISON_CASES = (
+    "stale-blocker", "malformed-blocker", "lowercase-status",
+    "missing-route-entry", "wrong-route", "stale-reason",
+    "text-ted", "boolean-ted", "nonfinite-ted",
+)
+
+
+def _native_authority_report_target(native_member_report_cases):
+    """Return the current two-face bundle, its pickle and its torsion row."""
+    inp, out = copy.deepcopy(native_member_report_cases["two-face"])
+    original = pickle.dumps((inp, out))
+    assert out["plastic_cases"][0]["results"]["torsion"] is out["torsion"]
+    assert result_presentation.torsion_publication_component_is_current(
+        inp, out["shear"], out["torsion"],
+    ) == (True, None)
+    assert result_presentation.torsion_applicability_publication_status(out["torsion"]) == "APPLICABLE"
+    positive_rows = result_presentation.multi_case_summary_rows(inp, out)
+    target = next(row for row in positive_rows if row.get("overview_key") == "torsion:resistance")
+    assert target["status"] in {"PASS", "FAIL"}
+    assert target["util"] is not None and target["result"] != "-"
+    return inp, out, original, target
+
+
+def _native_authority_row_pattern(row):
+    return r"\s+".join(
+        re.escape(str(row[key])).replace(r"\ ", r"\s+").replace(r"\-", r"-\s*")
+        for key in ("check", "case", "status", "result")
+    )
+
+
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-def test_native_torsion_report_rejects_isolated_authority_poison(
+def test_native_torsion_report_publishes_current_authority(
     native_member_report_cases, profile, tmp_path,
 ):
-    import json
-
     @result_presentation.publication_calculation_scope()
-    def check_reports():
-        inp, out = copy.deepcopy(native_member_report_cases["two-face"])
-        original = pickle.dumps((inp, out))
-        assert out["plastic_cases"][0]["results"]["torsion"] is out["torsion"]
-        assert result_presentation.torsion_publication_component_is_current(
-            inp, out["shear"], out["torsion"],
-        ) == (True, None)
-        assert result_presentation.torsion_applicability_publication_status(out["torsion"]) == "APPLICABLE"
-        positive_rows = result_presentation.multi_case_summary_rows(inp, out)
-        target = next(row for row in positive_rows if row.get("overview_key") == "torsion:resistance")
-        assert target["status"] in {"PASS", "FAIL"}
-        assert target["util"] is not None and target["result"] != "-"
-
-        def row_pattern(row):
-            return r"\s+".join(
-                re.escape(str(row[key])).replace(r"\ ", r"\s+").replace(r"\-", r"-\s*")
-                for key in ("check", "case", "status", "result")
-            )
-
+    def check_report():
+        inp, out, original, target = _native_authority_report_target(native_member_report_cases)
         pdf = _build_report_from_completed_payload({}, inp, out, figures=False, profile=profile)
         (tmp_path / f"native-authority-positive-{profile}.pdf").write_bytes(pdf)
         text = " ".join(_pdf_text(pdf).split())
-        assert re.search(row_pattern(target), text)
+        assert re.search(_native_authority_row_pattern(target), text)
         if profile != "Brief":
             assert "Torsion applicability and member scope" in text
-        evidence = []
-        for authority_case in (
-            "stale-blocker", "malformed-blocker", "lowercase-status",
-            "missing-route-entry", "wrong-route", "stale-reason",
-            "text-ted", "boolean-ted", "nonfinite-ted",
-        ):
-            poisoned = copy.deepcopy(out)
-            torsion = poisoned["torsion"]
-            assert poisoned["plastic_cases"][0]["results"]["torsion"] is torsion
-            shear_before = pickle.dumps(poisoned["shear"])
-            primary_before = pickle.dumps(torsion["primary"])
-            # Detach only the root declaration; native physical-face evidence
-            # must stay unchanged so this tests wrapper reconciliation.
-            torsion["applicability"] = copy.deepcopy(torsion["applicability"])
-            if authority_case == "stale-blocker":
-                torsion["applicability_blocked"] = True
-            elif authority_case == "malformed-blocker":
-                torsion["applicability_blocked"] = "False"
-            elif authority_case == "lowercase-status":
-                torsion["applicability"]["status"] = "applicable"
-            elif authority_case == "missing-route-entry":
-                torsion["applicability"].pop("full_resistance_route_entered")
-            elif authority_case == "wrong-route":
-                torsion["applicability"]["route"] = "compatibility residual full resistance"
-            elif authority_case == "stale-reason":
-                torsion["applicability"]["reason"] = "open or warping-sensitive torsion requires member analysis"
-            elif authority_case == "text-ted":
-                torsion["t_ed"] = str(torsion["t_ed"])
-            elif authority_case == "boolean-ted":
-                torsion["t_ed"] = True
-            else:
-                torsion["t_ed"] = math.nan
-            assert pickle.dumps(poisoned["shear"]) == shear_before, authority_case
-            assert pickle.dumps(torsion["primary"]) == primary_before, authority_case
-            poisoned_before = pickle.dumps(poisoned)
-            assert result_presentation.torsion_applicability_publication_status(torsion) == "NOT ASSESSED", authority_case
-            current, reason = result_presentation.torsion_publication_component_is_current(
-                inp, poisoned["shear"], torsion,
-            )
-            assert current is False, authority_case
-            blocked = [
-                row for row in result_presentation.multi_case_summary_rows(inp, poisoned)
-                if str(row.get("overview_key", "")).startswith(("torsion", "combined"))
-            ]
-            assert any(row["overview_key"] == "torsion" for row in blocked), authority_case
-            assert any(str(row["overview_key"]).startswith("combined") for row in blocked), authority_case
-            assert all(row["status"] == "NOT ASSESSED" and row["util"] is None
-                       and row["result"] == "-" for row in blocked), (authority_case, blocked)
-            pdf = _build_report_from_completed_payload({}, inp, poisoned, figures=False, profile=profile)
-            (tmp_path / f"native-authority-{authority_case}-{profile}.pdf").write_bytes(pdf)
-            text = " ".join(_pdf_text(pdf).split())
-            assert all(re.search(row_pattern(row), text) for row in blocked), authority_case
-            assert re.search(row_pattern(target), text) is None, authority_case
-            if profile != "Brief":
-                assert "Torsion result" in text, authority_case
-                assert "Torsion applicability and member scope" not in text, authority_case
-            assert pickle.dumps(poisoned) == poisoned_before, authority_case
-            evidence.append({"case": authority_case, "current": current, "reason": reason,
-                             "blocked_rows": [{key: row[key] for key in ("check", "case", "status", "result")}
-                                              for row in blocked]})
-        assert len(evidence) == 9
-        (tmp_path / f"native-authority-evidence-{profile}.json").write_text(
+        assert pickle.dumps((inp, out)) == original
+
+    check_report()
+
+
+@pytest.mark.parametrize("authority_case", _NATIVE_AUTHORITY_POISON_CASES)
+@pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
+def test_native_torsion_report_rejects_isolated_authority_poison(
+    native_member_report_cases, profile, authority_case, tmp_path,
+):
+    import json
+
+    assert len(_NATIVE_AUTHORITY_POISON_CASES) == 9
+
+    @result_presentation.publication_calculation_scope()
+    def check_report():
+        inp, out, original, target = _native_authority_report_target(native_member_report_cases)
+        poisoned = copy.deepcopy(out)
+        torsion = poisoned["torsion"]
+        assert poisoned["plastic_cases"][0]["results"]["torsion"] is torsion
+        shear_before = pickle.dumps(poisoned["shear"])
+        primary_before = pickle.dumps(torsion["primary"])
+        # Detach only the root declaration; native physical-face evidence
+        # must stay unchanged so this tests wrapper reconciliation.
+        torsion["applicability"] = copy.deepcopy(torsion["applicability"])
+        if authority_case == "stale-blocker":
+            torsion["applicability_blocked"] = True
+        elif authority_case == "malformed-blocker":
+            torsion["applicability_blocked"] = "False"
+        elif authority_case == "lowercase-status":
+            torsion["applicability"]["status"] = "applicable"
+        elif authority_case == "missing-route-entry":
+            torsion["applicability"].pop("full_resistance_route_entered")
+        elif authority_case == "wrong-route":
+            torsion["applicability"]["route"] = "compatibility residual full resistance"
+        elif authority_case == "stale-reason":
+            torsion["applicability"]["reason"] = "open or warping-sensitive torsion requires member analysis"
+        elif authority_case == "text-ted":
+            torsion["t_ed"] = str(torsion["t_ed"])
+        elif authority_case == "boolean-ted":
+            torsion["t_ed"] = True
+        else:
+            torsion["t_ed"] = math.nan
+        assert pickle.dumps(poisoned["shear"]) == shear_before, authority_case
+        assert pickle.dumps(torsion["primary"]) == primary_before, authority_case
+        poisoned_before = pickle.dumps(poisoned)
+        assert result_presentation.torsion_applicability_publication_status(torsion) == "NOT ASSESSED", authority_case
+        current, reason = result_presentation.torsion_publication_component_is_current(
+            inp, poisoned["shear"], torsion,
+        )
+        assert current is False, authority_case
+        blocked = [
+            row for row in result_presentation.multi_case_summary_rows(inp, poisoned)
+            if str(row.get("overview_key", "")).startswith(("torsion", "combined"))
+        ]
+        assert any(row["overview_key"] == "torsion" for row in blocked), authority_case
+        assert any(str(row["overview_key"]).startswith("combined") for row in blocked), authority_case
+        assert all(row["status"] == "NOT ASSESSED" and row["util"] is None
+                   and row["result"] == "-" for row in blocked), (authority_case, blocked)
+        pdf = _build_report_from_completed_payload({}, inp, poisoned, figures=False, profile=profile)
+        (tmp_path / f"native-authority-{authority_case}-{profile}.pdf").write_bytes(pdf)
+        text = " ".join(_pdf_text(pdf).split())
+        assert all(re.search(_native_authority_row_pattern(row), text) for row in blocked), authority_case
+        assert re.search(_native_authority_row_pattern(target), text) is None, authority_case
+        if profile != "Brief":
+            assert "Torsion result" in text, authority_case
+            assert "Torsion applicability and member scope" not in text, authority_case
+        assert pickle.dumps(poisoned) == poisoned_before, authority_case
+        evidence = {"case": authority_case, "current": current, "reason": reason,
+                    "blocked_rows": [{key: row[key] for key in ("check", "case", "status", "result")}
+                                     for row in blocked]}
+        (tmp_path / f"native-authority-evidence-{authority_case}-{profile}.json").write_text(
             json.dumps(evidence, indent=2) + "\n", encoding="utf-8",
         )
         assert pickle.dumps((inp, out)) == original
 
-    check_reports()
+    check_report()
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
@@ -14078,8 +14109,20 @@ def _assert_native_scheduler_contexts(
 
 
 
+# One test for each consumed transverse term, so that xdist can spread the
+# report chapters. The old loop asserted the same three terms.
+@pytest.mark.parametrize(
+    "family,key,path",
+    [
+        pytest.param("shear", "shear.links.vrds", ("shear", "directions", "vy", "links", "res", "tan"), id="shear"),
+        pytest.param("torsion", "torsion.resistance.governing", ("torsion", "primary", "strut_resistance"), id="torsion"),
+        pytest.param("combined", "combined.dk-na.sum", ("combined", "directions", "vy", "dkna_selection"), id="combined"),
+    ],
+)
 @result_presentation.publication_calculation_scope()
-def test_native_report_rejects_isolated_consumed_transverse_terms(native_scheduler_report_cases, tmp_path):
+def test_native_report_rejects_isolated_consumed_transverse_terms(
+    native_scheduler_report_cases, family, key, path, tmp_path,
+):
     """Actual guarded case chapters show operands, then reject one missing term."""
     import json
     inp, out = native_scheduler_report_cases("dkna")
@@ -14137,66 +14180,60 @@ def test_native_report_rejects_isolated_consumed_transverse_terms(native_schedul
             return result_presentation.torsion_publication_component_is_current(ci,co["shear"],co["torsion"])
         return result_presentation.combined_publication_evidence_is_current(ci,co)
 
-    evidence=[]
-    for family,key,path in (
-        ("shear","shear.links.vrds",("shear","directions","vy","links","res","tan")),
-        ("torsion","torsion.resistance.governing",("torsion","primary","strut_resistance")),
-        ("combined","combined.dk-na.sum",("combined","directions","vy","dkna_selection")),
-    ):
-        ci,co = contexts["PL-GOV"]
-        assert authority(ci,co,family)[0] is True
-        positive_keys,positive_text,positive_selection,positive_records = chapter(out,family,"native-terms-positive-"+family)
-        assert key in positive_keys
-        owned = [item for item in positive_records if item["key"] == key]
-        assert owned
-        for record in owned:
-            assert record["number"] is not None
-            assert "Equation ("+record["number"]+")" in positive_text
-            assert "Numerical substitution:" in record["text"]
-            assert "Result:" in record["text"]
-        rejected=copy.deepcopy(out)
-        rejected_source=pickle.dumps(rejected)
-        entry=next(item for item in rejected["plastic_cases"] if item["name"]=="PL-GOV")
-        owner=entry["results"]
-        for part in path[:-1]:owner=owner[part]
-        original_keys=tuple(owner)
-        removed=owner.pop(path[-1])
-        rejected_before=pickle.dumps(rejected)
-        rejected_contexts=_assert_native_scheduler_contexts(inp,rejected,require_component_current=False)
-        current_input,current_output=rejected_contexts["PL-GOV"]
-        rejected_authority=authority(current_input,current_output,family)
-        assert rejected_authority[0] is False
-        negative_keys,negative_text,negative_selection,negative_records = chapter(rejected,family,"native-terms-missing-"+family)
-        normal_negative_records = negative_records
-        if family == "shear":
-            assert positive_selection[family] == {"case_id":"PL-GOV","component":"vy"}
-            assert "Governing worked example: Vy,Ed" in positive_text
-            assert negative_selection[family] == {"case_id":"PL-GOV","component":"vx"}
-            assert "Governing worked example: Vx,Ed" in negative_text
-            assert key in negative_keys  # The unaffected Vx calculation remains valid.
-            assert result_presentation.provided_link_publication_assessment(
-                current_input,current_output["shear"]["directions"]["vx"],
-                torsion_result=current_output["torsion"],
-            ).valid is True
-            negative_keys,negative_text,negative_selection,negative_records = chapter(
-                rejected,family,"native-terms-missing-shear-vy",shear_component="vy",
-            )
-        assert key not in negative_keys
-        assert not any(item["key"] == key for item in negative_records)
-        assert "NOT ASSESSED" in negative_text
-        assert pickle.dumps(rejected)==rejected_before
-        owner[path[-1]]=removed
-        restored_order={name:owner[name] for name in original_keys}
-        owner.clear()
-        owner.update(restored_order)
-        restored=_assert_native_scheduler_contexts(inp,rejected)
-        assert authority(*restored["PL-GOV"],family)[0] is True
-        assert pickle.dumps(rejected)==rejected_source
-        evidence.append({"family":family,"path":path,"rejected_authority":rejected_authority,
-                         "positive_equations":positive_records,"negative_equations":negative_records,
-                         "normal_negative_equations":normal_negative_records,
-                         "positive_selection":positive_selection,"negative_selection":negative_selection})
-    (tmp_path/"native-missing-term-evidence.json").write_text(json.dumps(evidence,indent=2))
+    ci,co = contexts["PL-GOV"]
+    assert authority(ci,co,family)[0] is True
+    positive_keys,positive_text,positive_selection,positive_records = chapter(out,family,"native-terms-positive-"+family)
+    assert key in positive_keys
+    owned = [item for item in positive_records if item["key"] == key]
+    assert owned
+    for record in owned:
+        assert record["number"] is not None
+        assert "Equation ("+record["number"]+")" in positive_text
+        assert "Numerical substitution:" in record["text"]
+        assert "Result:" in record["text"]
+    rejected=copy.deepcopy(out)
+    rejected_source=pickle.dumps(rejected)
+    entry=next(item for item in rejected["plastic_cases"] if item["name"]=="PL-GOV")
+    owner=entry["results"]
+    for part in path[:-1]:owner=owner[part]
+    original_keys=tuple(owner)
+    removed=owner.pop(path[-1])
+    rejected_before=pickle.dumps(rejected)
+    rejected_contexts=_assert_native_scheduler_contexts(inp,rejected,require_component_current=False)
+    current_input,current_output=rejected_contexts["PL-GOV"]
+    rejected_authority=authority(current_input,current_output,family)
+    assert rejected_authority[0] is False
+    negative_keys,negative_text,negative_selection,negative_records = chapter(rejected,family,"native-terms-missing-"+family)
+    normal_negative_records = negative_records
+    if family == "shear":
+        assert positive_selection[family] == {"case_id":"PL-GOV","component":"vy"}
+        assert "Governing worked example: Vy,Ed" in positive_text
+        assert negative_selection[family] == {"case_id":"PL-GOV","component":"vx"}
+        assert "Governing worked example: Vx,Ed" in negative_text
+        assert key in negative_keys  # The unaffected Vx calculation remains valid.
+        assert result_presentation.provided_link_publication_assessment(
+            current_input,current_output["shear"]["directions"]["vx"],
+            torsion_result=current_output["torsion"],
+        ).valid is True
+        negative_keys,negative_text,negative_selection,negative_records = chapter(
+            rejected,family,"native-terms-missing-shear-vy",shear_component="vy",
+        )
+    assert key not in negative_keys
+    assert not any(item["key"] == key for item in negative_records)
+    assert "NOT ASSESSED" in negative_text
+    assert pickle.dumps(rejected)==rejected_before
+    owner[path[-1]]=removed
+    restored_order={name:owner[name] for name in original_keys}
+    owner.clear()
+    owner.update(restored_order)
+    restored=_assert_native_scheduler_contexts(inp,rejected)
+    assert authority(*restored["PL-GOV"],family)[0] is True
+    assert pickle.dumps(rejected)==rejected_source
+    evidence={"family":family,"path":path,"rejected_authority":rejected_authority,
+              "positive_equations":positive_records,"negative_equations":negative_records,
+              "normal_negative_equations":normal_negative_records,
+              "positive_selection":positive_selection,"negative_selection":negative_selection}
+    (tmp_path/f"native-missing-term-evidence-{family}.json").write_text(json.dumps(evidence,indent=2))
     assert pickle.dumps((inp,out))==original
 
 

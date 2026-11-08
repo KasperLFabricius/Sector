@@ -12,8 +12,6 @@ sys.path.insert(0, str(ROOT / "app"))
 
 import sector_report as report
 import result_presentation as presentation
-from native_member_report_fixtures import native_base_en_report_case  # noqa: F401
-from native_member_report_fixtures import native_subdivided_report_case  # noqa: F401
 
 
 @pytest.mark.parametrize("kind", ["single", "compound"])
