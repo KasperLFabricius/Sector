@@ -13560,7 +13560,7 @@ def interaction_view(inp, results):
         with column:
             if not data["M"]:
                 other_label = "M_y" if axis == "x" else "M_x"
-                st.warning(
+                st.info(
                     f"No N-M{axis} diagram: the section cannot carry "
                     f"${other_label}$ = {other:.3f} kNm at any axial force."
                 )
