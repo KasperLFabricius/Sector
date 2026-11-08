@@ -5269,11 +5269,10 @@ class ReportBuilder:
                 "(negative in compression) is the concrete strain at the tendon "
                 "under prestress alone: at the long-term modular ratio "
                 "n<sub>l</sub> for the elastic and fatigue models, and at "
-                "E<sub>s</sub>/E<sub>cm</sub> for the plastic model, with the "
-                "entered E<sub>cm</sub> = E<sub>c</sub> = "
-                f"{_fmt(self.inp.get('conc_Ec'), 3)} GPa, because "
+                "E<sub>s</sub>/E<sub>cm</sub> for the plastic model, because "
                 "the creep strain does not recover in a short-term load to "
-                "failure. The elastic model applies sigma<sub>p</sub><super>(0)"
+                "failure. The plastic model uses the entered E<sub>cm</sub> = "
+                f"E<sub>c</sub> = {_fmt(self.inp.get('conc_Ec'), 3)} GPa. The elastic model applies sigma<sub>p</sub><super>(0)"
                 "</super> = E<sub>p</sub> eps<sub>p</sub><super>(0)</super> to "
                 "the bonded section. Under prestress alone the tendon stress "
                 "then returns to sigma<sub>p,0</sub> = E<sub>p</sub> IS. "
@@ -7641,7 +7640,7 @@ class ReportBuilder:
         )
         self._small('The 2023 tau<sub>Rd,c</sub> calculation uses the flexural design yield and the axial-force modification in Formula (8.31). Its aggregate-size parameter is:')
         self._small('d<sub>dg</sub> = 16 + D<sub>lower</sub>.')
-        self._small('N<sub>Ed</sub> and M<sub>Ed</sub> include the locked-in tendon prestress effects in accordance with 8.2.1(8).')
+        self._small('N<sub>Ed</sub> and M<sub>Ed</sub> include the effective tendon prestress action (Initial prestress action) in accordance with 8.2.1(8).')
         self._small('Tendons are assumed parallel to the member axis: cos beta = 1.')
         if sh.get("links") is not None:
             self._shear_links(sh)
@@ -10794,7 +10793,7 @@ class ReportBuilder:
                                       tube["tef"], ak_m2=tube["Ak"], report_labels=True), 120, 100)
         if t.get("n_prestress"):
             self._small(f"alpha<sub>cw</sub> uses sigma<sub>cp</sub> = {_fmt(t['sigma_cp'], 3)} MPa.")
-            self._small(f"This stress includes axial N and tendon precompression of {_fmt(t['n_prestress'], 3)} kN. The tendon precompression comes from the prestress initial strain.")
+            self._small(f"This stress includes axial N and tendon precompression of {_fmt(t['n_prestress'], 3)} kN. The tendon precompression is the effective prestress action from the prestrain IS.")
         if t.get("nu_v_detailing"):
             self._small('The selected detailing condition raises the strut factor from nu<sub>t</sub> to nu<sub>v</sub>:')
             self._small('nu = nu<sub>v</sub>.')
@@ -11273,7 +11272,7 @@ class ReportBuilder:
                 el.get("stress_plane"),
                 ec_mpa=float(self.inp.get("conc_Ec", 0.0)) * 1000.0,
                 title="Elastic strain profile"), 150, 100)
-            self._small("Concrete profile: instantaneous stress-plane strain. Markers: TOTAL material strain, including retained long-term deformation and tendon initial strain.")
+            self._small("Concrete profile: instantaneous stress-plane strain. Markers: TOTAL material strain, including retained long-term deformation and the tendon bond strain difference.")
         # Transformed properties: uncracked and (when cracked) cracked, n_l-weighted.
         self._h2("Transformed section properties (n<sub>l</sub>)")
         pu = el.get("props_un") or {}

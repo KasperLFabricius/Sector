@@ -1093,7 +1093,7 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True,
                                       r"ratio $\alpha_e=E_s/E_{cm}$ from it. "
                                       "The plastic model uses it for the "
                                       "decompression strain of bonded tendons. "
-                                      "Enter the short-term value; the creep "
+                                      "Enter the short-term value. The creep "
                                       "coefficient sets the long-term state."
                                   ),
                               },
@@ -13824,12 +13824,13 @@ def elastic_view(inp, results, *, global_results=None):
         # The resultants are tendon tension; the prestress precompresses the
         # section, so as an axial action (tension-positive) N is a compression.
         st.caption(
-            "The elastic solver applies the locked-in tendon resultant "
+            r"The elastic solver applies the tendon resultant of "
+            r"$\varepsilon^{(0)}_p$: "
             f"$N={-locked['n']:.3f}$ kN, $M_x$ = {locked['mx']:.3f} kNm, "
-            f"$M_y$ = {locked['my']:.3f} kNm. Under prestress alone it gives "
-            f"the effective action $N={-ps[0]:.3f}$ kN, $M_x$ = {ps[1]:.3f} kNm, "
-            f"$M_y$ = {ps[2]:.3f} kNm. The entered $N$ is the external force "
-            "only; $N$ is tension-positive."
+            f"$M_y$ = {locked['my']:.3f} kNm. Under prestress alone the tendons "
+            f"give the effective action $N={-ps[0]:.3f}$ kN, "
+            f"$M_x$ = {ps[1]:.3f} kNm, $M_y$ = {ps[2]:.3f} kNm. The entered $N$ "
+            "is the external force only. $N$ is tension-positive."
         )
     elif ps is not None:
         st.caption(f"Effective tendon-prestress action: $N={-ps[0]:.3f}$ kN, "

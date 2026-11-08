@@ -141,7 +141,7 @@ def build_field(inp, result, *, family, duration="TOTAL"):
             rows = result["reinforcement_states"]
             state = f"Ultimate capacity at NA angle {_number(result['V']):.3g} deg"
             caption = ("Ultimate-capacity state at the selected neutral-axis angle. "
-                       "Concrete stress uses the selected design law. Tendon material strain includes initial strain.")
+                       "Concrete stress uses the selected design law. Tendon material strain includes the bond strain difference.")
         elif family == "Elastic":
             accepted = result["accepted_states"]
             long = _plane(accepted["long_term"])
@@ -171,7 +171,7 @@ def build_field(inp, result, *, family, duration="TOTAL"):
             rows = result["elements"]
             state = "Combined actions (TOTAL)" if duration == "TOTAL" else "Sustained actions (LONG)"
             caption = ("Compatible section strain includes retained long-term deformation. "
-                       "Tendon material strain includes initial strain. Concrete stress uses the cracked elastic state. "
+                       "Tendon material strain includes the bond strain difference. Concrete stress uses the cracked elastic state. "
                        "The zero-strain and zero-concrete-stress lines can differ under creep.")
         else:
             raise FieldUnavailable("The field family is unavailable.")

@@ -386,12 +386,12 @@ def numerical_blocks():
         ["Concrete outline", "(-200,-300), (200,-300), (200,150), (50,300), (-200,300)"],
         ["Void", "(-70,-20), (30,-20), (30,80), (-70,80)"],
     ])
-    table(["Element", "$x$ (mm)", "$y$ (mm)", "Area or diameter", "Modulus / initial strain"], [
+    table(["Element", "$x$ (mm)", "$y$ (mm)", "Area or diameter", "Modulus / bond strain difference"], [
         *[[f"Bar {i}", _number(x*1000), _number(y*1000), "Diameter 25 mm", "200 GPa / 0"]
           for i, (x,y,_a,_n,_l) in enumerate(case["elements"][:4], 1)],
         ["Tendon 1", "50", "-180", "$150\\,\\text{mm}^{2}$", "195 GPa / 5 \u2030"],
     ])
-    md('Use one assigned mild-steel material for all four bars and one prestress material for the tendon. The elastic calculation uses their moduli.\n\nThis check enters the locked-in strain $\\varepsilon^{(0)}_{p}$ directly. In the app, Sector derives it from $IS$ (Prestressing steel). The tendon locked-in stress is:\n\n$E_p\\varepsilon^{(0)}_{p}=975$ MPa.\n\nIts locked resultants are:\n\n- Axial force: 146.25 kN.\n- Moment using $y$: -26.325 kNm.\n- Moment using $x$: 7.3125 kNm.')
+    md('Use one assigned mild-steel material for all four bars and one prestress material for the tendon. The elastic calculation uses their moduli.\n\nThis check enters the locked-in strain $\\varepsilon^{(0)}_{p}$ directly. In the app, Sector derives it from $IS$ (Material laws > Prestressing steel). The tendon locked-in stress is:\n\n$E_p\\varepsilon^{(0)}_{p}=975$ MPa.\n\nIts locked resultants are:\n\n- Axial force: 146.25 kN.\n- Moment using $y$: -26.325 kNm.\n- Moment using $x$: 7.3125 kNm.')
     md('After you subtract those locked resultants, the elastic target is:\n\n$(T_1,T_2,T_3)=(-346.25,-73.675,-47.3125)$.\n\nThe first component is in kN. The two moment components are in kNm.')
     h2("Initialization and first correction")
     table(["Initial matrix row", "$q_0$ coefficient", "$g_x$ coefficient", "$g_y$ coefficient"], [

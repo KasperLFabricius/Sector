@@ -322,7 +322,7 @@ def test_manual_pins_the_tendon_projection_sign_and_per_element_extreme():
         "s_{p,j}",
         "\\varepsilon^{(0)}_{p,j}",
         "s_{p,min}=\\min_j s_{p,j}",
-        "Sector evaluates each tendon at its own position, initial strain and material limit",
+        "Sector evaluates each tendon at its own position, bond strain difference and material limit",
     ):
         assert expected in text
     assert "s_{cab,min}" not in text
