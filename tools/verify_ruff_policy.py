@@ -31,7 +31,7 @@ RUFF_SAFETY_OPTIONS = (
 VALIDATE_STEP = "Validate Ruff policy ratchet"
 EXECUTE_STEP = "Execute Ruff policy"
 CHECKOUT_STEP = "Check out source"
-CHECKOUT_ACTION = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+CHECKOUT_ACTION = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 BASELINE_ENV = "SECTOR_RUFF_POLICY_BASE"
 BASELINE_EXPRESSION = (
     "${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}"

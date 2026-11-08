@@ -31,8 +31,8 @@ python tools/qa_core_shards.py durations --input qa-durations --output tools/qa_
 
 ## Dependency updates
 
-Dependabot opens weekly pull requests for the pip-compile locks and the GitHub
-Actions. Each one runs the full QA workflow.
+Dependabot opens weekly pull requests for the pip-compile locks and one grouped
+pull request for the GitHub Actions. Each one runs the full QA workflow.
 
 - The policy validators and tests pin the SHA of each action in
   `.github/workflows/qa.yml` (checkout, setup-python, upload-artifact and

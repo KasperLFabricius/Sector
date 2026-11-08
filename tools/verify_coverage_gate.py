@@ -26,10 +26,10 @@ VALIDATOR_STEP_NAME = "Validate non-shrinking coverage gate"
 COVERAGE_STEP_NAME = "Run complete test suite with coverage"
 BRANCH_COVERAGE_STEP_NAME = "Run decision-branch coverage gate"
 CHECKOUT_STEP_NAME = "Check out source"
-CHECKOUT_ACTION = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
+CHECKOUT_ACTION = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
 QA_UPLOAD_STEP_NAME = "Upload QA diagnostics"
 QA_UPLOAD_ACTION = (
-    "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
+    "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"
 )
 QA_UPLOAD_SETTINGS = {
     "name": "sector-qa-${{ github.run_id }}",
@@ -480,7 +480,7 @@ CORE_SHARDS = (
     "real",
 )
 CORE_DOWNLOAD_STEP_NAME = "Download exact core shard evidence"
-CORE_DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
+CORE_DOWNLOAD_ACTION = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
 CORE_DOWNLOAD_SETTINGS = {
     "pattern": "sector-core-${{ github.run_id }}-${{ github.run_attempt }}-*",
     "path": "qa-core-inputs",
@@ -498,7 +498,7 @@ def expected_core_job() -> dict[str, Any]:
         "steps": [
             {"name": CHECKOUT_STEP_NAME, "uses": CHECKOUT_ACTION, "with": {"fetch-depth": 0}},
             {"name": "Set up pinned Python",
-             "uses": "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065",
+             "uses": "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
              "with": {"python-version-file": ".python-version", "cache": "pip", "cache-dependency-path": "requirements-dev.txt"}},
             {"name": "Preflight locked dependency inputs",
              "run": "python tools/verify_dependency_audit.py quality-dependency-audit.toml --preflight-locks"},
