@@ -2242,7 +2242,8 @@ def _held_moment_band(section, concrete, steel, axis, m_off, axials, *,
     ``m_off``) is not negative. An angle scan of ``NM_COMPANION_SCAN`` samples
     gives the margin at ``axials`` (sorted, with the ends of the axial range).
     Round the best of them, a golden-section search of the margin with
-    refined extremes finds its peak, and two bisections find the band edges.
+    refined extremes (0.05 degree) finds its peak, and two bisections find the
+    band edges (1e-3 of the axial range).
     The band is an estimate: each point in it still gets the exact
     :func:`companion_moment_range`.
     """
@@ -2283,7 +2284,7 @@ def _held_moment_band(section, concrete, steel, axis, m_off, axials, *,
         c, d = b - golden * (b - a), a + golden * (b - a)
         fc, fd = score(c), score(d)
         top = max(best, fc, fd)
-        while b - a > 0.01:
+        while b - a > 0.05:
             if fc >= fd:
                 b, d, fd = d, c, fc
                 c = b - golden * (b - a)
@@ -2316,7 +2317,7 @@ def _held_moment_band(section, concrete, steel, axis, m_off, axials, *,
         return None
     lo = axials[max(k - 1, 0)]
     hi = axials[min(k + 1, len(axials) - 1)]
-    tol = 1.0e-4 * max(1.0, abs(axials[-1] - axials[0]))
+    tol = 1.0e-3 * max(1.0, abs(axials[-1] - axials[0]))
 
     def fine(P):
         return margin(P, True)[0]

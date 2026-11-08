@@ -438,6 +438,15 @@ def test_symmetric_section_finds_the_held_moment_near_the_peak():
                                              m_off=564.19, n_points=32)
     assert len(loop.upper) >= 3 and len(loop.lower) >= 3
     _check_against_scan(loop, section, concrete, steel, "y", 564.19, tol=0.5)
+    # Review R5-02: the grid value N = 2064.5 kN has equal samples at 80 and
+    # 100 degrees with an 18-degree scan step offset. The scan carries the held
+    # moment there, so each branch must have a point at this grid value.
+    grid = [loop.n_t + (loop.n_c - loop.n_t) * i / 32 for i in range(1, 32)]
+    tie = min(grid, key=lambda n: abs(n - 2064.476))
+    assert tie == pytest.approx(2064.476, abs=0.01)
+    assert _scan_range(section, concrete, steel, tie, "y", 564.19) is not None
+    for branch in (loop.upper, loop.lower):
+        assert any(abs(q.axial - tie) < 1.0e-6 for q in branch)
 
 
 def test_band_above_the_pure_axis_peak_is_found():
