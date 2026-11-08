@@ -4942,8 +4942,9 @@ def shear_direction_specs(inp):
     mx_origin = float(inp.get("Mx_pl", 0.0))
     my_origin = float(inp.get("My_pl", 0.0))
     # Section forces are entered about the coordinate origin. Face selection must
-    # follow the bending at the physical concrete centroid, including the locked-in
-    # tendon moment, exactly like the action-dependent shear calculation below.
+    # follow the bending at the physical concrete centroid, including the effective
+    # tendon prestress moment, exactly like the action-dependent shear calculation
+    # below.
     # N is tension-positive, hence M_C = M_O + N*c before prestress is deducted.
     mx_centroid = mx_origin + axial * cy - mx_prestress
     my_centroid = my_origin + axial * cx - my_prestress

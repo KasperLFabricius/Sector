@@ -15548,7 +15548,7 @@ def shear_view(inp, results, *, global_results=None):
         )
     if nominal_valid and nominal_route == "concrete":
         _concrete_chord_panel(inp, sh, torsion_result=results.get("torsion"))
-    pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
+    pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN ("
                  "effective prestress action from the prestrain IS)" if sh.get("n_prestress") else "")
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
                f"{sh['method']}. The axial action uses the plastic axial force "

@@ -903,7 +903,7 @@ def plastic_blocks():
             'For this rectangle, calculate the geometry of each band:\n\n- Area: $A_i=b\\Delta s$.\n- Centroid: $y_i=(y_{lower}+y_{upper})/2$.\n\nThen calculate its force and moment:\n\n- $F_i=\\sigma_i A_i$.\n- $M_{x,i}=F_i y_i$.\n\nUse MPa and $\\text{mm}^{2}$ for force in N. Divide by 1000 for kN. The plateau carries $f_{cd}$ over its full area.\n\nThe plastic calculation uses the net concrete polygon before reinforcement-area deduction and adds reinforcement forces.'
         ),
         _md(
-            '3. **Calculate reinforcement forces.** Evaluate each bar at the strain plane and its assigned design law. For each tendon, add its plastic bond strain difference (at Es/Ecm, Material laws > Prestressing steel) to its tension-positive section strain. Then evaluate its law. Multiply the stress by the element area. Use its x and y coordinates as moment arms.'
+            '3. **Calculate reinforcement forces.** Evaluate each bar at the strain plane and its assigned design law. For each tendon, add its plastic bond strain difference (at $E_s/E_{cm}$, Material laws > Prestressing steel) to its tension-positive section strain. Then evaluate its law. Multiply the stress by the element area. Use its x and y coordinates as moment arms.'
         ),
         _md(
             '4. **Balance axial force.** Compare the sum of compression-positive forces with -N from the input table. If the trial force is too small, increase c. If it is too large, decrease c. Sector brackets the target and halves the depth interval at each iteration. The bracket can extend beyond the full section depth, which makes whole-section compression possible.'
