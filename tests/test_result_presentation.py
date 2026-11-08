@@ -17,8 +17,6 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "app"))
 
 import result_presentation as presentation  # noqa: E402
-from native_member_report_fixtures import native_formula_631_cases  # noqa: E402,F401
-from native_member_report_fixtures import native_member_report_cases  # noqa: E402,F401
 
 from app import case_analysis, load_cases, modelled_direction  # noqa: E402
 from sector import (  # noqa: E402

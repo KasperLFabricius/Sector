@@ -1,4 +1,12 @@
-"""Real native member bundles used to qualify publication and report routes."""
+"""Real native member bundles used to qualify publication and report routes.
+
+``tests/conftest.py`` registers this module as a plugin, so each xdist worker
+calculates each reference bundle one time for the whole session. A consumer
+fixture gives each test a deep copy, so no test can change the reference that
+another test receives. Test modules must not import these fixtures again: a
+module import would register a second session fixture with its own cache
+(``tests/test_qa_core_shards.py`` checks this).
+"""
 from __future__ import annotations
 
 import copy
@@ -6,10 +14,9 @@ import pickle
 
 import pytest
 
-from test_torsion import _fresh, _set, _set_and_click
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def native_formula_631_cases(tmp_path_factory):
     """Copy complete native screen bundles, cached by every varied input.
 
@@ -18,7 +25,7 @@ def native_formula_631_cases(tmp_path_factory):
     """
     import result_presentation as presentation
     from sector import codes
-    from test_torsion import _apply_box_section, _subdivided
+    from test_torsion import _apply_box_section, _fresh, _set, _set_and_click, _subdivided
 
     destination = tmp_path_factory.mktemp("native-formula-631")
     applications = {}
@@ -125,8 +132,9 @@ def native_formula_631_cases(tmp_path_factory):
         yield produce
 
 
-@pytest.fixture(scope="module")
-def native_member_report_cases(tmp_path_factory):
+@pytest.fixture(scope="session")
+def _native_member_report_reference(tmp_path_factory):
+    from test_torsion import _fresh, _set, _set_and_click
     destination = tmp_path_factory.mktemp("native-member-reports")
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("SECTOR_AUTOSAVE_DIR", str(destination / "autosave"))
@@ -165,14 +173,22 @@ def native_member_report_cases(tmp_path_factory):
         yield cases
 
 
-@pytest.fixture(scope="module")
-def native_med_max_report_case(tmp_path_factory):
+
+@pytest.fixture
+def native_member_report_cases(_native_member_report_reference):
+    """Give each test its own deep copy of the session reference."""
+    return copy.deepcopy(_native_member_report_reference)
+
+
+@pytest.fixture(scope="session")
+def _native_med_max_report_reference(tmp_path_factory):
     """Return a native 2005 member bundle where the entered MEd,max limits the chord.
 
     EN 1992-1-1 6.2.3(7) with cot(theta) = 1.0, VEd = 200 kN and Mx = 300 kNm:
     dFtd z = 100 kN x 0.511 m = 51.1 kNm > MEd,max - MEd = 320 - 300 = 20 kNm,
     so the links-route chord and the combined M-V-T chord both apply the limit.
     """
+    from test_torsion import _fresh, _set, _set_and_click
     from sector import capacity, combined
 
     destination = tmp_path_factory.mktemp("native-med-max-report")
@@ -208,9 +224,17 @@ def native_med_max_report_case(tmp_path_factory):
         return inp, out
 
 
-@pytest.fixture(scope="module")
-def native_base_en_report_case(tmp_path_factory):
+
+@pytest.fixture
+def native_med_max_report_case(_native_med_max_report_reference):
+    """Give each test its own deep copy of the session reference."""
+    return copy.deepcopy(_native_med_max_report_reference)
+
+
+@pytest.fixture(scope="session")
+def _native_base_en_report_reference(tmp_path_factory):
     """Return a complete single-direction Base-EN native publication bundle."""
+    from test_torsion import _fresh, _set, _set_and_click
     from sector import codes
 
     destination = tmp_path_factory.mktemp("native-base-en-report")
@@ -247,9 +271,16 @@ def native_base_en_report_case(tmp_path_factory):
         return inp, out
 
 
-@pytest.fixture(scope="module")
-def native_subdivided_report_case(tmp_path_factory):
-    from test_torsion import _subdivided
+
+@pytest.fixture
+def native_base_en_report_case(_native_base_en_report_reference):
+    """Give each test its own deep copy of the session reference."""
+    return copy.deepcopy(_native_base_en_report_reference)
+
+
+@pytest.fixture(scope="session")
+def _native_subdivided_report_reference(tmp_path_factory):
+    from test_torsion import _fresh, _set, _set_and_click, _subdivided
 
     destination = tmp_path_factory.mktemp("native-subdivided-report")
     with pytest.MonkeyPatch.context() as patch:
@@ -288,9 +319,17 @@ def native_subdivided_report_case(tmp_path_factory):
 
 
 
-@pytest.fixture(scope="module")
+
+@pytest.fixture
+def native_subdivided_report_case(_native_subdivided_report_reference):
+    """Give each test its own deep copy of the session reference."""
+    return copy.deepcopy(_native_subdivided_report_reference)
+
+
+@pytest.fixture(scope="session")
 def native_axial_compression_report_cases(tmp_path_factory):
     """Native 2023 linked-shear cases with unavailable compression web force."""
+    from test_torsion import _fresh, _set, _set_and_click
     from sector import capacity, codes
     import result_presentation as presentation
 
@@ -344,8 +383,8 @@ def native_axial_compression_report_cases(tmp_path_factory):
 
 
 
-@pytest.fixture(scope="module")
-def native_scheduler_report_cases(native_base_en_report_case, tmp_path_factory):
+@pytest.fixture(scope="session")
+def native_scheduler_report_cases(_native_base_en_report_reference, tmp_path_factory):
     """Recalculate canonical named-case matrices through the actual producer."""
     import case_analysis
     import result_presentation as presentation
@@ -353,7 +392,7 @@ def native_scheduler_report_cases(native_base_en_report_case, tmp_path_factory):
     from sector import capacity, codes
 
     destination = tmp_path_factory.mktemp("native-scheduler-report")
-    seed, seed_out = copy.deepcopy(native_base_en_report_case)
+    seed, seed_out = copy.deepcopy(_native_base_en_report_reference)
     original_seed = pickle.dumps((seed, seed_out))
     cache = {}
 
