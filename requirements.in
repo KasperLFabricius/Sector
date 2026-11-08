@@ -11,7 +11,7 @@ numpy>=2.5,<2.6
 numba>=0.67
 
 # Eight application modules import pandas directly.
-pandas>=3.1,<4
+pandas>=3.1.1,<4
 streamlit>=1.66,<1.67
 # Security floor for Requests' urllib3 dependency (PYSEC-2026-4175/4176/4177).
 urllib3>=2.8.0,<3
@@ -20,6 +20,6 @@ reportlab>=5.0,<6
 kaleido>=1.5,<2
 choreographer>=1.4,<2
 # Streamlit's Arrow dependency, at the version of the 0.97.1 refresh.
-pyarrow>=26,<27
+pyarrow>=26.0.1,<27
 # Security floor for Streamlit's Pillow dependency (39 advisories in 12.3.0).
 pillow>=13,<14
