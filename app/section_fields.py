@@ -32,7 +32,7 @@ class FieldUnavailable(ValueError):
 def context_signature(inp, family):
     """Bind field evidence to the calculated geometry, materials and actions."""
     keys = ["outer", "holes", "bars", "tendons", "bar_elements", "tendon_elements",
-            "concrete", "steel", "prestress", "bar_materials", "tendon_materials", "slab_density"]
+            "concrete", "steel", "prestress", "bar_materials", "slab_density"]
     keys += (["P_pl", "Mx_pl", "My_pl", "plastic_case"] if family == "Plastic" else
              ["P_el_l", "Mx_el_l", "My_el_l", "P_el_s", "Mx_el_s", "My_el_s",
               "conc_Ec", "el_phi", "ns", "nl", "elastic_case"])
@@ -47,6 +47,16 @@ def context_signature(inp, family):
             return value.item()
         return value
     record = {key: plain(inp.get(key)) for key in keys}
+    # Each family binds the tendon laws of its own model: the plastic model uses
+    # the bond strain at Es/Ecm, the elastic model the one at nl. A change that
+    # affects only the other model (for example el_phi) keeps the field valid.
+    if family == "Plastic":
+        laws = inp.get("tendon_materials_uls")
+        record["tendon_laws"] = plain(
+            laws if laws is not None else inp.get("tendon_materials")
+        )
+    else:
+        record["tendon_laws"] = plain(inp.get("tendon_materials"))
     # Descriptions and category labels can change while a verified bending
     # result is reused. Bind the numerical state and stable action identity.
     case_key = "plastic_case" if family == "Plastic" else "elastic_case"
@@ -131,7 +141,7 @@ def build_field(inp, result, *, family, duration="TOTAL"):
             rows = result["reinforcement_states"]
             state = f"Ultimate capacity at NA angle {_number(result['V']):.3g} deg"
             caption = ("Ultimate-capacity state at the selected neutral-axis angle. "
-                       "Concrete stress uses the selected design law. Tendon material strain includes initial strain.")
+                       "Concrete stress uses the selected design law. Tendon material strain includes the bond strain difference.")
         elif family == "Elastic":
             accepted = result["accepted_states"]
             long = _plane(accepted["long_term"])
@@ -161,7 +171,7 @@ def build_field(inp, result, *, family, duration="TOTAL"):
             rows = result["elements"]
             state = "Combined actions (TOTAL)" if duration == "TOTAL" else "Sustained actions (LONG)"
             caption = ("Compatible section strain includes retained long-term deformation. "
-                       "Tendon material strain includes initial strain. Concrete stress uses the cracked elastic state. "
+                       "Tendon material strain includes the bond strain difference. Concrete stress uses the cracked elastic state. "
                        "The zero-strain and zero-concrete-stress lines can differ under creep.")
         else:
             raise FieldUnavailable("The field family is unavailable.")
@@ -446,7 +456,7 @@ def section_field_figure(field, quantity, *, scale_limits=None, title=None):
             hovertemplate=(f"%{{text}}<br>x %{{x:.2f}} mm; y %{{y:.2f}} mm"
                            f"<br>Stress %{{customdata[0]:.4g}} MPa<br>Material strain %{{customdata[1]:.5g}} {PERMILLE}"
                            f"<br>Compatible section strain %{{customdata[3]:.5g}} {PERMILLE}"
-                           f"<br>Initial strain %{{customdata[2]:.5g}} {PERMILLE}"
+                           f"<br>Bond strain difference %{{customdata[2]:.5g}} {PERMILLE}"
                            "<br>Material %{customdata[4]}<extra></extra>")))
     extent = max(max(p[0] for p in field.outer) - min(p[0] for p in field.outer),
                  max(p[1] for p in field.outer) - min(p[1] for p in field.outer)) * 1000

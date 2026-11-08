@@ -52,6 +52,10 @@ def test_schema27_project_loads_with_corrected_methods_and_message():
     assert "MEd,max" in message
     assert "NVd/2" in message
     assert "a_l = d" in message
+    assert "decompression strain" in message
+    assert "Es/Ecm" in message
+    assert "upper bound" in message
+    assert "max(VRd,c, VRd)" in message
 
 
 def test_schema27_project_with_the_2023_preset_loads_without_pivot_c():

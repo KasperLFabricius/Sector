@@ -80,6 +80,20 @@ SCHEMA28_METHOD_CHANGES = (
     "Shear without shear reinforcement: the tension chord includes the moment "
     "shift a_l = d (EN 1992-1-1:2004, 6.2.2(5) and 9.2.1.3(2); "
     "DS/EN 1992-1-1:2023, 8.2.2(10)).",
+    "Prestress: the prestrain IS is the tendon strain under prestress alone "
+    "after all losses, IS = sigma_pm/Ep. Sector adds the concrete strain at the "
+    "tendon (decompression strain) to get the bond strain difference eps_p(0). "
+    "If the project contains eps_p(0) as IS, replace IS by sigma_pm/Ep. The bond "
+    "strain table of the report (Initial prestress action) shows IS and "
+    "eps_p(0).",
+    "Crack width: the ratio alpha_e in the mean strain difference of 7.3.4(2) "
+    "is Es/Ecm also for the long-term state.",
+    "Concrete fatigue: the search gives an upper bound of the damage, and the "
+    "verdict uses that bound. A search that does not converge gives INVALID "
+    "with its cause.",
+    "Combined M-V-T, DK NA sum: the shear term uses the resistance of the "
+    "section with its installed links: max(VRd,c, VRd) when VEd <= VRd,c, and "
+    "VRd when VEd > VRd,c (EN 1992-1-1 6.2.3(1)).",
 )
 
 

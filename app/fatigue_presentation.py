@@ -11,7 +11,16 @@ from collections.abc import Mapping
 import math
 
 from app import report_summary_notation as report_notation
+from sector.fatigue import CONCRETE_MINER, CONCRETE_MINER_METHODS
 
+
+CONCRETE_UPPER_BOUND_NOTE = (
+    "The concrete damage is the upper bound of the damage from the section "
+    "search."
+)
+# Round-off between the fixed-fibre assessment and the search evaluation of the
+# same point. A larger excess is a bound violation.
+_BOUND_ROUND_OFF = 1.0e-9
 
 _CAPABILITY_LABELS = {
     "reinforcement_fatigue": "Reinforcement fatigue",
@@ -68,11 +77,182 @@ def evidence_number(raw):
 
 
 def result_status(result):
-    """Return the acceptance status of one computed spectrum/component."""
+    """Return the acceptance status of one computed spectrum/component.
+
+    A spectrum or a payload whose retained damage values do not agree with the
+    published damage contract is INVALID (see :func:`damage_publication_issue`).
+    """
 
     if result is None or not bool(value(result, "converged", False)):
         return "INVALID"
+    if damage_publication_issue(result) is not None:
+        return "INVALID"
     return "PASS" if bool(value(result, "passed", False)) else "FAIL"
+
+
+def _is_payload(record):
+    return isinstance(record, Mapping) and "spectra" in record
+
+
+def _is_spectrum(record):
+    return (
+        not _is_payload(record)
+        and value(record, "spectrum_name") is not None
+    )
+
+
+def concrete_miner_search(spectrum):
+    """Return the concrete search of a spectrum with a concrete Miner check."""
+
+    search = value(spectrum, "concrete_search")
+    if search is None:
+        return None
+    method = (
+        value(spectrum, "concrete_method")
+        or value(search, "method")
+        or CONCRETE_MINER
+    )
+    return search if method in CONCRETE_MINER_METHODS else None
+
+
+def _concrete_miner_results(spectrum):
+    method = value(spectrum, "concrete_method")
+    return tuple(
+        result
+        for result in items(spectrum, "concrete")
+        if (method or value(result, "method") or CONCRETE_MINER)
+        in CONCRETE_MINER_METHODS
+    )
+
+
+def _not_above_bound(point, upper):
+    return point <= upper or math.isclose(
+        point, upper, rel_tol=_BOUND_ROUND_OFF, abs_tol=0.0
+    )
+
+
+def _spectrum_damage_issue(spectrum):
+    """Recompute the published damage values of one spectrum."""
+
+    reinforcement = [
+        evidence_number(value(result, "damage"))
+        for result in items(spectrum, "reinforcement")
+    ]
+    if any(damage is None for damage in reinforcement):
+        return "a reinforcement Miner damage is not a number"
+    upper = None
+    search = concrete_miner_search(spectrum)
+    if search is not None:
+        upper = evidence_number(value(search, "upper_damage"))
+        sampled = evidence_number(value(search, "damage"))
+        if upper is None or sampled is None or upper < sampled:
+            return (
+                "the concrete damage upper bound is less than the largest "
+                "sampled damage"
+            )
+        gap = evidence_number(value(search, "absolute_gap"))
+        if (
+            math.isfinite(upper)
+            and gap is not None
+            and math.isfinite(gap)
+            and not math.isclose(
+                gap,
+                upper - sampled,
+                rel_tol=_BOUND_ROUND_OFF,
+                abs_tol=_BOUND_ROUND_OFF * max(abs(upper), 1.0e-300),
+            )
+        ):
+            return (
+                "the concrete damage upper bound does not agree with the "
+                "search gap"
+            )
+        for result in items(spectrum, "concrete"):
+            point = evidence_number(value(result, "damage"))
+            if point is None or not _not_above_bound(point, upper):
+                return (
+                    "a concrete fibre damage is more than the upper bound of "
+                    "the section search"
+                )
+    elif _concrete_miner_results(spectrum):
+        return "the concrete damage has no upper bound from the section search"
+    candidates = reinforcement + ([] if upper is None else [upper])
+    expected = max(candidates) if candidates else None
+    raw = value(spectrum, "miner_damage")
+    retained = None if raw is None else evidence_number(raw)
+    if raw is not None and retained is None:
+        return "the published maximum Miner damage is not a number"
+    if expected != retained:
+        return (
+            "the published maximum Miner damage is not the maximum of the "
+            "reinforcement damages and the concrete damage upper bound"
+        )
+    return None
+
+
+def damage_publication_issue(record):
+    """Return why the retained damage values cannot be published, or ``None``.
+
+    The published concrete damage is the upper bound of the damage from the
+    bounded section search. The published maximum Miner damage is the maximum
+    of the reinforcement damages and that upper bound. The check recomputes
+    both values from the retained component results, so a result that
+    publishes the largest sampled concrete damage as the damage fails closed.
+    Component results (one element or one fibre) have no such values.
+    """
+
+    if _is_payload(record):
+        spectra = items(record, "spectra")
+        for spectrum in spectra:
+            issue = _spectrum_damage_issue(spectrum)
+            if issue is not None:
+                name = str(value(spectrum, "spectrum_name", "-"))
+                return f"{name}: {issue}"
+        if "miner_damage" not in record:
+            return None
+        values = [
+            evidence_number(value(spectrum, "miner_damage"))
+            for spectrum in spectra
+            if value(spectrum, "miner_damage") is not None
+        ]
+        expected = max(values) if values else None
+        raw = record.get("miner_damage")
+        retained = None if raw is None else evidence_number(raw)
+        if expected != retained:
+            return (
+                "the published maximum Miner damage is not the maximum of the "
+                "spectrum values"
+            )
+        return None
+    if _is_spectrum(record):
+        return _spectrum_damage_issue(record)
+    return None
+
+
+def concrete_damage_upper_bound(spectrum):
+    """Return the published concrete Miner damage of one spectrum.
+
+    The value is the upper bound of the damage from the section search. It is
+    ``None`` without a concrete Miner check or when the retained damage values
+    fail :func:`damage_publication_issue`.
+    """
+
+    search = concrete_miner_search(spectrum)
+    if search is None or _spectrum_damage_issue(spectrum) is not None:
+        return None
+    return evidence_number(value(search, "upper_damage"))
+
+
+def miner_damage_is_concrete_bound(record):
+    """Return whether the published maximum Miner damage is a concrete bound."""
+
+    miner = evidence_number(value(record, "miner_damage"))
+    if miner is None:
+        return False
+    spectra = items(record, "spectra") if _is_payload(record) else (record,)
+    return any(
+        concrete_damage_upper_bound(spectrum) == miner
+        for spectrum in spectra
+    )
 
 
 def overall_status(payload, *, stale=False):
@@ -99,6 +279,9 @@ def overall_note(payload, *, stale=False):
         suffix = "" if len(errors) == 1 else "s"
         return f"{len(errors)} fatigue input error{suffix}; fatigue not assessed"
     if status == "INVALID":
+        causes = invalid_causes(payload)
+        if causes:
+            return "; ".join(causes)
         return "One or more grouped spectra did not converge"
     if status == "FAIL":
         breakdown = criterion_breakdown(payload)
@@ -114,6 +297,61 @@ def overall_note(payload, *, stale=False):
         breakdown = criterion_breakdown(payload)
         return warning_note + ("; " + breakdown if breakdown else "")
     return criterion_breakdown(payload) or "Governing grouped spectrum"
+
+
+def invalid_causes(payload):
+    """Return one plain cause for each spectrum that is INVALID.
+
+    A concrete search that did not converge states its last damage bounds. The
+    reinforcement verdict of the same spectrum is stated separately, because the
+    concrete search does not change it.
+    """
+
+    causes = []
+    for spectrum in items(payload, "spectra"):
+        if result_status(spectrum) != "INVALID":
+            continue
+        name = str(value(spectrum, "spectrum_name", "-"))
+        bins_converged = all(
+            bool(value(state, "converged", False))
+            for state in items(spectrum, "bins")
+        )
+        search = value(spectrum, "concrete_search")
+        if not bins_converged:
+            causes.append(
+                f"{name}: the elastic solution of one or more bins did not converge"
+            )
+            continue
+        if search is not None and not bool(value(search, "converged", False)):
+            lower = compact_number(value(search, "damage"))
+            upper = compact_number(value(search, "upper_damage"))
+            boxes = value(search, "boxes_evaluated", 0)
+            quantity = (
+                "utilisation"
+                if value(search, "method") == "Damage-equivalent stress amplitude"
+                else "Miner damage"
+            )
+            cause = (
+                f"{name}: the concrete fibre search did not converge "
+                f"({quantity} between {lower} and {upper} after {boxes} boxes)"
+            )
+            steel = items(spectrum, "reinforcement")
+            if steel:
+                steel_passed = all(
+                    bool(value(result, "passed", False)) for result in steel
+                )
+                cause += (
+                    "; the reinforcement check gives "
+                    + ("PASS" if steel_passed else "FAIL")
+                )
+            causes.append(cause)
+        issue = _spectrum_damage_issue(spectrum)
+        if issue is not None:
+            causes.append(f"{name}: {issue}")
+    issue = damage_publication_issue(payload)
+    if issue is not None and issue not in causes:
+        causes.append(issue)
+    return causes
 
 
 def spectrum_by_name(payload, spectrum_name):
@@ -164,11 +402,18 @@ def criterion_breakdown(spectrum):
     governing = governing_criterion(spectrum)
     if governing != "-":
         parts.append(f"governing: {governing}")
-    miner = evidence_number(value(spectrum, "miner_damage"))
+    miner = (
+        evidence_number(value(spectrum, "miner_damage"))
+        if damage_publication_issue(spectrum) is None
+        else None
+    )
     if miner is not None:
-        parts.append(report_notation.concat(
+        pieces = [
             "max Miner D ", report_notation.number(compact_number(miner)),
-        ))
+        ]
+        if miner_damage_is_concrete_bound(spectrum):
+            pieces.append(" (concrete, upper bound)")
+        parts.append(report_notation.concat(*pieces))
     yield_util = evidence_number(value(spectrum, "yield_utilisation"))
     if yield_util is not None:
         parts.append(
@@ -188,6 +433,7 @@ def spectrum_rows(payload):
     rows = []
     for spectrum in items(payload, "spectra"):
         search = value(spectrum, "concrete_search")
+        publishable = _spectrum_damage_issue(spectrum) is None
         rows.append({
             "spectrum": str(value(spectrum, "spectrum_name", "-")),
             "status": result_status(spectrum),
@@ -195,8 +441,16 @@ def spectrum_rows(payload):
             "reinforcement_elements": len(items(spectrum, "reinforcement")),
             "concrete_fibres": len(items(spectrum, "concrete")),
             "governing": governing_criterion(spectrum),
-            "miner_damage": evidence_number(
-                value(spectrum, "miner_damage")
+            "miner_damage": (
+                evidence_number(value(spectrum, "miner_damage"))
+                if publishable
+                else None
+            ),
+            "miner_damage_concrete_bound": (
+                publishable and miner_damage_is_concrete_bound(spectrum)
+            ),
+            "concrete_damage_upper_bound": concrete_damage_upper_bound(
+                spectrum
             ),
             "yield_utilisation": evidence_number(
                 value(spectrum, "yield_utilisation")

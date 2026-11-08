@@ -1201,6 +1201,11 @@ def _fmt(v, nd=3):
     return f"{v:.{nd}f}"
 
 
+def _scaled(value, factor):
+    """Scaled value, or None when the value is not available."""
+    return None if value is None else value * factor
+
+
 _GAMMA_V_REPORT_DECIMALS = 3
 
 
@@ -3558,7 +3563,7 @@ class ReportBuilder:
                     properties = (
                         f"built-in fixed curve {law.curve}; E<sub>p</sub> = "
                         f"{_fmt(law.Es / 1000, 1)} GPa; "
-                        f"eps<sub>p,0</sub> / eps<sub>ut</sub> = "
+                        f"IS / eps<sub>ut</sub> = "
                         f"{_fmt(law.IS * 1000, 3)} / "
                         f"{_fmt(law.rupture_strain * 1000, 3)} &#8240;; "
                         f"gamma<sub>y</sub> = {_fmt(law.gamma_y, 3)}"
@@ -3577,7 +3582,7 @@ class ReportBuilder:
                         f"f<sub>pk</sub> = {_fmt(law.fytk, 3)} / "
                         f"{_fmt(law.futk, 3)} MPa; E<sub>p</sub> = "
                         f"{_fmt(law.Es / 1000, 1)} GPa; "
-                        f"eps<sub>p,0</sub> = "
+                        f"IS = "
                         f"{_fmt(law.IS * 1000, 3)} &#8240;",
                         f"eps<sub>ut</sub> = {_fmt(law.eut * 1000, 3)} &#8240;",
                         f"gamma<sub>y</sub> / gamma<sub>u</sub> / "
@@ -3777,6 +3782,16 @@ class ReportBuilder:
                 ["Neutral-axis maximum increment", f"{_fmt(inp.get('v_inc'), 3)}&#176;"],
                 ["Applied-moment utilization", self._brief_switch(check_util)],
                 ["N-M interaction diagrams", self._brief_switch(inp.get("interaction"))],
+            ])
+        if (
+            inp.get("tendons")
+            and not elastic_requested
+            and not inp.get("fatigue_on")
+        ):
+            rows.append([
+                "Concrete elastic modulus E<sub>c</sub> = E<sub>cm</sub> "
+                "(plastic bond strain of tendons)",
+                f"{_fmt(inp.get('conc_Ec'), 3)} GPa",
             ])
         if elastic_requested or inp.get("fatigue_on"):
             concrete_preset = (
@@ -5140,7 +5155,7 @@ class ReportBuilder:
             if item.get("description"):
                 self._small(_html_escape(item["description"]))
             rows = [["Parameter", "Symbol", "Value"],
-                    ["Initial prestrain", "eps<sub>p</sub><super>(0)</super>",
+                    ["Prestrain after all losses", "IS",
                      f"{_fmt(p.IS*1000, 3)} &#8240;"],
                     [
                         "Design-law source",
@@ -5209,7 +5224,7 @@ class ReportBuilder:
         block_start = len(self.flow)
         self._h2("Initial prestress action")
         state_rows = [[
-            "Tendon", "Material", "E<sub>p</sub> (MPa)", "eps<sub>p,0</sub> (-)",
+            "Tendon", "Material", "E<sub>p</sub> (MPa)", "IS (-)",
             "sigma<sub>p,0</sub> (MPa)", "A<sub>p</sub> (mm<super>2</super>)", "F<sub>p,0</sub> (kN)",
         ]]
         moment_rows = [[
@@ -5245,6 +5260,53 @@ class ReportBuilder:
             repeat_cols=1,
         )
 
+        bond = payload.get("bond_strain") or []
+        if bond:
+            self._p(
+                "The section models bond each tendon with the bond strain "
+                "difference eps<sub>p</sub><super>(0)</super> = IS - "
+                "eps<sub>c,p</sub> (EN 1992-1-1 Figure 6.1). eps<sub>c,p</sub> "
+                "(negative in compression) is the concrete strain at the tendon "
+                "under prestress alone: at the long-term modular ratio "
+                "n<sub>l</sub> for the elastic and fatigue models, and at "
+                "E<sub>s</sub>/E<sub>cm</sub> for the plastic model, because "
+                "the creep strain does not recover in a short-term load to "
+                "failure. The plastic model uses the entered E<sub>cm</sub> = "
+                f"E<sub>c</sub> = {_fmt(self.inp.get('conc_Ec'), 3)} GPa. The elastic model applies sigma<sub>p</sub><super>(0)"
+                "</super> = E<sub>p</sub> eps<sub>p</sub><super>(0)</super> to "
+                "the bonded section. Under prestress alone the tendon stress "
+                "then returns to sigma<sub>p,0</sub> = E<sub>p</sub> IS. "
+                "eps<sub>p</sub><super>(0)</super> is negative for a lightly "
+                "stressed tendon where prestress alone elongates the concrete "
+                "by more than IS."
+            )
+            bond_rows = [[
+                "Tendon", "IS (&#8240;)",
+                "eps<sub>p</sub><super>(0)</super> elastic (&#8240;)",
+                "sigma<sub>p</sub><super>(0)</super> elastic (MPa)",
+                "eps<sub>p</sub><super>(0)</super> plastic (&#8240;)",
+            ]]
+            for row in bond:
+                bond_rows.append([
+                    row["element_id"],
+                    _fmt(row["effective_strain"] * 1000.0, 4),
+                    _fmt(_scaled(row["bond_strain_elastic"], 1000.0), 4),
+                    _fmt(row["bond_stress_elastic_mpa"], 2),
+                    _fmt(row["bond_strain_plastic"] * 1000.0, 4),
+                ])
+            self._table(
+                bond_rows,
+                [22 * mm, 26 * mm, 40 * mm, 40 * mm, 40 * mm],
+                font=6.8,
+                keep=False,
+                repeat_cols=1,
+            )
+            if any(row["bond_strain_elastic"] is None for row in bond):
+                self._p(
+                    "The long-term bond state is not established. The elastic "
+                    "and fatigue models are off, so no result uses it."
+                )
+
         def labelled(values, formatter):
             return "; ".join(
                 f"{row['element_id']}: {formatter(row)}" for row in values
@@ -5252,9 +5314,10 @@ class ReportBuilder:
 
         self._formula(
             "sigma<sub>p,0,i</sub> = E<sub>p,i</sub> "
-            "eps<sub>p,0,i</sub>",
+            "IS<sub>i</sub>",
             equation_key="prestress.initial-stress",
-            ref="Sector locked-in prestress initialisation from entered tendon strain.",
+            ref=("Effective prestress after all losses from the entered tendon "
+                 "strain IS."),
             subst=labelled(
                 elements,
                 lambda row: (f"{_fmt(row['modulus_mpa'], 1)} &#183; "
@@ -5855,7 +5918,7 @@ class ReportBuilder:
                            "kappa<sub>C</sub> ,  "
                            "min<sub>i</sub>[eps<sub>su,i</sub>/d<sub>s,i</sub>] ,  "
                            "min<sub>j</sub>[(eps<sub>pu,j</sub>-"
-                           "eps<sub>p0,j</sub>)/d<sub>p,j</sub>] )",
+                           "eps<sub>p,j</sub><super>(0)</super>)/d<sub>p,j</sub>] )",
                            equation_key="basis.plastic.governing-curvature",
                            ref=f"Concrete: {concrete_ref}; reinforcement: {steel_ref}")
             self._small("Each bar and tendon uses its assigned material law and "
@@ -7577,7 +7640,7 @@ class ReportBuilder:
         )
         self._small('The 2023 tau<sub>Rd,c</sub> calculation uses the flexural design yield and the axial-force modification in Formula (8.31). Its aggregate-size parameter is:')
         self._small('d<sub>dg</sub> = 16 + D<sub>lower</sub>.')
-        self._small('N<sub>Ed</sub> and M<sub>Ed</sub> include the locked-in tendon prestress effects in accordance with 8.2.1(8).')
+        self._small('N<sub>Ed</sub> and M<sub>Ed</sub> include the effective tendon prestress action (Initial prestress action) in accordance with 8.2.1(8).')
         self._small('Tendons are assumed parallel to the member axis: cos beta = 1.')
         if sh.get("links") is not None:
             self._shear_links(sh)
@@ -9317,7 +9380,7 @@ class ReportBuilder:
                 f"{angle_note}."
             )
         self._p("The sectional actions use the shared edition <b>" + str(c["method"]) + "</b>.")
-        self._p("Each denominator in the DK NA interaction is the resistance to that action acting alone. The other external sectional actions are set to zero.")
+        self._p("Each denominator in the DK NA interaction is the resistance to that action acting alone. The other external sectional actions are set to zero. For V this is the resistance of the section with its installed links: max(V<sub>Rd,c</sub>, V<sub>Rd</sub>) when V<sub>Ed</sub> &#8804; V<sub>Rd,c</sub>, also when the shear check itself uses the concrete route, and V<sub>Rd</sub> when V<sub>Ed</sub> &gt; V<sub>Rd,c</sub>, where the section needs its links (EN 1992-1-1 6.2.3(1)).")
         governing_assessment_note = (
             presentation.combined_governing_assessment_note(c)
         )
@@ -10730,7 +10793,7 @@ class ReportBuilder:
                                       tube["tef"], ak_m2=tube["Ak"], report_labels=True), 120, 100)
         if t.get("n_prestress"):
             self._small(f"alpha<sub>cw</sub> uses sigma<sub>cp</sub> = {_fmt(t['sigma_cp'], 3)} MPa.")
-            self._small(f"This stress includes axial N and tendon precompression of {_fmt(t['n_prestress'], 3)} kN. The tendon precompression comes from the prestress initial strain.")
+            self._small(f"This stress includes axial N and tendon precompression of {_fmt(t['n_prestress'], 3)} kN. The tendon precompression is the effective prestress action from the prestrain IS.")
         if t.get("nu_v_detailing"):
             self._small('The selected detailing condition raises the strut factor from nu<sub>t</sub> to nu<sub>v</sub>:')
             self._small('nu = nu<sub>v</sub>.')
@@ -11073,7 +11136,7 @@ class ReportBuilder:
             self._h2("Step 4 - combine the element stress components")
             self._formula(
                 "sigma<sub>total,i</sub> = sigma<sub>s2,i</sub> + "
-                "sigma<sub>RST1,i</sub> + sigma<sub>p0,i</sub>",
+                "sigma<sub>RST1,i</sub> + sigma<sub>p,i</sub><super>(0)</super>",
                 equation_key="elastic.combined.total-stress",
                 subst=(f"= {_fmt(element['reduced_long_mpa'], 9)} + "
                        f"{_fmt(element['rst1_mpa'], 9)} + "
@@ -11116,11 +11179,29 @@ class ReportBuilder:
             )
         )
         if ps is not None and self.inp.get("tendons"):
-            self._p("Tendon prestress is applied through its initial strain. The entered N is the external force only.")
-            self._p("Equivalent prestress actions, with N positive in tension:")
-            self._p(f"N = {_fmt(ps['n_kn'], 3)} kN.")
-            self._p(f"M<sub>x</sub> = {_fmt(ps['mx_knm'], 3)} kN&#183;m.")
-            self._p(f"M<sub>y</sub> = {_fmt(ps['my_knm'], 3)} kN&#183;m.")
+            locked = (el.get("superposition") or {}).get("prestress_resultant")
+            self._p(
+                "Tendon prestress is applied through the bond strain difference "
+                "eps<sub>p</sub><super>(0)</super> (Initial prestress action). "
+                "The entered N is the external force only. N is positive in "
+                "tension."
+            )
+            if locked is not None:
+                self._p(
+                    "The elastic solver applies the locked-in tendon resultant "
+                    "of sigma<sub>p</sub><super>(0)</super> = E<sub>p</sub> "
+                    "eps<sub>p</sub><super>(0)</super> to the bonded section: "
+                    f"N = {_fmt(-locked['n'], 3)} kN, "
+                    f"M<sub>x</sub> = {_fmt(locked['mx'], 3)} kN&#183;m, "
+                    f"M<sub>y</sub> = {_fmt(locked['my'], 3)} kN&#183;m."
+                )
+            self._p(
+                "Under prestress alone the tendons then give the effective "
+                "prestress action, from sigma<sub>p,0</sub> = E<sub>p</sub> IS: "
+                f"N = {_fmt(ps['n_kn'], 3)} kN, "
+                f"M<sub>x</sub> = {_fmt(ps['mx_knm'], 3)} kN&#183;m, "
+                f"M<sub>y</sub> = {_fmt(ps['my_knm'], 3)} kN&#183;m."
+            )
             self._p("Section and materials gives the prestress-action calculation.")
         if self._selected_family("elastic", self.inp) is not None:
             self._elastic_worked(el)
@@ -11191,7 +11272,7 @@ class ReportBuilder:
                 el.get("stress_plane"),
                 ec_mpa=float(self.inp.get("conc_Ec", 0.0)) * 1000.0,
                 title="Elastic strain profile"), 150, 100)
-            self._small("Concrete profile: instantaneous stress-plane strain. Markers: TOTAL material strain, including retained long-term deformation and tendon initial strain.")
+            self._small("Concrete profile: instantaneous stress-plane strain. Markers: TOTAL material strain, including retained long-term deformation and the tendon bond strain difference.")
         # Transformed properties: uncracked and (when cracked) cracked, n_l-weighted.
         self._h2("Transformed section properties (n<sub>l</sub>)")
         pu = el.get("props_un") or {}
@@ -12051,6 +12132,14 @@ class ReportBuilder:
                 subst=subst,
                 result=result,
             )
+        if mean.get("alpha_e") is not None:
+            self._small(
+                f"alpha<sub>e</sub> = E<sub>s</sub>/E<sub>cm</sub> = "
+                f"{_fmt(mean.get('alpha_e'), 3)} "
+                + ("(7.3.4(2))" if edition == "2005" else "(9.2.3(3))")
+                + ", also for the long-term width. The creep modular ratio "
+                "sets only the cracked-section state."
+            )
 
     def _crack_candidates(self, cases):
         """Append the complete sorted per-element crack-width audit table."""
@@ -12596,7 +12685,7 @@ class ReportBuilder:
         rows = [[
             "Spectrum", "Status", "Governing",
             "Max Miner D", "Max yield / proof", "Governing util.",
-            "Search upper D",
+            "Concrete D, upper bound",
         ]]
         rows.extend([
             [
@@ -12606,7 +12695,7 @@ class ReportBuilder:
                 _fmt_sig(row["miner_damage"], 6),
                 _pct(row["yield_utilisation"]),
                 _pct(row["utilisation"]),
-                _fmt_sig(row["search_upper_damage"], 6),
+                _fmt_sig(row["concrete_damage_upper_bound"], 6),
             ]
             for row in summary_rows
         ])
@@ -12620,7 +12709,9 @@ class ReportBuilder:
         self._small(
             "Each spectrum has its own Miner sum. Governing utilization is the "
             "maximum applicable simplified screen, Miner range, yield/proof "
-            "stress or concrete result."
+            "stress or concrete result. "
+            + fatigue_presentation.CONCRETE_UPPER_BOUND_NOTE
+            + " Max Miner D includes this upper bound."
         )
         self._table(
             [["Spectrum", "Bins", "Steel elements", "Concrete fibers"],
@@ -13122,10 +13213,18 @@ class ReportBuilder:
                     )) == fatigue_core.CONCRETE_EQUIVALENT
                 )
                 self._h2("Concrete fatigue")
+                # The concrete damage of the section is the upper bound of the
+                # section search. A sampled damage at one point stays in the
+                # Audit detail with its own label.
+                point_damage_column = equivalent_method or audit_detail
                 rows = [[
                     "Fiber", "Source", "x", "y", "f<sub>cd,fat</sub>",
-                    (
-                        "Equivalent util." if equivalent_method else "Miner D"
+                    *(
+                        (
+                            "Equivalent util." if equivalent_method
+                            else "D at point",
+                        )
+                        if point_damage_column else ()
                     ),
                     "Stress util.", "Governing", "Util.", "Status",
                 ]]
@@ -13136,10 +13235,13 @@ class ReportBuilder:
                         _fmt(row["x_mm"], 1),
                         _fmt(row["y_mm"], 1),
                         _fmt(row["fcd_fat_mpa"], 3),
-                        (
-                            _pct(row["equivalent_utilisation"])
-                            if equivalent_method
-                            else _fmt_sig(row["damage"], 6)
+                        *(
+                            (
+                                _pct(row["equivalent_utilisation"])
+                                if equivalent_method
+                                else _fmt_sig(row["damage"], 6),
+                            )
+                            if point_damage_column else ()
                         ),
                         _pct(row["stress_utilisation"]),
                         row["governing"],
@@ -13150,8 +13252,13 @@ class ReportBuilder:
                 ])
                 self._table(
                     rows,
-                    [14 * mm, 18 * mm, 12 * mm, 12 * mm, 17 * mm,
-                     16 * mm, 18 * mm, 26 * mm, 13 * mm, 14 * mm],
+                    (
+                        [14 * mm, 18 * mm, 12 * mm, 12 * mm, 17 * mm,
+                         16 * mm, 18 * mm, 26 * mm, 13 * mm, 14 * mm]
+                        if point_damage_column
+                        else [16 * mm, 20 * mm, 13 * mm, 13 * mm, 18 * mm,
+                              19 * mm, 27 * mm, 15 * mm, 19 * mm]
+                    ),
                     font=5.4,
                     keep=False,
                     repeat_cols=2,
@@ -13159,6 +13266,12 @@ class ReportBuilder:
                 self._small(
                     "Coordinates in mm; f<sub>cd,fat</sub> in MPa. The selected "
                     "criterion and stress are evaluated at the same fixed fiber."
+                    + (
+                        " D at point is the Miner damage at that point only. "
+                        + fatigue_presentation.CONCRETE_UPPER_BOUND_NOTE
+                        if point_damage_column and not equivalent_method
+                        else ""
+                    )
                 )
                 result = fatigue_presentation.result_by_fibre(
                     spectrum, governing_fibre
@@ -13207,16 +13320,46 @@ class ReportBuilder:
                         else "INVALID"
                     )
                     self._h2("Bounded governing-fiber search")
+                    # Audit keeps the largest sampled value and its location
+                    # as the governing point of the search. Every profile
+                    # publishes the upper bound as the concrete result.
+                    sampled_header = (
+                        "x", "y",
+                        (
+                            "Largest sampled util. [%]"
+                            if equivalent_method else "Largest sampled D"
+                        ),
+                    ) if audit_detail else ()
+                    sampled_values = (
+                        f"{_fmt(1000.0 * fatigue_presentation.value(
+                            search, 'x_m', 0.0
+                        ), 2)} mm",
+                        f"{_fmt(1000.0 * fatigue_presentation.value(
+                            search, 'y_m', 0.0
+                        ), 2)} mm",
+                        (
+                            _pct(fatigue_presentation.value(
+                                search, "damage"
+                            ))
+                            if equivalent_method
+                            else _fmt_sig(fatigue_presentation.value(
+                                search, "damage"
+                            ), 6)
+                        ),
+                    ) if audit_detail else ()
+                    upper_bound = (
+                        fatigue_presentation.value(search, "upper_damage")
+                        if equivalent_method
+                        else fatigue_presentation.concrete_damage_upper_bound(
+                            spectrum
+                        )
+                    )
                     self._table(
                         [[
-                            "Status", "x", "y",
+                            "Status", *sampled_header,
                             (
-                                "Point util. [%]"
-                                if equivalent_method else "Point D"
-                            ),
-                            (
-                                "Upper util. [%]"
-                                if equivalent_method else "Upper D"
+                                "Util., upper bound [%]"
+                                if equivalent_method else "D, upper bound"
                             ),
                             (
                                 "Abs. gap [%]"
@@ -13225,29 +13368,11 @@ class ReportBuilder:
                             "Rel. gap", "Divisions", "Boxes", "Points",
                         ], [
                             search_status,
-                            f"{_fmt(1000.0 * fatigue_presentation.value(
-                                search, 'x_m', 0.0
-                            ), 2)} mm",
-                            f"{_fmt(1000.0 * fatigue_presentation.value(
-                                search, 'y_m', 0.0
-                            ), 2)} mm",
+                            *sampled_values,
                             (
-                                _pct(fatigue_presentation.value(
-                                    search, "damage"
-                                ))
+                                _pct(upper_bound)
                                 if equivalent_method
-                                else _fmt_sig(fatigue_presentation.value(
-                                    search, "damage"
-                                ), 6)
-                            ),
-                            (
-                                _pct(fatigue_presentation.value(
-                                    search, "upper_damage"
-                                ))
-                                if equivalent_method
-                                else _fmt_sig(fatigue_presentation.value(
-                                    search, "upper_damage"
-                                ), 6)
+                                else _fmt_sig(upper_bound, 6)
                             ),
                             (
                                 _pct(fatigue_presentation.value(
@@ -13269,9 +13394,26 @@ class ReportBuilder:
                                 search, "points_evaluated", "-"
                             ),
                         ]],
-                        [22 * mm, 16 * mm, 16 * mm, 16 * mm, 16 * mm,
-                         16 * mm, 16 * mm, 22 * mm, 18 * mm, 18 * mm],
+                        (
+                            [22 * mm, 16 * mm, 16 * mm, 18 * mm, 18 * mm,
+                             16 * mm, 14 * mm, 20 * mm, 18 * mm, 18 * mm]
+                            if audit_detail
+                            else [22 * mm, 26 * mm, 24 * mm, 22 * mm,
+                                  28 * mm, 27 * mm, 27 * mm]
+                        ),
                         font=5.3,
+                    )
+                    self._small(
+                        (
+                            "The upper bound is the published concrete result."
+                            if equivalent_method
+                            else fatigue_presentation.CONCRETE_UPPER_BOUND_NOTE
+                        )
+                        + (
+                            " x and y give the location of the largest sampled "
+                            "value."
+                            if audit_detail else ""
+                        )
                     )
                 self._h2(
                     "Governing concrete fiber bin results - "
@@ -13333,7 +13475,7 @@ class ReportBuilder:
                     ),
                     (
                         "Cycle count" if equivalent_method
-                        else "Miner D"
+                        else "Bin D<sub>i</sub>"
                     ),
                     "Stress utilization",
                 ]]

@@ -74,12 +74,12 @@ MANUAL_EQUATION_LOCATIONS = (
     _location(
         3, "manual.material.prestress-law", "C3-3", "Material laws",
         "Prestressing steel",
-        "e61a85aca0ae68096eae6d42740d5e556e839b765c69ec57f61ecc5c146cbaa5",
+        "a4e8814eb5bfa973a257a91c30c1f0858137e5b7d5d9ca229c9d27358f5b15c9",
     ),
     _location(
         4, "manual.plastic.governing-curvature", "C5-1",
         "Plastic capacity analysis", "The governing curvature",
-        "b7d2d42c417b87d22ce6eab64d35bd507eac0fd1395473841b00f0934ccadb6c",
+        "6448af2a86347ed6ddc7224993e37115df7ef54b81985924d619e25d2f139253",
     ),
     _location(
         5, "manual.crack.2005.width", "C6-1",

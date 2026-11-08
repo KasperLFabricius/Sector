@@ -280,7 +280,19 @@ def member_checks(
     rho_positive = 800.0 / (bw_mm * d_mm)
     basic_positive = crdc * k * (100.0 * rho_positive * FCK_MPA) ** (1.0 / 3.0)
     vrd_positive = max(basic_positive, vmin) * bw_mm * d_mm / 1000.0
-    isolated_vrd = min(vrd_c, vrd_positive)
+    # TB-04: V acting alone uses the section with its installed links,
+    # max(VRd,c, VRd). Without T, the best link angle in the band makes VRd,s
+    # equal to VRd,max: asw/s fywd (cot^2 + 1) = bw nu1 fcd. The case face has
+    # the larger tension area (1000 mm2), so the shorter lever arm, and governs.
+    isolated_link_cot = min(max(math.sqrt(
+        bw_mm * nu1 * FCD_MPA / (asw_per_s * fywd) - 1.0
+    ), 1.0), 2.5)
+    isolated_link_vrd = min(
+        asw_per_s * lever_arm_mm * fywd * isolated_link_cot,
+        bw_mm * lever_arm_mm * nu1 * FCD_MPA
+        / (isolated_link_cot + 1.0 / isolated_link_cot),
+    ) / 1000.0
+    isolated_vrd = max(min(vrd_c, vrd_positive), isolated_link_vrd)
     isolated_t_cot = math.sqrt(
         torsion_resistance_coefficient / torsion_yield_coefficient - 1.0
     )
@@ -337,7 +349,7 @@ def fatigue() -> dict[str, float]:
     stress_ranges = (steel_at_55 * 4.0 / 55.0, steel_at_55 * 2.0 / 55.0)
     applied_cycles = (100_000.0, 1_000_000.0)
     reference = 162.5
-    gamma_s_fatigue = 1.15
+    gamma_s_fatigue = 1.32  # DK NA:2024 2.4.2.4(1): 1.20 x 1.1
     knee = reference / gamma_s_fatigue
     steel_damage = 0.0
     for stress_range, cycles in zip(stress_ranges, applied_cycles):
@@ -345,7 +357,7 @@ def fatigue() -> dict[str, float]:
         life = 1_000_000.0 * (reference / gamma_s_fatigue / stress_range) ** exponent
         steel_damage += cycles / life
 
-    fcd_fat = 0.85 * FCK_MPA / 1.50 * (1.0 - FCK_MPA / 250.0)
+    fcd_fat = 0.85 * FCK_MPA / 1.595 * (1.0 - FCK_MPA / 250.0)  # 1.45 x 1.1
     concrete_damage = 0.0
     concrete_stress_utilisation = 0.0
     for total_moment, cycles in zip((9.0, 7.0), applied_cycles):
@@ -357,7 +369,7 @@ def fatigue() -> dict[str, float]:
         concrete_stress_utilisation = max(
             concrete_stress_utilisation, sigma_max / fcd_fat
         )
-    yield_utilisation = (steel_at_55 * 9.0 / 55.0) / (FYK_MPA / 1.15)
+    yield_utilisation = (steel_at_55 * 9.0 / 55.0) / (FYK_MPA / gamma_s_fatigue)
     return {
         "steel_high_range_mpa": stress_ranges[0],
         "steel_low_range_mpa": stress_ranges[1],

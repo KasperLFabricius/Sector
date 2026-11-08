@@ -433,7 +433,7 @@ def _bar_stress(u: np.ndarray, bx: np.ndarray, by: np.ndarray, n: float,
                 n_mult: np.ndarray | None = None) -> np.ndarray:
     """Load-induced steel stress at each bar (Ec = 1): ``sigma = n * n_mult * eps``.
 
-    This is the *passive* response only; a tendon's locked-in prestress ``Ep*IS``
+    This is the *passive* response only; a tendon's locked-in prestress ``Ep*eps_p(0)``
     is added to the reported stress by :func:`solve_elastic_combined`, not here, so
     the crack-width check sees the load-induced increment rather than the total."""
     if not bx.size:
@@ -787,8 +787,9 @@ def solve_elastic_combined(
 
     ``n_mult`` is a per-bar modular-ratio multiplier (1 for mild reinforcement,
     ``Ep/Es`` for tendons). ``prestress_stress`` is the locked-in tendon prestress
-    (``Ep*IS``) per bar: its constant resultant is applied to every solve (so the
-    user's ``N`` is the external force only, as in the plastic solver), and it is
+    (``Ep*eps_p(0)``, from the bond strain difference) per bar: its constant
+    resultant is applied to every solve (so the user's ``N`` is the external
+    force only, as in the plastic solver), and it is
     added to the reported tendon stresses. Being locked-in, it does not creep, so
     it is kept out of the ``s2`` neutralising step.
     """
@@ -874,7 +875,7 @@ def solve_elastic_combined(
     rst1 = st_res.bar_stress
 
     # 4. Combine. The locked-in prestress is added to the reported tendon stresses
-    #    (physical stress = passive increment + Ep*IS); it cancels out of `dif`.
+    #    (physical stress = passive increment + Ep*eps_p(0)); it cancels out of `dif`.
     total = s2 + rst1 if s1_passive.size else rst1
     s1 = s1_passive
     locked_in = np.zeros_like(s1_passive)
@@ -906,3 +907,91 @@ def solve_elastic_combined(
         na_y_intercept=st_res.na_y_intercept,
         converged=c1 and c2,
     )
+
+
+def bonded_prestress_stress(
+    section: Section,
+    n: float,
+    effective_stress: np.ndarray,
+    *,
+    n_mult: np.ndarray | None = None,
+    tendon_mask: np.ndarray | None = None,
+    displace_concrete: bool = True,
+    rel_tol: float = 1.0e-10,
+    max_iter: int = 100,
+) -> np.ndarray:
+    """Locked-in tendon stress that gives the effective stress under prestress alone.
+
+    The entered tendon prestrain ``IS`` is the tendon strain after all losses, so
+    under prestress alone the tendon stress is ``Ep*IS`` (``effective_stress``,
+    kN/m2 per element, zero for ordinary bars). In the bonded section model the
+    tendon also follows the concrete at its level: its stress is
+    ``sigma_0 + n*n_mult*s``, where ``s`` is the concrete stress plane at the
+    tendon (``Ec = 1``). The solver therefore needs the locked-in stress
+    ``sigma_0 = Ep*IS - Ep*eps_c,p``, where ``eps_c,p`` is the concrete strain at
+    the tendon under that prestress at the modular ratio ``n``. ``sigma_0/Ep`` is
+    then the bond strain difference of EN 1992-1-1 Figure 6.1, which includes the
+    decompression strain.
+
+    Direct solution: with the tendon forces fixed at ``Ap*Ep*IS``, the concrete
+    and the ordinary bars have the same equilibrium as in the bonded model, so
+    one solve with zero tendon stiffness gives the strain plane, and
+    ``sigma_0 = Ep*IS - n*n_mult*s`` at each tendon. A solve of the bonded model
+    then checks the tendon stresses. When the no-tension state takes another
+    crack pattern, residual steps correct ``sigma_0`` (for a fixed crack pattern
+    the tendon stress is ``(I + K)^-1 sigma_0`` with ``K`` similar to a positive
+    semi-definite matrix, so these steps converge). ``sigma_0`` is negative
+    where prestress alone elongates the concrete at a lightly stressed tendon by
+    more than ``IS``.
+
+    ``tendon_mask`` marks the tendons (default: the elements with a non-zero
+    effective stress). Raises ``ValueError`` when an elastic state or the
+    correction does not converge.
+    """
+    effective = np.asarray(effective_stress, dtype=float)
+    scale = float(np.max(np.abs(effective))) if effective.size else 0.0
+    if scale == 0.0:
+        return effective.copy()
+    tendon = (
+        effective != 0.0
+        if tendon_mask is None
+        else np.asarray(tendon_mask, dtype=bool)
+    )
+    if tendon.shape != effective.shape:
+        raise ValueError("one tendon flag is required per element")
+    if np.any(effective[~tendon] != 0.0):
+        raise ValueError("an ordinary bar cannot carry an effective prestress")
+    bx, by, _ = section.bar_arrays()
+    multiplier = (
+        np.ones(effective.shape, dtype=float)
+        if n_mult is None
+        else np.asarray(n_mult, dtype=float)
+    )
+    free = solve_elastic_combined(
+        section, 0.0, 0.0, 0.0, n, 0.0, 0.0, 0.0, n,
+        displace_concrete=displace_concrete,
+        n_mult=np.where(tendon, 0.0, multiplier),
+        prestress_stress=np.where(tendon, effective, 0.0),
+    )
+    if not free.converged:
+        raise ValueError("the elastic state under prestress alone did not converge")
+    plane = free.long
+    concrete = plane.eps0 + plane.kx * bx + plane.ky * by
+    locked = np.where(tendon, effective - float(n) * multiplier * concrete, 0.0)
+    if not np.all(np.isfinite(locked)):
+        raise ValueError("the bonded prestress state is not finite")
+    for _ in range(max_iter):
+        state = solve_elastic_combined(
+            section, 0.0, 0.0, 0.0, n, 0.0, 0.0, 0.0, n,
+            displace_concrete=displace_concrete,
+            n_mult=n_mult,
+            prestress_stress=locked,
+        )
+        if not state.converged:
+            raise ValueError("the elastic state under prestress alone did not converge")
+        solved = np.asarray(state.bar_stress_total, dtype=float)
+        residual = np.where(tendon, effective - solved, 0.0)
+        if float(np.max(np.abs(residual))) <= rel_tol * scale:
+            return locked
+        locked = locked + residual
+    raise ValueError("the bonded prestress state did not converge")

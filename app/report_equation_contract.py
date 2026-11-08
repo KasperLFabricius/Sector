@@ -169,31 +169,31 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("prestress.initial-stress", None): _result(
         "sigma<sub>p,0,i</sub>", "MPa",
-        ("sigma<sub>p,0,i</sub>", "locked-in initial stress of tendon i", "MPa"),
+        ("sigma<sub>p,0,i</sub>", "effective stress of tendon i after all losses", "MPa"),
         ("E<sub>p,i</sub>", "elastic modulus of tendon i", "MPa"),
-        ("eps<sub>p,0,i</sub>", "entered initial strain of tendon i"),
+        ("IS<sub>i</sub>", "entered strain of tendon i after all losses"),
     ),
     ("prestress.element-force", None): _result(
         "F<sub>p,0,i</sub>", "kN",
-        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
-        ("sigma<sub>p,0,i</sub>", "locked-in initial stress of tendon i", "MPa"),
+        ("F<sub>p,0,i</sub>", "effective tensile force of tendon i after all losses", "kN"),
+        ("sigma<sub>p,0,i</sub>", "effective stress of tendon i after all losses", "MPa"),
         ("A<sub>p,i</sub>", "area of tendon i", "mm2"),
     ),
     ("prestress.resultant-n", None): _result(
         "N<sub>p,0</sub>", "kN",
-        ("N<sub>p,0</sub>", "locked-in tendon tensile resultant", "kN"),
-        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
+        ("N<sub>p,0</sub>", "effective tendon tensile resultant", "kN"),
+        ("F<sub>p,0,i</sub>", "effective tensile force of tendon i after all losses", "kN"),
     ),
     ("prestress.resultant-mx", None): _result(
         "M<sub>p,x,0</sub>", "kNm",
-        ("M<sub>p,x,0</sub>", "locked-in tendon moment resultant about x", "kNm"),
-        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
+        ("M<sub>p,x,0</sub>", "effective tendon moment resultant about x", "kNm"),
+        ("F<sub>p,0,i</sub>", "effective tensile force of tendon i after all losses", "kN"),
         ("y<sub>i</sub>", "tendon-i y-coordinate about the declared origin", "m"),
     ),
     ("prestress.resultant-my", None): _result(
         "M<sub>p,y,0</sub>", "kNm",
-        ("M<sub>p,y,0</sub>", "locked-in tendon moment resultant about y", "kNm"),
-        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
+        ("M<sub>p,y,0</sub>", "effective tendon moment resultant about y", "kNm"),
+        ("F<sub>p,0,i</sub>", "effective tensile force of tendon i after all losses", "kN"),
         ("x<sub>i</sub>", "tendon-i x-coordinate about the declared origin", "m"),
     ),
     ("basis.plastic.governing-curvature", None): _relation(
@@ -204,7 +204,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("eps<sub>su,i</sub>", "ultimate strain of reinforcing bar i"),
         ("d<sub>s,i</sub>", "bar-i distance from the neutral axis", "mm"),
         ("eps<sub>pu,j</sub>", "ultimate total strain of tendon j"),
-        ("eps<sub>p0,j</sub>", "initial strain of tendon j"),
+        ("eps<sub>p,j</sub><super>(0)</super>", "bond strain difference of tendon j"),
         ("d<sub>p,j</sub>", "tendon-j distance from the neutral axis", "mm"),
     ),
     ("basis.plastic.equilibrium", None): _relation(
@@ -403,7 +403,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("fatigue.concrete.miner-sum", None): _result(
         "D", "dimensionless",
-        ("D", "total concrete Miner damage"),
+        ("D", "total concrete Miner damage at the selected point"),
         ("D<sub>i</sub>", "concrete Miner damage contribution from bin i"),
     ),
     ("fatigue.concrete.stress-utilisation", None): _result(
@@ -414,7 +414,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ("fatigue.concrete.utilisation", None): _result(
         "u", "dimensionless",
         ("u", "governing concrete fatigue utilization"),
-        ("D", "total concrete Miner damage"),
+        ("D", "total concrete Miner damage at the selected point"),
         ("u<sub>sigma</sub>", "concrete compressive-stress utilization"),
         ("u<sub>eq</sub>", "equivalent-amplitude concrete fatigue utilization"),
         (
@@ -717,7 +717,9 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("sigma<sub>total,i</sub>", "combined total element stress", "MPa"),
         ("sigma<sub>s2,i</sub>", "reduced passive long-term stress", "MPa"),
         ("sigma<sub>RST1,i</sub>", "instantaneous response stress", "MPa"),
-        ("sigma<sub>p0,i</sub>", "locked-in prestress", "MPa"),
+        ("sigma<sub>p,i</sub><super>(0)</super>",
+         "locked-in bond stress E<sub>p</sub> eps<sub>p</sub><super>(0)</super>",
+         "MPa"),
     ),
     ("elastic.combined.difference-stress", None): _result(
         "sigma<sub>DIF,i</sub>", "MPa",

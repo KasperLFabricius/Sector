@@ -32,7 +32,7 @@ from sector import capacity, torsion  # noqa: E402
 
 APP = str(ROOT / "app" / "sector_app.py")
 EXPECTED_INPUT_SHA256 = (
-    "d4c597eea7fede83978faf7e4063c197417a3249516085d8abf2e2b7a618baef"
+    "9dc6854e879e6c1843cd9b39f7522fd631d39c46193cfc78a3951e2cf0405fd8"
 )
 # Loading normalizes only these newly optional document-control/reference fields.
 # The original download identity remains unchanged above.
@@ -42,7 +42,7 @@ LOADED_REPORT_DEFAULTS = {
     "rep_source_register": [],
 }
 EXPECTED_LOADED_INPUT_SHA256 = (
-    "8202ad6c98608a1f8c345fa1454de33a0ae6c4bf21f339c98b6676c844431306"
+    "aa530ef60aaf6608c6143fb6bb34e10eb642ec6da57b034e1c61b5b2070437c4"
 )
 
 
@@ -481,10 +481,15 @@ def test_pub_m01_provided_links_publish_their_own_pass_in_native_views(
     assert shear["links"]["longitudinal_shear_force"] == 0.0
     combined = results["combined"]
     action_alone_shear = combined["action_alone"]["v"]
-    assert action_alone_shear["resistance"] == pytest.approx(44.181297943302305)
-    assert action_alone_shear["evidence"]["nominal_route"] == "concrete"
-    assert combined["r_v"] == pytest.approx(30.0 / 44.181297943302305)
-    assert action_alone_shear["resistance"] != pytest.approx(provided.resistance)
+    # DK NA 6.3.2(6), TB-04: V acting alone uses the section with its installed
+    # links, max(VRd,c, min(VRd,s, VRd,max)) = max(44.18, min(127.65, 271.28)).
+    # The band is fixed at cot 1.206 and VRd,s does not depend on N, so it
+    # equals the provided-link resistance.
+    assert action_alone_shear["resistance"] == pytest.approx(link_result["vrd_s"])
+    assert action_alone_shear["resistance"] == pytest.approx(127.6538699949732)
+    assert action_alone_shear["evidence"]["nominal_route"] == "links"
+    assert combined["r_v"] == pytest.approx(30.0 / 127.6538699949732)
+    assert action_alone_shear["resistance"] == pytest.approx(provided.resistance)
     assert combined["transverse"]["shear_fraction"] == 0.0
 
     pub_m01_example.selectbox(key="view").set_value("Shear").run()
@@ -1193,8 +1198,21 @@ def test_fatigue_outputs_match_independent_equations(
     assert concrete.stress_utilisation == pytest.approx(
         expected_fatigue["concrete_stress_utilisation"]
     )
-    assert spectrum.concrete_search.converged is False
-    assert results["fatigue"]["passed"] is False
+    # TA-01: the corrected bound converges on the reference project.
+    assert spectrum.concrete_search.converged is True
+    assert results["fatigue"]["passed"] is True
+    # 0.97.0 decision: the published concrete damage is the search upper
+    # bound. The hand field maximum is the top-edge damage (check pack).
+    import fatigue_presentation
+
+    hand = expected_fatigue["concrete_damage"]
+    published = fatigue_presentation.concrete_damage_upper_bound(spectrum)
+    assert published == spectrum.concrete_search.upper_damage
+    assert hand * (1.0 - 1.0e-9) <= published <= hand + 1.0e-4 + 1.0e-3 * hand
+    assert spectrum.miner_damage == max(
+        reinforcement.damage, published,
+        *(item.damage for item in spectrum.reinforcement),
+    )
 
 def test_checking_pack_remains_a_qa_asset_outside_the_end_user_manual():
     pack = reproducible_example.checking_pack()
@@ -1209,7 +1227,7 @@ def test_checking_pack_remains_a_qa_asset_outside_the_end_user_manual():
         "the user-specified long-term and short-term ordinary limits are both "
         "0.20 mm",
         "The separate Formula 7.100 NA permitted-width operand is also 0.20 mm",
-        "0.1343977823/0.20=0.6719889115",
+        "0.1346851147/0.20=0.6734255736",
         "phi=max(25.23132522,25.23132522)=25.23132522 mm",
         "Fine gives base ratio",
         "As,required/As,provided=1.81457651843",
