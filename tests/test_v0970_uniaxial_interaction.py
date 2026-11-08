@@ -438,8 +438,8 @@ def test_symmetric_section_finds_the_held_moment_near_the_peak():
                                              m_off=564.19, n_points=32)
     assert len(loop.upper) >= 3 and len(loop.lower) >= 3
     _check_against_scan(loop, section, concrete, steel, "y", 564.19, tol=0.5)
-    # Review R5-02: the grid value N = 2064.5 kN has equal samples at 80 and
-    # 100 degrees with an 18-degree scan step offset. The scan carries the held
+    # Review R5-02: at the grid value N = 2064.5 kN, 18 scan samples (20-degree
+    # step) give equal samples at 80 and 100 degrees. The scan carries the held
     # moment there, so each branch must have a point at this grid value.
     grid = [loop.n_t + (loop.n_c - loop.n_t) * i / 32 for i in range(1, 32)]
     tie = min(grid, key=lambda n: abs(n - 2064.476))

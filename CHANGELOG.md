@@ -6,9 +6,10 @@
 
 Calculation corrections from an internal review. Pivot C limits the strain of a
 section in full compression (EN 1992-1-1:2004, 6.1(6)). The shear chord checks
-use only the member moment MEd,max to limit the shear shift (6.2.3(7)), the 2023
-chord forces (NVd + NEd)/2, and the chord force MEd + |VEd| d on the concrete
-route. The DK NA 6.3.2(6) sum uses the installed links for V alone. A new option
+have three corrections. Only the member moment MEd,max limits the shear shift
+(6.2.3(7)). Each 2023 chord gets (NVd + NEd)/2. On the concrete route, the
+tension chord carries the moment MEd + |VEd| d. The DK NA 6.3.2(6) sum uses
+the installed links for V alone. A new option
 includes bonded tendons in Asl and d of the shear check without links
 (DS/EN 1992-1-1:2023, 8.2.2(6), Formulae (8.36) and (8.37)).
 
