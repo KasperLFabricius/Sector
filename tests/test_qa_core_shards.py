@@ -399,3 +399,18 @@ def test_slow_marker_follows_the_duration_table_and_the_group_suffix():
     conftest.pytest_collection_modifyitems(None, items)
     assert [[mark.name for mark in entry.added] for entry in items] == [
         ["slow"], ["slow"], [], ["slow"], ["slow"], ["slow"]]
+
+
+def test_native_report_references_are_registered_only_by_conftest():
+    """A module import of the fixtures would add a second session cache."""
+    import re
+
+    tests = Path(__file__).resolve().parent
+    importer = re.compile(r"^[ \t]*(?:from|import)[ \t]+native_member_report_fixtures\b", re.M)
+    importers = sorted(
+        path.name for path in tests.glob("*.py")
+        if importer.search(path.read_text(encoding="utf-8"))
+    )
+    assert importers == []
+    conftest = (tests / "conftest.py").read_text(encoding="utf-8")
+    assert 'pytest_plugins = ("native_member_report_fixtures",)' in conftest
