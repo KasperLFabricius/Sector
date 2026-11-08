@@ -2259,6 +2259,14 @@ def _bind_concrete_publication_fixture(shear, inp):
         d=d_mm,
         asl=asl,
         asl_bar_ids=asl_ids,
+        # Schema 28 shear records carry the Asl split (review item TB-05).
+        asl_tendon_area=0.0,
+        asl_split=capacity.shear_tension_steel_record(
+            capacity.shear_tension_steel(
+                inp, axis, tension_low, cy if axis == "x" else cx,
+                model_2023=model_2023,
+            )
+        ),
         asl_cg=cg,
         ac=area,
         fck=inp["concrete"].fck,
