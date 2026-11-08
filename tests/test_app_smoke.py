@@ -1884,7 +1884,7 @@ def test_plastic_and_elastic_result_views_route_retained_contour_hover():
             expected = [r for r in rows if r["element_type"] == kind]
             assert len(trace["customdata"]) == len(expected)
             hover = trace["hovertemplate"]
-            for label in ("Stress", "Material strain", "Compatible section strain", "Initial strain", "Material"):
+            for label in ("Stress", "Material strain", "Compatible section strain", "Bond strain difference", "Material"):
                 assert label in hover
             assert "MPa" in hover and chr(0x2030) in hover
             assert "area" not in hover.lower()

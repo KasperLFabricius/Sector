@@ -456,7 +456,7 @@ def section_field_figure(field, quantity, *, scale_limits=None, title=None):
             hovertemplate=(f"%{{text}}<br>x %{{x:.2f}} mm; y %{{y:.2f}} mm"
                            f"<br>Stress %{{customdata[0]:.4g}} MPa<br>Material strain %{{customdata[1]:.5g}} {PERMILLE}"
                            f"<br>Compatible section strain %{{customdata[3]:.5g}} {PERMILLE}"
-                           f"<br>Initial strain %{{customdata[2]:.5g}} {PERMILLE}"
+                           f"<br>Bond strain difference %{{customdata[2]:.5g}} {PERMILLE}"
                            "<br>Material %{customdata[4]}<extra></extra>")))
     extent = max(max(p[0] for p in field.outer) - min(p[0] for p in field.outer),
                  max(p[1] for p in field.outer) - min(p[1] for p in field.outer)) * 1000

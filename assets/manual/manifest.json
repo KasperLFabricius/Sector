@@ -42,19 +42,19 @@
       "png_sha256": "229c021974dca6840b18db8c856dd6b71dc7580a33bd29863d697c64b05e1631"
     },
     "fig_plastic_strain_map": {
-      "figure_sha256": "9bc6d190292e6c15896c5eb4bc48b4ac87787cfb8e272a9e084e879ab76ae1b1",
+      "figure_sha256": "cd354865dc124935e1eb13f9182cc44c3da114618d12b2f73e568446f22414c0",
       "png_sha256": "c96a1c6ae25c118043dab895d1806c4bb8c010a3771aaa268616af475ee35f45"
     },
     "fig_plastic_stress_map": {
-      "figure_sha256": "c4c51f5da64754d8f13766c2bd45b9ae890ad6ec8ddbd4c94481dc4bbed0d6fc",
+      "figure_sha256": "9825ec7a9009ee19c8639ef10a374b5b1c9b14c457229473980bd1219e9a378d",
       "png_sha256": "f20d122ec040dc00e5ccc5ddb9c7884f31c9a424e49357e5b8e95816004dfaed"
     },
     "fig_elastic_strain_map": {
-      "figure_sha256": "79cb0918f855e1172963224a50a12b85714ec8649a4e7b0f5e7118aa3fc673e7",
+      "figure_sha256": "351271d0be0ea5d645c560ba95b172c9da10e39c94ffd522dfc2d1d7e1916a60",
       "png_sha256": "410ea172f20ae638ffe1d8e7c789466088469a7fb67a883afa0e4785c0e8ed33"
     },
     "fig_elastic_stress_map": {
-      "figure_sha256": "5ee0830d5ad371060c8702987d78b654c253261ed469edc92bf7b316d74a6c4b",
+      "figure_sha256": "7e33589fb0c336a13e07e027643ec613077c26b0fbdf0d4bebf95a5d84c735a2",
       "png_sha256": "f7a2ee83b63d7e153cd1815e85b2c9d4c819cbdf73e159d4d929665dccec5a75"
     },
     "fig_sign_convention": {

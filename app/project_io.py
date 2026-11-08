@@ -92,8 +92,8 @@ SCHEMA28_METHOD_CHANGES = (
     "verdict uses that bound. A search that does not converge gives INVALID "
     "with its cause.",
     "Combined M-V-T, DK NA sum: the shear term uses the resistance of the "
-    "section with its installed links, max(VRd,c, VRd) when VEd <= VRd,c and "
-    "VRd above VRd,c.",
+    "section with its installed links: max(VRd,c, VRd) when VEd <= VRd,c, and "
+    "VRd when VEd > VRd,c (EN 1992-1-1 6.2.3(1)).",
 )
 
 

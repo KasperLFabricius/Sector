@@ -1064,7 +1064,7 @@ def manual_blocks() -> list:
         "compression branches to yield followed by the selected post-yield response.")
     call("standard", 'Edition-named concrete and steel presets have their selected Eurocode source (3.1.7 / 3.2.7 for the 2005 family). Generic named curves and custom/imported laws stay project-defined and uncited.')
     h2("Prestressing steel")
-    md('Each prestress definition contains a tendon law and an initial strain **IS**. Sector adds the initial strain to the section strain at the tendon. The material law uses this total strain. The preview marks the initial-strain point on the tendon curve.')
+    md('Each prestress definition contains a tendon law and the prestrain **IS**, the tendon strain under prestress alone after all losses. Sector derives the bond strain difference $\\varepsilon^{(0)}_{p}$ from IS (Prestressing steel) and adds it to the section strain at the tendon. The material law uses this total strain. The preview marks the IS point on the tendon curve.')
     call("concept", 'Plastic capacity, cracked-elastic stiffness and stress, and crack calculations use the material assigned to each element.\n\nShared member checks for shear and torsion use the selected mild-steel reference material. Sector shows its ID with those settings and results.')
     fig(fig_circular_prestress_law, "The tendon law for the circular example.",
         'A prestressing-steel stress-strain curve with an initial elastic branch and a nonlinear branch to design strength and ultimate strain.')

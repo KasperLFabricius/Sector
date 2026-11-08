@@ -175,25 +175,25 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
     ),
     ("prestress.element-force", None): _result(
         "F<sub>p,0,i</sub>", "kN",
-        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
-        ("sigma<sub>p,0,i</sub>", "locked-in initial stress of tendon i", "MPa"),
+        ("F<sub>p,0,i</sub>", "effective tensile force of tendon i after all losses", "kN"),
+        ("sigma<sub>p,0,i</sub>", "effective stress of tendon i after all losses", "MPa"),
         ("A<sub>p,i</sub>", "area of tendon i", "mm2"),
     ),
     ("prestress.resultant-n", None): _result(
         "N<sub>p,0</sub>", "kN",
-        ("N<sub>p,0</sub>", "locked-in tendon tensile resultant", "kN"),
-        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
+        ("N<sub>p,0</sub>", "effective tendon tensile resultant", "kN"),
+        ("F<sub>p,0,i</sub>", "effective tensile force of tendon i after all losses", "kN"),
     ),
     ("prestress.resultant-mx", None): _result(
         "M<sub>p,x,0</sub>", "kNm",
-        ("M<sub>p,x,0</sub>", "locked-in tendon moment resultant about x", "kNm"),
-        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
+        ("M<sub>p,x,0</sub>", "effective tendon moment resultant about x", "kNm"),
+        ("F<sub>p,0,i</sub>", "effective tensile force of tendon i after all losses", "kN"),
         ("y<sub>i</sub>", "tendon-i y-coordinate about the declared origin", "m"),
     ),
     ("prestress.resultant-my", None): _result(
         "M<sub>p,y,0</sub>", "kNm",
-        ("M<sub>p,y,0</sub>", "locked-in tendon moment resultant about y", "kNm"),
-        ("F<sub>p,0,i</sub>", "locked-in tensile force of tendon i", "kN"),
+        ("M<sub>p,y,0</sub>", "effective tendon moment resultant about y", "kNm"),
+        ("F<sub>p,0,i</sub>", "effective tensile force of tendon i after all losses", "kN"),
         ("x<sub>i</sub>", "tendon-i x-coordinate about the declared origin", "m"),
     ),
     ("basis.plastic.governing-curvature", None): _relation(
@@ -204,7 +204,7 @@ _CONTRACTS: dict[tuple[str, str | None], EquationContract] = {
         ("eps<sub>su,i</sub>", "ultimate strain of reinforcing bar i"),
         ("d<sub>s,i</sub>", "bar-i distance from the neutral axis", "mm"),
         ("eps<sub>pu,j</sub>", "ultimate total strain of tendon j"),
-        ("eps<sub>p0,j</sub>", "initial strain of tendon j"),
+        ("eps<sub>p,j</sub><super>(0)</super>", "bond strain difference of tendon j"),
         ("d<sub>p,j</sub>", "tendon-j distance from the neutral axis", "mm"),
     ),
     ("basis.plastic.equilibrium", None): _relation(

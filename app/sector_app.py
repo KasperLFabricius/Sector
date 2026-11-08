@@ -887,15 +887,17 @@ def _material_definition_message(item, kind):
     return _MATERIAL_DEFINITION_DISPLAY
 
 
-def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
+def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True,
+                   lock_ec=None):
     """Concrete material: preset, editable parameters and adjacent preview.
 
     ``locked`` (elastic-only mode) disables the parameters that do not affect the
     elastic results: gamma_c and alpha_cc set the design strength fcd, which is a
     plastic-only quantity. fck stays editable -- it feeds the serviceability fctm
     (the Auto button) -- and so does the preset, which prefills fck.
-    ``lock_elastic`` (plastic-only mode without tendons) disables fctm and Ec,
-    which then affect only the elastic results.
+    ``lock_elastic`` (plastic-only mode) disables fctm and Ec, which then affect
+    only the elastic results. ``lock_ec`` (default ``lock_elastic``) locks Ec on
+    its own: with tendons, Ec also sets the plastic bond strain (Es/Ecm).
     """
     if heading:
         box.markdown("**Concrete**")
@@ -1063,15 +1065,18 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
                                     },
                                 ))
 
-    # Elastic modulus Ec: only used by the elastic analysis, to derive the modular
-    # ratios n = Es/Ec. The Auto button sets the EC2 secant modulus for the grade.
+    # Elastic modulus Ec: the elastic analysis derives the modular ratios n = Es/Ec,
+    # and with tendons the plastic model takes the bond strain at Es/Ec. The Auto
+    # button sets the EC2 secant modulus for the grade.
+    if lock_ec is None:
+        lock_ec = lock_elastic
     ecm_gpa = codes.ecm(fck) / 1000.0
     st.session_state.setdefault("conc_Ec", ecm_gpa)
     if (box.button(f"Auto $E_c$ (EC2: {ecm_gpa:.2f} GPa)", key="conc_Ec_auto",
-                   width="stretch", disabled=lock_elastic,
+                   width="stretch", disabled=lock_ec,
                    help=r"Set $E_c=E_{cm}=22(f_{cm}/10)^{0.3}$ GPa (EC2 Table 3.1) for the "
                         "current grade.")
-            or (auto_all and not lock_elastic)):
+            or (auto_all and not lock_ec)):
         st.session_state["conc_Ec"] = ecm_gpa
         if auto_all:
             _journal_current_input_values("conc_Ec")
@@ -1080,7 +1085,7 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
                           **_input_widget_kwargs(
                               "conc_Ec",
                               {
-                                  "disabled": lock_elastic,
+                                  "disabled": lock_ec,
                                   "help": (
                                       r"Concrete secant modulus $E_{cm}$. The "
                                       r"elastic analysis derives the modular "
@@ -8527,14 +8532,14 @@ def build_inputs(host=st):
         or fatigue_on
     )
     lock_mats = mode == "Elastic" and not capacity_checks_on
-    # fctm also enters both generations of the minimum-reinforcement check, and
-    # Ec sets the decompression strain of bonded tendons in the plastic model.
+    # fctm also enters both generations of the minimum-reinforcement check.
     lock_elastic = (
         mode == "Plastic"
         and not minimum_reinforcement_on
         and not fatigue_on
-        and not tendons
     )
+    # Ec also sets the decompression strain of bonded tendons in the plastic model.
+    lock_ec = lock_elastic and not tendons
     if lock_mats:
         mat_tab.caption(
             "Elastic-only mode locks the stress-strain laws. "
@@ -8604,7 +8609,8 @@ def build_inputs(host=st):
 
     (concrete, sls_fctm, conc_Ec, concrete_preset,
      concrete_k_tc, concrete_eta_cc) = concrete_panel(
-         conc_inputs, locked=lock_mats, lock_elastic=lock_elastic, heading=False
+         conc_inputs, locked=lock_mats, lock_elastic=lock_elastic, heading=False,
+         lock_ec=lock_ec,
      )
     _material_input_preview(
         conc_preview,
@@ -13818,14 +13824,12 @@ def elastic_view(inp, results, *, global_results=None):
         # The resultants are tendon tension; the prestress precompresses the
         # section, so as an axial action (tension-positive) N is a compression.
         st.caption(
-            "Tendon prestress: the elastic solver applies the locked-in tendon "
-            "resultant of the bond strain difference, "
+            "The elastic solver applies the locked-in tendon resultant "
             f"$N={-locked['n']:.3f}$ kN, $M_x$ = {locked['mx']:.3f} kNm, "
-            f"$M_y$ = {locked['my']:.3f} kNm, to the bonded section. Under "
-            "prestress alone the tendons then give the effective prestress "
-            f"action $N={-ps[0]:.3f}$ kN, $M_x$ = {ps[1]:.3f} kNm, "
-            f"$M_y$ = {ps[2]:.3f} kNm (Initial prestress action). The entered "
-            r"$N$ is the external force only; $N$ is tension-positive."
+            f"$M_y$ = {locked['my']:.3f} kNm. Under prestress alone it gives "
+            f"the effective action $N={-ps[0]:.3f}$ kN, $M_x$ = {ps[1]:.3f} kNm, "
+            f"$M_y$ = {ps[2]:.3f} kNm. The entered $N$ is the external force "
+            "only; $N$ is tension-positive."
         )
     elif ps is not None:
         st.caption(f"Effective tendon-prestress action: $N={-ps[0]:.3f}$ kN, "

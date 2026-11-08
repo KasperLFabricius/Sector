@@ -3783,6 +3783,16 @@ class ReportBuilder:
                 ["Applied-moment utilization", self._brief_switch(check_util)],
                 ["N-M interaction diagrams", self._brief_switch(inp.get("interaction"))],
             ])
+        if (
+            inp.get("tendons")
+            and not elastic_requested
+            and not inp.get("fatigue_on")
+        ):
+            rows.append([
+                "Concrete elastic modulus E<sub>c</sub> = E<sub>cm</sub> "
+                "(plastic bond strain of tendons)",
+                f"{_fmt(inp.get('conc_Ec'), 3)} GPa",
+            ])
         if elastic_requested or inp.get("fatigue_on"):
             concrete_preset = (
                 inp.get("concrete_preset") or inp.get("conc_preset")
@@ -5259,12 +5269,17 @@ class ReportBuilder:
                 "(negative in compression) is the concrete strain at the tendon "
                 "under prestress alone: at the long-term modular ratio "
                 "n<sub>l</sub> for the elastic and fatigue models, and at "
-                "E<sub>s</sub>/E<sub>cm</sub> for the plastic model, because "
+                "E<sub>s</sub>/E<sub>cm</sub> for the plastic model, with the "
+                "entered E<sub>cm</sub> = E<sub>c</sub> = "
+                f"{_fmt(self.inp.get('conc_Ec'), 3)} GPa, because "
                 "the creep strain does not recover in a short-term load to "
                 "failure. The elastic model applies sigma<sub>p</sub><super>(0)"
                 "</super> = E<sub>p</sub> eps<sub>p</sub><super>(0)</super> to "
                 "the bonded section. Under prestress alone the tendon stress "
-                "then returns to sigma<sub>p,0</sub> = E<sub>p</sub> IS."
+                "then returns to sigma<sub>p,0</sub> = E<sub>p</sub> IS. "
+                "eps<sub>p</sub><super>(0)</super> is negative for a lightly "
+                "stressed tendon where prestress alone elongates the concrete "
+                "by more than IS."
             )
             bond_rows = [[
                 "Tendon", "IS (&#8240;)",
@@ -5904,7 +5919,7 @@ class ReportBuilder:
                            "kappa<sub>C</sub> ,  "
                            "min<sub>i</sub>[eps<sub>su,i</sub>/d<sub>s,i</sub>] ,  "
                            "min<sub>j</sub>[(eps<sub>pu,j</sub>-"
-                           "eps<sub>p0,j</sub>)/d<sub>p,j</sub>] )",
+                           "eps<sub>p,j</sub><super>(0)</super>)/d<sub>p,j</sub>] )",
                            equation_key="basis.plastic.governing-curvature",
                            ref=f"Concrete: {concrete_ref}; reinforcement: {steel_ref}")
             self._small("Each bar and tendon uses its assigned material law and "

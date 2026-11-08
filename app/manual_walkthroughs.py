@@ -1051,9 +1051,10 @@ def other_blocks():
                 'The elastic calculation uses the assigned modulus of each bar or tendon. The plastic calculation uses its assigned design stress-strain law and strain limits. The Active in compression (plastic) switch changes the plastic reinforcement response. Elastic steel stays linear in tension and compression.'
             ),
             _md(
-                "For a tendon with initial strain 0.005 and tension-positive section strain 0.001, the total material strain is 0.006. "
+                "For a tendon with bond strain difference 0.005 and tension-positive section strain 0.001, the total material strain is 0.006. "
                 "Evaluate the selected tendon law at that total strain. If the section strain is -0.001, the total becomes 0.004. "
-                "The initial strain is an input after the assumed losses. Each tendon can have its own assigned law and initial strain."
+                "Sector derives the bond strain difference from the prestrain IS, the tendon strain under prestress alone after all losses "
+                "(Prestressing steel). Each tendon can have its own assigned law and prestrain."
             ),
         ],
     }
