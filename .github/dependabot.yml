@@ -22,7 +22,7 @@ updates:
           - streamlit
     ignore:
       # pytest 9.2 needs a pytest-xdist release that supports its node IDs
-      # (see the cap in requirements-dev.in).
+      # (see the cap in requirements-dev.in and "Dependency updates" in AGENTS.md).
       - dependency-name: pytest
         versions:
           - ">=9.2"

@@ -7,7 +7,9 @@
 
 # pytest 9.2 stores node IDs in a structured form, so pytest-xdist 3.8 cannot add
 # the @group suffix: the xdist groups split and the CI shard merge gate fails.
-# Remove the cap when a pytest-xdist release supports pytest 9.2.
+# Remove the cap when a pytest-xdist release supports pytest 9.2. That release
+# drops the @group suffix, so tools/qa_core_shards.py must change in the same
+# pull request (see "Dependency updates" in AGENTS.md).
 pytest>=9.1.1,<9.2
 pytest-xdist>=3.0,<4
 pytest-cov>=7.1,<8

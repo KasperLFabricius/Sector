@@ -39,9 +39,9 @@ Actions. Each one runs the full QA workflow.
   download-artifact): `tools/verify_coverage_gate.py`,
   `tools/verify_dependency_audit.py`, `tools/verify_mypy_policy.py`,
   `tools/verify_ruff_policy.py` and `tests/test_portable_windows_policy.py`.
-  An action update must change the old SHA in each of these files. Search for
-  the old SHA in `tools/` and `tests/`, and check the new SHA against the
-  release tag of the action before you change it.
+  An action update must change the old SHA in each of these files that
+  contains it. Search for the old SHA in `tools/` and `tests/`, and check the
+  new SHA against the release tag of the action before you change it.
 - A Streamlit update needs a review of `tests/native_callable_page_client.py`,
   which accepts one reviewed Streamlit release.
 - Update the exact Python pin in `.python-version` by hand.
@@ -50,4 +50,11 @@ Actions. Each one runs the full QA workflow.
   so pytest-xdist 3.8 cannot add the `@group` suffix: the xdist groups split
   and the shard merge gate fails with "shard collection differs from its
   balanced assignment". Remove the cap and the ignore entry when a
-  pytest-xdist release supports pytest 9.2.
+  pytest-xdist release supports pytest 9.2. The fix on the pytest-xdist development
+  branch sends the group names separately and drops the `@group` suffix for
+  every pytest version. That release thus also needs a change to
+  `tools/qa_core_shards.py` in the same pull request: the worker node IDs
+  (shard collection) will not have the suffix, but the expected IDs from the
+  reference collection are `nodeid@group`. Do not normalise the worker IDs
+  before that release, because the gate failure is the only automatic
+  detection of split xdist groups.
