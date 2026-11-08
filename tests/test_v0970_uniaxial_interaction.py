@@ -474,3 +474,27 @@ def test_short_diagram_gets_the_band_points():
         axials = [q.axial for q in branch]
         assert all(b > a for a, b in zip(axials, axials[1:]))
     _check_against_scan(loop, section, concrete, steel, "y", -399.22, tol=0.5)
+
+
+def test_range_with_a_failed_solve_is_failed(monkeypatch):
+    # Codex review of PR #578: when a reachable solve fails, the crossings found
+    # can be incomplete. The range is then "failed" (the diagram is INVALID),
+    # also when some crossings were found.
+    section = _l_section()
+    concrete, steel = _materials()
+    real = plastic._companion_crossings
+
+    def one_crossing_and_a_failed_solve(*args, **kwargs):
+        points, scan_failed, _solve_failed = real(*args, **kwargs)
+        return points[:1], scan_failed, True
+
+    low, high, status = plastic.companion_moment_range(
+        section, concrete, steel, 500.0, "x", 0.0)
+    assert status == "ok" and high > low
+    monkeypatch.setattr(plastic, "_companion_crossings", one_crossing_and_a_failed_solve)
+    low, high, status = plastic.companion_moment_range(
+        section, concrete, steel, 500.0, "x", 0.0)
+    assert status == "failed" and low == high
+    loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "x",
+                                             m_off=50.0, n_points=4)
+    assert not all(q.converged for q in loop.upper + loop.lower)

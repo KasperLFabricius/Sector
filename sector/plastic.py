@@ -1966,7 +1966,9 @@ def companion_moment_range(
     Returns ``(low, high, status)``. ``status`` is ``"ok"``; ``"unattainable"``
     when no envelope point has the companion moment ``m_off`` (the companion
     moment is more than the section can carry at ``P``); or ``"failed"`` when a
-    solve did not converge and no crossing was found.
+    reachable solve did not converge. The crossings found can then be
+    incomplete, so ``low`` and ``high`` are only the range of the crossings
+    found (0.0 and 0.0 without a crossing).
     """
     if axis not in {"x", "y"}:
         raise ValueError("axis must be 'x' or 'y'")
@@ -1983,11 +1985,12 @@ def companion_moment_range(
         n_scan=n_scan, tol_deg=tol_deg, root_search=root_search,
         skip_unreachable=skip_unreachable,
     )
-    if crossings:
-        owns = [_own_moment(pt, axis) for pt in crossings]
-        return min(owns), max(owns), "ok"
+    owns = [_own_moment(pt, axis) for pt in crossings]
     if scan_failed or solve_failed:
-        return 0.0, 0.0, "failed"
+        # A missing crossing can hide an extreme of the range (Codex review).
+        return (min(owns), max(owns), "failed") if owns else (0.0, 0.0, "failed")
+    if owns:
+        return min(owns), max(owns), "ok"
     return 0.0, 0.0, "unattainable"
 
 
