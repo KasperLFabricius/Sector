@@ -8,6 +8,10 @@ import pytest
 
 from tools.qa_core_shards import load_durations, module_seconds, node_row, seconds_for
 
+# Session-scoped native report references, shared by every test module of a
+# worker. Register them only here; see tests/native_member_report_fixtures.py.
+pytest_plugins = ("native_member_report_fixtures",)
+
 # A test is marked ``slow`` when its CI duration in tools/qa_shard_durations.json,
 # or the mean CI duration of all tests in its module, reaches this many seconds.
 # Tests of one module share report and native-run caches: CI charges the shared

@@ -25,9 +25,6 @@ import result_presentation
 import sector_report
 import test_report as report_data
 
-from native_member_report_fixtures import (
-    native_med_max_report_case, native_member_report_cases, native_subdivided_report_case,
-)
 from test_shear import pub_m01_signed_2023_cases
 from sector import detailing, design_standards
 from sector.section import Section
