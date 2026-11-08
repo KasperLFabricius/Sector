@@ -1543,7 +1543,8 @@ def _own_moment(pt, axis: str) -> float:
 
 
 def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
-                         tol_deg: float, root_search: str = "bisection"):
+                         tol_deg: float, root_search: str = "bisection",
+                         skip_unreachable: bool = False):
     """Return ``(points, scan_failed, solve_failed)`` where companion == target.
 
     ``points`` are the converged plastic capacity points of a full-circle
@@ -1558,6 +1559,10 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
     on the smooth companion curve; it stops when the companion residual is at
     most 1e-7 of the largest scanned companion moment or the bracket is at most
     ``tol_deg``.
+
+    With ``skip_unreachable``, a scan angle at which the axial force is outside
+    the reachable range of the section is not a failed solve: the M-M envelope
+    at this axial force has no point at that angle, so the scan skips it.
     """
     # Set by _refine/_extremum when a solve INSIDE a bracketed crossing fails to
     # converge (as opposed to a crossing legitimately landing on the wrong face).
@@ -1568,7 +1573,15 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
     def _refine(v_lo, v_hi, c_lo, c_hi):
         """Refine [v_lo, v_hi] (which brackets a companion == target crossing) and
         return the converged point there, or None if a solve fails to converge
-        (flags solve_failed)."""
+        (flags solve_failed). An end with an exact zero residual is the
+        crossing (review R3-03): the sign tests below cannot keep it."""
+        for v_end, c_end in ((v_lo, c_lo), (v_hi, c_hi)):
+            if c_end - target == 0.0:
+                pt = _cap(v_end)
+                if not pt.converged:
+                    solve_failed[0] = True
+                    return None
+                return pt
         if root_search == "illinois":
             return _illinois(v_lo, v_hi, c_lo - target, c_hi - target)
         f_lo = c_lo - target
@@ -1651,7 +1664,11 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
     step = 360.0 / n_scan
     pts = [_cap(i * step) for i in range(n_scan + 1)]
     angs = [i * step for i in range(n_scan + 1)]
-    any_fail = any(not p.converged for p in pts)
+    any_fail = any(
+        not p.converged
+        and not (skip_unreachable and p.axial_reachable is False)
+        for p in pts
+    )
     residual_tol = 1.0e-7 * max(
         [1.0, abs(target)] + [abs(_companion(p)) for p in pts if p.converged]
     )
@@ -1860,6 +1877,7 @@ def companion_moment_range(
     n_scan: int = 36,
     tol_deg: float = 0.005,
     root_search: str = "bisection",
+    skip_unreachable: bool = True,
 ) -> tuple[float, float, str]:
     """Range of the moment about ``axis`` when the companion moment is ``m_off``.
 
@@ -1887,6 +1905,7 @@ def companion_moment_range(
     crossings, scan_failed, solve_failed = _companion_crossings(
         _cap, lambda pt: _companion_moment(pt, axis), m_off,
         n_scan=n_scan, tol_deg=tol_deg, root_search=root_search,
+        skip_unreachable=skip_unreachable,
     )
     if crossings:
         owns = [_own_moment(pt, axis) for pt in crossings]
@@ -1962,7 +1981,7 @@ NM_COMPANION_SCAN = 18
 
 def _held_companion_branch(points, section, concrete, steel, axis, m_off, *,
                            upper, prestress, bar_materials, tendon_materials,
-                           n_bands, rel_tol, ranges):
+                           n_bands, rel_tol, ranges, has_ends=True):
     """Replace the fixed-angle points of one branch (see uniaxial_interaction).
 
     ``ranges`` caches :func:`companion_moment_range` by axial force, so the two
@@ -1976,7 +1995,7 @@ def _held_companion_branch(points, section, concrete, steel, axis, m_off, *,
         if abs(companion - m_off) <= rel_tol * max(abs(own), 1.0):
             refined.append(point)
             continue
-        if index in (0, last):
+        if has_ends and index in (0, last):
             continue
         key = round(float(point.axial), 6)
         if key not in ranges:
@@ -2033,8 +2052,13 @@ def uniaxial_interaction_loop(
 ) -> InteractionLoop:
     """Both branches of the N-M diagram about ``axis`` at the held ``m_off``.
 
-    The result equals :func:`uniaxial_interaction` at the two pure-axis angles of
-    ``axis``. One companion search per axial force serves both branches.
+    Each branch is :func:`uniaxial_interaction` at a pure-axis angle of ``axis``,
+    with one difference: the interior points of both branches use one axial
+    grid, so one companion search per axial force serves both branches. The
+    grid spans the axial range that both fixed-angle traces reach (a hardening
+    steel law or a prestrain can move the tension end point with the angle).
+    Each branch keeps its own two end points. ``n_t`` and ``n_c`` are the most
+    tensile and the largest compressive end point of the two traces.
     """
     if axis not in {"x", "y"}:
         raise ValueError("axis must be 'x' or 'y'")
@@ -2053,23 +2077,135 @@ def uniaxial_interaction_loop(
     }
     n_t = min(points[0].axial for points in ends.values())
     n_c = max(points[-1].axial for points in ends.values())
-    interior = [n_t + (n_c - n_t) * (i / n_points) for i in range(1, n_points)]
+    # Interior grid on the range that both traces reach, so no interior point
+    # of a branch is clamped at its own end point.
+    grid_t = max(points[0].axial for points in ends.values())
+    grid_c = min(points[-1].axial for points in ends.values())
+    interior = [
+        grid_t + (grid_c - grid_t) * (i / n_points) for i in range(1, n_points)
+    ]
     ranges: dict = {}
-    branches = []
-    for upper in (True, False):
-        trace = _capacity_trace(
-            section, concrete, steel, FACE_ANGLE[(axis, upper)], interior,
-            prestress=prestress, bar_materials=bar_materials,
-            tendon_materials=tendon_materials, n_bands=n_bands,
+    options = dict(prestress=prestress, bar_materials=bar_materials,
+                   tendon_materials=tendon_materials, n_bands=n_bands)
+
+    def branches_at(axials, with_ends):
+        result = []
+        for upper in (True, False):
+            trace = _capacity_trace(
+                section, concrete, steel, FACE_ANGLE[(axis, upper)], axials,
+                **options,
+            )
+            points = [ends[upper][0], *trace, ends[upper][-1]] if with_ends else trace
+            result.append(_held_companion_branch(
+                points, section, concrete, steel, axis, m_off, upper=upper,
+                rel_tol=rel_tol, ranges=ranges, has_ends=with_ends, **options,
+            ))
+        return result
+
+    branches = branches_at(interior, True)
+    if not branches[0] and not branches[1]:
+        # Near its largest value the held moment can be carried only in an
+        # axial band narrower than one grid interval. Sample that band.
+        band = _held_moment_band(
+            section, concrete, steel, axis, m_off,
+            [grid_t, *interior, grid_c], **options,
         )
-        points = [ends[upper][0], *trace, ends[upper][-1]]
-        branches.append(_held_companion_branch(
-            points, section, concrete, steel, axis, m_off, upper=upper,
-            prestress=prestress, bar_materials=bar_materials,
-            tendon_materials=tendon_materials, n_bands=n_bands,
-            rel_tol=rel_tol, ranges=ranges,
-        ))
+        if band is not None:
+            n_a, n_b = band
+            branches = branches_at(
+                [n_a + (n_b - n_a) * (i / (_BAND_POINTS + 1))
+                 for i in range(1, _BAND_POINTS + 1)],
+                False,
+            )
     return InteractionLoop(branches[0], branches[1], n_t, n_c)
+
+
+# Points that sample an axial band found by _held_moment_band.
+_BAND_POINTS = 8
+
+
+def _held_moment_band(section, concrete, steel, axis, m_off, axials, *,
+                      prestress, bar_materials, tendon_materials, n_bands):
+    """Axial band ``(N_a, N_b)`` that can carry the held moment, or None.
+
+    At an axial force the companion moments of the M-M envelope lie between
+    about the two pure-axis capacities about the other axis. The held moment is
+    attainable where the margin ``min(largest - m_off, m_off - smallest)`` (in
+    the sign of ``m_off``) is not negative. A golden-section search of this
+    margin round the best of ``axials`` (sorted, with the end points of the
+    common range) finds its peak, and two bisections find the band edges. The
+    band is an estimate: each point in it still gets the exact
+    :func:`companion_moment_range`.
+    """
+    if len(axials) < 2 or m_off == 0.0:
+        return None
+    other = "y" if axis == "x" else "x"
+    sign = 1.0 if m_off > 0.0 else -1.0
+    target = sign * m_off
+    angle_high = FACE_ANGLE[(other, m_off > 0.0)]
+    angle_low = FACE_ANGLE[(other, not m_off > 0.0)]
+    _bx, _by, ba = section.bar_arrays()
+    _tx, _ty, ta = section.tendon_arrays()
+    bar_laws = _material_sequence(steel, bar_materials, len(ba), "bar")
+    tendon_laws = _material_sequence(
+        prestress, tendon_materials, len(ta), "tendon"
+    ) if (prestress is not None or tendon_materials is not None) else ()
+    prep = _prep_section(section, bool(tendon_laws))
+    band_memo: dict = {}
+
+    def signed(P, angle):
+        point = plastic_capacity_at_angle(
+            section, concrete, steel, P, angle, prestress=prestress,
+            bar_materials=bar_laws, tendon_materials=tendon_laws or None,
+            n_bands=n_bands, prep=prep, band_memo=band_memo,
+        )
+        return sign * _own_moment(point, other) if point.converged else None
+
+    def margin(P):
+        high = signed(P, angle_high)
+        low = signed(P, angle_low)
+        if high is None or low is None:
+            return -math.inf
+        return min(high - target, target - low)
+
+    values = [margin(P) for P in axials]
+    k = max(range(len(axials)), key=values.__getitem__)
+    lo = axials[max(k - 1, 0)]
+    hi = axials[min(k + 1, len(axials) - 1)]
+    golden = 0.6180339887498949
+    a, b = lo, hi
+    c, d = b - golden * (b - a), a + golden * (b - a)
+    fc, fd = margin(c), margin(d)
+    for _ in range(60):
+        if b - a <= 1.0e-6 * max(1.0, abs(a) + abs(b)):
+            break
+        if fc >= fd:
+            b, d, fd = d, c, fc
+            c = b - golden * (b - a)
+            fc = margin(c)
+        else:
+            a, c, fc = c, d, fd
+            d = a + golden * (b - a)
+            fd = margin(d)
+    n_peak = 0.5 * (a + b)
+    if not margin(n_peak) >= 0.0:
+        return None
+
+    def edge(n_out, n_in):
+        if margin(n_out) >= 0.0:
+            return n_out
+        for _ in range(60):
+            if abs(n_in - n_out) <= 1.0e-6 * max(1.0, abs(n_in) + abs(n_out)):
+                break
+            mid = 0.5 * (n_out + n_in)
+            if margin(mid) >= 0.0:
+                n_in = mid
+            else:
+                n_out = mid
+        return n_in
+
+    n_a, n_b = edge(lo, n_peak), edge(hi, n_peak)
+    return (n_a, n_b) if n_b > n_a else None
 
 
 def _capacity_trace(section, concrete, steel, V_deg, axials, *, prestress,

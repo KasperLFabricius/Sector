@@ -240,3 +240,89 @@ def test_loop_equals_the_single_branches_and_gives_the_trace_ends():
     assert flat(loop.lower) == pytest.approx(flat(lower), abs=1.0e-6)
     n_t, n_c = plastic.axial_limits(section, concrete, steel, 0.0)
     assert (loop.n_t, loop.n_c) == pytest.approx((n_t, n_c), rel=1.0e-9)
+
+
+def test_prestressed_branches_stay_converged_when_tension_limits_differ():
+    # Review R3-01: with a prestrain the tension limits of the two pure-axis
+    # angles can differ by more than one grid step. No interior point may be
+    # clamped at the end of one branch, and every point must converge.
+    from sector.materials import Prestress
+
+    bars = [(x, -0.25, 314.16) for x in (-0.15, -0.09, -0.03, 0.03, 0.09, 0.15)]
+    bars += [(-0.15, 0.25, 314.16), (0.15, 0.25, 314.16)]
+    section = Section.from_polygon(
+        corners=[(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        bars_xy_area_mm2=bars, tendons_xy_area_mm2=[(0.0, 0.2, 600.0)],
+    )
+    concrete, steel = _materials()
+    strand = Prestress(fytk=1640.0, futk=1860.0, eut=0.035, gamma_y=1.15,
+                       gamma_u=1.15, gamma_E=1.0, Es=195000.0)
+    upper_ends = plastic.solve_interaction(section, concrete, steel, 90.0,
+                                           prestress=strand, n_points=1)
+    lower_ends = plastic.solve_interaction(section, concrete, steel, 270.0,
+                                           prestress=strand, n_points=1)
+    loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "x",
+                                             prestress=strand, n_points=32)
+    assert all(p.converged for p in loop.upper + loop.lower)
+    assert loop.n_t == pytest.approx(min(upper_ends[0].axial, lower_ends[0].axial))
+    assert loop.n_c == pytest.approx(max(upper_ends[-1].axial, lower_ends[-1].axial))
+    for branch, ends in ((loop.upper, upper_ends), (loop.lower, lower_ends)):
+        axials = [p.axial for p in branch]
+        assert all(b > a for a, b in zip(axials, axials[1:]))
+        assert ends[0].axial - 1.0e-6 <= axials[0] and axials[-1] <= ends[-1].axial + 1.0e-6
+
+
+def test_held_moment_near_its_largest_value_is_found_between_grid_points():
+    # Codex review of PR #578: near its largest value the held moment can be
+    # carried only in an axial band narrower than one grid interval. The
+    # diagram must then sample that band and not report "no diagram".
+    section = _l_section()
+    concrete, steel = _materials()
+    n_t, n_c = plastic.axial_limits(section, concrete, steel, 90.0)
+    grid = [n_t + (n_c - n_t) * i / 8 for i in range(1, 8)]
+
+    def my_pure(P):
+        return plastic.plastic_capacity_at_angle(section, concrete, steel, P, 0.0).My
+
+    grid_best = max(my_pure(P) for P in grid)
+    fine_best = max(my_pure(P) for P in np.linspace(n_t, n_c, 321)[1:-1])
+    assert fine_best > grid_best + 2.0
+    m_off = 0.5 * (grid_best + fine_best)
+    # Setup check with the independent scan: no grid point carries m_off.
+    assert all(
+        _scan_range(section, concrete, steel, P, "x", m_off, step=1.0) is None
+        for P in grid
+    )
+    loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "x",
+                                             m_off=m_off, n_points=8)
+    assert loop.upper and loop.lower
+    for high, low in zip(loop.upper, loop.lower):
+        assert high.converged and low.converged
+        oracle = _scan_range(section, concrete, steel, high.axial, "x", m_off)
+        assert oracle is not None
+        assert (low.Mx, high.Mx) == pytest.approx(oracle, abs=1.0)
+    beyond = plastic.uniaxial_interaction_loop(section, concrete, steel, "x",
+                                               m_off=1.05 * fine_best, n_points=8)
+    assert beyond.upper == [] and beyond.lower == []
+
+
+@pytest.mark.parametrize("root_search", ["bisection", "illinois"])
+def test_crossing_search_keeps_an_exact_zero_bracket_end(root_search):
+    # Review R3-03: a synthetic companion curve with its maximum exactly at the
+    # target on a plateau (101 to 105 degrees). Each returned point must carry
+    # the target; before the correction one search returned a point with a
+    # residual of -13 or -23.
+    from types import SimpleNamespace
+
+    def cap(angle):
+        return SimpleNamespace(converged=True, axial_reachable=True, angle=angle)
+
+    def companion(point):
+        a = point.angle % 360.0
+        return -max(0.0, 101.0 - a, a - 105.0)
+
+    points, scan_failed, solve_failed = plastic._companion_crossings(
+        cap, companion, 0.0, n_scan=36, tol_deg=0.005, root_search=root_search,
+    )
+    assert points and not scan_failed and not solve_failed
+    assert all(companion(point) == 0.0 for point in points)

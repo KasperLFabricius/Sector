@@ -13386,7 +13386,7 @@ def plastic_view(inp, results):
         )
     else:
         st.caption(
-            "Each effective depth $d$ extends from the opposite extreme concrete fiber "
+            "Each effective depth $d$ extends from the opposite extreme concrete fibre "
             "to the centroid of the listed ordinary bars. Four values align with the "
             "section faces and cover either bending direction, including off-axis "
             "states. With bonded tendons in $A_{sl}$, the shear result gives $d$."
@@ -13548,7 +13548,7 @@ def interaction_view(inp, results):
                 title=title, limits=data.get("limits")), width="stretch")
     st.caption(
         "Each curve holds the moment about the other axis at the value in the "
-        "metric label: the case value, or 0 when the utilisation check is off. A "
+        "metric label. This value is the case value, or 0 without the check. A "
         "curve ends where the section cannot carry that moment. The marked point "
         "is the applied action."
     )
@@ -15589,7 +15589,7 @@ def shear_view(inp, results, *, global_results=None):
                         f"{res['d_kvp']:.1f} mm", f"{res['ddg']:.1f} mm",
                         f"{res['tau_rdc']:.3f} MPa", f"{res['tau_min']:.3f} MPa",
                         f"{res['fyd']:.1f} MPa"
-                        + (" (fpd of the bonded tendons; 8.2.1(4))"
+                        + (" (fpd of the bonded tendons, 8.2.1(4))"
                            if (sh.get("asl_split") or {}).get("rule")
                            == capacity.SHEAR_ASL_TENDONS_ONLY else ""),
                         f"{res['gamma_v']:.2f}"]},

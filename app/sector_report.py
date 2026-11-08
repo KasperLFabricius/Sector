@@ -7521,7 +7521,7 @@ class ReportBuilder:
                 ["Aggregate size", "d<sub>dg</sub>", f"{_fmt(res['ddg'], 1)} mm"],
                 ["Flexural design yield", "f<sub>yd</sub>",
                  f"{_fmt(res['fyd'], 1)} MPa"
-                 + (" (f<sub>pd</sub> of the bonded tendons; 8.2.1(4))"
+                 + (" (f<sub>pd</sub> of the bonded tendons, 8.2.1(4))"
                     if (sh.get("asl_split") or {}).get("rule")
                     == capacity.SHEAR_ASL_TENDONS_ONLY else "")],
                 ["Shear partial factor (4.3.3; Table 4.3 NDP)",
