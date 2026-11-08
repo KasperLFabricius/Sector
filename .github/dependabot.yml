@@ -18,8 +18,11 @@ updates:
           - patch
         # tests/native_callable_page_client.py accepts one reviewed Streamlit
         # release, so each Streamlit update comes as its own pull request.
+        # The pytest-xdist release that supports pytest 9.2 also needs a change
+        # to tools/qa_core_shards.py (AGENTS.md), so it comes on its own too.
         exclude-patterns:
           - streamlit
+          - pytest-xdist
     ignore:
       # pytest 9.2 needs a pytest-xdist release that supports its node IDs
       # (see the cap in requirements-dev.in and "Dependency updates" in AGENTS.md).
