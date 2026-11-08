@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass
 from importlib import import_module
 from numbers import Real
-from typing import Any
+from typing import Any, NamedTuple
 
 from . import codes
 from .engineer_message import EngineerMessage
@@ -4153,11 +4153,13 @@ def gross_area_centroid(outer, holes):
 
 
 def plastic_effective_depths(inp):
-    """Return the four existing face-specific mild-steel effective depths.
+    """Return the four face-specific effective depths of the ordinary bars.
 
     Plastic states are not generally aligned with a section face.  The result
-    presentation therefore publishes the same x/y, low/high-face ``d`` values
-    already used by the shear routes instead of inventing a state-normal depth.
+    presentation therefore publishes the x/y, low/high-face ``d`` values of the
+    ordinary bars instead of inventing a state-normal depth. These are the shear
+    ``d`` values when the tendon option is off; with the option on, the shear
+    result gives ``d`` with the bonded tendons (:func:`shear_tension_steel`).
     """
 
     _, cx, cy = gross_area_centroid(inp["outer"], inp.get("holes") or [])
@@ -4982,8 +4984,12 @@ def _build_shear_face_context(
     _, mx_prestress, my_prestress = prestress_resultants(inp, cx, cy)
     centroid_coord = cy if axis == "x" else cx
     shear = _module("shear")
-    asl, cg, asl_bar_ids, d_mm, asl_tendon_area = shear_tension_steel(
+    tension_steel = shear_tension_steel(
         inp, axis, tension_low, centroid_coord, model_2023=model_2023
+    )
+    asl, cg, asl_bar_ids, d_mm = (
+        tension_steel.asl, tension_steel.centroid, tension_steel.bar_ids,
+        tension_steel.d,
     )
     bw_auto = shear.min_web_width(inp["outer"], inp["holes"], axis)
     bw_mm = bw_override if bw_override > 0.0 else bw_auto
@@ -5018,7 +5024,7 @@ def _build_shear_face_context(
         ),
     )
     fck = inp["concrete"].fck
-    fyd_flex = design_yield(inp["steel"])
+    fyd_flex = shear_flexural_fyd(inp, tension_steel)
     ddg = code.shear_ddg(fck, inp["shear_dlower"]) if model_2023 else 0.0
     if model_2023:
         try:
@@ -5050,7 +5056,7 @@ def _build_shear_face_context(
             code,
             shear_geometry["concrete_bw_mm"],
             d_mm,
-            asl,
+            tension_steel.rho_area,
             n_ed_comp,
             area,
             fyd_mpa=fyd_flex,
@@ -5092,7 +5098,8 @@ def _build_shear_face_context(
         "d": d_mm,
         "asl": asl,
         "asl_bar_ids": asl_bar_ids,
-        "asl_tendon_area": asl_tendon_area,
+        "asl_tendon_area": tension_steel.ap,
+        "asl_split": shear_tension_steel_record(tension_steel),
         "asl_cg": cg,
         "ac": area,
         "fck": fck,
@@ -5331,12 +5338,43 @@ def build_directional_shear_contexts(inp, n_prestress, n_ed_comp):
 # Bonded tendons in the longitudinal shear reinforcement (review item TB-05).
 SHEAR_TENDONS_KEY = "shear_include_tendons"
 
+# How Asl and d are formed on one shear tension face.
+SHEAR_ASL_BARS = "bars"
+SHEAR_ASL_TENDONS_ONLY = "tendons only"
+SHEAR_ASL_AREA_WEIGHTED = "area-weighted mean d"
+SHEAR_ASL_FORMULA_8_36 = "Formulae (8.36) and (8.37)"
+
+
+class ShearTensionSteel(NamedTuple):
+    """Longitudinal tension steel of one shear face (areas mm2, depths mm).
+
+    ``asl`` is As + Ap. ``rho_area`` is the area that gives rho_l as
+    ``rho_area/(bw d)``: As + Ap for the EN 1992-1-1:2004 family, and
+    ``(ds As + dp Ap)/d`` for DS/EN 1992-1-1:2023 Formula (8.37).
+    ``centroid`` is the coordinate (m) at depth ``d``. ``tendons_excluded``
+    gives the duct case when the option is on but the tendons are not bonded.
+    """
+
+    asl: float
+    centroid: float | None
+    bar_ids: list
+    d: float
+    ap: float
+    as_bars: float
+    ds: float
+    dp: float
+    tendon_ids: list
+    rho_area: float
+    rule: str
+    tendons_excluded: str
+
 
 def shear_tendons_default(shear_method) -> bool:
-    """Default of the tendon option: on for 2023, off for the 2005 family.
+    """Default of the tendon option: on for 2023, off for the 2004 family.
 
-    DS/EN 1992-1-1:2023 8.2.2(6) includes Ap in d and rho_l. EN 1992-2
-    6.2.2(101) permits the bonded prestressing steel in Asl for the 2005 family.
+    DS/EN 1992-1-1:2023 8.2.2(6) includes Ap in d and rho_l. For the 2004
+    family, EN 1992-1-1 6.2.2(1) uses tension reinforcement only, and
+    EN 1992-2 6.2.2(101) (bridges) permits the bonded prestressing steel.
     """
     try:
         code = selected_shear_code(shear_method)
@@ -5345,41 +5383,114 @@ def shear_tendons_default(shear_method) -> bool:
     return getattr(code, "shear_model", "2005") == "2023"
 
 
+def shear_tendons_bonded(inp) -> bool:
+    """False when the shear duct case does not establish bonded tendons."""
+    shear = _module("shear")
+    return inp.get("shear_duct_case", shear.SHEAR_DUCT_NONE) not in (
+        shear.SHEAR_DUCT_UNGROUTED_OR_SOFT,
+        shear.SHEAR_DUCT_DETAILS_INCOMPLETE,
+    )
+
+
 def shear_tension_steel(inp, axis, tension_low, centroid_coord, *, model_2023):
-    """Return ``(Asl, centroid, bar_ids, d_mm, Ap)`` for one shear tension face.
+    """Return the :class:`ShearTensionSteel` of one shear tension face.
 
     Without the tendon option, Asl and d come from the ordinary bars on the
     tension side. With it, the bonded tendons on the tension side join Asl.
-    The 2005 family uses the area-weighted depth (EN 1992-2 6.2.2(101)); the
-    2023 edition uses Formula (8.36), d = (ds^2 As + dp^2 Ap)/(ds As + dp Ap).
-    The returned centroid is the coordinate at depth d.
+    The EN 1992-1-1:2004 family uses the area-weighted mean depth (EN 1992-2
+    6.2.2(101) permits a weighted mean d and does not give the weight). The
+    2023 edition uses Formula (8.36), d = (ds^2 As + dp^2 Ap)/(ds As + dp Ap),
+    and Formula (8.37), rho_l = (ds As + dp Ap)/(bw d^2). A duct case that does
+    not establish bond keeps the tendons out (2023 8.2.2(6) NOTE: unbonded
+    tendons act on the action side).
     """
     shear = _module("shear")
-    asl, cg, bar_ids = shear.tension_reinforcement_selection(
+    as_bars, cg_s, bar_ids = shear.tension_reinforcement_selection(
         inp["bars"], axis, tension_low, centroid_coord
     )
-    d_mm = shear.effective_depth(inp["outer"], axis, tension_low, cg)
+    ds = shear.effective_depth(inp["outer"], axis, tension_low, cg_s)
+    bars_only = ShearTensionSteel(
+        asl=as_bars, centroid=cg_s, bar_ids=bar_ids, d=ds, ap=0.0,
+        as_bars=as_bars, ds=ds, dp=0.0, tendon_ids=[], rho_area=as_bars,
+        rule=SHEAR_ASL_BARS, tendons_excluded="",
+    )
     tendons = list(inp.get("tendons") or [])
     if inp.get(SHEAR_TENDONS_KEY) is not True or not tendons:
-        return asl, cg, bar_ids, d_mm, 0.0
-    ap, cg_p, _ids = shear.tension_reinforcement_selection(
+        return bars_only
+    ap, cg_p, tendon_ids = shear.tension_reinforcement_selection(
         tendons, axis, tension_low, centroid_coord
     )
     if ap <= 0.0:
-        return asl, cg, bar_ids, d_mm, 0.0
-    dp_mm = shear.effective_depth(inp["outer"], axis, tension_low, cg_p)
-    if asl <= 0.0:
-        return ap, cg_p, bar_ids, dp_mm, ap
+        return bars_only
+    if not shear_tendons_bonded(inp):
+        return bars_only._replace(
+            tendons_excluded=str(inp.get("shear_duct_case") or "")
+        )
+    dp = shear.effective_depth(inp["outer"], axis, tension_low, cg_p)
+    if as_bars <= 0.0:
+        return ShearTensionSteel(
+            asl=ap, centroid=cg_p, bar_ids=[], d=dp, ap=ap, as_bars=0.0,
+            ds=0.0, dp=dp, tendon_ids=tendon_ids, rho_area=ap,
+            rule=SHEAR_ASL_TENDONS_ONLY, tendons_excluded="",
+        )
     if model_2023:
-        depth = (d_mm ** 2 * asl + dp_mm ** 2 * ap) / (d_mm * asl + dp_mm * ap)
+        depth = (ds ** 2 * as_bars + dp ** 2 * ap) / (ds * as_bars + dp * ap)
+        rho_area = (ds * as_bars + dp * ap) / depth
+        rule = SHEAR_ASL_FORMULA_8_36
     else:
-        depth = (d_mm * asl + dp_mm * ap) / (asl + ap)
+        depth = (ds * as_bars + dp * ap) / (as_bars + ap)
+        rho_area = as_bars + ap
+        rule = SHEAR_ASL_AREA_WEIGHTED
     coords = [
         float(point[1] if axis == "x" else point[0]) for point in inp["outer"]
     ]
     fibre = max(coords) if tension_low else min(coords)
     centroid = fibre - depth / 1000.0 if tension_low else fibre + depth / 1000.0
-    return asl + ap, centroid, bar_ids, depth, ap
+    return ShearTensionSteel(
+        asl=as_bars + ap, centroid=centroid, bar_ids=bar_ids, d=depth, ap=ap,
+        as_bars=as_bars, ds=ds, dp=dp, tendon_ids=tendon_ids,
+        rho_area=rho_area, rule=rule, tendons_excluded="",
+    )
+
+
+def shear_flexural_fyd(inp, steel: ShearTensionSteel) -> float:
+    """fyd of the flexural reinforcement on a shear face (MPa).
+
+    DS/EN 1992-1-1:2023 8.2.1(4): fyd in Formula (8.20) is the design yield
+    strength used for the flexural reinforcement. When Asl has tendons only,
+    this is the largest fpd = fp0.1k/gamma_s of these tendons (the larger value
+    gives the smaller tau_Rdc,min). Otherwise it is fyd of the mild steel.
+    """
+    if steel.rule == SHEAR_ASL_TENDONS_ONLY:
+        materials = list(inp.get("tendon_materials") or [])
+        default = inp.get("prestress")
+        values = []
+        for tendon_id in steel.tendon_ids:
+            index = int(tendon_id) - 1
+            material = (
+                materials[index]
+                if 0 <= index < len(materials) and materials[index] is not None
+                else default
+            )
+            if material is not None:
+                values.append(design_yield(material))
+        if values:
+            return max(values)
+    return design_yield(inp["steel"])
+
+
+def shear_tension_steel_record(steel: ShearTensionSteel) -> dict:
+    """Plain record of the Asl split for results, reports and currency checks."""
+    return {
+        "as": steel.as_bars,
+        "ds": steel.ds,
+        "ap": steel.ap,
+        "dp": steel.dp,
+        "rho_area": steel.rho_area,
+        "rule": steel.rule,
+        "tendon_ids": list(steel.tendon_ids),
+        "tendons_excluded": steel.tendons_excluded,
+    }
 
 
 def build_shear_context(inp, n_prestress, n_ed_comp):

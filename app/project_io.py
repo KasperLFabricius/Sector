@@ -80,19 +80,28 @@ SCHEMA28_METHOD_CHANGES = (
     "Shear without shear reinforcement: the tension chord includes the moment "
     "shift a_l = d (EN 1992-1-1:2004, 6.2.2(5) and 9.2.1.3(2); "
     "DS/EN 1992-1-1:2023, 8.2.2(10)).",
+)
+
+# Added to the load message only for a 2023 shear project with tendons.
+SCHEMA28_TENDON_CHANGE = (
     "Shear without shear reinforcement, DS/EN 1992-1-1:2023: the bonded "
-    "tendons on the tension side are included in Asl and d (8.2.2(6), "
-    "Formula (8.36)). You can clear this option in the shear panel.",
+    "tendons on the tension side are included in Asl, d and rho_l (8.2.2(6), "
+    "Formulae (8.36) and (8.37)). You can clear this option in the shear panel."
 )
 
 
-def schema28_migration_warning(*, pivot_c_cleared: bool = False) -> str:
+def schema28_migration_warning(
+    *, pivot_c_cleared: bool = False, tendons_2023: bool = False
+) -> str:
     """Load message for a project saved before the 0.97.0 method corrections."""
 
+    changes = SCHEMA28_METHOD_CHANGES + (
+        (SCHEMA28_TENDON_CHANGE,) if tendons_2023 else ()
+    )
     return (
         "This project file is from an earlier Sector version. Sector now "
         "calculates it with corrected methods, so results can differ from the "
-        "earlier results: " + " ".join(SCHEMA28_METHOD_CHANGES)
+        "earlier results: " + " ".join(changes)
         + (
             " This project file clears the pivot C limit, so Sector does not "
             "apply it."
@@ -110,19 +119,35 @@ def _schema28_pivot_c_default(scalars: Mapping) -> bool:
     )
 
 
+def _schema28_tendon_change_applies(scalars: Mapping, tables: Mapping) -> bool:
+    """True when the migrated 2023 tendon option changes a shear result."""
+
+    if scalars.get(capacity.SHEAR_TENDONS_KEY) is not True:
+        return False
+    if not capacity.shear_tendons_default(_schema28_effective_shear_method(scalars)):
+        return False
+    tendons = rebar_table.normalise_table(tables.get("tendons_base"), "tendon")
+    return len(tendons) > 0
+
+
+def _schema28_effective_shear_method(scalars: Mapping):
+    """Shear method that the app uses: the combined method when it is on."""
+
+    return (
+        scalars.get("combined_method")
+        if scalars.get("combined_on") is True
+        else scalars.get("shear_method")
+    )
+
+
 def _schema28_defaults(scalars: dict) -> None:
     """Add the schema-28 method inputs to a migrated project."""
 
     scalars.setdefault("conc_pivot_c", _schema28_pivot_c_default(scalars))
     scalars.setdefault(capacity.MED_MAX_ON_KEY, False)
-    effective_shear_method = (
-        scalars.get("combined_method")
-        if scalars.get("combined_on") is True
-        else scalars.get("shear_method")
-    )
     scalars.setdefault(
         capacity.SHEAR_TENDONS_KEY,
-        capacity.shear_tendons_default(effective_shear_method),
+        capacity.shear_tendons_default(_schema28_effective_shear_method(scalars)),
     )
     for key in capacity.MED_MAX_KEYS.values():
         scalars.setdefault(key, 0.0)
@@ -2358,6 +2383,7 @@ def parse_project_with_info(text: str):
                     scalars["conc_pivot_c"] is False
                     and _schema28_pivot_c_default(scalars)
                 ),
+                tendons_2023=_schema28_tendon_change_applies(scalars, tables),
             ),
         )
     _apply_presentation(data, raw_scalars, scalars)
