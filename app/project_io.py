@@ -83,23 +83,34 @@ SCHEMA28_METHOD_CHANGES = (
 )
 
 
-def schema28_migration_warning() -> str:
+def schema28_migration_warning(*, pivot_c_cleared: bool = False) -> str:
     """Load message for a project saved before the 0.97.0 method corrections."""
 
     return (
         "This project file is from an earlier Sector version. Sector now "
         "calculates it with corrected methods, so results can differ from the "
         "earlier results: " + " ".join(SCHEMA28_METHOD_CHANGES)
+        + (
+            " This project file clears the pivot C limit, so Sector does not "
+            "apply it."
+            if pivot_c_cleared
+            else ""
+        )
+    )
+
+
+def _schema28_pivot_c_default(scalars: Mapping) -> bool:
+    """Pivot C default of the concrete preset that the project load applies."""
+
+    return material_presets.pivot_c_default(
+        scalars.get("conc_preset", material_presets.DEFAULT_CONCRETE_PRESET)
     )
 
 
 def _schema28_defaults(scalars: dict) -> None:
     """Add the schema-28 method inputs to a migrated project."""
 
-    scalars.setdefault(
-        "conc_pivot_c",
-        material_presets.pivot_c_default(scalars.get("conc_preset")),
-    )
+    scalars.setdefault("conc_pivot_c", _schema28_pivot_c_default(scalars))
     scalars.setdefault(capacity.MED_MAX_ON_KEY, False)
     for key in capacity.MED_MAX_KEYS.values():
         scalars.setdefault(key, 0.0)
@@ -2327,7 +2338,14 @@ def parse_project_with_info(text: str):
     method_changes: tuple[str, ...] = ()
     if source_version != VERSION:
         _schema28_defaults(scalars)
-        method_changes = (schema28_migration_warning(),)
+        method_changes = (
+            schema28_migration_warning(
+                pivot_c_cleared=(
+                    scalars["conc_pivot_c"] is False
+                    and _schema28_pivot_c_default(scalars)
+                ),
+            ),
+        )
     _apply_presentation(data, raw_scalars, scalars)
     _validate_geometry(tables)
     info = {

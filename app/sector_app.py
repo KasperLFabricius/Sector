@@ -428,7 +428,6 @@ _PRESET_HELP = (
 )
 
 # Default material edition (Danish practice: DS/EN with the DK National Annex).
-_DEFAULT_PRESET = "DS/EN 1992-1-1:2005 + DK NA:2024"
 
 # DS/EN 1992-1-1:2023, 5.1.6(1): 0.85 is the general/other-case value. The value
 # 1.00 is not an equivalent preference; it is an explicit applicability choice
@@ -878,7 +877,7 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True):
         box.markdown("**Concrete**")
     presets = mp.CONCRETE_PRESETS
     labels = list(presets)
-    preset = _seeded_selectbox(box, "Preset", labels, _DEFAULT_PRESET,
+    preset = _seeded_selectbox(box, "Preset", labels, mp.DEFAULT_CONCRETE_PRESET,
                                "conc_preset", help=_PRESET_HELP)
     _prefill("conc", preset, presets)
     curve = presets[preset]["curve"]
@@ -4097,7 +4096,7 @@ def _apply_project_text(text: str) -> None:
     # project file omits the selector and the owning material stage mounts during
     # the same run (for example during startup autosave restoration).
     preset_families = (
-        ("conc", "conc_preset", _DEFAULT_PRESET, mp.CONCRETE_PRESETS),
+        ("conc", "conc_preset", mp.DEFAULT_CONCRETE_PRESET, mp.CONCRETE_PRESETS),
         (
             "mild",
             "mild_preset",
@@ -6928,7 +6927,9 @@ def build_inputs(host=st):
         ].any()
     )
     loads.markdown("**Global Elastic parameter**")
-    creep_concrete_preset = st.session_state.get("conc_preset", _DEFAULT_PRESET)
+    creep_concrete_preset = st.session_state.get(
+        "conc_preset", mp.DEFAULT_CONCRETE_PRESET
+    )
     phi_creep = _seeded_number(
         loads, r"Creep coefficient $\varphi$", 0.0, 5.0, 3.0, 0.1,
         "el_phi", disabled=not (elastic_on or fatigue_on),
