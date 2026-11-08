@@ -1,83 +1,140 @@
 # Sector 0.97.0 notes
 
-Sector 0.97.0 corrects calculation results that the review of 2 November 2026
-found. Results of existing projects can change. A project from Sector 0.96 or
-earlier loads with the corrected methods, and the load message lists them.
-Project files use schema 28.
+Sector 0.97.0 corrects calculation results that an internal review found. It
+also adds bonded tendons to the shear reinforcement Asl and gives N-M diagrams
+at the moment of the case.
+Supported project schema: 28.
 
-## Bending and axial force
+## Open projects from earlier versions
 
-- **Pivot C (EN 1992-1-1 6.1(5), Figure 6.1).** When the whole section is in
-  compression, the strain at (1 - eps_c2/eps_cu2) h from the more compressed
-  face is limited to eps_c2. The squash load and the upper part of the N-M and
-  M-M envelopes decrease. Example: 400 x 400 mm, C30, 1 % B550, gamma_s = 1.20:
-  3950.3 kN (was 4043.7 kN). The limit is on for the Eurocode presets. The
-  concrete panel has an option to clear it for a legacy calculation.
-- **N-M diagrams (TA-08).** Each diagram holds the moment about the other axis
-  at the case value. On a section that is not symmetric about the bending axis,
-  the diagram no longer overstates the uniaxial capacity.
+Sector opens projects of schemas 25, 26 and 27 with the corrected methods, so
+the results of an existing project can change. A load message lists each
+change that applies to the project. Schema 28 adds the
+pivot C strain limit, the member moments MEd,max for the shear shift and the
+option to include bonded tendons in Asl and d.
 
-## Shear chords
+The prestrain IS has a new meaning (see Crack widths and prestress). Examine
+the prestrain of each tendon in an earlier project, and enter IS = σpm/Ep.
 
-- **2005 family, 6.2.3(7).** The shear term on the tension chord is limited only
-  by the member maximum moment MEd,max when you enter it (shared M-V-T settings,
-  per bending direction and sign). Sector no longer uses the section resistance
-  MRd as that limit, because with that limit the check could not fail. A button
-  copies the largest case moments; this is valid only when the cases include the
-  section with the maximum moment.
-- **DS/EN 1992-1-1:2023, Formulae (8.51) and (8.52).** Each chord receives
-  (NVd + NEd)/2, with NEd positive in tension. Example: MEd = 90 kNm,
-  MRd = 100 kNm, NVd = 250 kN, z = 0.5 m gives utilisation 1.525 (was 2.15).
-- **No shear reinforcement (6.2.2(5), 9.2.1.3(2); 2023 8.2.2(10)).** The tension
-  chord carries MEd + |VEd| d. This is a new result in the shear view and report.
-- **Bonded tendons in Asl and d (TB-05).** An option includes bonded tendons in
-  the longitudinal reinforcement and the effective depth of the concrete shear
-  resistance (EN 1992-2 6.2.2(101); 2023 Formula (8.36)). It is on by default for
-  the 2023 edition. A section with strands only now has a shear result.
-- **DK NA 6.3.2(6) sum (TB-04).** The resistance to V acting alone uses the
-  installed links when they resist more than VRd,c.
+## Section capacity
 
-## Serviceability and prestress
+When the full section is in compression, the strain at (1 - εc2/εcu2) h from
+the more compressed face is limited to εc2 (EN 1992-1-1:2004, 6.1(6) and
+Figure 6.1). The concrete panel has the option **Concentric-compression strain
+limit εc2 (pivot C)**. It is on by default for the EN 1992-1-1:2004 presets,
+with and without DK NA. It is off for DS/EN 1992-1-1:2023, because 8.1.1(3)
+limits only εcu, and off for the two legacy curve presets.
 
-- **Long-term crack width (TA-03).** Formula (7.9) uses alpha_e = Es/Ecm also for
-  the long-term width (7.3.4(2)). The long-term crack width increases when the
-  creep coefficient is more than zero.
-- **Tendon prestrain IS (TA-04).** IS is the strain difference between the tendon
-  and the adjacent concrete after all losses. Under prestress alone the tendon
-  stress is Ep IS. Sector adds no elastic-shortening or creep loss; it derives
-  the bond strain difference, with the decompression strain, for the elastic,
-  fatigue and plastic models. Prestressed sections get a higher effective
-  prestress than before if IS was entered after all losses.
+Example: the squash load of a 400 x 400 mm C30 section with 1 % B550
+reinforcement is 3950.3 kN (was 4043.7 kN). A project file without a concrete
+preset gets pivot C from the default preset, DS/EN 1992-1-1:2005 + DK NA:2024.
+
+## Shear and torsion
+
+The chord checks of shear have three corrections:
+
+- Only the member moment MEd,max limits the shear shift of 6.2.3(7). Enter
+  MEd,max for each bending direction and sign in the shared M-V-T settings.
+  A button copies the largest case moments. This value is correct only when the
+  cases include the section with the maximum moment. Without an entry, or with
+  0, there is no limit. The section MRd is no longer the limit, so the chord
+  check can fail.
+- DS/EN 1992-1-1:2023, Formulae (8.51) and (8.52): each chord gets
+  (NVd + NEd)/2, with NEd positive in tension. Example: utilisation 1.525
+  (was 2.15).
+- On the concrete shear route, the tension chord carries MEd + |VEd| d
+  (6.2.2(5) and 9.2.1.3(2); 2023: 8.2.2(10)), also for members without links.
+  With torsion, the chord also gets Ftd,T z/2. The shear view, the Results
+  Overview and the report show this check.
+
+The DK NA 6.3.2(6) sum uses the section with its installed links for V alone:
+max(VRd,c, VRd) while VEd ≤ VRd,c, and VRd above VRd,c. VRd = min(VRd,s,
+VRd,max) at the strut angle with the largest resistance. The term increases
+with VEd. Example: the sum of the reference project is 2.132 (was 2.673).
+
+The new option **Include bonded tendons in Asl and d** adds the bonded tendons
+on the tension side to Asl and to the effective depth d of the shear check
+without links:
+
+- DS/EN 1992-1-1:2023: on by default (8.2.2(6)). d = (ds² As + dp² Ap)/(ds As
+  + dp Ap), Formula (8.36), and ρl = (ds As + dp Ap)/(bw d²), Formula (8.37).
+  For a face with tendons only, Formula (8.20) uses fpd of the tendons
+  (8.2.1(4)).
+- EN 1992-1-1:2005: off by default, because 6.2.2(1) uses only the tension
+  reinforcement. EN 1992-2, 6.2.2(101), permits bonded prestressing steel for
+  bridges. With the option on, d is the area-weighted mean of ds and dp.
+- Tendons with the duct condition "Not grouted, soft-filled, or unbonded" or
+  "Duct details not established" stay out of Asl and d.
+
+A section with strands only now has a shear result. The shear view and the
+report show As at ds, Ap at dp and the rule for d.
+
+## N-M interaction diagrams
+
+Each N-M diagram holds the moment about the other axis at the case value, or
+at 0 when the utilisation check is off. Before, each branch used one
+neutral-axis direction. On a section that is not symmetric about the bending
+axis, this direction also gives a moment about the other axis, so the diagram
+could show too large a capacity. Sector now searches all neutral-axis
+directions for the states that carry the held moment.
+
+A branch ends where the section cannot carry the held moment. When the held
+moment is close to its largest value, Sector adds 8 points in the narrow band
+of axial force that can carry it. The labels of the squash load and the
+tension limit show only at these limits. A diagram takes approximately 2 to
+10 s to calculate.
+
+## Crack widths and prestress
+
+The long-term crack width uses αe = Es/Ecm in Formula (7.9) (2023: Formula
+(9.11)) for both load durations (7.3.4(2)). The creep modular ratio sets only
+the cracked state. Long-term widths increase a little, for example from 0.530
+to 0.539 mm.
+
+IS is the tendon strain under prestress alone after all losses, IS = σpm/Ep.
+Sector adds no losses. Sector derives the bond strain difference εp(0) = IS - εc,p. The elastic and
+fatigue models use the modular ratio nl. The plastic model uses Es/Ecm with the
+entered Ec, and its ULS prestrain includes the decompression strain. εp(0) can
+be negative for a tendon with a low stress. Ec stays editable in Plastic mode
+when the section has tendons.
 
 ## Fatigue
 
-- **Concrete fibre search (TA-01).** The damage bound separates the part of a
-  box where both stress states are in compression from the part where only one
-  is. The absolute tolerance is 1e-4 of the decision limit 1.0. The reference
-  project now converges and gives PASS. A search that does not converge gives
-  INVALID with its cause and its last bounds; the message also states the
-  reinforcement verdict of the same spectrum.
-- **DK NA partial factors (TA-05).** The defaults follow the selected basis:
-  gamma_s,fat = 1.32 and gamma_c,fat = 1.595 for DS/EN 1992-1-1 DK NA:2024
-  (2.4.2.4(1): Table 2.1Na NA values times 1.1). A note shows when the entered
-  values differ. Projects keep their entered values.
+The section search for concrete fatigue has a correct upper bound, so it
+converges also above approximately 10^6 cycles. Each published concrete
+damage is the upper bound D,upper, and the verdict uses it. A search that does
+not converge is INVALID and shows its cause and bounds.
 
-## Manual and reference project
+The DK NA:2024 defaults of the fatigue partial factors are γs,fat = 1.32 and
+γc,fat = 1.595 (2.4.2.4(1)). A note shows when the entered values differ from
+the defaults. Projects keep their entered values.
 
-- The shear example states v_min = 0.422 MPa (MN-01). The crack-width example
-  states k_t, the action duration and the short-term widths (MN-02). The status
-  table lists every status that Sector shows (MN-03).
-- The reference check pack uses the (n - 1) area model for compression bars,
-  the DK NA fatigue factors and the converged concrete search (RP-15).
+## Manual and reference check pack
 
-## For developers
+The manual gives vmin = 0.422 MPa, a crack-width example with kt and the load
+duration, and a status table with each status of the Results Overview and the
+fatigue screens. The reference check pack uses the (n - 1) area model for compression bars and
+the DK NA:2024 fatigue factors. Its concrete fatigue search converges (PASS).
 
-- `AGENTS.md` gives the module map, data flow, invariants and commands.
-- New calculation code is in `sector/` (no Streamlit): `capacity.concrete_route_chord`,
-  `capacity.shear_tension_steel`, `elastic.bonded_prestress_stress`,
-  `plastic.uniaxial_interaction`.
+## Known limitations
 
-## Moved to a later release
+- With torsion, when VEd ≤ VRd,c, Sector does not add a shear force to the
+  links. A later release examines this rule.
+- In Stage I, the locked-in tendon stress under prestress alone can differ
+  from Ep IS by up to approximately 1.8 %. In the examined cases no verdict
+  changed. A later release corrects this.
 
-- TB-06 (torsion with VEd <= VRd,c): EN 1992-1-1 6.3.2(5) and (6.31) support the
-  review reading. The change affects three result validators and moves to 0.97.1.
+## Software and build
+
+Sector uses Python 3.14.10 and Streamlit 1.66.1, with current versions of the
+runtime, test and build packages. The dependency audit passes without
+exceptions. The automatic tests run in parallel, and a fast local test tier is
+available. These changes do not change the calculation results.
+
+## Portable build
+
+Extract the complete `Sector-v0.97.0-windows-portable` ZIP and run
+`Sector.exe`. Keep its `_internal` folder beside the executable. The package
+includes the Python runtime. PDF figure export uses Microsoft Edge or another
+supported Chromium browser. A SHA-256 sidecar accompanies the ZIP. PDF and
+offline HTML manuals are separate downloads.

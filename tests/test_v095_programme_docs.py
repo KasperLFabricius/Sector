@@ -720,7 +720,7 @@ def test_pr_a05_acceptance_freezes_mapping_boundaries_and_fallback() -> None:
 
 
 def test_live_identity_is_v0966_and_uses_current_schema_27() -> None:
-    assert __version__ == "0.96.9"
+    assert __version__ == "0.97.0"
     # Sector 0.97.0 moved the live schema to 28; schema 27 stays migratable.
     assert re.search(r"^VERSION\s*=\s*28$", _text(PROJECT_IO), re.MULTILINE)
     assert re.search(
