@@ -252,6 +252,7 @@ def project_scalars() -> dict:
         "shear_med_max_mx_neg": 0.0,
         "shear_med_max_my_pos": 0.0,
         "shear_med_max_my_neg": 0.0,
+        "shear_include_tendons": False,
         "shear_links": True,
         "shear_vx_link_legs": 2.0,
         "shear_vy_link_legs": 2.0,

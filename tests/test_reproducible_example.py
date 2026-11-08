@@ -31,8 +31,10 @@ from sector import capacity, torsion  # noqa: E402
 
 
 APP = str(ROOT / "app" / "sector_app.py")
+# 0.97.0 TB-05: the reference project gains the schema 28 input
+# shear_include_tendons = False; both input hashes change, no other value.
 EXPECTED_INPUT_SHA256 = (
-    "d4c597eea7fede83978faf7e4063c197417a3249516085d8abf2e2b7a618baef"
+    "99ba426eaf37ed4fa158acc397d99cfbe1067ff470c5a7f5abef855a447fc270"
 )
 # Loading normalizes only these newly optional document-control/reference fields.
 # The original download identity remains unchanged above.
@@ -42,7 +44,7 @@ LOADED_REPORT_DEFAULTS = {
     "rep_source_register": [],
 }
 EXPECTED_LOADED_INPUT_SHA256 = (
-    "8202ad6c98608a1f8c345fa1454de33a0ae6c4bf21f339c98b6676c844431306"
+    "ef29ff960b7e954d00371a30b41d3f9f1de83a45c019af871d7f13bfcd682e74"
 )
 
 
