@@ -25,7 +25,7 @@ def test_report_equation_meanings_use_consistent_spelling():
             ))
     # The names are source identifiers and remain unchanged.
     assert ("fatigue.reinforcement.yield-utilisation", None) in contracts._CONTRACTS
-    assert len(contracts._CONTRACTS) == 145
+    assert len(contracts._CONTRACTS) == 147
 
 
 @pytest.mark.parametrize("valid", [False, True])

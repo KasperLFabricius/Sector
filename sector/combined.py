@@ -384,7 +384,8 @@ def chord_applied_moment(m_signed: float, tension_low: bool) -> float:
     neutral-axis angle, supplied separately by the caller.
     """
     m_face = m_signed if tension_low else -m_signed
-    return max(m_face, 0.0)
+    # ``max(-0.0, 0.0)`` returns -0.0; a zero moment must print as 0.00.
+    return m_face if m_face > 0.0 else 0.0
 
 
 def shear_term_cap(
@@ -409,6 +410,20 @@ def shear_term_cap(
     mv = min(mv_uncapped, m_ed_max - m_ed)
     capped = mv_uncapped > mv + 1.0e-9
     return mv, capped, "MEd,max cap" if capped else "uncapped"
+
+
+def chord_cap_evaluated(check) -> bool:
+    """Return True when a chord result evaluated the 6.2.3(7) ``MEd,max`` limit.
+
+    The limit is evaluated when an entered ``MEd,max`` exists and is not below
+    ``MEd`` (see :func:`shear_term_cap`). The demand is then
+    ``MEd + min(shear term, MEd,max - MEd) [+ Ftd,T*z/2]``. Otherwise it is the
+    plain sum. Reports and views use this to show the form that was applied.
+    """
+    return (
+        check.get("m_ed_max") is not None
+        and check.get("shear_term_selection") in {"MEd,max cap", "uncapped"}
+    )
 
 
 def longitudinal_check(
@@ -468,22 +483,37 @@ def concrete_route_chord_check(
     *,
     m_ed_max: float | None = None,
     model_2023: bool = False,
+    ftd_t: float = 0.0,
+    z: float | None = None,
 ) -> dict:
     """Tension chord of a member that needs no shear reinforcement (``a_l = d``).
 
     EN 1992-1-1 6.2.2(5) and 9.2.1.3(2) shift the ``MEd`` line by ``a_l = d`` for
     members without shear reinforcement. DS/EN 1992-1-1:2023 8.2.2(10) shifts it by
     ``d`` or increases the moment by ``d*|VEd|``. Sector uses the moment increase
-    ``|VEd|*d`` with the optional ``MEd,max`` cap of :func:`shear_term_cap`::
+    ``|VEd|*d`` with the optional ``MEd,max`` cap of :func:`shear_term_cap`. With
+    torsion, the same chord also carries half of the torsion longitudinal force
+    ``Ftd,T`` (EN 1992-1-1 6.3.2(3), Formula (6.28)) on the lever arm ``z``, as in
+    :func:`longitudinal_check`. The cap applies to the shifted moment only::
 
-        MEd,total = MEd + min(|VEd|*d, MEd,max - MEd) <= MRd
+        MEd,total = MEd + min(|VEd|*d, MEd,max - MEd) + Ftd,T*z/2 <= MRd
 
-    ``m_ed`` is the moment that tensions the shear tension face (kNm), ``v_ed`` in
-    kN and ``d`` in m.
+    ``m_ed`` is the moment that tensions the shear tension face (kNm), ``v_ed`` and
+    ``ftd_t`` in kN, ``d`` and ``z`` in m. ``z`` is ``None`` without torsion.
     """
+    if z is None:
+        if ftd_t != 0.0:
+            raise ValueError("the torsion share requires the lever arm z")
+        mt = 0.0
+    else:
+        if not (math.isfinite(z) and z > 0.0):
+            raise ValueError("lever arm z must be positive")
+        if not (math.isfinite(ftd_t) and ftd_t >= 0.0):
+            raise ValueError("torsion longitudinal force must be non-negative")
+        mt = ftd_t * z / 2.0
     mv_uncapped = abs(v_ed) * d
     mv, capped, selection = shear_term_cap(mv_uncapped, m_ed, m_ed_max)
-    m_total = m_ed + mv
+    m_total = m_ed + mv + mt
     if m_rd <= 0.0:
         util = math.inf if m_total > 0.0 else 0.0
     else:
@@ -491,7 +521,8 @@ def concrete_route_chord_check(
     passed = util <= 1.0 + 1.0e-9
     return dict(
         m_ed=m_ed, m_rd=m_rd, v_ed=abs(v_ed), d=d, a_l=d,
-        mv=mv, mv_uncapped=mv_uncapped, m_total=m_total, util=util,
+        mv=mv, mv_uncapped=mv_uncapped, ftd_t=ftd_t, z=z, mt=mt,
+        m_total=m_total, util=util,
         ok=passed, status="PASS" if passed else "FAIL",
         capped=capped, m_ed_max=m_ed_max, shear_term_selection=selection,
         clause=(

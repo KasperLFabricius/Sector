@@ -71,6 +71,8 @@ def _concrete_presets():
 
 
 CONCRETE_PRESETS = _concrete_presets()
+# The app and the project migration use this preset when none is entered.
+DEFAULT_CONCRETE_PRESET = "DS/EN 1992-1-1:2005 + DK NA:2024"
 
 CONCRETE_FIELDS = ["fck", "gamma_c", "alpha_cc", "eps_c2", "eps_cu2", "n"]
 
@@ -106,7 +108,7 @@ CONCRETE_HELP = {
 
 
 def pivot_c_default(preset) -> bool:
-    """Default of the pivot C strain limit (EN 1992-1-1 6.1(5)) for a preset.
+    """Default of the pivot C strain limit (6.1(6) and Figure 6.1) for a preset.
 
     The EN 1992-1-1:2004 edition presets apply it. DS/EN 1992-1-1:2023 8.1.1(3)
     has no such limit, and the two curve presets reproduce the legacy ECROSS laws.

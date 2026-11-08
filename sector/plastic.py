@@ -256,7 +256,7 @@ def _curvature_at_depth(
     """Apply the sole ultimate-curvature minimum and optionally retain its rows.
 
     ``pivot_c`` is ``(eps_c2, depth)`` for the concentric-compression limit of
-    EN 1992-1-1 6.1(5) and Figure 6.1, with ``depth`` the projected section depth
+    EN 1992-1-1 6.1(6) and Figure 6.1, with ``depth`` the projected section depth
     normal to the neutral axis. When the compression depth ``c`` exceeds that
     depth, the strain at pivot C, ``(1 - eps_c2/eps_cu2)*depth`` from the more
     compressed fibre, is limited to ``eps_c2``. The candidate equals the crushing
@@ -806,7 +806,7 @@ def plastic_capacity_at_angle(
     s_max = float(s.max())
     s_min = float(s.min())
     c_full = s_max - s_min
-    # EN 1992-1-1 6.1(5): pivot C limits the strain of a fully compressed section.
+    # EN 1992-1-1 6.1(6): pivot C limits the strain of a fully compressed section.
     pivot_c = (concrete.eps_c2, c_full) if concrete.pivot_c else None
 
     # Concrete band stresses depend only on kappa*h, which is constant across the

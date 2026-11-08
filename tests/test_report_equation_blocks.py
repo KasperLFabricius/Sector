@@ -390,12 +390,12 @@ def test_every_supported_contract_identity_passes_semantic_vector_and_raster_qa(
     reader = pypdf.PdfReader(io.BytesIO(pdf))
     page_texts = [page.extract_text() or "" for page in reader.pages]
 
-    assert len(equations) == 144
-    assert sum(len(_math_flowable(eq).block.lines) for eq in equations) == 552
+    assert len(equations) == 146
+    assert sum(len(_math_flowable(eq).block.lines) for eq in equations) == 560
     assert sum(
         "result-quantity" in eq._sector_equation_roles for eq in equations
-    ) == 136
-    assert sum(text.count("Mathematical expression:") for text in page_texts) == 552
+    ) == 138
+    assert sum(text.count("Mathematical expression:") for text in page_texts) == 560
     for equation in equations:
         math = _math_flowable(equation)
         identity_pages = [

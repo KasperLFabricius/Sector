@@ -1,4 +1,4 @@
-"""Pivot C (EN 1992-1-1 6.1(5) and Figure 6.1) in the plastic solver.
+"""Pivot C (EN 1992-1-1 6.1(6) and Figure 6.1) in the plastic solver.
 
 The expected values are hand calculations from the clause text, independent of
 Sector output. Section: 400 x 400 mm, C30 with gamma_c = 1.45 and alpha_cc = 1.0
@@ -131,7 +131,7 @@ def test_non_monotonic_axial_response_reaches_its_maximum():
 
 
 def test_pivot_c_default_follows_the_edition():
-    # EN 1992-1-1:2004 6.1(5) has pivot C; DS/EN 1992-1-1:2023 8.1.1(3) limits
+    # EN 1992-1-1:2004 6.1(6) has pivot C; DS/EN 1992-1-1:2023 8.1.1(3) limits
     # only eps_cu.
     from sector import codes, material_presets
 

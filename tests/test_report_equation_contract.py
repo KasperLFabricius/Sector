@@ -23,6 +23,7 @@ EXPECTED_CONTRACT_KEYS = {
     ("basis.plastic.equilibrium", None),
     ("basis.plastic.governing-curvature", None),
     ("combined.chord.demand", None),
+    ("combined.chord.demand", "capped"),
     ("combined.chord.demand", "2023"),
     ("combined.chord.utilisation", None),
     ("combined.crushing.interaction", None),
@@ -137,6 +138,7 @@ EXPECTED_CONTRACT_KEYS = {
     ("shear.2023.utilisation", None),
     ("shear.2023.vrdc", None),
     ("shear.chord.demand", "2005"),
+    ("shear.chord.demand", "2005-capped"),
     ("shear.chord.demand", "2023"),
     ("shear.chord.utilisation", None),
     ("shear.links.sigma-field", None),
@@ -221,7 +223,7 @@ def test_catalogue_accounts_for_every_supported_and_deferred_identity():
     _source, calls = _formula_calls()
     # Preserve every historical definition while requiring an authored path for
     # every supported equation. The sole deferred identity cannot be emitted.
-    assert len(calls) == 145
+    assert len(calls) == 146
     assert all(
         not any(keyword.arg == "equation_spec" for keyword in call.keywords)
         for call in calls
@@ -232,12 +234,12 @@ def test_catalogue_accounts_for_every_supported_and_deferred_identity():
         authored_pairs.update(_authored_pairs(call))
 
     catalogue_pairs = {key for key, _contract in contracts.equation_contract_items()}
-    assert len(catalogue_pairs) == 145
+    assert len(catalogue_pairs) == 147
     assert catalogue_pairs == EXPECTED_CONTRACT_KEYS
     supported = dict(contracts.supported_equation_contract_items())
     deferred = dict(contracts.deferred_equation_contract_items())
     assert set(deferred) == {("combined.chord.demand", "2023")}
-    assert len(supported) == 144
+    assert len(supported) == 146
     assert not set(supported) & set(deferred)
     assert set(supported) | set(deferred) == EXPECTED_CONTRACT_KEYS
     assert all(item.publication_scope == "supported" and item.scope_reason is None
@@ -259,12 +261,12 @@ def test_every_contract_is_complete_immutable_and_role_pinned():
         contract.expects_result for _key, contract in items
     )
     assert role_counts == {
-        "numerical": 137,
+        "numerical": 139,
         "none": 8,
     }
-    assert publication_role_counts == {"calculation": 137, "theory": 8}
+    assert publication_role_counts == {"calculation": 139, "theory": 8}
     # Conditional call sites expand to every exact runtime variant in the catalogue.
-    assert result_counts == {True: 137, False: 8}
+    assert result_counts == {True: 139, False: 8}
 
     for (key, _variant), contract in items:
         assert contract.symbols, key

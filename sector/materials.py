@@ -262,7 +262,7 @@ class Concrete:
         and unfavourable loading effects, so the design strength is
         ``alpha_cc * fck / gamma_c``. Defaults to 1.0 (no reduction).
     pivot_c:
-        Apply the concentric-compression strain limit of EN 1992-1-1 6.1(5) and
+        Apply the concentric-compression strain limit of EN 1992-1-1 6.1(6) and
         Figure 6.1 (pivot C) in the plastic solver: when the whole section is in
         compression, the strain at ``(1 - eps_c2/eps_cu2) h`` from the more
         compressed fibre is limited to ``eps_c2``. The Eurocode presets set it;
@@ -276,7 +276,7 @@ class Concrete:
     eps_c2: float = EPS_C_PEAK   # strain at peak stress (parabola apex), fraction
     eps_cu2: float = EPS_CU      # ultimate (crushing) strain, fraction
     n: float = 2.0              # parabola-rectangle exponent
-    pivot_c: bool = False       # EN 1992-1-1 6.1(5) concentric-compression limit
+    pivot_c: bool = False       # pivot C: EN 1992-1-1 6.1(6) and Figure 6.1
 
     def __post_init__(self) -> None:
         if self.curve not in (1, 2):

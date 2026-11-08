@@ -13,7 +13,7 @@ def _restore_function():
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                     and node.name == "_restore_project_transaction")
     compiled = compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec")
-    return next(value for value in compiled.co_consts if isinstance(value, CodeType))
+    return next(value for value in compiled.co_consts if isinstance(value, CodeType) and value.co_name != "__annotate__")
 
 
 class State(dict):

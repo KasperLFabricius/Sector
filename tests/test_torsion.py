@@ -1521,6 +1521,8 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
     _replace_plastic_cases(at, rows)
     _set(
         at,
+        # The per-case torsion authority is editable only with torsion on.
+        ("checkbox", "torsion_on", True),
         (
             "selectbox",
             "_torsion_case_design_basis::0::EQ-01",
@@ -1546,7 +1548,6 @@ def test_app_mixed_plastic_cases_keep_separate_torsion_authority_and_lifecycle()
         at,
         "calculate",
         ("checkbox", "shear_on", True),
-        ("checkbox", "torsion_on", True),
         ("checkbox", "combined_on", True),
         ("checkbox", "shear_links", True),
     )
@@ -1721,6 +1722,8 @@ def test_duplicate_case_authority_edits_do_not_transfer_after_name_resolution():
     _replace_plastic_cases(at, [row])
     _set(
         at,
+        # The per-case torsion authority is editable only with torsion on.
+        ("checkbox", "torsion_on", True),
         (
             "selectbox",
             "_torsion_case_design_basis::0::PL-01",
@@ -1736,7 +1739,6 @@ def test_duplicate_case_authority_edits_do_not_transfer_after_name_resolution():
         at,
         "calculate",
         ("checkbox", "shear_on", True),
-        ("checkbox", "torsion_on", True),
         ("checkbox", "combined_on", True),
         ("checkbox", "shear_links", True),
     )
@@ -2196,6 +2198,8 @@ def test_app_torsion_gamma_ct_defaults_follow_method_until_user_edit():
     at.run()
     assert at.session_state["torsion_gamma_ct"] == pytest.approx(1.70)
 
+    # The torsion method and gamma_ct are editable only with torsion on.
+    _set(at, ("checkbox", "torsion_on", True))
     _set(at, ("selectbox", "torsion_method", codes.EC2_2005.label))
     assert at.session_state["torsion_gamma_ct"] == pytest.approx(1.50)
 

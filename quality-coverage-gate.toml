@@ -55,5 +55,13 @@ tests = [
     "tests/test_combined.py::test_biaxial_shear_with_torsion_keeps_two_screens_and_no_three_way_claim",
     "tests/test_combined.py::test_biaxial_combined_keeps_directional_failure_without_aggregate_verdict",
     "tests/test_combined.py::test_app_biaxial_unavailable_prerequisite_retains_selected_separate_route",
+    "tests/test_v0970_chord_gate_fail_closed.py",
+    "tests/test_v0970_concrete_chord.py::test_stale_moment_with_consistent_arithmetic_is_not_published",
+    "tests/test_v0970_concrete_chord.py::test_stale_shear_depth_or_resistance_operand_is_not_published",
+    "tests/test_v0970_concrete_chord.py::test_stale_med_max_input_is_not_published",
+    "tests/test_v0970_concrete_chord.py::test_missing_chord_record_is_not_published",
+    "tests/test_v0970_concrete_chord.py::test_overall_status_less_severe_than_the_chord_is_not_published",
+    "tests/test_v0970_concrete_chord.py::test_chord_without_the_torsion_share_is_not_published",
+    "tests/test_v0970_concrete_chord.py::test_stale_torsion_action_is_not_published",
 ]
 minimum_percent = 81

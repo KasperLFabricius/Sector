@@ -2374,6 +2374,8 @@ def test_mvt_m04_contract_recomputes_pre_range_capacity_results():
     _set(
         at,
         ("radio", "mode", "Both"),
+        # Torsion enables the shared strut band before a user can edit it.
+        ("checkbox", "torsion_on", True),
         ("number_input", "strut_cot_max", 3.0),
     )
     _enable_all(at)
@@ -2458,6 +2460,8 @@ def test_mvt_m04_contract_recomputes_when_stored_input_and_result_are_both_old()
     _set(
         at,
         ("radio", "mode", "Both"),
+        # Torsion enables the shared strut band before a user can edit it.
+        ("checkbox", "torsion_on", True),
         ("number_input", "strut_cot_max", 3.0),
     )
     _enable_all(at)
@@ -2695,6 +2699,8 @@ def test_app_combined_view_renders():
 def test_app_combined_outside_permitted_range_withholds_all_verdicts():
     at = _fresh()
     at.run()
+    # Torsion enables the shared strut band before a user can edit it.
+    _set(at, ("checkbox", "torsion_on", True))
     from app_workflow_navigation import goto_widget_owner as native_widget_owner
     native_widget_owner(at, 'strut_cot_max')
     at.number_input(key="strut_cot_max").set_value(3.0).run()
@@ -6341,7 +6347,11 @@ def test_pub_h01_current_native_failure_rejects_isolated_candidate_inventory(
         ("x", True), ("x", False), ("y", True), ("y", False),
     }
     failed = next(item for item in candidates if item["status"] == "FAIL")
-    assert abs(failed["m_total"] / failed["m_rd"] - 2.059941571055692) < 1e-10
+    # 0.97.0 P1-13: Vy = 30 kN <= VRd,c with live torsion, so the a_l = d chord
+    # of this face (MRd 155.2 kNm) joins the member-angle objective and the
+    # angle moves from cot 1.491 to 1.453. This chord is Ftd,T z/2 only, with
+    # Ftd,T proportional to cot: 2.059941571055692 x 1.453 / 1.491.
+    assert abs(failed["m_total"] / failed["m_rd"] - 2.007441383463394) < 1e-10
     runner = AppTest.from_string(
         "import streamlit as st\nimport sector_app\n"
         "inp, out = st.session_state['native_bundle']\n"
@@ -6369,7 +6379,7 @@ def test_pub_h01_current_native_failure_rejects_isolated_candidate_inventory(
             assert not any("Combined M-V-T is NOT ASSESSED" in text for text in warnings)
             for metric_label in ("Longitudinal reinforcement", "Chord utilisation"):
                 metric = next(item for item in view_metrics if item["label"] == metric_label)
-                assert (metric["value"], metric["delta"]) == ("206.0 %", "FAIL")
+                assert (metric["value"], metric["delta"]) == ("200.7 %", "FAIL")
         else:
             assert any("Combined M-V-T is NOT ASSESSED" in text for text in warnings)
             assert not view_metrics
@@ -6380,7 +6390,7 @@ def test_pub_h01_current_native_failure_rejects_isolated_candidate_inventory(
         assert not combined_rows.empty
         if current:
             row = combined_rows[combined_rows["Check"] == "Combined longitudinal reinforcement"].iloc[0]
-            assert (row["Status"], row["Result"]) == ("FAIL", "206.0 %")
+            assert (row["Status"], row["Result"]) == ("FAIL", "200.7 %")
         else:
             assert set(combined_rows["Status"]) == {"NOT ASSESSED"}
             assert set(combined_rows["Result"]) == {"-"}

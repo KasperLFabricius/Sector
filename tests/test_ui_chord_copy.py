@@ -6,7 +6,9 @@ from types import SimpleNamespace
 
 import pytest
 
-APP = Path(__file__).resolve().parents[1] / "app" / "sector_app.py"
+from sector import combined as sector_combined
+
+APP =Path(__file__).resolve().parents[1] / "app" / "sector_app.py"
 
 
 def _namespace(*names):
@@ -99,12 +101,15 @@ def test_ui_crack_missing_zero_and_nonzero_limits_keep_distinct_meanings(limit, 
         assert box.metrics[0][1] == "0.150 mm"
 
 
+@pytest.mark.parametrize("capped", [False, True])
 @pytest.mark.parametrize("sign", [-1, 1])
-def test_four_chord_caption_branches_keep_balanced_math_and_exact_operands(sign):
+def test_four_chord_caption_branches_keep_balanced_math_and_exact_operands(sign, capped):
     source = APP.read_text(encoding="utf-8")
     tree = ast.parse(source)
-    namespace = _namespace("_ui_chord_mrd_label")
+    namespace = _namespace("_ui_chord_mrd_label", "_ui_chord_demand_2005")
+    namespace["combined"] = sector_combined
     count = 0
+    demand_forms = 0
     for function in tree.body:
         if not isinstance(function, ast.FunctionDef) or function.name not in {
             "shear_view", "_render_chord_off", "combined_view"
@@ -118,9 +123,16 @@ def test_four_chord_caption_branches_keep_balanced_math_and_exact_operands(sign)
                       "m_ed": sign * 10.0, "mv": 20.0, "mt": 30.0,
                       "m_total": 40.0, "m_rd": 50.0, "m_off": 2.0,
                       "z": 0.4, "conditional": True, "theta_mode": "fixed", "z_src": "selected"}
+            if capped:
+                # EN 1992-1-1 6.2.3(7) with an entered MEd,max = 15 and
+                # dFtd z = 25: min(25, 15 - MEd) = 5 for MEd = 10 and 25 for
+                # MEd = -10.
+                values.update(mv_uncapped=25.0, m_ed_max=15.0,
+                              mv=5.0 if sign > 0 else 25.0,
+                              shear_term_selection="MEd,max cap" if sign > 0 else "uncapped")
             before = copy.deepcopy(values)
             ui = _Box()
-            env = dict(namespace, st=ui, ch=values, och=values, lg=values,
+            env = dict(namespace, st=ui, ch=values, och=values, lg=values, combined=sector_combined,
                        face_desc="negative x", face_lbl="negative x", ax_lbl="x",
                        shear_term=r"\Delta F_{td}\,z", obj_note="", concrete={"angle_valid": True},
                        chord_util=0.8, chord_status="PASS", _pct=lambda _: "80.0 %",
@@ -134,5 +146,40 @@ def test_four_chord_caption_branches_keep_balanced_math_and_exact_operands(sign)
             assert "40.0" in caption and "50.0" in caption and "0.400" in caption
             assert "kNm" not in caption and "kN\u00b7m" in caption
             assert all("\\" not in part for part in caption.split("$")[::2])
+            if "_ui_chord_demand_2005" in ast.get_source_segment(source, call):
+                demand_forms += 1
+                m_ed = "10.0" if sign > 0 else "(-10.0)"
+                if capped:
+                    assert "M_{Ed,max}" in caption
+                    assert f"\\min(25.0,\\,15.0-{m_ed})+30.0" in caption
+                else:
+                    assert "\\min" not in caption and "M_{Ed,max}" not in caption
+                    assert f"={sign * 10.0:.1f}+20.0+30.0" in caption
             count += 1
     assert count == 4
+    assert demand_forms == 2
+
+
+def test_base_en_combined_chord_states_the_med_max_limit_only_when_it_was_evaluated():
+    source = APP.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    view = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == "_render_base_en_combined")
+    guarded = [node for node in ast.walk(view)
+               if isinstance(node, ast.If)
+               and ast.get_source_segment(source, node.test) == "combined.chord_cap_evaluated(lg)"
+               and any("6.2.3(7): the shear term is" in ast.get_source_segment(source, item)
+                       for item in node.body)]
+    assert len(guarded) == 1
+    # EN 1992-1-1 6.2.3(7): dFtd z = 25, MEd,max = 15, MEd = 10 gives min(25, 15 - 10) = 5.
+    lg = {"m_ed": 10.0, "mv_uncapped": 25.0, "m_ed_max": 15.0, "mv": 5.0,
+          "shear_term_selection": "MEd,max cap"}
+    assert sector_combined.chord_cap_evaluated(lg)
+    assert not sector_combined.chord_cap_evaluated(dict(lg, m_ed_max=None, shear_term_selection="uncapped"))
+    ui = _Box()
+    expression = ast.fix_missing_locations(ast.Module(body=guarded[0].body, type_ignores=[]))
+    exec(compile(expression, str(APP), "exec"), {"st": ui, "lg": lg})
+    caption = ui.captions[0]
+    assert r"\min(25.000,\,15.000-10.000)=5.000$" in caption
+    assert caption.count("$") % 2 == 0
+    assert "kNm" not in caption

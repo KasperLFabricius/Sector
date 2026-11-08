@@ -470,6 +470,8 @@ def test_live_curve_figures_are_memoised():
     # changes; an unrelated rerun reuses the cached figure.
     at = _fresh()
     at.run()
+    # The creep coefficient is editable only with an Elastic or Fatigue analysis.
+    _set(at, ("radio", "mode", "Both"))
     _goto_material_tab(at, "Concrete")
     conc_id = id(at.session_state["_fig_cache"]["concrete"][1])
     _set(at, ("number_input", "el_phi", 2.0))  # unrelated to the concrete law
@@ -1597,6 +1599,9 @@ def test_assembled_report_payload_retains_interaction_and_bond_selection():
     at.run()
     _goto_input_tab(at, "Analysis settings")
     at.checkbox(key="pl_interaction").set_value(True).run()
+    # The bond choice is editable only with an Elastic analysis that requests
+    # the crack width, so a user turns both on first.
+    _set(at, ("radio", "mode", "Both"), ("checkbox", "sls_cw", True))
     from app_workflow_navigation import goto_widget_owner as native_widget_owner
     native_widget_owner(at, 'sls_bond')
     at.selectbox(key="sls_bond").set_value(
@@ -5530,7 +5535,7 @@ def test_loading_project_without_heightened_check_clears_prior_dk_state():
     at.run()
 
     assert not at.exception
-    state = at.session_state.filtered_state
+    state = at.session_state.to_dict()
     expected_defaults = {
         "sls_heightened_on": False,
         "sls_heightened_reference_case": "",
@@ -9082,6 +9087,8 @@ def test_invalid_live_material_domain_is_not_coerced_or_sent_to_solvers(
 def test_creep_help_follows_concrete_preset_without_changing_phi():
     at = _fresh()
     at.run()
+    # The creep coefficient is editable only with an Elastic or Fatigue analysis.
+    _set(at, ("radio", "mode", "Both"))
     _goto_input_tab(at, "Loads")
     from app_workflow_navigation import goto_widget_owner as native_widget_owner
     native_widget_owner(at, 'el_phi')

@@ -58,7 +58,7 @@ def _write_policy(path: Path, files: tuple[str, ...] = INITIAL_FILES) -> None:
     file_rows = "\n".join(f'    "{item}",' for item in files)
     path.write_text(
         "[tool.mypy]\n"
-        'python_version = "3.13"\n'
+        'python_version = "3.14"\n'
         "strict = true\n"
         'follow_imports = "silent"\n'
         "incremental = false\n"
@@ -101,7 +101,7 @@ def test_live_strict_policy_workflow_and_boundaries_pass():
 
     assert tuple(policy["tool"]["mypy"]["files"]) == TYPED_BOUNDARY_FILES
     assert policy["tool"]["mypy"] == {
-        "python_version": "3.13",
+        "python_version": "3.14",
         "strict": True,
         "follow_imports": "silent",
         "incremental": False,
@@ -253,6 +253,22 @@ def test_deleted_legacy_boundary_is_migrated_only_for_the_accepted_base():
     )
     with pytest.raises(MypyPolicyError, match="typed boundary file does not exist"):
         validate_policy(candidate, ROOT, baseline=baseline)
+
+
+def test_python_version_moves_to_3_14_only_from_the_accepted_3_13_base():
+    baseline = deepcopy(_policy())
+    baseline["tool"]["mypy"]["python_version"] = "3.13"
+    validate_policy(_policy(), ROOT, baseline=baseline)
+
+    for version in ("3.13", "3.15"):
+        candidate = deepcopy(_policy())
+        candidate["tool"]["mypy"]["python_version"] = version
+        with pytest.raises(MypyPolicyError, match="must remain 3.14"):
+            validate_policy(candidate, ROOT, baseline=baseline)
+
+    baseline["tool"]["mypy"]["python_version"] = "3.12"
+    with pytest.raises(MypyPolicyError, match="must remain 3.14"):
+        validate_policy(_policy(), ROOT, baseline=baseline)
 
 
 @pytest.mark.parametrize(

@@ -79,7 +79,7 @@ def function(source, name, namespace):
         for c in compile(
             ast.Module(body=[node], type_ignores=[]), str(source), "exec"
         ).co_consts
-        if isinstance(c, CodeType)
+        if isinstance(c, CodeType) and c.co_name != "__annotate__"
     )
     return FunctionType(code, namespace)
 
@@ -226,7 +226,7 @@ def assert_native_frontend_value(method, result, expected):
     code = next(
         c
         for c in compile(tree, str(installed), "exec").co_consts
-        if isinstance(c, CodeType)
+        if isinstance(c, CodeType) and c.co_name != "__annotate__"
     )
     proto = constructor()
     namespace = {
@@ -239,6 +239,9 @@ def assert_native_frontend_value(method, result, expected):
         "serde": SimpleNamespace(serialize=lambda value: value),
         "serializer": lambda value: [value],
         "cast": cast,
+        # Streamlit 1.66.1 serializes the current value before the branch.
+        "correct_serialization": [expected],
+        "labels_changed": False,
     }
     FunctionType(code, namespace)()
     assert proto.set_value is True
@@ -318,7 +321,7 @@ def test_adjacent_raw_control_publishes_retained_and_live_value(
             str(SOURCE),
             "exec",
         ).co_consts
-        if isinstance(c, CodeType)
+        if isinstance(c, CodeType) and c.co_name != "__annotate__"
     )
     FunctionType(
         code,

@@ -68,16 +68,18 @@ MIGRATABLE_VERSIONS = (
 # Sector 0.97.0 corrected these calculation methods. A project from schema 27 or
 # earlier is calculated with them after load, and the load message lists them.
 SCHEMA28_METHOD_CHANGES = (
-    "Bending resistance: for the EN 1992-1-1:2004 presets, a fully compressed "
-    "section has the concentric-compression strain limit of 6.1(5) (pivot C). "
-    "The concrete panel has an option to clear it for a legacy calculation.",
-    "Shear chord, 2005 family: only an entered member maximum moment MEd,max "
-    "limits the shear term of 6.2.3(7). Sector no longer uses the section "
-    "resistance MRd as that limit.",
+    "Bending resistance, EN 1992-1-1:2004 presets: when the full section is in "
+    "compression, Sector limits the strain at pivot C to eps_c2 (6.1(6) and "
+    "Figure 6.1). You can clear this limit in the concrete panel to reproduce "
+    "a legacy calculation.",
+    "Shear chord, EN 1992-1-1:2004: only an entered member maximum moment "
+    "MEd,max limits the shear term of 6.2.3(7). Sector no longer uses the "
+    "section resistance MRd as that limit.",
     "Shear chord, DS/EN 1992-1-1:2023: each chord receives NVd/2 in Formulae "
     "(8.51) and (8.52).",
     "Shear without shear reinforcement: the tension chord includes the moment "
-    "shift a_l = d (6.2.2(5), 9.2.1.3(2); 2023 8.2.2(10)).",
+    "shift a_l = d (EN 1992-1-1:2004, 6.2.2(5) and 9.2.1.3(2); "
+    "DS/EN 1992-1-1:2023, 8.2.2(10)).",
     "Prestress: the prestrain IS is the tendon strain under prestress alone "
     "after all losses, IS = sigma_pm/Ep. Sector adds the concrete strain at the "
     "tendon (decompression strain) to get the bond strain difference. If the "
@@ -93,23 +95,34 @@ SCHEMA28_METHOD_CHANGES = (
 )
 
 
-def schema28_migration_warning() -> str:
+def schema28_migration_warning(*, pivot_c_cleared: bool = False) -> str:
     """Load message for a project saved before the 0.97.0 method corrections."""
 
     return (
         "This project file is from an earlier Sector version. Sector now "
         "calculates it with corrected methods, so results can differ from the "
         "earlier results: " + " ".join(SCHEMA28_METHOD_CHANGES)
+        + (
+            " This project file clears the pivot C limit, so Sector does not "
+            "apply it."
+            if pivot_c_cleared
+            else ""
+        )
+    )
+
+
+def _schema28_pivot_c_default(scalars: Mapping) -> bool:
+    """Pivot C default of the concrete preset that the project load applies."""
+
+    return material_presets.pivot_c_default(
+        scalars.get("conc_preset", material_presets.DEFAULT_CONCRETE_PRESET)
     )
 
 
 def _schema28_defaults(scalars: dict) -> None:
     """Add the schema-28 method inputs to a migrated project."""
 
-    scalars.setdefault(
-        "conc_pivot_c",
-        material_presets.pivot_c_default(scalars.get("conc_preset")),
-    )
+    scalars.setdefault("conc_pivot_c", _schema28_pivot_c_default(scalars))
     scalars.setdefault(capacity.MED_MAX_ON_KEY, False)
     for key in capacity.MED_MAX_KEYS.values():
         scalars.setdefault(key, 0.0)
@@ -2337,7 +2350,14 @@ def parse_project_with_info(text: str):
     method_changes: tuple[str, ...] = ()
     if source_version != VERSION:
         _schema28_defaults(scalars)
-        method_changes = (schema28_migration_warning(),)
+        method_changes = (
+            schema28_migration_warning(
+                pivot_c_cleared=(
+                    scalars["conc_pivot_c"] is False
+                    and _schema28_pivot_c_default(scalars)
+                ),
+            ),
+        )
     _apply_presentation(data, raw_scalars, scalars)
     _validate_geometry(tables)
     info = {
