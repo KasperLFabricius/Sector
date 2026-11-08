@@ -433,7 +433,7 @@ def _bar_stress(u: np.ndarray, bx: np.ndarray, by: np.ndarray, n: float,
                 n_mult: np.ndarray | None = None) -> np.ndarray:
     """Load-induced steel stress at each bar (Ec = 1): ``sigma = n * n_mult * eps``.
 
-    This is the *passive* response only; a tendon's locked-in prestress ``Ep*IS``
+    This is the *passive* response only; a tendon's locked-in prestress ``Ep*eps_p(0)``
     is added to the reported stress by :func:`solve_elastic_combined`, not here, so
     the crack-width check sees the load-induced increment rather than the total."""
     if not bx.size:
@@ -787,8 +787,9 @@ def solve_elastic_combined(
 
     ``n_mult`` is a per-bar modular-ratio multiplier (1 for mild reinforcement,
     ``Ep/Es`` for tendons). ``prestress_stress`` is the locked-in tendon prestress
-    (``Ep*IS``) per bar: its constant resultant is applied to every solve (so the
-    user's ``N`` is the external force only, as in the plastic solver), and it is
+    (``Ep*eps_p(0)``, from the bond strain difference) per bar: its constant
+    resultant is applied to every solve (so the user's ``N`` is the external
+    force only, as in the plastic solver), and it is
     added to the reported tendon stresses. Being locked-in, it does not creep, so
     it is kept out of the ``s2`` neutralising step.
     """
@@ -874,7 +875,7 @@ def solve_elastic_combined(
     rst1 = st_res.bar_stress
 
     # 4. Combine. The locked-in prestress is added to the reported tendon stresses
-    #    (physical stress = passive increment + Ep*IS); it cancels out of `dif`.
+    #    (physical stress = passive increment + Ep*eps_p(0)); it cancels out of `dif`.
     total = s2 + rst1 if s1_passive.size else rst1
     s1 = s1_passive
     locked_in = np.zeros_like(s1_passive)

@@ -391,7 +391,7 @@ def numerical_blocks():
           for i, (x,y,_a,_n,_l) in enumerate(case["elements"][:4], 1)],
         ["Tendon 1", "50", "-180", "$150\\,\\text{mm}^{2}$", "195 GPa / 5 \u2030"],
     ])
-    md('Use one assigned mild-steel material for all four bars and one prestress material for the tendon. The elastic calculation uses their moduli.\n\nThis check enters the locked-in strain $\\varepsilon^{(0)}_{p}$ directly. In the app, Sector derives it from $IS$ (Material laws > Prestressing steel). The tendon locked-in stress is:\n\n$E_p\\varepsilon^{(0)}_{p}=975$ MPa.\n\nIts locked resultants are:\n\n- Axial force: 146.25 kN.\n- Moment using $y$: -26.325 kNm.\n- Moment using $x$: 7.3125 kNm.')
+    md('Use one assigned mild-steel material for all four bars and one prestress material for the tendon. The elastic calculation uses their moduli.\n\nThis check enters the bond strain difference $\\varepsilon^{(0)}_{p}$ directly. In the app, Sector derives it from $IS$ (Material laws > Prestressing steel). The tendon locked-in stress is:\n\n$E_p\\varepsilon^{(0)}_{p}=975$ MPa.\n\nIts locked resultants are:\n\n- Axial force: 146.25 kN.\n- Moment using $y$: -26.325 kNm.\n- Moment using $x$: 7.3125 kNm.')
     md('After you subtract those locked resultants, the elastic target is:\n\n$(T_1,T_2,T_3)=(-346.25,-73.675,-47.3125)$.\n\nThe first component is in kN. The two moment components are in kNm.')
     h2("Initialization and first correction")
     table(["Initial matrix row", "$q_0$ coefficient", "$g_x$ coefficient", "$g_y$ coefficient"], [
@@ -437,7 +437,7 @@ def numerical_blocks():
         [f"Bar {i+1}" if i<4 else "Tendon 1", _number(passive/1000), _number(lock/1000), _number((passive+lock)/1000)]
         for i,(passive,lock) in enumerate(zip(elastic["passive"], case["locked"]))
     ])
-    md('Concrete stress equals $q$ in the compressed region. Reinforcement passive stress equals $n_iq_i$. Add the locked stress to get the reported tendon stress. For zero creep, physical section strain is $q/E_c$. The tendon total strain also includes its initial strain.')
+    md('Concrete stress equals $q$ in the compressed region. Reinforcement passive stress equals $n_iq_i$. Add the locked stress to get the reported tendon stress. For zero creep, physical section strain is $q/E_c$. The tendon total strain also includes its bond strain difference $\\varepsilon^{(0)}_{p}$.')
     h1("Plastic depth search and force integration")
     md("Use the rectangular tutorial section and material values. Select the 90-degree orientation and axial action $N=0$. "
        "The local depth coordinate is then $s=y$, and the extreme concrete coordinate is $s_{max}=0.3$ m.")

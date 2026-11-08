@@ -770,7 +770,7 @@ class Prestress:
 
     * **types 1-5** -- the program's built-in characteristic curves, fixed
       polynomials of the tendon strain (in percent) up to the 3.5 % rupture
-      strain. Only the initial strain and the partial factor are user input.
+      strain. Only the prestrain IS and the partial factor are user input.
     * **type 6** -- a user-defined bilinear curve with hardening: elastic at
       slope ``ES/gamma_E`` to ``fytk/gamma_y``, then a hardening branch to
       ``futk/gamma_u`` at the rupture strain ``eut``.

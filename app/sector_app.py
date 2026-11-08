@@ -1250,9 +1250,10 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
     curves are fixed shapes -- only the prestrain (and yield factor) apply.
 
     ``locked`` (elastic-only mode) disables the stress-strain law parameters, which
-    only the plastic analysis uses. The initial prestrain ``IS`` and the modulus
-    ``Es`` (Ep) stay editable: the elastic analysis applies the tendon prestress
-    ``Ep*IS`` as a force and uses ``Ep/Ec`` for the tendon's modular ratio.
+    only the plastic analysis uses. The prestrain ``IS`` and the modulus ``Es``
+    (Ep) stay editable: the elastic analysis derives the bond strain difference
+    eps_p(0) from IS, applies the locked-in prestress ``Ep*eps_p(0)`` and uses
+    ``Ep/Ec`` for the tendon's modular ratio.
     """
     if heading:
         box.markdown("**Prestressing steel**")
@@ -9988,7 +9989,7 @@ def _run_single_analysis(
         p_el_l, p_el_s = -inp["P_el_l"], -inp["P_el_s"]
         # Tendons are folded into the bar set for the elastic run. Each tendon uses
         # its own modular ratio (Ep/Ec, via the multiplier Ep/Es) and carries the
-        # locked-in prestress Ep*IS, applied as a force so the user's N is the
+        # locked-in prestress Ep*eps_p(0), applied as a force so the user's N is the
         # external normal force only -- matching the plastic solver.
         sec = inp["section"]
         bar_laws = list(inp.get("bar_materials") or
@@ -13817,15 +13818,15 @@ def elastic_view(inp, results, *, global_results=None):
     # The tendon prestress is applied automatically from the prestrain, so N is
     # the external force only. The solver applies the locked-in resultant of the
     # bond strain difference to the bonded section; under prestress alone the
-    # tendons then give the effective prestress action of Initial prestress action.
+    # tendons then give the effective prestress action (Ep*IS).
     ps = e.get("prestress")
     locked = (e.get("superposition") or {}).get("prestress_resultant")
     if ps is not None and locked is not None:
         # The resultants are tendon tension; the prestress precompresses the
         # section, so as an axial action (tension-positive) N is a compression.
         st.caption(
-            r"The elastic solver applies the tendon resultant of "
-            r"$\varepsilon^{(0)}_p$: "
+            r"The elastic solver applies the locked-in resultant of "
+            r"$E_p\varepsilon^{(0)}_p$: "
             f"$N={-locked['n']:.3f}$ kN, $M_x$ = {locked['mx']:.3f} kNm, "
             f"$M_y$ = {locked['my']:.3f} kNm. Under prestress alone the tendons "
             f"give the effective action $N={-ps[0]:.3f}$ kN, "
@@ -15548,7 +15549,7 @@ def shear_view(inp, results, *, global_results=None):
     if nominal_valid and nominal_route == "concrete":
         _concrete_chord_panel(inp, sh, torsion_result=results.get("torsion"))
     pre_note = (f" plus tendon precompression {sh['n_prestress']:.1f} kN (from the "
-                 "prestress initial strain)" if sh.get("n_prestress") else "")
+                 "effective prestress action from the prestrain IS)" if sh.get("n_prestress") else "")
     st.caption(f"{axis_lbl} shear, tension on the {face_lbl} face. Method: "
                f"{sh['method']}. The axial action uses the plastic axial force "
                f"$N={sh['n_ed']:.1f}$ kN (tension-positive){pre_note}.")
@@ -17015,7 +17016,7 @@ def torsion_view(inp, results, *, global_results=None):
     if t.get("n_prestress"):
         st.caption(f"{_ALPHA}cw uses {_SIGMA}cp = {t['sigma_cp']:.3f} MPa, which "
                    f"includes the tendon precompression {t['n_prestress']:.1f} kN "
-                   "(from the prestress initial strain) as well as the axial N.")
+                   "(effective prestress action from the prestrain IS) as well as the axial N.")
     if t.get("nu_v_detailing"):
         st.caption(f"{_NU} = {_NU}v (raised from {_NU}t) under DK NA Figur 5.100 NA: "
                    "closed stirrups round the periphery + distributed longitudinal "
