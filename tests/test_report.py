@@ -5665,7 +5665,7 @@ def test_audit_appendix_rejects_legacy_owner_without_canonical_rows(tmp_path):
 
 
 # One test for each native report variant, so that xdist can spread the four
-# Audit report builds. The old test built the same four reports in one body.
+# Audit report builds.
 @pytest.mark.parametrize("variant", ["current", "mixed-PL-LOW", "mixed-PL-GOV", "legacy-bending"])
 @result_presentation.publication_calculation_scope()
 def test_audit_appendix_claims_combined_method_only_for_assessable_case(
@@ -6301,8 +6301,8 @@ def test_torsion_applicability_component_rendering_accepts_declared_positive(pro
     assert "APPLICABLE" in text
 
 
-# One test for each poisoned authority field, so that xdist can spread the
-# 27 report builds. The old loop asserted the same nine cases.
+# One test for each profile and poisoned authority field, so that xdist can
+# spread the report builds.
 _NATIVE_AUTHORITY_POISON_CASES = (
     "stale-blocker", "malformed-blocker", "lowercase-status",
     "missing-route-entry", "wrong-route", "stale-reason",
@@ -14110,7 +14110,7 @@ def _assert_native_scheduler_contexts(
 
 
 # One test for each consumed transverse term, so that xdist can spread the
-# report chapters. The old loop asserted the same three terms.
+# report chapters.
 @pytest.mark.parametrize(
     "family,key,path",
     [

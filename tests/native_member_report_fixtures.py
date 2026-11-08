@@ -4,7 +4,8 @@
 calculates each reference bundle one time for the whole session. A consumer
 fixture gives each test a deep copy, so no test can change the reference that
 another test receives. Test modules must not import these fixtures again: a
-module import would register a second, module-level fixture with its own cache.
+module import would register a second session fixture with its own cache
+(``tests/test_qa_core_shards.py`` checks this).
 """
 from __future__ import annotations
 
