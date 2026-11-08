@@ -1253,7 +1253,7 @@ def manual_blocks() -> list:
        "Plastic or Both analysis, then open **N-M Interaction** for the selected "
        "capacity case. Sector performs additional calculations that vary axial force "
        "between the attainable tension and compression limits.")
-    md('The $N$-$M_x$ diagram joins the 90-degree and 270-degree neutral-axis branches. The $N$-$M_y$ diagram joins the 0-degree and 180-degree branches. Both branches use 32 axial-force intervals between the tension limit and the squash load. An end point is in the diagram only when the section can carry the held moment there. The applied point identifies the selected action.')
+    md('The $N$-$M_x$ diagram joins the 90-degree and 270-degree neutral-axis branches. The $N$-$M_y$ diagram joins the 0-degree and 180-degree branches. Both branches use 32 axial-force intervals between the tension limit and the squash load. When the held moment is close to its largest value, only a narrow band of axial force can carry it. Sector then adds 8 points in this band. An end point is in the diagram only when the section can carry the held moment there. The applied point identifies the selected action.')
     md("Each diagram holds the moment about the other axis at a fixed value "
        "($M_y$ for the $N$-$M_x$ diagram). With **Check utilisation against applied "
        "moment** on, this value is the case value. With the check off, it is 0. "

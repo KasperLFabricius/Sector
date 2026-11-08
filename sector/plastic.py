@@ -1542,6 +1542,14 @@ def _own_moment(pt, axis: str) -> float:
     return pt.Mx if axis == "x" else pt.My
 
 
+class _UnreachableProbe(Exception):
+    """A probe angle inside a bracket at which the axial force is unreachable."""
+
+    def __init__(self, angle: float):
+        super().__init__(angle)
+        self.angle = angle
+
+
 def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
                          tol_deg: float, root_search: str = "bisection",
                          skip_unreachable: bool = False):
@@ -1560,9 +1568,11 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
     most 1e-7 of the largest scanned companion moment or the bracket is at most
     ``tol_deg``.
 
-    With ``skip_unreachable``, a scan angle at which the axial force is outside
+    With ``skip_unreachable``, an angle at which the axial force is outside
     the reachable range of the section is not a failed solve: the M-M envelope
-    at this axial force has no point at that angle, so the scan skips it.
+    at this axial force has no point at that angle. The scan skips such
+    samples, the extremum search scores them as the worst value, and a
+    bracket that holds them is split at the edges of the reachable arcs.
     """
     # Set by _refine/_extremum when a solve INSIDE a bracketed crossing fails to
     # converge (as opposed to a crossing legitimately landing on the wrong face).
@@ -1579,7 +1589,7 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
             if c_end - target == 0.0:
                 pt = _cap(v_end)
                 if not pt.converged:
-                    solve_failed[0] = True
+                    _probe_failed(pt, v_end)
                     return None
                 return pt
         if root_search == "illinois":
@@ -1589,7 +1599,7 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
             mid = 0.5 * (v_lo + v_hi)
             pm = _cap(mid)
             if not pm.converged:
-                solve_failed[0] = True
+                _probe_failed(pm, mid)
                 return None
             fm = _companion(pm) - target
             if (fm > 0.0) == (f_lo > 0.0):
@@ -1598,9 +1608,62 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
                 v_hi = mid
         pt = _cap(0.5 * (v_lo + v_hi))
         if not pt.converged:
-            solve_failed[0] = True
+            _probe_failed(pt, 0.5 * (v_lo + v_hi))
             return None
         return pt
+
+    def _probe_failed(pt, angle):
+        """Flag a failed solve, or raise _UnreachableProbe for an unreachable
+        probe when ``skip_unreachable`` is on."""
+        if skip_unreachable and pt.axial_reachable is False:
+            raise _UnreachableProbe(angle)
+        solve_failed[0] = True
+
+    def _reachable_edge(v_in, v_out):
+        """Last reachable angle from the reachable ``v_in`` toward the
+        unreachable ``v_out`` (to ``tol_deg``), as (angle, point), or None when
+        a reachable solve does not converge (flags solve_failed)."""
+        p_in = _cap(v_in)
+        if not p_in.converged:
+            solve_failed[0] = True
+            return None
+        while abs(v_out - v_in) > tol_deg:
+            mid = 0.5 * (v_in + v_out)
+            pm = _cap(mid)
+            if pm.converged:
+                v_in, p_in = mid, pm
+            elif pm.axial_reachable is False:
+                v_out = mid
+            else:
+                solve_failed[0] = True
+                return None
+        return v_in, p_in
+
+    def _refine_all(v_lo, v_hi, c_lo, c_hi, depth=0):
+        """The crossings in a bracket: :func:`_refine`, and with
+        ``skip_unreachable`` a split at the edges of an unreachable gap. A
+        crossing on each reachable side of the gap is refined; a sign change
+        across the gap only is not a crossing."""
+        try:
+            pt = _refine(v_lo, v_hi, c_lo, c_hi)
+        except _UnreachableProbe as gap:
+            if depth >= 4:
+                return []
+            found = []
+            for v_end, c_end, low_side in ((v_lo, c_lo, True), (v_hi, c_hi, False)):
+                edge = _reachable_edge(v_end, gap.angle)
+                if edge is None:
+                    return found
+                v_edge, p_edge = edge
+                c_edge = _companion(p_edge)
+                if v_edge == v_end or (c_end - target) * (c_edge - target) > 0.0:
+                    continue
+                if low_side:
+                    found += _refine_all(v_end, v_edge, c_end, c_edge, depth + 1)
+                else:
+                    found += _refine_all(v_edge, v_end, c_edge, c_end, depth + 1)
+            return found
+        return [] if pt is None else [pt]
 
     def _illinois(v_lo, v_hi, f_lo, f_hi):
         side = 0
@@ -1611,7 +1674,7 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
                 v_new = 0.5 * (v_lo + v_hi)
             pt = _cap(v_new)
             if not pt.converged:
-                solve_failed[0] = True
+                _probe_failed(pt, v_new)
                 return None
             f_new = _companion(pt) - target
             best = pt
@@ -1637,14 +1700,23 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
         c = v_hi - gr * (v_hi - v_lo)
         d = v_lo + gr * (v_hi - v_lo)
         pc, pd = _cap(c), _cap(d)
+
+        def _usable(pt):
+            return pt.converged or (skip_unreachable and pt.axial_reachable is False)
+
+        def _score(pt):
+            if not pt.converged:
+                return -math.inf
+            return _companion(pt) if maximize else -_companion(pt)
+
         for _ in range(60):
-            if not (pc.converged and pd.converged):
+            if not (_usable(pc) and _usable(pd)):
                 solve_failed[0] = True
                 return None, None
             if v_hi - v_lo <= tol_deg:
                 break
-            fc = _companion(pc) if maximize else -_companion(pc)
-            fd = _companion(pd) if maximize else -_companion(pd)
+            fc = _score(pc)
+            fd = _score(pd)
             if fc >= fd:
                 v_hi, d, pd = d, c, pc
                 c = v_hi - gr * (v_hi - v_lo)
@@ -1656,6 +1728,14 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
         v = 0.5 * (v_lo + v_hi)
         pt = _cap(v)
         if not pt.converged:
+            if skip_unreachable and pt.axial_reachable is False:
+                # The extremum lies at the edge of a reachable arc: take the
+                # better of the last two reachable probes.
+                kept = [(_score(q), w, q) for q, w in ((pc, c), (pd, d)) if q.converged]
+                if kept:
+                    _value, w, q = max(kept, key=lambda item: item[0])
+                    return w, q
+                return None, None
             solve_failed[0] = True
             return None, None
         return v, pt
@@ -1691,9 +1771,7 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
             continue
         da, db = _companion(a) - target, _companion(b) - target
         if da * db < 0.0:
-            r = _refine(angs[j], angs[j + 1], _companion(a), _companion(b))
-            if r is not None:
-                caps.append(r)
+            caps.extend(_refine_all(angs[j], angs[j + 1], _companion(a), _companion(b)))
 
     # Tangent touches: on a non-convex/asymmetric envelope the companion can reach
     # `target` at a LOCAL EXTREMUM whose sampled peak sits just short of it, so the
@@ -1731,9 +1809,7 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
             # The true extremum overshoots `target`: two crossings flank it.
             for a0, a1, c0, c1 in ((lo_ang, v_ext, ca, c_ext),
                                    (v_ext, hi_ang, c_ext, cb)):
-                r = _refine(a0, a1, c0, c1)
-                if r is not None:
-                    caps.append(r)
+                caps.extend(_refine_all(a0, a1, c0, c1))
         elif abs(c_ext - target) <= band:
             caps.append(p_ext)                    # a true tangent: the curve touches
 
@@ -1973,29 +2049,36 @@ def uniaxial_interaction(
     )
 
 
-# N-M diagrams search the companion crossings with a 20-degree scan and the
-# Illinois root search: about half the solves of the chord-check search, with
-# the same crossings (tests compare with an independent 0.5-degree scan).
-NM_COMPANION_SCAN = 18
+# N-M diagrams search the companion crossings with an 18-degree scan and the
+# Illinois root search: fewer solves than the chord-check search, with the same
+# crossings (tests compare with an independent 0.5-degree scan). The samples
+# include 0, 90, 180 and 270 degrees, where the companion moment of a section
+# that is symmetric about an axis has its peak (review R4-02).
+NM_COMPANION_SCAN = 20
 
 
 def _held_companion_branch(points, section, concrete, steel, axis, m_off, *,
                            upper, prestress, bar_materials, tendon_materials,
-                           n_bands, rel_tol, ranges, has_ends=True):
+                           n_bands, rel_tol, ranges, ends=None):
     """Replace the fixed-angle points of one branch (see uniaxial_interaction).
 
     ``ranges`` caches :func:`companion_moment_range` by axial force, so the two
-    branches of one diagram share each search.
+    branches of one diagram share each search. ``ends`` holds the indices of
+    the end points of the fixed-angle trace (default: the first and the last
+    point); an end point stays only when its companion moment is ``m_off``.
+    A point that did not converge (also a placeholder outside the axial range
+    of the fixed-angle trace) always gets the companion search.
     """
-    last = len(points) - 1
+    if ends is None:
+        ends = {0, len(points) - 1}
     refined = []
     for index, point in enumerate(points):
         own = _own_moment(point, axis)
         companion = _companion_moment(point, axis)
-        if abs(companion - m_off) <= rel_tol * max(abs(own), 1.0):
+        if point.converged and abs(companion - m_off) <= rel_tol * max(abs(own), 1.0):
             refined.append(point)
             continue
-        if has_ends and index in (0, last):
+        if index in ends:
             continue
         key = round(float(point.axial), 6)
         if key not in ranges:
@@ -2053,12 +2136,16 @@ def uniaxial_interaction_loop(
     """Both branches of the N-M diagram about ``axis`` at the held ``m_off``.
 
     Each branch is :func:`uniaxial_interaction` at a pure-axis angle of ``axis``,
-    with one difference: the interior points of both branches use one axial
-    grid, so one companion search per axial force serves both branches. The
-    grid spans the axial range that both fixed-angle traces reach (a hardening
-    steel law or a prestrain can move the tension end point with the angle).
-    Each branch keeps its own two end points. ``n_t`` and ``n_c`` are the most
-    tensile and the largest compressive end point of the two traces.
+    with two differences. First, the interior points of both branches use one
+    axial grid on ``[n_t, n_c]``, the most tensile and the largest compressive
+    end point of the two fixed-angle traces (a hardening steel law or a
+    prestrain can move the tension end point with the angle). One companion
+    search per axial force serves both branches. At a grid value outside the
+    axial range of one trace, that branch takes its value from the companion
+    search only. Each branch keeps its own two end points. Second, when both
+    branches have fewer than three points, the held moment is close to its
+    largest value: :func:`_held_moment_band` finds the narrow axial band that
+    can carry it, and ``_BAND_POINTS`` axial forces in the band are added.
     """
     if axis not in {"x", "y"}:
         raise ValueError("axis must be 'x' or 'y'")
@@ -2077,13 +2164,7 @@ def uniaxial_interaction_loop(
     }
     n_t = min(points[0].axial for points in ends.values())
     n_c = max(points[-1].axial for points in ends.values())
-    # Interior grid on the range that both traces reach, so no interior point
-    # of a branch is clamped at its own end point.
-    grid_t = max(points[0].axial for points in ends.values())
-    grid_c = min(points[-1].axial for points in ends.values())
-    interior = [
-        grid_t + (grid_c - grid_t) * (i / n_points) for i in range(1, n_points)
-    ]
+    interior = [n_t + (n_c - n_t) * (i / n_points) for i in range(1, n_points)]
     ranges: dict = {}
     options = dict(prestress=prestress, bar_materials=bar_materials,
                    tendon_materials=tendon_materials, n_bands=n_bands)
@@ -2091,33 +2172,60 @@ def uniaxial_interaction_loop(
     def branches_at(axials, with_ends):
         result = []
         for upper in (True, False):
-            trace = _capacity_trace(
-                section, concrete, steel, FACE_ANGLE[(axis, upper)], axials,
+            end_t, end_c = ends[upper][0], ends[upper][-1]
+            inside = [P for P in axials if end_t.axial < P < end_c.axial]
+            trace = iter(_capacity_trace(
+                section, concrete, steel, FACE_ANGLE[(axis, upper)], inside,
                 **options,
-            )
-            points = [ends[upper][0], *trace, ends[upper][-1]] if with_ends else trace
+            ))
+            # A grid value outside the axial range of this trace gets a
+            # placeholder (the nearest end moments, not converged), so the
+            # companion search alone gives its value (review R4-01).
+            points = [_placeholder(P, end_t) for P in axials if P < end_t.axial]
+            end_index = set()
+            if with_ends:
+                end_index.add(len(points))
+                points.append(end_t)
+            points += [next(trace) for P in axials if end_t.axial < P < end_c.axial]
+            if with_ends:
+                end_index.add(len(points))
+                points.append(end_c)
+            points += [_placeholder(P, end_c) for P in axials if P > end_c.axial]
             result.append(_held_companion_branch(
                 points, section, concrete, steel, axis, m_off, upper=upper,
-                rel_tol=rel_tol, ranges=ranges, has_ends=with_ends, **options,
+                rel_tol=rel_tol, ranges=ranges, ends=end_index, **options,
             ))
         return result
 
     branches = branches_at(interior, True)
-    if not branches[0] and not branches[1]:
+    if len(branches[0]) < 3 and len(branches[1]) < 3:
         # Near its largest value the held moment can be carried only in an
-        # axial band narrower than one grid interval. Sample that band.
+        # axial band about one grid interval wide or less. Sample that band.
         band = _held_moment_band(
-            section, concrete, steel, axis, m_off,
-            [grid_t, *interior, grid_c], **options,
+            section, concrete, steel, axis, m_off, [n_t, *interior, n_c], **options,
         )
         if band is not None:
             n_a, n_b = band
-            branches = branches_at(
+            extra = branches_at(
                 [n_a + (n_b - n_a) * (i / (_BAND_POINTS + 1))
                  for i in range(1, _BAND_POINTS + 1)],
                 False,
             )
+            branches = [_merged_branch(old, new) for old, new in zip(branches, extra)]
     return InteractionLoop(branches[0], branches[1], n_t, n_c)
+
+
+def _placeholder(P, end):
+    """Branch point at ``P`` outside the axial range of its fixed-angle trace."""
+    return InteractionPoint(axial=P, Mx=end.Mx, My=end.My, converged=False)
+
+
+def _merged_branch(first, second):
+    """The points of two branch lists in increasing axial force, without repeats."""
+    merged = {}
+    for point in [*first, *second]:
+        merged.setdefault(round(float(point.axial), 6), point)
+    return [merged[key] for key in sorted(merged)]
 
 
 # Points that sample an axial band found by _held_moment_band.
@@ -2128,22 +2236,21 @@ def _held_moment_band(section, concrete, steel, axis, m_off, axials, *,
                       prestress, bar_materials, tendon_materials, n_bands):
     """Axial band ``(N_a, N_b)`` that can carry the held moment, or None.
 
-    At an axial force the companion moments of the M-M envelope lie between
-    about the two pure-axis capacities about the other axis. The held moment is
-    attainable where the margin ``min(largest - m_off, m_off - smallest)`` (in
-    the sign of ``m_off``) is not negative. A golden-section search of this
-    margin round the best of ``axials`` (sorted, with the end points of the
-    common range) finds its peak, and two bisections find the band edges. The
-    band is an estimate: each point in it still gets the exact
+    At an axial force the held moment is attainable where it lies between the
+    smallest and the largest companion moment of the M-M envelope, so the
+    margin ``min(largest - m_off, m_off - smallest)`` (in the sign of
+    ``m_off``) is not negative. An angle scan of ``NM_COMPANION_SCAN`` samples
+    gives the margin at ``axials`` (sorted, with the ends of the axial range).
+    Round the best of them, a golden-section search of the margin with
+    refined extremes finds its peak, and two bisections find the band edges.
+    The band is an estimate: each point in it still gets the exact
     :func:`companion_moment_range`.
     """
-    if len(axials) < 2 or m_off == 0.0:
+    if len(axials) < 2:
         return None
     other = "y" if axis == "x" else "x"
-    sign = 1.0 if m_off > 0.0 else -1.0
+    sign = -1.0 if m_off < 0.0 else 1.0
     target = sign * m_off
-    angle_high = FACE_ANGLE[(other, m_off > 0.0)]
-    angle_low = FACE_ANGLE[(other, not m_off > 0.0)]
     _bx, _by, ba = section.bar_arrays()
     _tx, _ty, ta = section.tendon_arrays()
     bar_laws = _material_sequence(steel, bar_materials, len(ba), "bar")
@@ -2152,6 +2259,8 @@ def _held_moment_band(section, concrete, steel, axis, m_off, axials, *,
     ) if (prestress is not None or tendon_materials is not None) else ()
     prep = _prep_section(section, bool(tendon_laws))
     band_memo: dict = {}
+    step = 360.0 / NM_COMPANION_SCAN
+    golden = 0.6180339887498949
 
     def signed(P, angle):
         point = plastic_capacity_at_angle(
@@ -2161,44 +2270,79 @@ def _held_moment_band(section, concrete, steel, axis, m_off, axials, *,
         )
         return sign * _own_moment(point, other) if point.converged else None
 
-    def margin(P):
-        high = signed(P, angle_high)
-        low = signed(P, angle_low)
-        if high is None or low is None:
-            return -math.inf
-        return min(high - target, target - low)
+    def peak(P, centre, best, maximize):
+        # Golden-section search of the signed companion moment in one scan
+        # step either side of the best sample; non-converged probes are worst.
+        def score(angle):
+            value = signed(P, angle)
+            if value is None:
+                return -math.inf
+            return value if maximize else -value
 
-    values = [margin(P) for P in axials]
-    k = max(range(len(axials)), key=values.__getitem__)
+        a, b = centre - step, centre + step
+        c, d = b - golden * (b - a), a + golden * (b - a)
+        fc, fd = score(c), score(d)
+        top = max(best, fc, fd)
+        while b - a > 0.01:
+            if fc >= fd:
+                b, d, fd = d, c, fc
+                c = b - golden * (b - a)
+                fc = score(c)
+            else:
+                a, c, fc = c, d, fd
+                d = a + golden * (b - a)
+                fd = score(d)
+            top = max(top, fc, fd)
+        return top if maximize else -top
+
+    def margin(P, refine):
+        samples = [(signed(P, i * step), i * step) for i in range(NM_COMPANION_SCAN)]
+        samples = [(value, angle) for value, angle in samples if value is not None]
+        if not samples:
+            return -math.inf, 0.0
+        high, high_angle = max(samples)
+        low, low_angle = min(samples)
+        size = max(abs(high), abs(low))
+        if refine:
+            high = peak(P, high_angle, high, True)
+            low = peak(P, low_angle, -low, False)
+        return min(high - target, target - low), size
+
+    coarse = [margin(P, False) for P in axials]
+    k = max(range(len(axials)), key=lambda i: coarse[i][0])
+    size = max(item[1] for item in coarse)
+    # The 18-degree samples miss a peak by at most about 1.3 % of the moment.
+    if coarse[k][0] < -0.05 * max(1.0, size, abs(target)):
+        return None
     lo = axials[max(k - 1, 0)]
     hi = axials[min(k + 1, len(axials) - 1)]
-    golden = 0.6180339887498949
+    tol = 1.0e-4 * max(1.0, abs(axials[-1] - axials[0]))
+
+    def fine(P):
+        return margin(P, True)[0]
+
     a, b = lo, hi
     c, d = b - golden * (b - a), a + golden * (b - a)
-    fc, fd = margin(c), margin(d)
-    for _ in range(60):
-        if b - a <= 1.0e-6 * max(1.0, abs(a) + abs(b)):
-            break
+    fc, fd = fine(c), fine(d)
+    while b - a > tol:
         if fc >= fd:
             b, d, fd = d, c, fc
             c = b - golden * (b - a)
-            fc = margin(c)
+            fc = fine(c)
         else:
             a, c, fc = c, d, fd
             d = a + golden * (b - a)
-            fd = margin(d)
+            fd = fine(d)
     n_peak = 0.5 * (a + b)
-    if not margin(n_peak) >= 0.0:
+    if not fine(n_peak) >= 0.0:
         return None
 
     def edge(n_out, n_in):
-        if margin(n_out) >= 0.0:
+        if fine(n_out) >= 0.0:
             return n_out
-        for _ in range(60):
-            if abs(n_in - n_out) <= 1.0e-6 * max(1.0, abs(n_in) + abs(n_out)):
-                break
+        while abs(n_in - n_out) > tol:
             mid = 0.5 * (n_out + n_in)
-            if margin(mid) >= 0.0:
+            if fine(mid) >= 0.0:
                 n_in = mid
             else:
                 n_out = mid

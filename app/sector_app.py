@@ -13548,7 +13548,8 @@ def interaction_view(inp, results):
                 title=title, limits=data.get("limits")), width="stretch")
     st.caption(
         "Each curve holds the moment about the other axis at the value in the "
-        "metric label. This value is the case value, or 0 without the check. A "
+        "metric label. This value is the case value, or 0 when the utilisation "
+        "check is off. A "
         "curve ends where the section cannot carry that moment. The marked point "
         "is the applied action."
     )

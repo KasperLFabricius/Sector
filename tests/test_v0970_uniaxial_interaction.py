@@ -46,6 +46,8 @@ def _scan_range(section, concrete, steel, axial, axis, m_off, step=0.5, **kw):
 
     values = []
     for first, second in zip(states, states[1:]):
+        if not (first.converged and second.converged):
+            continue
         c1, c2 = companion(first) - m_off, companion(second) - m_off
         if c1 == 0.0:
             values.append(own(first))
@@ -266,10 +268,10 @@ def test_prestressed_branches_stay_converged_when_tension_limits_differ():
     assert all(p.converged for p in loop.upper + loop.lower)
     assert loop.n_t == pytest.approx(min(upper_ends[0].axial, lower_ends[0].axial))
     assert loop.n_c == pytest.approx(max(upper_ends[-1].axial, lower_ends[-1].axial))
-    for branch, ends in ((loop.upper, upper_ends), (loop.lower, lower_ends)):
+    for branch in (loop.upper, loop.lower):
         axials = [p.axial for p in branch]
         assert all(b > a for a, b in zip(axials, axials[1:]))
-        assert ends[0].axial - 1.0e-6 <= axials[0] and axials[-1] <= ends[-1].axial + 1.0e-6
+        assert loop.n_t - 1.0e-6 <= axials[0] and axials[-1] <= loop.n_c + 1.0e-6
 
 
 def test_held_moment_near_its_largest_value_is_found_between_grid_points():
@@ -326,3 +328,140 @@ def test_crossing_search_keeps_an_exact_zero_bracket_end(root_search):
     )
     assert points and not scan_failed and not solve_failed
     assert all(companion(point) == 0.0 for point in points)
+
+
+def _hardening_steel():
+    return MildSteel(fytk=500.0, fyck=500.0, futk=575.0, eut=0.025, gamma_y=1.15,
+                     gamma_u=1.15, gamma_E=1.0, curve=1)
+
+
+def _strand():
+    from sector.materials import Prestress
+
+    return Prestress(fytk=1640.0, futk=1860.0, eut=0.035, gamma_y=1.15,
+                     gamma_u=1.15, gamma_E=1.0, Es=195000.0)
+
+
+def _rc_rectangle(bars, tendons=()):
+    return Section.from_polygon(
+        corners=[(-0.2, -0.3), (0.2, -0.3), (0.2, 0.3), (-0.2, 0.3)],
+        bars_xy_area_mm2=list(bars), tendons_xy_area_mm2=list(tendons),
+    )
+
+
+def _shifted_l_section():
+    # The L-section of _l_section with its origin moved by (0.2, 0.2) m.
+    corners = [(0.0, 0.0), (0.6, 0.0), (0.6, 0.15), (0.15, 0.15), (0.15, 0.6), (0.0, 0.6)]
+    bars = [(0.05, 0.05, 314.0), (0.3, 0.05, 314.0), (0.55, 0.05, 314.0),
+            (0.05, 0.3, 314.0), (0.05, 0.55, 314.0), (0.1, 0.55, 314.0)]
+    return Section.from_polygon(
+        corners=[(x - 0.2, y - 0.2) for x, y in corners],
+        bars_xy_area_mm2=[(x - 0.2, y - 0.2, a) for x, y, a in bars],
+    )
+
+
+def _check_against_scan(loop, section, concrete, steel, axis, m_off, *, tol=1.0,
+                        count=4, **kw):
+    """Each branch is not empty, all its points converge, and a sample of its
+    points agrees with the independent scan."""
+    own = (lambda q: q.Mx) if axis == "x" else (lambda q: q.My)
+    for branch, side in ((loop.upper, 1), (loop.lower, 0)):
+        assert branch and all(q.converged for q in branch)
+        picks = sorted({round(i * (len(branch) - 1) / max(count - 1, 1))
+                        for i in range(count)})
+        for q in (branch[i] for i in picks):
+            oracle = _scan_range(section, concrete, steel, q.axial, axis, m_off, **kw)
+            assert oracle is not None
+            assert own(q) == pytest.approx(oracle[side], abs=tol)
+
+
+def test_branch_with_the_more_tensile_end_keeps_its_tension_range():
+    # Review R4-01: prestressed section, hardening bars, held My = 0. The
+    # tension limits of the two fixed-angle traces differ. Each branch must
+    # reach the most tensile axial force at which the independent scan finds
+    # My = 0 attainable, within one grid step.
+    concrete, _steel = _materials()
+    steel, strand = _hardening_steel(), _strand()
+    section = _rc_rectangle(
+        [(-0.15, 0.25, 314.0), (0.15, 0.25, 314.0), (-0.15, -0.25, 201.0),
+         (0.15, -0.25, 201.0)],
+        [(-0.1, -0.24, 600.0), (0.12, -0.2, 300.0)],
+    )
+    loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "x",
+                                             prestress=strand, n_points=32)
+    grid_step = (loop.n_c - loop.n_t) / 32
+
+    def attainable(n):
+        return _scan_range(section, concrete, steel, n, "x", 0.0, step=1.0,
+                           prestress=strand) is not None
+
+    # Most tensile attainable axial force by bisection on the scan oracle.
+    reach, miss = 0.0, loop.n_t
+    assert attainable(reach)
+    for _ in range(8):
+        mid = 0.5 * (reach + miss)
+        if attainable(mid):
+            reach = mid
+        else:
+            miss = mid
+    for branch in (loop.upper, loop.lower):
+        assert all(q.converged for q in branch)
+        assert branch[0].axial <= reach + grid_step + 1.0e-6
+    _check_against_scan(loop, section, concrete, steel, "x", 0.0, prestress=strand)
+
+
+@pytest.mark.parametrize("m_off", [0.0, 100.0])
+def test_unreachable_angles_inside_the_search_do_not_fail_the_diagram(m_off):
+    # Review R3-02 (rest): two tendon levels; near the tension end the axial
+    # force is unreachable round 90 degrees, inside the extremum and the root
+    # search of the y diagram. The diagram must stay converged.
+    concrete, steel = _materials()
+    strand = _strand()
+    section = _rc_rectangle(
+        [(-0.15, 0.25, 201.0), (0.15, 0.25, 201.0)],
+        [(0.0, -0.25, 1000.0), (0.0, 0.25, 300.0)],
+    )
+    loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "y",
+                                             m_off=m_off, prestress=strand,
+                                             n_points=32)
+    _check_against_scan(loop, section, concrete, steel, "y", m_off,
+                        prestress=strand)
+
+
+def test_symmetric_section_finds_the_held_moment_near_the_peak():
+    # Review R4-02: on a section symmetric about the y axis the samples at 80
+    # and 100 degrees were equal, so the search missed the peak at 90 degrees.
+    # Held Mx = 564.19 kNm, 98 % of the pure-axis peak.
+    concrete, steel = _materials()
+    section = _rc_rectangle([(x, y, 314.0) for x in (-0.15, 0.0, 0.15) for y in (-0.25, 0.25)])
+    loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "y",
+                                             m_off=564.19, n_points=32)
+    assert len(loop.upper) >= 3 and len(loop.lower) >= 3
+    _check_against_scan(loop, section, concrete, steel, "y", 564.19, tol=0.5)
+
+
+def test_band_above_the_pure_axis_peak_is_found():
+    # Review R4-03: the largest My (349.5 kNm by an angle scan) is not at a
+    # pure-axis angle. Held My = 349.35 kNm is above the largest pure-axis My
+    # (342.7 kNm); the scan finds it attainable near N = 740 kN.
+    concrete, _steel = _materials()
+    steel = _hardening_steel()
+    section = _shifted_l_section()
+    assert _scan_range(section, concrete, steel, 740.0, "x", 349.35) is not None
+    loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "x",
+                                             m_off=349.35, n_points=32)
+    _check_against_scan(loop, section, concrete, steel, "x", 349.35, tol=0.5)
+
+
+def test_short_diagram_gets_the_band_points():
+    # Review R4-04: one grid point in the band gave a one-point diagram.
+    concrete, _steel = _materials()
+    steel = _hardening_steel()
+    section = _shifted_l_section()
+    loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "y",
+                                             m_off=-399.22, n_points=32)
+    assert len(loop.upper) >= 3 and len(loop.lower) >= 3
+    for branch in (loop.upper, loop.lower):
+        axials = [q.axial for q in branch]
+        assert all(b > a for a, b in zip(axials, axials[1:]))
+    _check_against_scan(loop, section, concrete, steel, "y", -399.22, tol=0.5)
