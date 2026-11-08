@@ -45,8 +45,8 @@ The chord checks of shear have three corrections:
   MRd = 100 kNm, NVd = 250 kN and z = 0.5 m give the utilisation 1.525
   (was 2.15).
 - On the concrete shear route, the tension chord carries the moment
-  MEd + |VEd| d (6.2.2(5) and 9.2.1.3(2), 2023: 8.2.2(10)). This also applies
-  to members without links. With torsion, the chord also gets Ftd,T z/2. The
+  MEd + |VEd| d (6.2.2(5) and 9.2.1.3(2), 2023: 8.2.2(10)). Members without
+  links also get this check. With torsion, the chord also gets Ftd,T z/2. The
   shear view, the Results Overview and the report show this check.
 
 The DK NA 6.3.2(6) sum uses the section with its installed links for V alone:
@@ -55,8 +55,8 @@ VRd,max) at the strut angle with the largest resistance. The term increases
 with VEd. Example: the sum of the reference project is 2.132 (was 2.673).
 
 The new option **Include bonded tendons in Asl and d** adds the bonded tendons
-on the tension side to Asl and to the effective depth d. It applies to the
-shear check without links:
+on the tension side to Asl and to the effective depth d. The option is for
+the shear check without links:
 
 - DS/EN 1992-1-1:2023: on by default (8.2.2(6)). d = (ds² As + dp² Ap)/(ds As
   + dp Ap), Formula (8.36), and ρl = (ds As + dp Ap)/(bw d²), Formula (8.37).
@@ -83,8 +83,8 @@ directions for the states that carry the held moment.
 
 A branch ends where the section cannot carry the held moment. When the held
 moment is close to its largest value, Sector adds 8 points in the narrow band
-of axial force that can carry it. The figure marks the squash load and the
-tension limit only when the diagram reaches them. A diagram takes
+of axial force that can carry it. The figure shows the labels of the squash
+load and the tension limit only when the diagram reaches them. A diagram takes
 approximately 2 to 10 s to calculate.
 
 ## Crack widths and prestress
@@ -126,8 +126,8 @@ search converges (PASS).
 - In Stage I, the locked-in tendon stress under prestress alone can differ
   from Ep IS by up to approximately 1.8 %. In the examined cases no verdict
   changed. A later release examines this state.
-- Near the tension limit, an N-M branch can be narrower than the true
-  capacity at some axial forces. The diagram is then on the safe side.
+- Near the tension limit, an N-M branch can show less capacity than the
+  section has at some axial forces. The diagram is then on the safe side.
 
 ## Software and build
 

@@ -5,13 +5,14 @@
 ## 0.97.0 - 2026-11-08
 
 Calculation corrections from an internal review. Pivot C limits the strain of a
-section in full compression (EN 1992-1-1:2004, 6.1(6)). The shear chord checks
-have three corrections. Only the member moment MEd,max limits the shear shift
-(6.2.3(7)). Each 2023 chord gets (NVd + NEd)/2. On the concrete route, the
-tension chord carries the moment MEd + |VEd| d. The DK NA 6.3.2(6) sum uses
-the installed links for V alone. A new option
-includes bonded tendons in Asl and d of the shear check without links
-(DS/EN 1992-1-1:2023, 8.2.2(6), Formulae (8.36) and (8.37)).
+section in full compression (EN 1992-1-1:2004, 6.1(6)).
+
+The shear chord checks have three corrections. Only the member moment MEd,max
+limits the shear shift (6.2.3(7)). Each 2023 chord gets (NVd + NEd)/2. On the
+concrete route, the tension chord carries the moment MEd + |VEd| d. The DK NA
+6.3.2(6) sum uses the installed links for V alone. A new option includes bonded
+tendons in Asl and d of the shear check without links (DS/EN 1992-1-1:2023,
+8.2.2(6), Formulae (8.36) and (8.37)).
 
 N-M diagrams hold the moment about the other axis at the case value. The
 long-term crack width uses alpha_e = Es/Ecm. The prestrain IS is the tendon
