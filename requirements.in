@@ -12,7 +12,7 @@ numba>=0.67
 
 # Eight application modules import pandas directly.
 pandas>=3.1,<4
-streamlit>=1.66,<1.67
+streamlit>=1.67.0,<1.68
 # Security floor for Requests' urllib3 dependency (PYSEC-2026-4175/4176/4177).
 urllib3>=2.8.0,<3
 plotly>=7.0,<8
