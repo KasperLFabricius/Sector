@@ -196,3 +196,20 @@ def test_lightly_stressed_top_tendon_gets_a_negative_bond_strain_in_the_app():
         assert np.asarray(state.bar_stress_total[4:]) / 1000.0 == pytest.approx(
             [1100.0, 100.0], rel=1.0e-8
         )
+
+
+def test_field_signature_binds_only_the_tendon_laws_of_its_family():
+    # Codex review of PR #577: el_phi changes only the long-term (elastic) bond
+    # strain, so a reused plastic result must keep its section field.
+    import section_fields
+
+    inp = _inp(_tendon())
+    sector_app._apply_bonded_prestrain(inp)
+    plastic = section_fields.context_signature(inp, "Plastic")
+    elastic = section_fields.context_signature(inp, "Elastic")
+    changed = dict(inp, nl=30.0, tendon_materials=[_tendon(strain=0.0062)])
+    assert section_fields.context_signature(changed, "Plastic") == plastic
+    assert section_fields.context_signature(changed, "Elastic") != elastic
+    changed = dict(inp, tendon_materials_uls=[_tendon(strain=0.0059)])
+    assert section_fields.context_signature(changed, "Plastic") != plastic
+    assert section_fields.context_signature(changed, "Elastic") == elastic

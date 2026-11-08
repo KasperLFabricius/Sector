@@ -32,8 +32,7 @@ class FieldUnavailable(ValueError):
 def context_signature(inp, family):
     """Bind field evidence to the calculated geometry, materials and actions."""
     keys = ["outer", "holes", "bars", "tendons", "bar_elements", "tendon_elements",
-            "concrete", "steel", "prestress", "bar_materials", "tendon_materials",
-            "tendon_materials_uls", "slab_density"]
+            "concrete", "steel", "prestress", "bar_materials", "slab_density"]
     keys += (["P_pl", "Mx_pl", "My_pl", "plastic_case"] if family == "Plastic" else
              ["P_el_l", "Mx_el_l", "My_el_l", "P_el_s", "Mx_el_s", "My_el_s",
               "conc_Ec", "el_phi", "ns", "nl", "elastic_case"])
@@ -48,6 +47,16 @@ def context_signature(inp, family):
             return value.item()
         return value
     record = {key: plain(inp.get(key)) for key in keys}
+    # Each family binds the tendon laws of its own model: the plastic model uses
+    # the bond strain at Es/Ecm, the elastic model the one at nl. A change that
+    # affects only the other model (for example el_phi) keeps the field valid.
+    if family == "Plastic":
+        laws = inp.get("tendon_materials_uls")
+        record["tendon_laws"] = plain(
+            laws if laws is not None else inp.get("tendon_materials")
+        )
+    else:
+        record["tendon_laws"] = plain(inp.get("tendon_materials"))
     # Descriptions and category labels can change while a verified bending
     # result is reused. Bind the numerical state and stable action identity.
     case_key = "plastic_case" if family == "Plastic" else "elastic_case"
