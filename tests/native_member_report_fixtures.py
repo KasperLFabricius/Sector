@@ -166,6 +166,49 @@ def native_member_report_cases(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
+def native_med_max_report_case(tmp_path_factory):
+    """Return a native 2005 member bundle where the entered MEd,max limits the chord.
+
+    EN 1992-1-1 6.2.3(7) with cot(theta) = 1.0, VEd = 200 kN and Mx = 300 kNm:
+    dFtd z = 100 kN x 0.511 m = 51.1 kNm > MEd,max - MEd = 320 - 300 = 20 kNm,
+    so the links-route chord and the combined M-V-T chord both apply the limit.
+    """
+    from sector import capacity, combined
+
+    destination = tmp_path_factory.mktemp("native-med-max-report")
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("SECTOR_AUTOSAVE_DIR", str(destination / "autosave"))
+        at = _fresh().run()
+        _set(
+            at,
+            ("checkbox", "shear_on", True),
+            ("checkbox", "torsion_on", True),
+            ("checkbox", "combined_on", True),
+        )
+        _set(
+            at,
+            ("checkbox", "shear_links", True),
+            ("number_input", "strut_cot_min", 1.0),
+            ("number_input", "strut_cot_max", 1.0),
+            ("checkbox", capacity.MED_MAX_ON_KEY, True),
+            ("number_input", capacity.MED_MAX_KEYS[("x", True)], 320.0),
+        )
+        _set_and_click(
+            at, "calculate",
+            ("number_input", "shear_V", 200.0),
+            ("number_input", "pl_Mx", 300.0),
+            ("number_input", "torsion_T", 10.0),
+        )
+        assert not at.exception
+        inp = copy.deepcopy(at.session_state["result_input_snapshot"])
+        out = copy.deepcopy(at.session_state["results"])
+        chord = out["shear"]["links"]["chord"]
+        assert combined.chord_cap_evaluated(chord) and chord["mv"] == pytest.approx(20.0)
+        (destination / "med-max.pickle").write_bytes(pickle.dumps((inp, out)))
+        return inp, out
+
+
+@pytest.fixture(scope="module")
 def native_base_en_report_case(tmp_path_factory):
     """Return a complete single-direction Base-EN native publication bundle."""
     from sector import codes

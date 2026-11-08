@@ -29,10 +29,10 @@ def goto_page(at, page):
     """Request one registered native page while retaining the input stage."""
     state = at.session_state
     if page == "Inputs":
-        target = _STAGE_LABELS.get(state.filtered_state.get("_input_tab"), "section")
+        target = _STAGE_LABELS.get(state.to_dict().get("_input_tab"), "section")
     else:
         target = page if page in _PUBLIC_ROUTES else _PAGE_ROUTES[page]
-    if state.filtered_state.get("_workflow_page") != target:
+    if state.to_dict().get("_workflow_page") != target:
         state["_next_workflow_page"] = target
         at.run()
     return at
@@ -45,11 +45,11 @@ def goto_input_stage(at, short_name):
 def _navigation_values(at, values):
     """Mirror navigation preferences only; leave all engineering inputs intact."""
     state = at.session_state
-    changed = any(state.filtered_state.get(key) != value for key, value in values.items())
+    changed = any(state.to_dict().get(key) != value for key, value in values.items())
     for key, value in values.items():
         state[key] = value
         for mirror in ("_pending_input_events", "_durable_input_scalars"):
-            saved = state.filtered_state.get(mirror)
+            saved = state.to_dict().get(mirror)
             if isinstance(saved, MutableMapping):
                 saved[key] = value
     return changed
@@ -98,7 +98,7 @@ def goto_widget_owner(at, key):
             group = "General"
         values["_analysis_group"] = group
     changed = _navigation_values(at, values)
-    current = at.session_state.filtered_state.get("_workflow_page")
+    current = at.session_state.to_dict().get("_workflow_page")
     goto_page(at, route)
     if changed and current == route:
         at.run()
@@ -118,7 +118,7 @@ def goto_action_family(at, family):
     if family not in {"Plastic", "Elastic", "Fatigue"}:
         raise ValueError("Unknown Actions tab")
     changed = _navigation_values(at, {"_actions_family": family})
-    current = at.session_state.filtered_state.get("_workflow_page")
+    current = at.session_state.to_dict().get("_workflow_page")
     goto_page(at, "actions")
     if changed and current == "actions":
         at.run()

@@ -61,6 +61,7 @@ import result_presentation as presentation
 import section_fields
 from app import engineer_messages
 from sector import capacity
+from sector import combined as combined_core
 from sector import codes as ec2_codes
 from sector import detailing
 from sector import shear_inputs
@@ -418,6 +419,49 @@ _GREEK = {"eps": "&#949;", "sigma": "&#963;", "lambda": "&#955;", "alpha": "&#94
           "kappa": "&#954;", "rho": "&#961;", "phi": "&#966;",
           "theta": "&#952;", "nu": "&#957;", "tau": "&#964;", "permille": "&#8240;"}
 _GREEK_RE = re.compile(r"\b(" + "|".join(_GREEK) + r")\b")
+
+
+_MED_MAX_BELOW_MED = "uncapped, MEd,max below MEd"
+_MED_MAX_BELOW_MED_NOTE = (
+    "The entered M<sub>Ed,max</sub> is less than M<sub>Ed</sub>, so it is not used."
+)
+# A last contents page that is used up to this share of its frame is almost empty.
+_CONTENTS_SPARSE_SHARE = 0.35
+
+
+class _ReportContents(TableOfContents):
+    """Contents that close the row gaps if this removes an almost empty last page."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._normal_styles = list(self.levelStyles)
+
+    def _page_fill(self, available, full):
+        """Return the page count and the height used on the last contents page."""
+
+        pages, used = 1, 0.0
+        for row in self._table._rowHeights:
+            if used + row > available:
+                pages, used, available = pages + 1, 0.0, full
+            used += row
+        return pages, used
+
+    def wrap(self, availWidth, availHeight):
+        self.levelStyles = self._normal_styles
+        size = super().wrap(availWidth, availHeight)
+        full = self._frame._aH
+        pages, used = self._page_fill(availHeight, full)
+        if pages == 1 or used > _CONTENTS_SPARSE_SHARE * full:
+            return size
+        self.levelStyles = [
+            ParagraphStyle(f"{style.name}_closed", parent=style, spaceBefore=0)
+            for style in self._normal_styles
+        ]
+        closed = super().wrap(availWidth, availHeight)
+        if self._page_fill(availHeight, full)[0] < pages:
+            return closed
+        self.levelStyles = self._normal_styles
+        return super().wrap(availWidth, availHeight)
 
 
 class _LiteralReportText(str):
@@ -1251,6 +1295,86 @@ def _scientific_equation_markup(text):
         expand,
         text,
     )
+
+
+_PIVOT_C_CLAUSE = "EN 1992-1-1:2004, 6.1(6) and Figure 6.1"
+_PIVOT_C_MODE_LABEL = f"Concentric compression (pivot C, {_PIVOT_C_CLAUSE})"
+_PIVOT_C_2023_NOTE = (
+    "DS/EN 1992-1-1:2023, 8.1.1(3) limits only eps<sub>cu</sub>"
+)
+
+
+def _chord_demand_2005_formula(capped_form):
+    """EN 1992-1-1 chord demand with or without the 6.2.3(7) MEd,max limit."""
+    shear_term = (
+        "min(&#916;F<sub>td</sub>&#183;z, M<sub>Ed,max</sub> - M<sub>Ed</sub>)"
+        if capped_form
+        else "&#916;F<sub>td</sub>&#183;z"
+    )
+    return (
+        "M<sub>Ed,total</sub> = M<sub>Ed</sub> + " + shear_term
+        + " + F<sub>td,T</sub>&#183;z/2"
+    )
+
+
+def _chord_demand_2005_substitution(chord, capped_form, extra=None):
+    """Substitute the retained operands into the applied chord demand form."""
+    m_ed = _fmt(chord["m_ed"], 1)
+    # A negative subtrahend keeps its sign readable: 15.0 - (-10.0).
+    subtrahend = f"({m_ed})" if float(chord["m_ed"]) < 0.0 else m_ed
+    shear_term = (
+        f"min({_fmt(chord['mv_uncapped'], 1)}, {_fmt(chord['m_ed_max'], 1)} - "
+        f"{subtrahend})"
+        if capped_form
+        else _fmt(chord["mv"], 1)
+    )
+    arm = f"z = {_fmt(chord['z'], 3)} m"
+    return (
+        f"{m_ed} + {shear_term} + {_fmt(chord['mt'], 1)} kNm"
+        f"  ({arm}" + (f", {extra}" if extra else "") + ")"
+    )
+
+
+def _pivot_c_material_row(concrete, is_2023):
+    """Material-table row with the pivot C state and the edition that applies."""
+
+    pivot_c_on = getattr(concrete, "pivot_c", False) is True
+    if not is_2023:
+        return [
+            f"Pivot C strain limit ({_PIVOT_C_CLAUSE})",
+            "eps<sub>c2</sub>",
+            "On" if pivot_c_on else "Off",
+        ]
+    # The 2023 preset clears the limit; a user setting can still apply the
+    # EN 1992-1-1:2004 rule, and the row then names that edition.
+    return [
+        "Pivot C strain limit",
+        "eps<sub>c2</sub>",
+        f"On, user setting ({_PIVOT_C_CLAUSE}); {_PIVOT_C_2023_NOTE}"
+        if pivot_c_on
+        else f"Off ({_PIVOT_C_2023_NOTE})",
+    ]
+
+
+def _concrete_candidate_location(candidate):
+    """Name the concrete point of one ultimate-curvature candidate."""
+
+    if candidate.get("mode") == "concrete_concentric_compression":
+        # EN 1992-1-1:2004 Figure 6.1, key C: the pivot is inside the section.
+        return (
+            "pivot C at (1 - eps<sub>c2</sub>/eps<sub>cu2</sub>) h from the "
+            "more compressed face"
+        )
+    return "extreme concrete fiber"
+
+
+def _curvature_candidate_location(candidate):
+    """Name the point of one ultimate-curvature candidate in the section."""
+
+    element = candidate.get("element_id")
+    if element:
+        return "element " + _html_escape(str(element))
+    return _concrete_candidate_location(candidate)
 
 
 def _curvature_selection_substitution(candidates, selected):
@@ -2744,7 +2868,7 @@ class ReportBuilder:
     def _contents(self):
         """Add profile-appropriate linked contents without a page-count target."""
 
-        contents = TableOfContents(
+        contents = _ReportContents(
             levelStyles=[self.s["toc_h1"], self.s["toc_h2"]],
             dotsMinLevel=0,
             rightColumnWidth=12 * mm,
@@ -4801,6 +4925,7 @@ class ReportBuilder:
                  ["Peak strain", "eps<sub>c2</sub>", f"{_fmt(c.eps_c2*1000, 3)} &#8240;"],
                  ["Ultimate strain", "eps<sub>cu2</sub>", f"{_fmt(c.eps_cu2*1000, 3)} &#8240;"],
                  ["Exponent", "n", _fmt(c.n, 3)],
+                 _pivot_c_material_row(c, is_2023),
         ])
         if fcd is not None:
             rows.append(
@@ -5727,6 +5852,7 @@ class ReportBuilder:
             self._p('<b>Plastic section capacity.</b> Plane sections remain plane. Concrete in compression follows the design curve in the material section. Reinforcement follows its design stress-strain law.')
             self._p('For each trial neutral axis, the strain plane is scaled to the governing curvature. This curvature is the first material limit reached:')
             self._formula("kappa<sub>u</sub> = min( eps<sub>cu2</sub>/c ,  "
+                           "kappa<sub>C</sub> ,  "
                            "min<sub>i</sub>[eps<sub>su,i</sub>/d<sub>s,i</sub>] ,  "
                            "min<sub>j</sub>[(eps<sub>pu,j</sub>-"
                            "eps<sub>p0,j</sub>)/d<sub>p,j</sub>] )",
@@ -5734,6 +5860,28 @@ class ReportBuilder:
                            ref=f"Concrete: {concrete_ref}; reinforcement: {steel_ref}")
             self._small("Each bar and tendon uses its assigned material law and "
                         "strain limit in the element-wise minima.")
+            pivot_c_on = getattr(self.inp.get("concrete"), "pivot_c", False) is True
+            self._small(
+                "Pivot C (EN 1992-1-1:2004, 6.1(6) and Figure 6.1): when the "
+                "whole section is in compression (c &gt; h), Sector limits the "
+                "strain at (1 - eps<sub>c2</sub>/eps<sub>cu2</sub>) h from the "
+                "more compressed face to eps<sub>c2</sub>. This gives the "
+                "candidate kappa<sub>C</sub> = eps<sub>c2</sub> / "
+                "(c - (1 - eps<sub>c2</sub>/eps<sub>cu2</sub>) h), where h is the "
+                "section depth normal to the neutral axis. "
+                + (
+                    "The limit is on in this calculation."
+                    if pivot_c_on
+                    else "The limit is off in this calculation, so kappa<sub>C</sub> "
+                         "is not a candidate."
+                )
+                + (
+                    " " + _PIVOT_C_2023_NOTE + ", so the DS/EN 1992-1-1:2023 "
+                    "preset clears this limit."
+                    if material_2023
+                    else ""
+                )
+            )
             self._p("The compression depth c is solved from axial equilibrium and "
                     "the moments follow from the force resultants:")
             self._formula("F<sub>c</sub> + F<sub>s</sub> + F<sub>p</sub> = N ;   "
@@ -6935,18 +7083,17 @@ class ReportBuilder:
             if governing_candidate is not None:
                 mode_labels = {
                     "concrete_crushing": "Concrete crushing",
+                    "concrete_concentric_compression": _PIVOT_C_MODE_LABEL,
                     "bar_tension_rupture": "Bar tension rupture",
                     "bar_compression_rupture": "Bar compression rupture",
                     "tendon_tension_rupture": "Tendon tension rupture",
                 }
                 mode = governing_candidate.get("mode")
-                element = governing_candidate.get("element_id")
                 self._small(
                     "<b>Governing strain limit:</b> "
                     + _html_escape(mode_labels.get(mode, str(mode or "-")))
                     + "; "
-                    + ("element " + _html_escape(str(element))
-                       if element else "extreme concrete fiber")
+                    + _curvature_candidate_location(governing_candidate)
                 )
                 self._small(
                     "Sector governing-curvature minimum; the governing material "
@@ -7044,6 +7191,7 @@ class ReportBuilder:
         if candidates:
             mode_labels = {
                 "concrete_crushing": "Concrete crushing",
+                "concrete_concentric_compression": _PIVOT_C_MODE_LABEL,
                 "bar_tension_rupture": "Bar tension rupture",
                 "bar_compression_rupture": "Bar compression rupture",
                 "tendon_tension_rupture": "Tendon tension rupture",
@@ -7061,7 +7209,8 @@ class ReportBuilder:
                 for candidate in candidates:
                     candidate_rows.append([
                         mode_labels.get(candidate["mode"], candidate["mode"]),
-                        candidate.get("element_id") or "extreme concrete fiber",
+                        candidate.get("element_id")
+                        or _concrete_candidate_location(candidate),
                         _fmt(candidate["strain_limit"] * 1000.0, 6),
                         _fmt(candidate["distance_from_na_m"] * _MM, 4),
                         _fmt(candidate["curvature_per_m"], 8),
@@ -7076,7 +7225,6 @@ class ReportBuilder:
             if selected and governing_candidate is not None:
                 if self.profile.key != "Audit":
                     self._h2("Governing ultimate curvature")
-                    selected_element = governing_candidate.get("element_id")
                     self._small(
                         "<b>Selected candidate:</b> "
                         + _html_escape(mode_labels.get(
@@ -7084,11 +7232,7 @@ class ReportBuilder:
                             governing_candidate["mode"],
                         ))
                         + "; "
-                        + (
-                            "element " + _html_escape(str(selected_element))
-                            if selected_element
-                            else "extreme concrete fiber"
-                        )
+                        + _curvature_candidate_location(governing_candidate)
                         + "."
                     )
                 self._formula(
@@ -7985,8 +8129,85 @@ class ReportBuilder:
             )
         if sh.get("model_2023"):
             self._shear_2023(sh, res)
+        else:
+            self._shear_2005(sh, res)
+        self._concrete_route_chord(sh)
+
+    def _concrete_route_chord(self, sh):
+        """Tension chord of the concrete shear route with the shift a_l = d."""
+        publication = presentation.concrete_route_chord_publication_assessment(
+            self.inp, sh, torsion_result=self.out.get("torsion")
+        )
+        if publication["required"] is not True:
             return
-        self._shear_2005(sh, res)
+        self._h2("Tension chord with the moment shift a<sub>l</sub> = d")
+        chord = publication["chord"]
+        if publication["valid"] is not True or not isinstance(chord, Mapping):
+            self._small(
+                "NOT ASSESSED: The tension chord result is not current. "
+                "Recalculate the shear check before you use it."
+            )
+            return
+        if chord.get("valid") is not True:
+            self._small(
+                "NOT ASSESSED: " + _html_escape(str(chord.get("reason") or "-"))
+                + "."
+            )
+            return
+        cap = chord.get("m_ed_max")
+        if chord.get("shear_term_selection") == "uncapped, MEd,max below MEd":
+            cap_text = (
+                "The entered M<sub>Ed,max</sub> is less than M<sub>Ed</sub>, so "
+                "it is not used."
+            )
+        elif cap is None:
+            cap_text = (
+                "No member maximum moment M<sub>Ed,max</sub> is entered, so the "
+                "shift has no limit."
+            )
+        else:
+            cap_text = (
+                f"The member maximum moment M<sub>Ed,max</sub> = {_fmt(cap, 1)} kNm "
+                + ("limits the shifted moment." if chord.get("capped")
+                   else "does not limit the shifted moment.")
+            )
+        self._small(
+            _html_escape(str(chord.get("clause") or "-"))
+            + ": without shear reinforcement, the tension reinforcement carries "
+              "the moment increased by |V<sub>Ed</sub>| d. " + cap_text
+        )
+        has_torsion = chord.get("has_torsion") is True
+        if has_torsion:
+            self._small(
+                "EN 1992-1-1:2004, 6.3.2(3): with torsion, the same chord also "
+                "carries half of the torsion longitudinal force F<sub>td,T</sub> "
+                "(Formula (6.28)) on the lever arm z of the links route. The "
+                "M<sub>Ed,max</sub> limit does not apply to this share."
+            )
+        rows = [
+            ["Quantity", "Value"],
+            ["M<sub>Ed</sub> on the shear tension face",
+             f"{_fmt(chord['m_ed'], 2)} kNm"],
+            ["|V<sub>Ed</sub>| d",
+             f"{_fmt(chord['v_ed'], 2)} &#183; {_fmt(chord['d'], 3)} = "
+             f"{_fmt(chord['mv_uncapped'], 2)} kNm"],
+            ["M<sub>Ed</sub> + |V<sub>Ed</sub>| d",
+             f"{_fmt(chord['m_ed'] + chord['mv_uncapped'], 2)} kNm"],
+        ]
+        if chord.get("capped") and cap is not None:
+            rows.append(["Limited to M<sub>Ed,max</sub>", f"{_fmt(cap, 2)} kNm"])
+        if has_torsion:
+            rows.append([
+                "F<sub>td,T</sub> z/2",
+                f"{_fmt(chord['ftd_t'], 2)} &#183; {_fmt(chord['z'], 3)}/2 = "
+                f"{_fmt(chord['mt'], 2)} kNm",
+            ])
+        rows.extend([
+            ["M<sub>Ed,total</sub>", f"{_fmt(chord['m_total'], 2)} kNm"],
+            ["M<sub>Rd</sub> of the face", f"{_fmt(chord['m_rd'], 2)} kNm"],
+            ["Utilisation", f"{_pct(chord['util'])} ({chord['status']})"],
+        ])
+        self._table(rows, [70 * mm, 80 * mm])
 
     def _shear_2005(self, sh, res):
         bw_src = "user input" if sh["bw_user"] else "derived (minimum solid width)"
@@ -8241,7 +8462,7 @@ class ReportBuilder:
                  f"{_fmt(lk['sigma_cd'], 3)} MPa"],
                 ["Compression-field limit", "nu f<sub>cd</sub>",
                  f"{_fmt(lk['nu_fcd'], 3)} MPa"],
-                ["Additional chord force", "N<sub>Vd</sub>",
+                ["Additional tensile axial force from shear", "N<sub>Vd</sub>",
                  f"{_fmt(links['longitudinal_shear_force'], 1)} kN"],
             ])
         else:
@@ -8391,7 +8612,7 @@ class ReportBuilder:
             )
         if not links_are_nominal:
             self._small(angle_note)
-            self._small("The provided links do not replace the applicable concrete resistance route. Thus, no longitudinal shear force is applied in the nominal check.")
+            self._small("The provided links do not replace the applicable concrete resistance route. Thus, no longitudinal shear force is applied in the nominal check. The tension chord check with the moment shift a<sub>l</sub> = d applies.")
             chord_status = str(
                 chord_assessment.get("status") or "NOT APPLICABLE"
             ).upper()
@@ -8435,32 +8656,30 @@ class ReportBuilder:
                 ch.get("tension_low", True), ch.get("axis")
             )
             if model_2023:
-                chord_formula = (
+                self._formula(
                     "M<sub>Ed,total</sub> = max(M<sub>face</sub> + "
-                    "N<sub>Vd</sub>&#183;z, 0) + "
-                    "F<sub>td,T</sub>&#183;z/2"
-                )
-                chord_ref = "DS/EN 1992-1-1:2023, 8.2.3(8), Formulae (8.50)-(8.52)"
+                    "(N<sub>Vd</sub>/2)&#183;z, 0) + "
+                    "F<sub>td,T</sub>&#183;z/2",
+                    equation_key="shear.chord.demand",
+                    equation_variant="2023",
+                    ref="DS/EN 1992-1-1:2023, 8.2.3(8), Formulae (8.50)-(8.52)",
+                    subst=(
+                        f"max({_fmt(ch.get('face_m_ed_signed', ch['m_ed']), 1)} + "
+                        f"{_fmt(ch['mv'], 1)}, 0) + {_fmt(ch['mt'], 1)} kNm "
+                        f" (z = {_fmt(ch['z'], 3)} m)"
+                    ),
+                    result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
             else:
-                chord_formula = (
-                    "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
-                    "&#916;F<sub>td</sub>&#183;z + F<sub>td,T</sub>&#183;z/2"
-                )
-                chord_ref = "EN 1992-1-1 6.2.3(7) + 6.3.2"
-            self._formula(
-                chord_formula,
-                equation_key="shear.chord.demand",
-                equation_variant="2023" if model_2023 else "2005",
-                ref=chord_ref,
-                subst=(
-                    f"max({_fmt(ch.get('face_m_ed_signed', ch['m_ed']), 1)} + "
-                    f"{_fmt(ch['mv'], 1)}, 0) + {_fmt(ch['mt'], 1)} kNm "
-                    f" (z = {_fmt(ch['z'], 3)} m)"
-                    if model_2023
-                    else f"{_fmt(ch['m_ed'], 1)} + {_fmt(ch['mv'], 1)} + "
-                         f"{_fmt(ch['mt'], 1)} kNm  (z = {_fmt(ch['z'], 3)} m)"
-                ),
-                result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
+                # 6.2.3(7): show the MEd,max limit only when the retained
+                # result evaluated it, with the operands that it used.
+                capped_form = combined_core.chord_cap_evaluated(ch)
+                self._formula(
+                    _chord_demand_2005_formula(capped_form),
+                    equation_key="shear.chord.demand",
+                    equation_variant="2005-capped" if capped_form else "2005",
+                    ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
+                    subst=_chord_demand_2005_substitution(ch, capped_form),
+                    result=f"M<sub>Ed,total</sub> = {_fmt(ch['m_total'], 1)} kNm")
             fallback = chord_publication.get("fallback")
             fell_back = fallback is not None
             chord_status = str(
@@ -8496,10 +8715,21 @@ class ReportBuilder:
             notes = [f"Tension chord: {face_desc}. M<sub>Rd</sub> "
                      + _report_chord_mrd_label(ch["axis"], ch.get("m_off", 0.0), ch.get("conditional", True)) + "."]
             if ch.get("theta_mode") == "utilisation":
-                demand_word = "uncapped" if model_2023 else "capped"
+                demand_word = (
+                    "uncapped" if model_2023 or not ch.get("capped") else "capped"
+                )
                 notes.append(f"This {demand_word} demand is part of the strut-angle objective. The selected angle moves away from the interval boundary when the chord would otherwise govern.")
+            if not model_2023 and ch.get("shear_term_selection") == _MED_MAX_BELOW_MED:
+                notes.append(_MED_MAX_BELOW_MED_NOTE)
             if model_2023:
                 notes.append("The acting axial force is already included in the conditional bending resistance for each face.")
+                notes.append(
+                    "Sector does not limit the chord force F<sub>td</sub> with an "
+                    "entered member maximum moment M<sub>Ed,max</sub>. Formula "
+                    "(8.53) applies only at a direct intermediate support or in "
+                    "the region of a concentrated load. Sector does not establish "
+                    "this condition."
+                )
             if fell_back:
                 fallback_axis = fallback.get("axis", "?")
                 fallback_face = "negative" if fallback.get("tension_low", True) else "positive"
@@ -8533,8 +8763,8 @@ class ReportBuilder:
         """Render the separate-shear face table after caller validation."""
         rows = [[
             "Face", "Chord", "Formula", "M<sub>face</sub>",
-            "N<sub>Vd</sub>z", "M<sub>Ed,total</sub>",
-            "M<sub>Rd</sub>", "Utilization", "Status",
+            "N<sub>Vd</sub>z/2", "M<sub>Ed,total</sub>",
+            "M<sub>Rd</sub>", "Utilisation", "Status",
         ]]
         for candidate in chord_publication.get("candidates") or ():
             if candidate.get("role") != "shear_axis":
@@ -8776,6 +9006,20 @@ class ReportBuilder:
                 font=7.2,
                 caption='Longitudinal chord demand and conditional resistance',
             )
+            if lg.get("capped"):
+                self._small(
+                    "The shear shift is limited so that bending plus shear does not "
+                    "exceed the entered member maximum moment M<sub>Ed,max</sub>"
+                    + (
+                        f" = {_fmt(lg.get('m_ed_max'), 1)} kNm"
+                        if lg.get("m_ed_max") is not None
+                        else ""
+                    )
+                    + " (6.2.3(7)). Without the limit, the shear shift is "
+                    f"&#916;F<sub>td</sub>&#183;z = {_fmt(lg.get('mv_uncapped'), 1)} kNm."
+                )
+            elif lg.get("shear_term_selection") == _MED_MAX_BELOW_MED:
+                self._small(_MED_MAX_BELOW_MED_NOTE)
             self._small(viz.chord_angle_note(
                 lg.get("theta_mode"),
                 angle_valid=concrete.get("angle_valid") is True,
@@ -9340,15 +9584,17 @@ class ReportBuilder:
             self._p("This force is distributed around the perimeter. Half acts on this chord.")
             self._p("Each contribution is converted to an equivalent moment with lever arm z. It is checked against M<sub>Rd</sub> "
                     + _report_chord_mrd_label(ax, lg.get("m_off", 0.0), lg.get("conditional", True)) + ".")
+            capped_form = combined_core.chord_cap_evaluated(lg)
             self._formula(
-                "M<sub>Ed,total</sub> = M<sub>Ed</sub> + "
-                "&#916;F<sub>td</sub>&#183;z + F<sub>td,T</sub>&#183;z/2",
+                _chord_demand_2005_formula(capped_form),
                 equation_key="combined.chord.demand",
+                equation_variant="capped" if capped_form else None,
                 ref="EN 1992-1-1 6.2.3(7) + 6.3.2",
-                subst=f"{_fmt(lg['m_ed'], 1)} + {_fmt(lg['mv'], 1)} + "
-                      f"{_fmt(lg['mt'], 1)} kNm  (z = {_fmt(lg['z'], 3)} m, "
-                      f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
-                      f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN)",
+                subst=_chord_demand_2005_substitution(
+                    lg, capped_form,
+                    f"&#916;F<sub>td</sub> = {_fmt(lg['ftd_v'], 1)} kN, "
+                    f"F<sub>td,T</sub> = {_fmt(lg['ftd_t'], 1)} kN",
+                ),
                 result=(
                     f"M<sub>Ed,total</sub> = {_fmt(lg['m_total'], 1)} kNm"
                 ),
@@ -9400,9 +9646,12 @@ class ReportBuilder:
                 notes.append("The &#8721;(S<sub>Ed</sub>/S<sub>Rd</sub>) check uses the full biaxial bending utilization. It remains the primary combined check.")
             if lg["capped"]:
                 notes[0:0] = [
-                    "The shear shift is limited so that bending plus shear does not exceed M<sub>Rd</sub>.",
-                    "Clause 6.2.3(7) permits the added tension to be limited by the tension at peak moment. This section calculation uses M<sub>Rd</sub> as that limit.",
+                    "The shear shift is limited so that bending plus shear does not exceed the entered member maximum moment M<sub>Ed,max</sub>"
+                    + (f" = {_fmt(lg.get('m_ed_max'), 1)} kNm" if lg.get("m_ed_max") is not None else "")
+                    + " (6.2.3(7)).",
                 ]
+            elif lg.get("shear_term_selection") == _MED_MAX_BELOW_MED:
+                notes[0:0] = [_MED_MAX_BELOW_MED_NOTE]
             for note in notes:
                 self._small(note)
             self._chord_off_block(

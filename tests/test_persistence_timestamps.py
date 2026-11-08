@@ -19,7 +19,7 @@ def _function(source, name, namespace):
                 if isinstance(item, ast.FunctionDef) and item.name == name)
     node.decorator_list = []
     compiled = compile(ast.Module(body=[node], type_ignores=[]), str(APP), "exec")
-    code = next(value for value in compiled.co_consts if isinstance(value, CodeType))
+    code = next(value for value in compiled.co_consts if isinstance(value, CodeType) and value.co_name != "__annotate__")
     return FunctionType(code, namespace)
 
 
@@ -35,7 +35,7 @@ def _actual_recovery_value(source):
         body=[ast.Return(value=writes[0].value)], decorator_list=[])
     code = compile(ast.fix_missing_locations(ast.Module(body=[node], type_ignores=[])), str(APP), "exec")
     frozen_now = datetime(2026, 10, 13, 4, 5, 6)
-    produced = FunctionType(next(value for value in code.co_consts if isinstance(value, CodeType)),
+    produced = FunctionType(next(value for value in code.co_consts if isinstance(value, CodeType) and value.co_name != "__annotate__"),
                             {"__builtins__": __builtins__,
                              "datetime": SimpleNamespace(now=lambda: frozen_now)})()
     assert produced == "04:05:06"

@@ -135,8 +135,8 @@ def _validate_python(source: Path, python: Path) -> None:
         version = (source / ".python-version").read_text(encoding="ascii").strip()
     except (OSError, UnicodeError) as exc:
         raise PortableBuildError("cannot read .python-version") from exc
-    if re.fullmatch(r"3\.13\.(0|[1-9][0-9]*)", version) is None:
-        raise PortableBuildError(".python-version must pin an exact Python 3.13 patch")
+    if re.fullmatch(r"3\.14\.(0|[1-9][0-9]*)", version) is None:
+        raise PortableBuildError(".python-version must pin an exact Python 3.14 patch")
     probe = (
         "import platform, struct; "
         "print(platform.python_implementation() + '|' + platform.python_version() "

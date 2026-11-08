@@ -27,14 +27,6 @@ COVERAGE_STEP_NAME = "Run complete test suite with coverage"
 BRANCH_COVERAGE_STEP_NAME = "Run decision-branch coverage gate"
 CHECKOUT_STEP_NAME = "Check out source"
 CHECKOUT_ACTION = "actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5"
-REPORT_RENDER_STEP_NAME = "Render report fixture with real figures"
-REPORT_RENDER_COMMAND = (
-    "python tools/report_render_fixture.py --output qa-artifacts/report"
-)
-MANUAL_RENDER_STEP_NAME = "Render manual fixture with real figures"
-MANUAL_RENDER_COMMAND = (
-    "python tools/manual_render_fixture.py --output qa-artifacts/manual"
-)
 QA_UPLOAD_STEP_NAME = "Upload QA diagnostics"
 QA_UPLOAD_ACTION = (
     "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
@@ -480,7 +472,13 @@ def expected_validator_command() -> str:
 
 
 
-CORE_SHARDS = ("report", "combined", "native", "other")
+# The balanced core and decision-branch shards and the serial real-image
+# shard of tools/qa_core_shards.py; the merge proves their completeness.
+CORE_SHARDS = (
+    *(f"core-{index:02d}" for index in range(1, 13)),
+    *(f"branch-{index:02d}" for index in range(1, 5)),
+    "real",
+)
 CORE_DOWNLOAD_STEP_NAME = "Download exact core shard evidence"
 CORE_DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
 CORE_DOWNLOAD_SETTINGS = {
@@ -495,7 +493,7 @@ def expected_core_job() -> dict[str, Any]:
         "name": "Primary pytest (${{ matrix.shard }})",
         "needs": "preflight",
         "runs-on": "windows-latest",
-        "timeout-minutes": 240,
+        "timeout-minutes": 120,
         "strategy": {"fail-fast": False, "matrix": {"shard": list(CORE_SHARDS)}},
         "steps": [
             {"name": CHECKOUT_STEP_NAME, "uses": CHECKOUT_ACTION, "with": {"fetch-depth": 0}},
@@ -529,20 +527,7 @@ def expected_preflight_job() -> dict[str, Any]:
 
 def expected_coverage_command(data: Mapping[str, Any]) -> str:
     coverage = data["coverage"]
-    targets = "\n".join(
-        f"  --cov={target} `" for target in coverage["targets"]
-    )
     return f'''$ErrorActionPreference = "Stop"
-$baseTemp = Join-Path $env:RUNNER_TEMP (
-  "sector-pytest-{{0}}-{{1}}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
-)
-if (Test-Path -LiteralPath $baseTemp) {{
-  throw "Full-suite pytest basetemp must be previously nonexistent: $baseTemp"
-}}
-New-Item -ItemType Directory -Path $baseTemp | Out-Null
-$vizTemp = Join-Path $baseTemp "real-viz"
-$reportTemp = Join-Path $baseTemp "real-report"
-$manualTemp = Join-Path $baseTemp "real-manual"
 $phaseFailures = @()
 if ("${{{{ steps.core_download.outcome }}}}" -ne "success") {{
   $phaseFailures += "core artifact download"
@@ -551,47 +536,7 @@ if ("${{{{ steps.core_download.outcome }}}}" -ne "success") {{
 python tools/qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts
 $phaseExit = $LASTEXITCODE
 if ($phaseExit -ne 0) {{
-  $phaseFailures += "parallel core shards ($phaseExit)"
-}}
-
-python -m pytest tests/test_viz.py -n 0 `
-  -m "real_image_export" `
-  --basetemp $vizTemp `
-{targets}
-  --cov-append `
-  --cov-report= `
-  --junitxml=qa-artifacts/test-results-real-viz.xml
-$phaseExit = $LASTEXITCODE
-if ($phaseExit -ne 0) {{
-  $phaseFailures += "serial real-viz ($phaseExit)"
-}}
-
-python -m pytest `
-  tests/test_report_rendered.py::test_issued_report_renders_every_page_and_retains_expected_content `
-  -n 0 `
-  -m "real_image_export" `
-  --basetemp $reportTemp `
-{targets}
-  --cov-append `
-  --cov-report= `
-  --junitxml=qa-artifacts/test-results-real-report.xml
-$phaseExit = $LASTEXITCODE
-if ($phaseExit -ne 0) {{
-  $phaseFailures += "serial real-report ($phaseExit)"
-}}
-
-python -m pytest `
-  tests/test_manual_rendered.py::test_issued_manual_renders_every_page_and_retains_navigation `
-  -n 0 `
-  -m "real_image_export" `
-  --basetemp $manualTemp `
-{targets}
-  --cov-append `
-  --cov-report= `
-  --junitxml=qa-artifacts/test-results-real-manual.xml
-$phaseExit = $LASTEXITCODE
-if ($phaseExit -ne 0) {{
-  $phaseFailures += "serial real-manual ($phaseExit)"
+  $phaseFailures += "parallel test shards ($phaseExit)"
 }}
 
 python -m coverage xml -o qa-artifacts/coverage.xml
@@ -613,31 +558,9 @@ if ($phaseFailures.Count -gt 0) {{
 
 
 def expected_branch_coverage_command(data: Mapping[str, Any]) -> str:
-    branch = data["branch_coverage"]
-    tests = "\n".join(f"  {path} `" for path in branch["tests"])
-    targets = "\n".join(f"  --cov={module} `" for module in branch["targets"])
+    # The branch shards run data["branch_coverage"]["tests"]; the merge
+    # writes the combined Coverage.py JSON results that this step enforces.
     return f'''$ErrorActionPreference = "Stop"
-$branchTemp = Join-Path $env:RUNNER_TEMP (
-  "sector-branch-pytest-{{0}}-{{1}}" -f $env:GITHUB_RUN_ID, $env:GITHUB_RUN_ATTEMPT
-)
-if (Test-Path -LiteralPath $branchTemp) {{
-  throw "Branch-coverage pytest basetemp must be previously nonexistent: $branchTemp"
-}}
-New-Item -ItemType Directory -Path $branchTemp | Out-Null
-
-python -m pytest `
-{tests}
-  -n 4 `
-  --dist loadgroup `
-  --basetemp $branchTemp `
-{targets}
-  --cov-branch `
-  --cov-report=json:{BRANCH_RESULTS_PATH} `
-  --junitxml=qa-artifacts/test-results-branches.xml
-if ($LASTEXITCODE -ne 0) {{
-  throw "Decision-branch test matrix failed ($LASTEXITCODE)"
-}}
-
 python tools/verify_coverage_gate.py quality-coverage-gate.toml --results {BRANCH_RESULTS_PATH}
 if ($LASTEXITCODE -ne 0) {{
   throw "Decision-branch coverage floor failed ($LASTEXITCODE)"
@@ -666,32 +589,6 @@ def _named_step(steps: object, name: str) -> Mapping[str, Any]:
     if len(matches) != 1:
         raise CoverageGateContractError(f"workflow must contain one {name!r} step")
     return matches[0]
-
-
-def _always_run_step(
-    steps: object,
-    name: str,
-    command: str,
-) -> Mapping[str, Any]:
-    step = _named_step(steps, name)
-    if (
-        set(step) != {"name", "if", "run"}
-        or step.get("if") != "always()"
-        or step.get("run") != command
-    ):
-        raise CoverageGateContractError(
-            f"{name} must always retain its exact evidence destination"
-        )
-    command_matches = [
-        candidate
-        for candidate in steps
-        if isinstance(candidate, Mapping) and candidate.get("run") == command
-    ]
-    if len(command_matches) != 1:
-        raise CoverageGateContractError(
-            f"workflow must contain exactly one command for {name}"
-        )
-    return step
 
 
 def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
@@ -780,16 +677,6 @@ def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
     if branch_step.get("run") != expected_branch_coverage_command(data):
         raise CoverageGateContractError("branch coverage command differs")
 
-    report_render = _always_run_step(
-        steps,
-        REPORT_RENDER_STEP_NAME,
-        REPORT_RENDER_COMMAND,
-    )
-    manual_render = _always_run_step(
-        steps,
-        MANUAL_RENDER_STEP_NAME,
-        MANUAL_RENDER_COMMAND,
-    )
     upload = _named_step(steps, QA_UPLOAD_STEP_NAME)
     if (
         set(upload) != {"name", "if", "uses", "with"}
@@ -805,14 +692,12 @@ def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
         download,
         coverage_step,
         branch_step,
-        report_render,
-        manual_render,
         upload,
     ]
     positions = [steps.index(step) for step in ordered]
     if positions != sorted(positions) or len(set(positions)) != len(positions):
         raise CoverageGateContractError(
-            "coverage, render and evidence-upload step order differs"
+            "coverage and evidence-upload step order differs"
         )
 
 

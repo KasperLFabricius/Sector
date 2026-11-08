@@ -1,8 +1,55 @@
 """Shared pytest fixtures."""
 
 from __future__ import annotations
+import os
+
 
 import pytest
+
+from tools.qa_core_shards import load_durations, module_seconds, node_row, seconds_for
+
+# A test is marked ``slow`` when its CI duration in tools/qa_shard_durations.json,
+# or the mean CI duration of all tests in its module, reaches this many seconds.
+# Tests of one module share report and native-run caches: CI charges the shared
+# cost to the first test that runs, but a test alone can pay all of it. Every
+# serial real-image export test is slow too. ``-m "not slow"`` selects the fast
+# local tier; CI ignores the marker and runs every test.
+SLOW_SECONDS = 1.0
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    """Mark slow tests from the shard duration table before marker selection."""
+    durations = load_durations()
+    for item in items:
+        node, _ = node_row(item)
+        seconds = max(seconds_for(node, durations), module_seconds(node, durations))
+        if item.get_closest_marker("real_image_export") or seconds >= SLOW_SECONDS:
+            item.add_marker(pytest.mark.slow)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_fixture_setup(fixturedef, request):
+    """Give each module or session fixture its own autosave folder.
+
+    These fixtures run before ``_isolate_autosave``. A setup that takes longer than
+    the autosave interval would otherwise write ``~/.sector/autosave.json``, and the
+    next fixture app, also in another worker, would restore that project on launch.
+    A fixture that sets its own folder keeps it. The folder stays after the setup,
+    because a persistent image worker can keep its launcher page there.
+    """
+    if fixturedef.scope == "function":
+        yield
+        return
+    previous = os.environ.get("SECTOR_AUTOSAVE_DIR")
+    folder = str(request.config._tmp_path_factory.mktemp("fixture_autosave"))
+    os.environ["SECTOR_AUTOSAVE_DIR"] = folder
+    yield
+    if os.environ.get("SECTOR_AUTOSAVE_DIR") == folder:
+        if previous is None:
+            del os.environ["SECTOR_AUTOSAVE_DIR"]
+        else:
+            os.environ["SECTOR_AUTOSAVE_DIR"] = previous
 
 
 @pytest.fixture(autouse=True)
@@ -29,3 +76,19 @@ def _retain_callable_page_client():
         yield
     finally:
         patch.undo()
+
+
+@pytest.fixture(autouse=True)
+def _script_thread_state():
+    """Give direct native-callback tests the thread state of a script run.
+
+    Streamlit 1.66 runs each widget callback inside ``ThreadState.scoped()``,
+    which needs a state that ``ScriptRunContext.reset()`` sets in a script
+    thread. A test that calls the session-state lifecycle directly gets the
+    default ``FragmentThreadState`` here (no active script hash). AppTest runs
+    its scripts in their own threads, which this does not touch.
+    """
+    from streamlit.runtime.scriptrunner_utils.script_run_context import ThreadState
+
+    ThreadState.initialize()
+    yield

@@ -168,6 +168,10 @@ class DesignCode:
     # v_min = 0.035*k^1.5*sqrt(fck), the DK NA:2024
     # v_min = (0.051/gamma_c)*k^1.5*sqrt(fck), selected by ``shear_vmin_over_gamma_c``.
     shear_model: str = "2005"
+    # EN 1992-1-1:2004 6.1(6) and Figure 6.1 limit the strain at pivot C of a
+    # fully compressed section to eps_c2. DS/EN 1992-1-1:2023 8.1.1(3) limits
+    # only eps_cu.
+    pivot_c: bool = True
     shear_crd_c: float = 0.18
     shear_k1: float = 0.15
     shear_vmin_coeff: float = 0.035
@@ -302,7 +306,8 @@ class DesignCode:
         e_c2, e_cu2, n = self.strain_law(fck)
         return Concrete(fck=fck, gamma_c=self.gamma_c, curve=2,
                         alpha_cc=self.concrete_factor(fck),
-                        eps_c2=e_c2, eps_cu2=e_cu2, n=n)
+                        eps_c2=e_c2, eps_cu2=e_cu2, n=n,
+                        pivot_c=self.pivot_c)
 
     def steel(self, fyk: float) -> MildSteel:
         """Reinforcement law for characteristic yield ``fyk`` (MPa) under this code.
@@ -359,6 +364,7 @@ EC2_2005_DKNA = DesignCode(
 EC2_2023 = DesignCode(
     key="EC2-2023",
     label="DS/EN 1992-1-1:2023",
+    pivot_c=False,
     gamma_c=1.5,
     gamma_s=1.15,
     gamma_ct=1.50,

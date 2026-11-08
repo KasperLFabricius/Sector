@@ -4,9 +4,10 @@ Project files contain the geometry, reinforcement, actions, numerical
 coefficients and direct method choices needed to reproduce a calculation.
 Sector 0.94 projects used schema 25. Sector 0.95 used schema 26 to separate
 long-term, short-term and heightened permitted crack-width inputs. Sector 0.96.9
-uses schema 27 to persist the user-selected DS/EN 1992-1-1:2023 shear partial
-factor.
-Schemas 25 and 26 have bounded in-memory migrations; schema 24 and future
+used schema 27 to persist the user-selected DS/EN 1992-1-1:2023 shear partial
+factor. Sector 0.97.0 uses schema 28 for the corrected calculation methods and
+their method inputs (pivot C, the member maximum moment MEd,max).
+Schemas 25, 26 and 27 have bounded in-memory migrations; schema 24 and future
 schemas remain unsupported. Retired component-mapped bridge inputs are
 deliberately absent from the schema.
 """
@@ -54,13 +55,65 @@ from sector.sls_identity import (
 )
 
 FORMAT = "sector-project"
-VERSION = 27
+VERSION = 28
+PREVIOUS_VERSION = 27
 MIGRATABLE_VERSION = 26
 LEGACY_MIGRATABLE_VERSION = 25
 MIGRATABLE_VERSIONS = (
     LEGACY_MIGRATABLE_VERSION,
     MIGRATABLE_VERSION,
+    PREVIOUS_VERSION,
 )
+
+# Sector 0.97.0 corrected these calculation methods. A project from schema 27 or
+# earlier is calculated with them after load, and the load message lists them.
+SCHEMA28_METHOD_CHANGES = (
+    "Bending resistance, EN 1992-1-1:2004 presets: when the full section is in "
+    "compression, Sector limits the strain at pivot C to eps_c2 (6.1(6) and "
+    "Figure 6.1). You can clear this limit in the concrete panel to reproduce "
+    "a legacy calculation.",
+    "Shear chord, EN 1992-1-1:2004: only an entered member maximum moment "
+    "MEd,max limits the shear term of 6.2.3(7). Sector no longer uses the "
+    "section resistance MRd as that limit.",
+    "Shear chord, DS/EN 1992-1-1:2023: each chord receives NVd/2 in Formulae "
+    "(8.51) and (8.52).",
+    "Shear without shear reinforcement: the tension chord includes the moment "
+    "shift a_l = d (EN 1992-1-1:2004, 6.2.2(5) and 9.2.1.3(2); "
+    "DS/EN 1992-1-1:2023, 8.2.2(10)).",
+)
+
+
+def schema28_migration_warning(*, pivot_c_cleared: bool = False) -> str:
+    """Load message for a project saved before the 0.97.0 method corrections."""
+
+    return (
+        "This project file is from an earlier Sector version. Sector now "
+        "calculates it with corrected methods, so results can differ from the "
+        "earlier results: " + " ".join(SCHEMA28_METHOD_CHANGES)
+        + (
+            " This project file clears the pivot C limit, so Sector does not "
+            "apply it."
+            if pivot_c_cleared
+            else ""
+        )
+    )
+
+
+def _schema28_pivot_c_default(scalars: Mapping) -> bool:
+    """Pivot C default of the concrete preset that the project load applies."""
+
+    return material_presets.pivot_c_default(
+        scalars.get("conc_preset", material_presets.DEFAULT_CONCRETE_PRESET)
+    )
+
+
+def _schema28_defaults(scalars: dict) -> None:
+    """Add the schema-28 method inputs to a migrated project."""
+
+    scalars.setdefault("conc_pivot_c", _schema28_pivot_c_default(scalars))
+    scalars.setdefault(capacity.MED_MAX_ON_KEY, False)
+    for key in capacity.MED_MAX_KEYS.values():
+        scalars.setdefault(key, 0.0)
 
 
 class ProjectInputError(ValueError):
@@ -216,7 +269,7 @@ SCALAR_KEYS = [
     # Concrete and material catalogues.
     "conc_preset", "conc_fck", "conc_gamma_c", "conc_k_tc",
     "conc_alpha_cc", "conc_eps_c2", "conc_eps_cu2", "conc_n",
-    "conc_Ec", "sls_fctm",
+    "conc_pivot_c", "conc_Ec", "sls_fctm",
     material_catalog.MILD_CATALOG_KEY,
     material_catalog.PRESTRESS_CATALOG_KEY,
     fatigue_inputs.DETAIL_CATALOG_KEY,
@@ -259,7 +312,7 @@ SCALAR_KEYS = [
     "shear_vy_link_legs", "shear_link_dia", "shear_link_s",
     "shear_fywk", "shear_vx_transverse_leg_spacing",
     "shear_vy_transverse_leg_spacing", "strut_cot_min",
-    "strut_cot_max",
+    "strut_cot_max", capacity.MED_MAX_ON_KEY, *capacity.MED_MAX_KEYS.values(),
     # Torsion and combined resistance.
     "torsion_on", "torsion_method", "torsion_design_basis",
     "torsion_member_scope", "torsion_T", "torsion_tef",
@@ -317,6 +370,8 @@ _POSITIVE_FACTOR_KEYS = {
 # No Boolean/string/container truthiness or float-from-text conversion is allowed.
 _BOOLEAN_SCALAR_KEYS = frozenset({
     "qsv_qs_cover_to_edge",
+    "conc_pivot_c",
+    capacity.MED_MAX_ON_KEY,
     "mild_active_comp",
     "pl_check_util",
     "pl_interaction",
@@ -1903,7 +1958,8 @@ def _decode(text: str) -> dict:
         raise ProjectInputError(
             f"unsupported Sector project schema {version!r}; "
             f"only current schema {VERSION} and migrations from schemas "
-            f"{LEGACY_MIGRATABLE_VERSION} and {MIGRATABLE_VERSION} are supported",
+            f"{LEGACY_MIGRATABLE_VERSION}, {MIGRATABLE_VERSION} and "
+            f"{PREVIOUS_VERSION} are supported",
             engineer_message=_PROJECT_INCOMPATIBLE,
         )
     if not isinstance(data.get("tables"), Mapping):
@@ -2279,6 +2335,17 @@ def parse_project_with_info(text: str):
             )
         scalars = _canonical_scalars(raw_scalars, tables)
 
+    method_changes: tuple[str, ...] = ()
+    if source_version != VERSION:
+        _schema28_defaults(scalars)
+        method_changes = (
+            schema28_migration_warning(
+                pivot_c_cleared=(
+                    scalars["conc_pivot_c"] is False
+                    and _schema28_pivot_c_default(scalars)
+                ),
+            ),
+        )
     _apply_presentation(data, raw_scalars, scalars)
     _validate_geometry(tables)
     info = {
@@ -2288,6 +2355,7 @@ def parse_project_with_info(text: str):
             source_version != VERSION or heightened_contract_migrated
         ),
         "migration_warnings": migration_warnings,
+        "method_changes": method_changes,
         "migration_provenance": migration_provenance,
         "provenance": provenance,
     }

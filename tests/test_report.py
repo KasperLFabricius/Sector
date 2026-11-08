@@ -5460,7 +5460,6 @@ def test_retained_report_audits_independent_governing_faces_and_angles(tmp_path)
     assert "V+T (6.29)" in text
 
 
-@pytest.mark.xdist_group("native-member-report")
 def test_report_legacy_blocker_sanitizes_both_face_combined_cells_only(
     native_member_report_cases,
 ):
@@ -5591,7 +5590,6 @@ def test_brief_governing_depth_does_not_publish_worked_selection_register():
     assert out["worked_example_selection"] == selection_before
 
 
-@pytest.mark.xdist_group("native-scheduler-report")
 @result_presentation.publication_calculation_scope()
 def test_audit_appendix_claims_combined_method_only_for_assessable_case(native_scheduler_report_cases, tmp_path):
     inp = _inp()
@@ -6296,7 +6294,6 @@ def test_torsion_applicability_component_rendering_accepts_declared_positive(pro
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-@pytest.mark.xdist_group("native-member-report")
 def test_native_torsion_report_rejects_isolated_authority_poison(
     native_member_report_cases, profile, tmp_path,
 ):
@@ -6720,7 +6717,6 @@ def test_audit_drops_stale_torsion_subchecks_when_applicability_is_blocked():
 
 
 @pytest.mark.parametrize("profile", ("Brief", "Standard", "Audit"))
-@pytest.mark.xdist_group("native-scheduler-report")
 @result_presentation.publication_calculation_scope()
 def test_report_profiles_identify_each_plastic_case_torsion_authority(
     profile, native_scheduler_report_cases, tmp_path,
@@ -7902,7 +7898,7 @@ def _base_en_incomplete_failed_chord_out():
         cap_shear_force=False,
         capped=False,
         mv_uncapped=20.0,
-        shear_headroom=0.0,
+        m_ed_max=None,
         shear_term_selection="uncapped",
     )
     combined.update(
@@ -8146,7 +8142,6 @@ def _base_en_scheduler_combined_case(action, util, *, component):
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-@pytest.mark.xdist_group("native-member-report")
 def test_native_base_en_report_retains_physical_rows_without_dkna_aggregate(
     native_base_en_report_case, profile, tmp_path,
 ):
@@ -8369,9 +8364,10 @@ def test_base_en_2005_component_rendering_rejects_ambiguous_shear_cap(profile, t
         row for row in positive_rows
         if row[0] == "Combined longitudinal reinforcement"
     )[2:4] == ("FAIL", "150.0 %")
-    # The old 60 + 20 + 10 = 90 kNm / 60 kNm vector is ambiguous without
-    # its explicit uncapped choice, since the available shear headroom is zero.
+    # A vector capped by the former MRd rule (no flag, capped, no MEd,max) is not
+    # reproducible under 6.2.3(7) with an entered MEd,max only.
     combined["longitudinal"].pop("cap_shear_force")
+    combined["longitudinal"]["capped"] = True
     assert capacity._combined_longitudinal_candidate(combined["longitudinal"]) is None
     assert capacity.combined_longitudinal_assessment(combined)["status"] == "NOT ASSESSED"
     pdf, actual_rows = _pub_h01_2005_component_unit_pdf(inp, combined, profile)
@@ -8445,9 +8441,9 @@ def _pub_h01_report_combined(parent_state="stale_mapping"):
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 4.213620,
-        "shear_headroom": 20.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     for legacy_only_key in (
@@ -8578,7 +8574,7 @@ def _pub_h01_report_current_direct(
                 ok=True,
                 m_rd=direct["m_total"] / 0.80,
                 util=0.80,
-                shear_headroom=direct["m_total"] / 0.80 - direct["m_ed"],
+                m_ed_max=None,
             )
         combined.update(t_ed=40.0, asl_torsion=500.0)
     combined.update(
@@ -8782,9 +8778,9 @@ def _pub_h01_report_four_face_torsion():
             "z": 0.5,
             "util": 1.0 / 15.0,
             "capped": False,
-            "cap_shear_force": True,
+            "cap_shear_force": False,
             "mv_uncapped": 0.0,
-            "shear_headroom": 150.0,
+            "m_ed_max": None,
             "shear_term_selection": "uncapped",
         }
         if role == "shear_axis":
@@ -8887,9 +8883,9 @@ def test_pub_h01_2005_component_rendering_rejects_stale_longitudinal_operands(
         "z": 0.25,
         "util": 0.50,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 10.0,
-        "shear_headroom": 60.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     stale_formula = _pub_h01_report_zero_formula_628()
@@ -9011,8 +9007,8 @@ def test_pub_h01_2005_component_rendering_binds_operand_poison_controls(
         "biaxial": False, "off_util": 0.0, "off_not_evaluated": None,
         "m_ed": 40.0, "mv": 10.0, "mt": 0.0, "m_total": 50.0,
         "m_rd": 100.0, "ftd_v": 40.0, "ftd_t": 0.0, "z": 0.25,
-        "util": 0.50, "capped": False, "cap_shear_force": True,
-        "mv_uncapped": 10.0, "shear_headroom": 60.0,
+        "util": 0.50, "capped": False, "cap_shear_force": False,
+        "mv_uncapped": 10.0, "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     formula = _pub_h01_report_zero_formula_628()
@@ -9370,7 +9366,6 @@ def test_retained_2023_chord_arithmetic_rejects_targeted_poison(attack):
 
 
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
-@pytest.mark.xdist_group("native-member-report")
 def test_native_base_en_report_rejects_unsupported_2023_combined_marker(
     native_base_en_report_case, profile, tmp_path,
 ):
@@ -9616,9 +9611,9 @@ def test_pub_h01_2005_component_rendering_retains_exact_longitudinal_failure(
         "z": 0.243,
         "util": 1.2392531643,
         "capped": False,
-        "cap_shear_force": True,
+        "cap_shear_force": False,
         "mv_uncapped": 4.213620,
-        "shear_headroom": 20.0,
+        "m_ed_max": None,
         "shear_term_selection": "uncapped",
     }
     for legacy_only_key in (
@@ -9705,7 +9700,6 @@ def test_pub_h01_2005_component_rendering_retains_exact_longitudinal_failure(
         assert "100.000 kNm" in text
 
 
-@pytest.mark.xdist_group("native-member-report")
 @pytest.mark.parametrize("profile", ["Brief", "Standard", "Audit"])
 @result_presentation.publication_calculation_scope()
 def test_native_combined_report_rejects_incomplete_root_candidate_inventory(
@@ -9725,12 +9719,15 @@ def test_native_combined_report_rejects_incomplete_root_candidate_inventory(
     assert (failed["axis"], failed["tension_low"]) == ("x", False)
     assert failed["m_total"] / failed["m_rd"] == pytest.approx(failed["util"])
     # Frozen native V=30 kN / T=180 kNm regression, separate from the 123.9% unit vector.
-    assert failed["util"] == pytest.approx(2.059941571055692)
+    # 0.97.0 P1-13: the a_l = d chord with torsion joins the member-angle objective
+    # (cot 1.491 -> 1.453); this chord is Ftd,T z/2 with Ftd,T proportional to cot:
+    # 2.059941571055692 x 1.453 / 1.491.
+    assert failed["util"] == pytest.approx(2.007441383463394)
     rows = result_presentation.multi_case_summary_rows(inp, out)
     target = next(row for row in rows
                   if row.get("overview_key") == "combined:longitudinal")
     assert (target["case"], target["status"], target["result"]) == (
-        "PL-01", "FAIL", "206.0 %",
+        "PL-01", "FAIL", "200.7 %",
     )
 
     def row_pattern(row):
@@ -10580,7 +10577,6 @@ def test_retained_2005_component_rendering_rejects_formula_629_conflicts(
 
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
-@pytest.mark.xdist_group("native-scheduler-report")
 @result_presentation.publication_calculation_scope()
 def test_report_base_en_keeps_only_the_governing_combined_worked_case(
     profile, native_scheduler_report_cases, tmp_path,
@@ -10879,7 +10875,6 @@ def test_report_combined_zero_2023_chord_candidates_stays_not_assessed(
     assert "SHEAR-LONGITUDINAL" not in text
 
 
-@pytest.mark.xdist_group("native-scheduler-report")
 @result_presentation.publication_calculation_scope()
 def test_report_publishes_only_governing_transverse_family_worked_examples(native_scheduler_report_cases, tmp_path):
     inp = _inp()
@@ -11005,7 +11000,6 @@ def test_report_publishes_only_governing_transverse_family_worked_examples(nativ
     assert "Vx+T" in flat and "Vy+T" in flat
 
 
-@pytest.mark.xdist_group("native-scheduler-report")
 @result_presentation.publication_calculation_scope()
 def test_transverse_worked_selector_uses_only_valid_applicable_final_checks(
     native_scheduler_report_cases, tmp_path,
@@ -11151,7 +11145,6 @@ def test_transverse_worked_selector_uses_only_valid_applicable_final_checks(
 
 
 @pytest.mark.parametrize("profile", ["Standard", "Audit"])
-@pytest.mark.xdist_group("native-scheduler-report")
 @result_presentation.publication_calculation_scope()
 def test_report_main_torsion_worked_example_requires_applicable_case(
     profile, native_scheduler_report_cases, tmp_path,
@@ -11621,7 +11614,6 @@ def test_dkna_retained_sum_unassessed_keeps_selected_separate_route(profile, tmp
     assert "NOT ASSESSED" in txt
 
 
-@pytest.mark.xdist_group("native-scheduler-report")
 @result_presentation.publication_calculation_scope()
 def test_report_keeps_only_governing_biaxial_combined_worked_block(native_scheduler_report_cases, tmp_path):
     import io
@@ -11802,7 +11794,6 @@ def test_retained_report_combined_longitudinal_biaxial_fallback_warns(tmp_path):
     assert "pure-axis substitute" in folded
 
 
-@pytest.mark.xdist_group("native-member-report")
 @result_presentation.publication_calculation_scope()
 def test_report_withholds_verdict_for_preserved_non_governing_fallback(
     native_member_report_cases, monkeypatch, tmp_path,
@@ -11890,7 +11881,7 @@ def test_report_withholds_verdict_for_preserved_non_governing_fallback(
         if mutation == "zero-substitute":
             altered.update(combined_core.longitudinal_check(
                 altered["m_ed"], 0.0, altered["ftd_v"], altered["ftd_t"],
-                altered["z"], cap_shear_force=True,
+                altered["z"],
             ))
         elif mutation == "missing-off-flag":
             altered.pop("off_not_evaluated")
@@ -13596,7 +13587,6 @@ def _retained_dkna_member_component_pdf(
     return pdf
 
 
-@pytest.mark.xdist_group("native-member-report")
 @result_presentation.publication_calculation_scope()
 def test_native_subdivided_report_discloses_off_axis_skip(
     native_subdivided_report_case, tmp_path,
@@ -14088,7 +14078,6 @@ def _assert_native_scheduler_contexts(
 
 
 
-@pytest.mark.xdist_group("native-scheduler-report")
 @result_presentation.publication_calculation_scope()
 def test_native_report_rejects_isolated_consumed_transverse_terms(native_scheduler_report_cases, tmp_path):
     """Actual guarded case chapters show operands, then reject one missing term."""

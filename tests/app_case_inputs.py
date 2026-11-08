@@ -80,7 +80,7 @@ def _tree_parent_of_key(node, key):
 def discard_retired_qs_fragment(at):
     """Mirror the browser removal of Quick Section after its full rerun."""
 
-    if at.session_state.filtered_state.get("_qs_open", False):
+    if at.session_state.to_dict().get("_qs_open", False):
         return at
     main = next(
         child
