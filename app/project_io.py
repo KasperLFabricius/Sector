@@ -158,6 +158,22 @@ def _schema28_effective_shear_method(scalars: Mapping):
     )
 
 
+# The released Sector 0.96.9 wrote schema 27. Development builds between the
+# schema 28 change and the 0.97.0 release recorded 0.96.9 with schema 28. Their
+# files can lack later schema-28 inputs (the tendon option) and use the earlier
+# prestrain meaning, so they load like files from an earlier version.
+_DEVELOPMENT_SCHEMA28_VERSIONS = frozenset({"0.96.9"})
+
+
+def _development_schema28(source_version, provenance: Mapping) -> bool:
+    """True for a schema-28 file from a development build before 0.97.0."""
+
+    return (
+        source_version == VERSION
+        and provenance.get("sector_version") in _DEVELOPMENT_SCHEMA28_VERSIONS
+    )
+
+
 def _schema28_defaults(scalars: dict) -> None:
     """Add the schema-28 method inputs to a migrated project."""
 
@@ -2393,7 +2409,7 @@ def parse_project_with_info(text: str):
         scalars = _canonical_scalars(raw_scalars, tables)
 
     method_changes: tuple[str, ...] = ()
-    if source_version != VERSION:
+    if source_version != VERSION or _development_schema28(source_version, provenance):
         _schema28_defaults(scalars)
         method_changes = (
             schema28_migration_warning(

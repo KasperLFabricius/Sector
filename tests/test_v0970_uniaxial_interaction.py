@@ -498,3 +498,81 @@ def test_range_with_a_failed_solve_is_failed(monkeypatch):
     loop = plastic.uniaxial_interaction_loop(section, concrete, steel, "x",
                                              m_off=50.0, n_points=4)
     assert not all(q.converged for q in loop.upper + loop.lower)
+
+
+@pytest.mark.parametrize("root_search", ["bisection", "illinois"])
+def test_crossing_near_the_edge_of_a_reachable_arc_is_found(root_search):
+    # Codex review of PR #578: the axial force is reachable only from 0 to 25
+    # degrees, and the companion crossing is at 20 degrees. The scan samples
+    # at 0 and 18 degrees are below the target and the sample at 36 degrees
+    # is unreachable, so the crossing lies between 18 degrees and the arc edge.
+    from types import SimpleNamespace
+
+    def cap(angle):
+        reachable = 0.0 <= angle % 360.0 <= 25.0
+        return SimpleNamespace(converged=reachable, axial_reachable=reachable,
+                               angle=angle)
+
+    def companion(point):
+        return point.angle % 360.0 - 20.0
+
+    points, scan_failed, solve_failed = plastic._companion_crossings(
+        cap, companion, 0.0, n_scan=20, tol_deg=0.005, root_search=root_search,
+        skip_unreachable=True,
+    )
+    assert not scan_failed and not solve_failed
+    assert points and all(abs(companion(point)) < 0.01 for point in points)
+
+
+def _external_offaxis_rows():
+    # External program results (legacy ECROSS/PCROSS output PDFs). The source
+    # files and their SHA-256 are in tests/fixtures/handcalc_source_manifest.json
+    # (tests/test_plastic_handcalc.py). Only rows without tendons, with both
+    # moments not zero, and with a fixed-angle point that Sector reproduces
+    # within the comparison limit (tests/fixtures/handcalc_comparison.json).
+    import json
+    import pathlib
+
+    from tools import compare_handcalc_fixtures as comparison
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    retained = {
+        case["name"]: case for case in json.loads(
+            (root / "tests" / "fixtures" / "handcalc_comparison.json").read_text(
+                encoding="utf-8"))["cases"]
+    }
+    rows = []
+    for case in comparison.load_cases():
+        if case.get("tendons"):
+            continue
+        for index, row in enumerate(case["rows"]):
+            axial, _angle, mx, my = row[:4]
+            record = retained[case["name"]]["rows"][index]
+            if abs(mx) > 1.0 and abs(my) > 1.0 and record["within_tolerance"]:
+                rows.append(pytest.param(
+                    case, axial, mx, my, record["metrics"]["mx"]["limit"],
+                    record["metrics"]["my"]["limit"],
+                    id=f"{case['name']}-{index}",
+                ))
+    return rows
+
+
+@pytest.mark.parametrize("case, axial, mx, my, mx_limit, my_limit",
+                         _external_offaxis_rows())
+def test_held_moment_range_reproduces_external_offaxis_points(
+        case, axial, mx, my, mx_limit, my_limit):
+    # Oracle independent of Sector: an external program point (N, Mx, My) at a
+    # fixed neutral-axis angle lies on the M-M envelope at N (EN 1992-1-1:2004,
+    # 6.1). With My held at the external value, one end of the Mx range is the
+    # external Mx, and with Mx held, one end of the My range is the external My.
+    from tools import compare_handcalc_fixtures as comparison
+
+    section, concrete, mild, _prestress = comparison.build_case(case)
+    low, high, status = plastic.companion_moment_range(
+        section, concrete, mild, axial, "x", my, n_bands=50)
+    assert status == "ok"
+    assert min(abs(low - mx), abs(high - mx)) <= mx_limit
+    low, high, status = plastic.companion_moment_range(
+        section, concrete, mild, axial, "y", mx, n_bands=50)
+    assert status == "ok"
+    assert min(abs(low - my), abs(high - my)) <= my_limit

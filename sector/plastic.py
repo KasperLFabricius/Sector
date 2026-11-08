@@ -1639,6 +1639,30 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
                 return None
         return v_in, p_in
 
+    def _arc_edge_crossings(v_a, p_a, v_b, p_b):
+        """Crossings between a reachable sample and the edge of its reachable
+        arc, when the other sample of the interval is unreachable."""
+        if p_a.converged and p_b.axial_reachable is False:
+            v_in, c_in, v_out, low_side = v_a, _companion(p_a), v_b, True
+        elif p_b.converged and p_a.axial_reachable is False:
+            v_in, c_in, v_out, low_side = v_b, _companion(p_b), v_a, False
+        else:
+            return []
+        edge = _reachable_edge(v_in, v_out)
+        if edge is None:
+            return []
+        v_edge, p_edge = edge
+        if v_edge == v_in:
+            return []
+        c_edge = _companion(p_edge)
+        if c_edge - target == 0.0:
+            return [p_edge]
+        if (c_in - target) * (c_edge - target) > 0.0:
+            return []
+        if low_side:
+            return _refine_all(v_in, v_edge, c_in, c_edge)
+        return _refine_all(v_edge, v_in, c_edge, c_in)
+
     def _refine_all(v_lo, v_hi, c_lo, c_hi, depth=0):
         """The crossings in a bracket: :func:`_refine`, and with
         ``skip_unreachable`` a split at the edges of an unreachable gap. A
@@ -1768,6 +1792,8 @@ def _companion_crossings(_cap, _companion, target: float, *, n_scan: int,
     for j in range(n_scan):
         a, b = pts[j], pts[j + 1]
         if not (a.converged and b.converged):
+            if skip_unreachable:
+                caps.extend(_arc_edge_crossings(angs[j], a, angs[j + 1], b))
             continue
         da, db = _companion(a) - target, _companion(b) - target
         if da * db < 0.0:

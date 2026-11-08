@@ -264,3 +264,46 @@ def test_tendon_change_is_not_stated_when_it_changes_nothing(changes):
     )
     _tables, _scalars, info = project_io.parse_project_with_info(text)
     assert project_io.SCHEMA28_TENDON_CHANGE not in " ".join(info["method_changes"])
+
+
+def _development_schema28_text(app_version, *, tendons=None, **scalar_changes) -> str:
+    # A schema-28 file without the tendon option, as development builds wrote
+    # it between the schema 28 change and the 0.97.0 release.
+    tables = reproducible_example.project_tables()
+    if tendons is not None:
+        tables["tendons_base"] = reinforcement_table.table_from_points(
+            tendons, "tendon"
+        )
+    scalars = dict(reproducible_example.project_scalars(), **scalar_changes)
+    scalars.pop(capacity.SHEAR_TENDONS_KEY)
+    return project_io.dump_project(tables, scalars, app_version=app_version)
+
+
+def test_development_schema28_file_loads_with_the_message():
+    # Codex review of PR #578: such a file loaded without a load message, and
+    # the tendon option then followed the 2023 default without notice.
+    changes = dict(tendons=[(0.0, -200.0, 600.0)],
+                   shear_method=codes.EC2_2023.label, combined_on=False)
+    text = _development_schema28_text("0.96.9", **changes)
+    _tables, scalars, info = project_io.parse_project_with_info(text)
+    assert info["source_schema_version"] == project_io.VERSION
+    assert scalars[capacity.SHEAR_TENDONS_KEY] is True
+    message = " ".join(info["method_changes"])
+    assert project_io.SCHEMA28_TENDON_CHANGE in message
+    assert "decompression strain" in message
+    # A 2005 shear project gets the general message without the tendon change.
+    text = _development_schema28_text("0.96.9", tendons=[(0.0, -200.0, 600.0)])
+    _tables, scalars, info = project_io.parse_project_with_info(text)
+    assert scalars[capacity.SHEAR_TENDONS_KEY] is False
+    message = " ".join(info["method_changes"])
+    assert message and project_io.SCHEMA28_TENDON_CHANGE not in message
+
+
+def test_released_schema28_file_loads_without_the_message():
+    text = project_io.dump_project(
+        reproducible_example.project_tables(),
+        reproducible_example.project_scalars(),
+        app_version="0.97.0",
+    )
+    _tables, _scalars, info = project_io.parse_project_with_info(text)
+    assert info["method_changes"] == ()
