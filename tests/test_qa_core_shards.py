@@ -246,6 +246,199 @@ def test_failed_real_image_phase_fails_the_merge(evidence, kind):
     assert json.loads((evidence.output / "core-shard-summary.json").read_text())["all_real_passed"] is False
 
 
+def _attempt_copy(evidence, shard, attempt, *, move=False):
+    """Give a shard the evidence of another attempt of the same run."""
+    import shutil
+
+    source = evidence.directories[shard]
+    target = evidence.inputs / f"sector-core-123-{attempt}-{shard}"
+    (shutil.move if move else shutil.copytree)(source, target)
+    names = shards.REAL_FILES if shard == "real" else shards.FILES
+    _manifest(target, lambda value: value.update(run_attempt=str(attempt)), names=names)
+    return target
+
+
+def _fail_junit(directory, name="test-results.xml"):
+    path = directory / name
+    tree = ET.parse(path)
+    ET.SubElement(next(tree.getroot().iter("testcase")), "failure", message="observed nonpass")
+    tree.write(path)
+
+
+@pytest.mark.parametrize("shard", ["core-03", "branch-02", "real"])
+def test_rerun_of_failed_jobs_keeps_the_evidence_of_the_earlier_attempt(evidence, shard):
+    # A rerun of failed jobs (attempt 2) does not run this shard again.
+    _attempt_copy(evidence, shard, 1, move=True)
+    assert shards.merge_shards(evidence.inputs, evidence.output) == 0
+    summary = json.loads((evidence.output / "core-shard-summary.json").read_text())
+    attempts = {row["shard"]: row["attempt"] for row in (*summary["shards"], *summary["branch_shards"])}
+    attempts["real"] = summary["real"]["attempt"]
+    assert attempts == {name: 1 if name == shard else 2 for name in shards.SHARDS}
+
+
+@pytest.mark.parametrize("newest_passes", [True, False])
+def test_newest_attempt_of_a_shard_governs_its_outcome(evidence, newest_passes):
+    earlier = _attempt_copy(evidence, "core-02", 1)
+    names = shards.FILES
+    if newest_passes:
+        _fail_junit(earlier)
+        _manifest(earlier, names=names)
+    else:
+        _fail_junit(evidence.directories["core-02"])
+        _manifest(evidence.directories["core-02"], names=names)
+    assert shards.merge_shards(evidence.inputs, evidence.output) == (0 if newest_passes else 1)
+
+
+@pytest.mark.parametrize("damage", ["later_attempt", "other_run", "claims_newer_attempt", "padded_attempt"])
+def test_evidence_of_another_run_or_attempt_cannot_pass(evidence, damage):
+    import shutil
+
+    if damage == "later_attempt":
+        _attempt_copy(evidence, "core-04", 3)
+    elif damage == "other_run":
+        shutil.copytree(evidence.directories["core-04"], evidence.inputs / "sector-core-122-2-core-04")
+    elif damage == "claims_newer_attempt":
+        # The name says attempt 1, but the manifest is the evidence of attempt 2.
+        evidence.directories["core-04"].rename(evidence.inputs / "sector-core-123-1-core-04")
+    else:
+        shutil.copytree(evidence.directories["core-04"], evidence.inputs / "sector-core-123-02-core-04")
+    with pytest.raises(shards.QaShardError):
+        shards.merge_shards(evidence.inputs, evidence.output)
+
+
+def _process_exists(pid):
+    import os
+    import subprocess
+
+    if os.name == "nt":
+        listed = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True, text=True,
+                                check=False).stdout
+        return str(pid) in listed.split()
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def test_real_phase_past_the_hang_limit_stops_its_process_tree(tmp_path):
+    import sys
+    import time
+
+    grandchild = tmp_path / "grandchild.pid"
+    child = ("import pathlib, subprocess, sys, time; "
+             "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']); "
+             f"pathlib.Path({str(grandchild)!r}).write_text(str(p.pid)); time.sleep(120)")
+    started = time.monotonic()
+    code = shards.run_real_phase([sys.executable, "-c", child], cwd=tmp_path, env=None, limit=30.0)
+    assert code == shards.REAL_PHASE_TIMEOUT_EXIT
+    assert time.monotonic() - started < 120
+    pid = int(grandchild.read_text())
+    deadline = time.monotonic() + 15
+    while _process_exists(pid) and time.monotonic() < deadline:
+        time.sleep(0.5)
+    assert not _process_exists(pid), "the browser-like grandchild of a stopped phase still runs"
+    assert shards.run_real_phase([sys.executable, "-c", "raise SystemExit(3)"], cwd=tmp_path, env=None) == 3
+
+
+@pytest.mark.parametrize("budget, expected", [(900.0, [0] * 5), (100.0, [0] * 5), (0.0, [124] * 5)])
+def test_real_phases_share_one_budget_below_the_step_limit(tmp_path, monkeypatch, budget, expected):
+    limits = []
+
+    def phase(command, *, cwd, env, limit=None):
+        limits.append(limit)
+        return 0
+
+    monkeypatch.setattr(shards, "identity", lambda: {"run_id": "1", "run_attempt": "1"})
+    monkeypatch.setattr(shards, "source_digest", lambda: "unchanged")
+    monkeypatch.setattr(shards, "run_real_phase", phase)
+    monkeypatch.setattr(shards, "REAL_SHARD_BUDGET_S", budget)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "temporary"))
+    shards.run_shard("real", tmp_path / "real")
+    manifest = json.loads((tmp_path / "real" / "manifest.json").read_text())
+    assert list(manifest["phases"].values()) == expected
+    assert len(manifest["commands"]) == 5
+    assert all(0 < limit <= min(shards.REAL_PHASE_LIMIT_S, budget) for limit in limits)
+    assert len(limits) == (0 if budget == 0.0 else 5)
+    # The budget and its last phase stay inside the 20 min step limit of qa.yml.
+    assert shards.REAL_SHARD_BUDGET_S + shards.REAL_PHASE_MIN_S < 20 * 60
+
+
+def test_shard_without_evidence_in_any_attempt_asks_for_a_full_rerun(evidence):
+    import shutil
+
+    shutil.rmtree(evidence.directories["core-05"])
+    with pytest.raises(shards.QaShardError, match=r"run 123 for shard core-05[.] Run all jobs .*full rerun"):
+        shards.merge_shards(evidence.inputs, evidence.output)
+
+
+@pytest.mark.parametrize("shard", ["core-03", "real"])
+def test_invalid_kept_evidence_of_an_earlier_attempt_asks_for_a_full_rerun(evidence, shard):
+    kept = _attempt_copy(evidence, shard, 1, move=True)
+    name = "test-results-real-viz.xml" if shard == "real" else "test-results.xml"
+    with (kept / name).open("ab") as stream:
+        stream.write(b" ")
+    with pytest.raises(shards.QaShardError, match=rf"kept evidence of shard {shard} from attempt 1 .*full rerun"):
+        shards.merge_shards(evidence.inputs, evidence.output)
+
+
+def test_invalid_evidence_of_the_current_attempt_keeps_its_own_message(evidence):
+    with (evidence.directories["core-03"] / "test-results.xml").open("ab") as stream:
+        stream.write(b" ")
+    with pytest.raises(shards.QaShardError, match="hash or size differs") as caught:
+        shards.merge_shards(evidence.inputs, evidence.output)
+    assert "full rerun" not in str(caught.value)
+
+
+def test_real_phase_stop_reaches_a_descendant_in_its_own_session(tmp_path):
+    """The shared exporter calls os.setsid() on POSIX; the stop must still reach it.
+
+    Windows has no sessions of this kind, so there the grandchild stays in the
+    tree of the phase. The gate counts a skipped test as not passed, so this
+    test runs on each platform.
+    """
+    import sys
+    import time
+
+    grandchild = tmp_path / "grandchild.pid"
+    detach = "import os, time; getattr(os, 'setsid', lambda: None)(); time.sleep(120)"
+    child = ("import pathlib, subprocess, sys, time; "
+             f"p = subprocess.Popen([sys.executable, '-c', {detach!r}]); "
+             f"pathlib.Path({str(grandchild)!r}).write_text(str(p.pid)); time.sleep(120)")
+    assert shards.run_real_phase([sys.executable, "-c", child], cwd=tmp_path, env=None,
+                                 limit=30.0) == shards.REAL_PHASE_TIMEOUT_EXIT
+    pid = int(grandchild.read_text())
+    deadline = time.monotonic() + 15
+    while _process_exists(pid) and time.monotonic() < deadline:
+        time.sleep(0.5)
+    assert not _process_exists(pid)
+
+
+def test_descendants_follow_parent_links(monkeypatch):
+    # The Windows listing gives "pid ppid" lines too; process 0 is its own parent there.
+    listing = " 0 0\n 10  1\n 11 10\n 12 11\n 13  1\n 14 12\n"
+    monkeypatch.setattr(shards, "process_listing", lambda: listing)
+    assert shards.descendants(10) == [11, 12, 14]
+    assert shards.descendants(13) == []
+    assert shards.descendants(0) == []
+
+
+def test_process_listing_contains_this_process_and_its_parent():
+    import os
+
+    rows = {tuple(map(int, line.split())) for line in shards.process_listing().splitlines()
+            if len(line.split()) == 2 and all(part.isdigit() for part in line.split())}
+    assert (os.getpid(), os.getppid()) in rows
+
+
+def test_real_phase_stopped_at_the_hang_limit_fails_the_merge_by_name(evidence):
+    _manifest(evidence.directories["real"], lambda value: value.update(
+        exit_code=shards.REAL_PHASE_TIMEOUT_EXIT,
+        phases={**value["phases"], "viz": shards.REAL_PHASE_TIMEOUT_EXIT}), names=shards.REAL_FILES)
+    with pytest.raises(shards.QaShardError, match="hang limit: viz"):
+        shards.merge_shards(evidence.inputs, evidence.output)
+
+
 @pytest.mark.parametrize("field,value", [
     ("run_id", "122"), ("run_attempt", "1"), ("source_revision", "c" * 40),
     ("source_tree", "c" * 40), ("repository", "another/repo"), ("source_root", "another-root"),

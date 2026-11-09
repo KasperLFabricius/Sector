@@ -45,6 +45,7 @@ from sector import (
 from sector.design_standards import DesignBasisKey
 from sector.materials import ES, Concrete
 from sector.section import Section
+from tools.kaleido_start import start_image_exporter
 from tools.publication_preflight import (
     REPORT_FURNITURE,
     RasterCrop,
@@ -967,6 +968,10 @@ def build_fixture_pdf(*, figures: bool = True, profile: str = "Audit") -> bytes:
     exhaustive equation/provenance coverage. The product default is Standard and
     receives its own profile-specific acceptance gates.
     """
+    if figures:
+        # A bounded start with one more attempt; the report then finds the
+        # exporter ready (tools/kaleido_start.py).
+        start_image_exporter()
     original_datetime = sector_report.datetime.datetime
     sector_report.datetime.datetime = _FixedDateTime
     try:
