@@ -557,6 +557,54 @@ def _free_section_stress(inp):
 
 
 @pytest.mark.slow
+def test_plastic_only_report_has_no_stage_one_reference(monkeypatch, tmp_path):
+    # Review E1-R2-T01: a Plastic-only report has no cracking threshold and no
+    # Stage I values, so the bond paragraph must not refer to them.
+    import io
+
+    import pypdf
+    from streamlit.testing.v1 import AppTest
+
+    import sector_report
+    from app import reinforcement_table
+    from app_case_inputs import CALCULATION_RUN_TIMEOUT, apply_widget_changes
+    from app_workflow_navigation import goto_page
+
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path / "autosave"))
+    at = AppTest.from_file(str(ROOT / "app" / "sector_app.py"), default_timeout=120).run()
+    apply_widget_changes(at, [("radio", "mode", "Plastic"),
+                              ("number_input", "pre_IS", 5.0)])
+    goto_page(at, "Inputs")
+    version = at.session_state["ed_tendons_ver"] if "ed_tendons_ver" in at.session_state else 0
+    at.session_state["tendons_base"] = reinforcement_table.table_from_points(
+        [(0.0, -270.0, 600.0)], "tendon"
+    )
+    at.session_state["ed_tendons_ver"] = version + 1
+    if "ed_tendons" in at.session_state:
+        del at.session_state["ed_tendons"]
+    at.run()
+    goto_page(at, "Analysis")
+    at.button(key="calculate").click()
+    at.run(timeout=CALCULATION_RUN_TIMEOUT)
+    assert not at.exception
+    inp = copy.deepcopy(at.session_state["result_input_snapshot"])
+    out = copy.deepcopy(at.session_state["results"])
+    assert inp["mode"] == "Plastic"
+    pdf = sector_report.build_report(
+        {"proj_no": "P", "proj_name": "N", "section": "S", "author": "A"},
+        inp, out, version="test", figures=False, profile="Standard",
+    )
+    text = " ".join(
+        " ".join((page.extract_text() or "").split())
+        for page in pypdf.PdfReader(io.BytesIO(pdf)).pages
+    )
+    assert "bond strain difference" in text
+    assert "The Stage I cracking check" not in text
+    assert "The cracking threshold gives" not in text
+    assert "Stage I locked-in tendon stress" not in text
+
+
+@pytest.mark.slow
 def test_app_stage_one_tension_is_the_hand_value_under_prestress_alone(stage_one_app):
     inp, out = stage_one_app
     corners = _free_section_stress(inp)

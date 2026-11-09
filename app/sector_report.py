@@ -5299,11 +5299,8 @@ class ReportBuilder:
                 "then returns to sigma<sub>p,0</sub> = E<sub>p</sub> IS. "
                 "eps<sub>p</sub><super>(0)</super> is negative for a lightly "
                 "stressed tendon where prestress alone elongates the concrete "
-                "by more than IS. The Stage I cracking check takes "
-                "eps<sub>c,p</sub> on the uncracked section at "
-                "n<sub>l</sub>, so that the Stage I tendon stress under "
-                "prestress alone is also E<sub>p</sub> IS. The cracking "
-                "threshold gives its locked-in stress."
+                "by more than IS."
+                + self._bond_stage_one_text()
             )
             bond_rows = [[
                 "Tendon", "IS (&#8240;)",
@@ -11698,6 +11695,17 @@ class ReportBuilder:
                 f"u<sub>w</sub> = {_fmt(assessment.get('ratio'), 3)}; "
                 f"{_html_escape(status)}"
             ),
+        )
+
+    def _bond_stage_one_text(self):
+        """Stage I sentences of the bond paragraph, only with a threshold block."""
+        if not isinstance(self._selected_cracking_threshold, Mapping):
+            return ""
+        return (
+            " The Stage I cracking check takes eps<sub>c,p</sub> on the "
+            "uncracked section at n<sub>l</sub>, so that the Stage I tendon "
+            "stress under prestress alone is also E<sub>p</sub> IS. The "
+            "cracking threshold gives its locked-in stress."
         )
 
     def _stage_one_locked_in_text(self):

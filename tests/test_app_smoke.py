@@ -2333,6 +2333,7 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
         assert expected in report_text
     assert "Report profile Standard" in report_text
     assert "= 1 - 6.85 / 6.85" not in report_text
+    assert "The cracking threshold gives its locked-in stress." in report_text
     # 0.97.1 E1 (review T03): the printed Stage I locked-in stress reproduces the
     # printed sigma_ct,I. Hand solve of the bonded uncracked section in N and mm:
     # the transformed tendon adds (Ep/Ec - 1) Ap, and the locked-in force
