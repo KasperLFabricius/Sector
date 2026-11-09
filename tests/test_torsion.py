@@ -2350,6 +2350,7 @@ def test_app_torsion_view_renders():
 
 def test_app_torsion_wall_evidence_fails_closed_and_recovers(monkeypatch):
     import sector_app
+    from app import calculation_service
 
     at = _fresh()
     at.run()
@@ -2400,7 +2401,7 @@ def test_app_torsion_wall_evidence_fails_closed_and_recovers(monkeypatch):
         raise AssertionError("incomplete wall evidence reached torsion resistance")
 
     original_tube_solver = sector_app._tube_torsion
-    monkeypatch.setattr(sector_app, "_tube_torsion", forbidden_tube_solver)
+    monkeypatch.setattr(calculation_service, "_tube_torsion", forbidden_tube_solver)
     isolated = {"plastic": {"util": 0.0}}
     sector_app._run_uniaxial_capacity_checks(latest, isolated)
     assert solver_calls == []
@@ -2408,7 +2409,7 @@ def test_app_torsion_wall_evidence_fails_closed_and_recovers(monkeypatch):
     assert isolated["torsion"]["trd"] is None
     assert isolated["torsion"]["util"] is None
     assert isolated["torsion"]["asl_req"] is None
-    monkeypatch.setattr(sector_app, "_tube_torsion", original_tube_solver)
+    monkeypatch.setattr(calculation_service, "_tube_torsion", original_tube_solver)
 
     _calculate(at)
     rejected = at.session_state["results"]["torsion"]

@@ -428,6 +428,7 @@ def test_live_negative_reinforcement_area_blocks_solver_and_result(
 ):
     import reinforcement_table as rebar_table
     import sector_app
+    from app import calculation_service
 
     at = _fresh()
     at.run()
@@ -454,8 +455,8 @@ def test_live_negative_reinforcement_area_blocks_solver_and_result(
         solver_calls.append(True)
         raise AssertionError("invalid reinforcement reached a solver")
 
-    monkeypatch.setattr(sector_app, "solve_plastic", forbidden_solver)
-    monkeypatch.setattr(sector_app, "solve_elastic_combined", forbidden_solver)
+    monkeypatch.setattr(calculation_service, "solve_plastic", forbidden_solver)
+    monkeypatch.setattr(calculation_service, "solve_elastic_combined", forbidden_solver)
     assert sector_app.run_analysis(latest) == {}
     assert solver_calls == []
 
@@ -1085,6 +1086,7 @@ def test_run_analysis_prepares_shared_calculations_once_across_named_cases(
 
     import importlib
     import sector_app
+    from app import calculation_service
     from sector.materials import Concrete, MildSteel, Prestress
     from sector.section import Section
 
@@ -1192,7 +1194,7 @@ def test_run_analysis_prepares_shared_calculations_once_across_named_cases(
             ],
         }
 
-    monkeypatch.setattr(sector_app, "_run_single_analysis", fake_single)
+    monkeypatch.setattr(calculation_service, "_run_single_analysis", fake_single)
     monkeypatch.setattr(case_analysis_core, "run_case_tables", fake_cases)
 
     result = sector_app.run_analysis(inp)
@@ -1377,6 +1379,7 @@ def test_run_analysis_rejects_unsafe_sweep_before_shared_or_warm_work(
     monkeypatch,
 ):
     import sector_app
+    from app import calculation_service
 
     reached = []
 
@@ -1390,7 +1393,7 @@ def test_run_analysis_rejects_unsafe_sweep_before_shared_or_warm_work(
         "_warm_solver",
         "_run_single_analysis",
     ):
-        monkeypatch.setattr(sector_app, name, forbidden)
+        monkeypatch.setattr(calculation_service, name, forbidden)
 
     with pytest.raises(
         sector_app.engineer_messages.EngineerValidationError
@@ -1412,6 +1415,7 @@ def test_run_analysis_rejects_unsafe_sweep_before_shared_or_warm_work(
 
 def test_run_analysis_rejects_numpy_boolean_sweep_before_any_work(monkeypatch):
     import sector_app
+    from app import calculation_service
 
     reached = []
 
@@ -1425,7 +1429,7 @@ def test_run_analysis_rejects_numpy_boolean_sweep_before_any_work(monkeypatch):
         "_warm_solver",
         "_run_single_analysis",
     ):
-        monkeypatch.setattr(sector_app, name, forbidden)
+        monkeypatch.setattr(calculation_service, name, forbidden)
 
     with pytest.raises(
         sector_app.engineer_messages.EngineerValidationError
@@ -7310,6 +7314,7 @@ def test_material_nonfinite_design_ordinate_is_blocked_before_solver(
     monkeypatch,
 ):
     import sector_app
+    from app import calculation_service
     from sector import material_presets
 
     class Box:
@@ -7353,7 +7358,7 @@ def test_material_nonfinite_design_ordinate_is_blocked_before_solver(
         raise AssertionError("invalid material reached a solver")
 
     monkeypatch.setattr(
-        sector_app, "_section_and_material_results", forbidden_solver
+        calculation_service, "_section_and_material_results", forbidden_solver
     )
     assert sector_app.run_analysis(
         {"section": object(), "material_error": box.messages[0]}
@@ -7365,6 +7370,7 @@ def test_material_factored_yield_nan_escape_is_blocked_before_solver(
     monkeypatch,
 ):
     import sector_app
+    from app import calculation_service
     from sector import material_presets
 
     class Box:
@@ -7411,7 +7417,7 @@ def test_material_factored_yield_nan_escape_is_blocked_before_solver(
         raise AssertionError("invalid material reached a solver")
 
     monkeypatch.setattr(
-        sector_app, "_section_and_material_results", forbidden_solver
+        calculation_service, "_section_and_material_results", forbidden_solver
     )
     assert sector_app.run_analysis(
         {"section": object(), "material_error": box.messages[0]}
@@ -8991,6 +8997,7 @@ def test_invalid_live_material_domain_is_not_coerced_or_sent_to_solvers(
     monkeypatch,
 ):
     import sector_app
+    from app import calculation_service
 
     at = _fresh()
     at.run()
@@ -9072,9 +9079,9 @@ def test_invalid_live_material_domain_is_not_coerced_or_sent_to_solvers(
         solver_calls.append(True)
         raise AssertionError("invalid material reached a solver")
 
-    monkeypatch.setattr(sector_app, "solve_plastic", forbidden_solver)
-    monkeypatch.setattr(sector_app, "solve_elastic_combined", forbidden_solver)
-    monkeypatch.setattr(sector_app, "_run_fatigue_or_invalid", forbidden_solver)
+    monkeypatch.setattr(calculation_service, "solve_plastic", forbidden_solver)
+    monkeypatch.setattr(calculation_service, "solve_elastic_combined", forbidden_solver)
+    monkeypatch.setattr(calculation_service, "_run_fatigue_or_invalid", forbidden_solver)
     assert sector_app.run_analysis(latest) == {}
     assert solver_calls == []
 
