@@ -367,6 +367,32 @@ def test_invalid_evidence_of_the_current_attempt_keeps_its_own_message(evidence)
     assert "full rerun" not in str(caught.value)
 
 
+@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX process sessions")
+def test_real_phase_stop_reaches_a_descendant_in_its_own_session(tmp_path):
+    """The shared exporter calls os.setsid(); the stop must still reach it."""
+    import sys
+    import time
+
+    grandchild = tmp_path / "grandchild.pid"
+    child = ("import pathlib, subprocess, sys, time; "
+             "p = subprocess.Popen([sys.executable, '-c', 'import os, time; os.setsid(); time.sleep(120)']); "
+             f"pathlib.Path({str(grandchild)!r}).write_text(str(p.pid)); time.sleep(120)")
+    assert shards.run_real_phase([sys.executable, "-c", child], cwd=tmp_path, env=None,
+                                 limit=5.0) == shards.REAL_PHASE_TIMEOUT_EXIT
+    pid = int(grandchild.read_text())
+    deadline = time.monotonic() + 15
+    while _process_exists(pid) and time.monotonic() < deadline:
+        time.sleep(0.5)
+    assert not _process_exists(pid)
+
+
+def test_posix_descendants_follow_parent_links(monkeypatch):
+    listing = " 10  1\n 11 10\n 12 11\n 13  1\n 14 12\n"
+    monkeypatch.setattr(shards.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=listing))
+    assert shards.posix_descendants(10) == [11, 12, 14]
+    assert shards.posix_descendants(13) == []
+
+
 def test_real_phase_stopped_at_the_hang_limit_fails_the_merge_by_name(evidence):
     _manifest(evidence.directories["real"], lambda value: value.update(
         exit_code=shards.REAL_PHASE_TIMEOUT_EXIT,

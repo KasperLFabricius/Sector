@@ -223,18 +223,55 @@ def suite_command(suite):
     return [*branch["tests"], *(f"--cov={target}" for target in branch["targets"]), "--cov-branch"]
 
 
+def posix_descendants(pid):
+    """Return every process below ``pid`` by parent links, also in other sessions.
+
+    The shared image exporter calls ``os.setsid()``, so it and its browser leave
+    the process group of the phase, but their parent links stay.
+    """
+    listing = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, check=False).stdout
+    children = {}
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and all(field.isdigit() for field in fields):
+            children.setdefault(int(fields[1]), []).append(int(fields[0]))
+    found, pending = [], [pid]
+    while pending:
+        for child in children.get(pending.pop(), ()):
+            if child not in found:
+                found.append(child)
+                pending.append(child)
+    return found
+
+
 def stop_process_tree(process):
     """Stop a timed-out phase and every browser or worker process below it."""
     if os.name == "nt":
+        # taskkill follows the parent links, also into the exporter's job.
         subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
     else:
         import signal
 
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except OSError:
-            pass
+        # Collect the tree before the kill: an orphan loses its parent link.
+        descendants = posix_descendants(process.pid)
+        groups = {process.pid}
+        for pid in descendants:
+            try:
+                groups.add(os.getpgid(pid))
+            except OSError:
+                pass
+        groups.discard(os.getpgrp())
+        for group in groups:
+            try:
+                os.killpg(group, signal.SIGKILL)
+            except OSError:
+                pass
+        for pid in descendants:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
     if process.poll() is None:
         process.kill()
     process.wait(timeout=60)
