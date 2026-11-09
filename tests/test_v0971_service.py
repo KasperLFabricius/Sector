@@ -1,7 +1,9 @@
 """0.97.1 F2 (AR-07): the calculation service module and its headless entry.
 
-The calculation functions moved unchanged from ``app/sector_app.py`` to
-``app/calculation_service.py``. These tests hold the module contract: the
+The calculation functions moved from ``app/sector_app.py`` to
+``app/calculation_service.py``, unchanged except the cache decorator of
+``_warm_solver`` and one comment about the member-angle scan. These tests hold
+the module contract: the
 re-export from ``sector_app``, no Streamlit import in the service, and the
 ``calculate_project`` entry and command line. The engineering values are the
 existing results; a test here compares two routes of the same calculation and
@@ -120,6 +122,25 @@ def test_service_imports_with_the_repository_root_alone_and_loads_no_streamlit(
     assert output == "0 1"
 
 
+@pytest.mark.parametrize("first", ["app.calculation_service", "calculation_service"])
+def test_both_module_names_give_one_module_object(first):
+    second = (
+        "calculation_service" if first == "app.calculation_service"
+        else "app.calculation_service"
+    )
+    output = _run_isolated(
+        "import importlib, sys\n"
+        f"sys.path[:0] = [{str(ROOT)!r}, {str(ROOT / 'app')!r}]\n"
+        f"a = importlib.import_module({first!r})\n"
+        f"b = importlib.import_module({second!r})\n"
+        "import app\n"
+        "from app import calculation_service as c\n"
+        "print(a is b, b is c, app.calculation_service is a,"
+        " a._warm_solver is b._warm_solver)\n"
+    )
+    assert output == "True True True True"
+
+
 def test_calculation_in_a_new_process_loads_no_streamlit(tmp_path):
     # Inputs prepared here and pickled; the new process has never run the
     # application, so a Streamlit import during the calculation would show.
@@ -158,8 +179,14 @@ def test_calculate_project_matches_run_analysis_for_an_input_document():
 
 @pytest.mark.parametrize(
     "item",
-    [3, (1, 2, 3), b"{}", ("{}", "{}"), ({}, "{}")],
-    ids=["number", "three-tuple", "bytes", "two-texts", "mapping-and-text"],
+    [
+        3, (1, 2, 3), b"{}", ("{}", "{}"), ({}, "{}"),
+        ({"section": None}, {"section": None}),
+    ],
+    ids=[
+        "number", "three-tuple", "bytes", "two-texts", "mapping-and-text",
+        "two-input-documents",
+    ],
 )
 def test_calculate_project_rejects_an_item_that_is_not_a_project(item):
     with pytest.raises(TypeError, match="project must be"):
@@ -270,17 +297,28 @@ def test_project_inputs_accepts_parsed_tables_and_scalars(monkeypatch):
     _install_fake_session(monkeypatch, fake)
     monkeypatch.delenv("SECTOR_AUTOSAVE_DIR", raising=False)
     assert calculation_service.project_inputs((tables, scalars)) is inputs
-    assert fake.session_state["_pending_project"] == project_io.dump_project(
-        tables, scalars
+    # The save time of a project text has a resolution of 1 s, so compare the
+    # documents without it.
+    assert _without_save_time(fake.session_state["_pending_project"]) == (
+        _without_save_time(project_io.dump_project(tables, scalars))
     )
     assert "SECTOR_AUTOSAVE_DIR" not in os.environ
+
+
+def _without_save_time(text: str) -> dict:
+    document = json.loads(text)
+    del document["provenance"]["saved_at_utc"]
+    return document
 
 
 def test_command_line_rejects_a_missing_file_with_one_line(tmp_path, capsys):
     missing = tmp_path / "missing.json"
     assert calculation_service.main([str(missing)]) == 1
     captured = capsys.readouterr()
-    assert captured.err == f"Sector: File not found: {missing}\n"
+    assert captured.err == (
+        f"Sector: The file {missing} does not exist. Make sure that the path "
+        "is correct.\n"
+    )
     assert captured.out == ""
 
 
@@ -328,14 +366,54 @@ def test_script_entry_starts_without_an_installed_package():
     assert "Calculate one Sector project file" in result.stdout
 
 
-def test_command_line_result_equals_the_calculate_record_of_the_app(
-    tmp_path, capsys,
-):
+def _run_command_line(path, tmp_path):
+    # A new process, as the engineer runs it, with its own autosave folder.
+    environment = dict(os.environ, SECTOR_AUTOSAVE_DIR=str(tmp_path / "autosave"))
+    return subprocess.run(
+        [sys.executable, "-I", str(SERVICE), str(path)],
+        cwd=ROOT, capture_output=True, text=True, timeout=600, check=False,
+        env=environment,
+    )
+
+
+def test_command_line_writes_one_line_for_a_rejected_project(tmp_path):
+    path = tmp_path / "not-a-project.json"
+    path.write_text("{", encoding="utf-8")
+    result = _run_command_line(path, tmp_path)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == (
+        "Sector: New file was not applied: the selected file is not a readable "
+        "Sector project. Select an intact, compatible Sector project file and "
+        "try again.\n"
+    )
+
+
+def test_command_line_summary_restores_the_log_state(monkeypatch, tmp_path, capsys):
+    inp = report_render_fixture._inputs()
+    expected = project_io.result_sha256(sector_app.run_analysis(copy.deepcopy(inp)))
+    monkeypatch.setattr(calculation_service, "project_inputs", lambda _text: inp)
+    path = tmp_path / "fixture.json"
+    path.write_text("{}", encoding="utf-8")
+    import logging
+
+    before = logging.root.manager.disable
+    assert calculation_service.main([str(path)]) == 0
+    assert logging.root.manager.disable == before
+    printed = capsys.readouterr().out.splitlines()
+    assert printed[0] == "Project: fixture.json"
+    assert f"Result SHA-256: {expected}" in printed
+
+
+def test_command_line_result_equals_the_calculate_record_of_the_app(tmp_path):
     text = reproducible_example.project_json()
     path = tmp_path / "reference.json"
     path.write_text(text, encoding="utf-8")
-    assert calculation_service.main([str(path)]) == 0
-    printed = capsys.readouterr().out.splitlines()
+    result = _run_command_line(path, tmp_path)
+    assert result.returncode == 0, result.stderr
+    # A valid project writes nothing to standard error (no internal log lines).
+    assert result.stderr == ""
+    printed = result.stdout.splitlines()
     assert printed[0] == "Project: reference.json"
     service_hash = next(
         line.split(": ", 1)[1] for line in printed if line.startswith("Result SHA-256")

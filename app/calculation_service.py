@@ -13,6 +13,13 @@ scan; ``sector_app`` imports them again for one release.
     from app import calculation_service
     result_set = calculation_service.calculate_project(project_text)
 
+The import puts the ``app`` folder first on ``sys.path`` when it is not there,
+the same as ``sector_app`` does. Until the app modules become a package in
+0.97.3 (AR-03, AR-09), the names of the app modules (for example ``viz``,
+``manual``, ``project_io``) are thus reserved in the process: a caller module
+with one of these names is not found after the import. The module is one object
+under both names, ``app.calculation_service`` and ``calculation_service``.
+
 The command line calculates one project file and prints a short summary::
 
     python app/calculation_service.py project.json
@@ -54,6 +61,16 @@ from sector.sls_identity import (  # noqa: E402
     LONG_TERM_PERMITTED_CRACK_WIDTH_KEY,
     SHORT_TERM_PERMITTED_CRACK_WIDTH_KEY,
 )
+
+# The flat layout lets the module load as ``app.calculation_service`` and as
+# ``calculation_service``. Register this module object under both names, so
+# that the second import gives the same globals and the same caches.
+if __name__ in {"app.calculation_service", "calculation_service"}:
+    _THIS_MODULE = sys.modules[__name__]
+    for _module_name in ("app.calculation_service", "calculation_service"):
+        sys.modules.setdefault(_module_name, _THIS_MODULE)
+    if getattr(sys.modules.get("app"), "calculation_service", None) is None:
+        setattr(sys.modules["app"], "calculation_service", _THIS_MODULE)
 
 # The same deferred module names as in sector_app: a module that the first
 # render does not need stays unloaded until a calculation reaches it.
@@ -3339,7 +3356,10 @@ def project_inputs(project, *, timeout: float = 180.0) -> dict:
     if (
         isinstance(project, tuple)
         and len(project) == 2
-        and all(isinstance(part, Mapping) for part in project)
+        and all(
+            isinstance(part, Mapping) and not _is_input_document(part)
+            for part in project
+        )
     ):
         text = project_io.dump_project(*project)
     elif isinstance(project, str):
@@ -3443,6 +3463,7 @@ def main(argv=None) -> int:
     """Command line: calculate one project file and print a short summary."""
 
     import argparse
+    import logging
 
     parser = argparse.ArgumentParser(
         prog="python app/calculation_service.py",
@@ -3455,7 +3476,11 @@ def main(argv=None) -> int:
     try:
         text = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
-        print(f"Sector: File not found: {path}", file=sys.stderr)
+        print(
+            f"Sector: The file {path} does not exist. Make sure that the path "
+            "is correct.",
+            file=sys.stderr,
+        )
         return 1
     except (OSError, UnicodeDecodeError):
         print(
@@ -3464,17 +3489,27 @@ def main(argv=None) -> int:
             file=sys.stderr,
         )
         return 1
+    # The headless session, the calculation and the summary write internal log
+    # lines: the "missing ScriptRunContext" warning of Streamlit and the note of
+    # the message filter about a suppressed diagnostic. The command line shows
+    # only the summary or one Sector line, so stop log output below ERROR while
+    # it runs, and set the earlier state again after it.
+    previous_disable = logging.root.manager.disable
+    logging.disable(logging.WARNING)
     try:
-        inp = project_inputs(text)
-        built = time.perf_counter()
-        result_set = calculate_project(inp)
-    except (ValueError, RuntimeError) as error:
-        engineer_message = getattr(error, "engineer_message", None)
-        detail = engineer_message.text if engineer_message is not None else error
-        print(f"Sector: {detail}", file=sys.stderr)
-        return 1
-    done = time.perf_counter()
-    lines = _summary_lines(path.name, result_set, built - start, done - built)
+        try:
+            inp = project_inputs(text)
+            built = time.perf_counter()
+            result_set = calculate_project(inp)
+        except (ValueError, RuntimeError) as error:
+            engineer_message = getattr(error, "engineer_message", None)
+            detail = engineer_message.text if engineer_message is not None else error
+            print(f"Sector: {detail}", file=sys.stderr)
+            return 1
+        done = time.perf_counter()
+        lines = _summary_lines(path.name, result_set, built - start, done - built)
+    finally:
+        logging.disable(previous_disable)
     print("\n".join(lines))
     return 0
 

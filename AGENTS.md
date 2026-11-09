@@ -22,7 +22,7 @@ label. It governs every change.
 | Detailing | `sector/detailing.py` | Minimum reinforcement, spacing, link rules. |
 | Fatigue | `sector/fatigue.py` | Reinforcement S-N and Miner, concrete fatigue with the fibre search. |
 | Application | `app/sector_app.py` | Streamlit script: input pages, `build_inputs`, result views. It imports the names of the calculation service again for one release (0.97.1). |
-| Calculation service | `app/calculation_service.py` | Calculation orchestration without Streamlit (`run_analysis`, `_run_uniaxial_capacity_checks`, `_run_capacity_checks`), `calculate_project` and the command line `python app/calculation_service.py <project file>`. |
+| Calculation service | `app/calculation_service.py` | Calculation orchestration without Streamlit (`run_analysis`, `_run_uniaxial_capacity_checks`, `_run_capacity_checks`), `calculate_project` and the command line `python app/calculation_service.py <project file>`. Until AR-09, `project_inputs` builds the inputs of a project file in a headless Streamlit session of the application. |
 | Project files | `app/project_io.py`, `app/session_state_migrations.py` | Schema, validation and migrations of `.sector` project files. |
 | Presentation | `app/result_presentation.py`, `app/fatigue_presentation.py` | Result rows, statuses and the publication validators that re-check retained results. |
 | Report | `app/sector_report.py`, `app/report_*.py`, `app/publication_*.py` | PDF reports (Brief, Standard, Audit). |
