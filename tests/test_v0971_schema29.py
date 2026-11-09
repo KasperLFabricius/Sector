@@ -2,7 +2,7 @@
 
 The expected values come from the schema-29 rules of the 0.97.1 PR plan
 (decisions 5, 6, 7 and 12): outer corners C<n>, void corners V<n> unique over
-all voids, an edge is the ordered pair of its corner IDs, one region R1, bar
+all voids, an edge is the ordered pair of its corner IDs, one region A1, bar
 groups G<n> with a group ID column on the elements, the case attributes
 (location tag, design situation default persistent, stage blank or "final")
 and the automatic-recalculation preference (off by default). Schemas 25 to 28
@@ -63,10 +63,9 @@ def _payload(tables=None, scalars=None) -> dict:
 
 
 def _rehash(payload: dict) -> str:
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     return json.dumps(payload)
 
 
@@ -400,26 +399,26 @@ def _regions(items):
     "value",
     (
         _regions([]),
-        _regions([{"id": "R1"}, {"id": "R2"}]),
+        _regions([{"id": "A1"}, {"id": "A1"}]),
         _regions([{"id": "S1"}]),
         _regions([{"id": "R1"}]),
         _regions([{"id": "A2"}]),
         _regions([{"id": "A1", "next_corner": 0}]),
         _regions([{"id": "A1", "next_void_corner": 2.0}]),
         _regions([{"id": "A1", "name": "deck"}]),
-        _regions([{"id": "R1", "template": {"kind": "Hexagon", "parameters": {}}}]),
-        _regions([{"id": "R1", "template": {"kind": "Rectangle"}}]),
-        _regions([{"id": "R1", "template": {
+        _regions([{"id": "A1", "template": {"kind": "Hexagon", "parameters": {}}}]),
+        _regions([{"id": "A1", "template": {"kind": "Rectangle"}}]),
+        _regions([{"id": "A1", "template": {
             "kind": "Rectangle", "parameters": {"b_mm": float("nan")}}}]),
-        _regions([{"id": "R1", "template": {
+        _regions([{"id": "A1", "template": {
             "kind": "Rectangle", "parameters": {"B": 1.0}}}]),
-        _regions([{"id": "R1", "template": {
+        _regions([{"id": "A1", "template": {
             "kind": "Rectangle", "parameters": {"b": [1.0]}}}]),
-        _regions([{"id": "R1", "template": {
+        _regions([{"id": "A1", "template": {
             "kind": "Rectangle", "parameters": {"note": "a\nb"}}}]),
-        {"version": 2, "items": [{"id": "R1"}]},
-        {"items": [{"id": "R1"}], "next_id": 2},
-        [{"id": "R1"}],
+        {"version": 2, "items": [{"id": "A1"}]},
+        {"items": [{"id": "A1"}], "next_id": 2},
+        [{"id": "A1"}],
     ),
 )
 def test_invalid_region_lists_are_rejected(value):
@@ -745,8 +744,8 @@ def test_geometry_normaliser_reads_records_and_rejects_unknown_tables():
         {"version": 1, "items": "R1"},
         {"version": 1, "items": ["R1"]},
         {"version": 1, "items": [{"id": 1}]},
-        {"version": 1, "items": [{"id": "R1", "template": "Rectangle"}]},
-        {"version": 1, "items": [{"id": "R1", "template": {
+        {"version": 1, "items": [{"id": "A1", "template": "Rectangle"}]},
+        {"version": 1, "items": [{"id": "A1", "template": {
             "kind": "Rectangle",
             "parameters": {f"p{i}": 1.0 for i in range(65)},
         }}]},
@@ -795,3 +794,56 @@ def test_app_load_of_a_0970_file_and_an_attribute_edit_keep_results_current(
     assert project_io.result_sha256(
         at.session_state["_latest_inputs"]["signature"]
     ) == signature
+
+
+def test_load_numbers_a_row_without_id_from_the_region_counters():
+    """D1-R2-01: a load issues the same IDs as a save and no deleted number."""
+
+    payload = _payload()
+    region = payload["scalars"][section_ids.REGIONS_KEY]["items"][0]
+    # C4 and V6 were issued and deleted before this save.
+    region["next_corner"] = 5
+    region["next_void_corner"] = 7
+    corners = payload["tables"]["corners_base"]
+    corners["rows"][3][0] = ""
+    corners["rows"][2][0] = "C1"          # duplicate of the first row
+    holes = payload["tables"]["hole_base"]
+    holes["rows"] = [
+        ["V1", -50.0, -50.0], ["V2", 50.0, -50.0], ["V3", 50.0, 50.0],
+        ["", 0.0, 60.0], ["V5", -50.0, 50.0],
+    ]
+    tables, scalars = project_io.parse_project(_rehash(payload))
+    assert tables["corners_base"]["ID"].tolist() == ["C1", "C2", "C5", "C6"]
+    assert tables["hole_base"]["ID"].tolist() == ["V1", "V2", "V3", "V7", "V5"]
+    saved = json.loads(project_io.dump_project(tables, scalars))
+    assert [row[0] for row in saved["tables"]["corners_base"]["rows"]] == [
+        "C1", "C2", "C5", "C6",
+    ]
+    region = saved["scalars"][section_ids.REGIONS_KEY]["items"][0]
+    assert (region["next_corner"], region["next_void_corner"]) == (7, 8)
+
+
+def test_app_protects_a_material_that_only_a_bar_group_uses(_isolated_autosave):
+    """D1-R1-05 and D1-R2-03: Delete is off, with a true help text."""
+
+    from app_workflow_navigation import goto_material
+    from streamlit.testing.v1 import AppTest
+
+    import material_catalog
+
+    tables, scalars = _reference()
+    catalogue = material_catalog.default_catalog("mild")
+    second = dict(catalogue["items"][0], id="M2", name="Group steel")
+    catalogue = {**catalogue, "next_id": 3, "items": [*catalogue["items"], second]}
+    scalars[material_catalog.MILD_CATALOG_KEY] = catalogue
+    scalars[rebar.GROUPS_KEY] = _group(material_id="M2")
+    app = str(ROOT / "app" / "sector_app.py")
+    at = AppTest.from_file(app, default_timeout=180).run()
+    _upload(at, project_io.dump_project(tables, scalars))
+    goto_material(at, "Mild steel")
+    at.session_state["_mild_catalog_selected"] = "M2"
+    at.run()
+    assert not at.exception
+    delete = at.button(key="mild_catalog_delete")
+    assert delete.disabled is True
+    assert delete.help == "A bar group in the project uses this material."

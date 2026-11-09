@@ -9,9 +9,10 @@ order of the table, for example ``C3-C4``.
 
 ``normalise_geometry_table`` keeps each valid ID, so a deletion does not
 renumber the other IDs. A row without a valid ID gets the next number that the
-region has not issued (``next_corner`` or ``next_void_corner``), so a deleted ID
-is not used again. The point editors of Sector 0.97.1 do not keep the IDs yet
-(PR I1), so an application save numbers the corners in row order.
+region has not issued (``next_corner`` or ``next_void_corner``), on load and on
+save, so a deleted ID is not used again. The point editors of Sector 0.97.1
+do not keep the IDs yet (PR I1), so an application save numbers the corners in
+row order.
 
 The section model is a list of regions. Schema 29 accepts one region, ``A1``,
 which owns the corner and void tables. The prefix A keeps the region ID apart

@@ -927,10 +927,9 @@ def test_upload_vectors_regenerate_with_the_documented_frozen_clock(
             actual = historical["scalars"][scalar]
             assert type(actual) is type(expected) and actual == expected
             del historical["scalars"][scalar]
-        historical["provenance"]["input_sha256"] = project_io._input_digest({
-            "tables": historical["tables"],
-            "scalars": historical["scalars"],
-        })
+        historical["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(historical)
+    )
         text = json.dumps(historical, indent=2, ensure_ascii=True, allow_nan=False)
         payload = text.encode("utf-8")
         payloads[key] = payload

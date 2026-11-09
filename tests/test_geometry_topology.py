@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from fractions import Fraction
-import hashlib
 import itertools
 import json
 import math
@@ -712,20 +711,10 @@ def _project_payload(outer, holes):
         "columns": ["ID", "x (mm)", "y (mm)"],
         "rows": hole_rows,
     }
-    content = {
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    }
-    canonical = json.dumps(
-        content,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
+    # Schema 29 records the digest without the schema-29 fields.
+    payload["provenance"]["input_sha256"] = project_io.recorded_input_sha256(
+        payload
     )
-    payload["provenance"]["input_sha256"] = hashlib.sha256(
-        canonical.encode("utf-8")
-    ).hexdigest()
     return payload
 
 

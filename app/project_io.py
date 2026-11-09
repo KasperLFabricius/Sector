@@ -1309,7 +1309,13 @@ def _validated_table_rows(
     return columns, validated_rows
 
 
-def _obj_to_table(value, key: str, *, source_version=VERSION) -> pd.DataFrame:
+def _obj_to_table(
+    value,
+    key: str,
+    *,
+    source_version=VERSION,
+    next_number: int = 1,
+) -> pd.DataFrame:
     columns, rows = _validated_table_rows(
         value, key, source_version=source_version
     )
@@ -1317,7 +1323,7 @@ def _obj_to_table(value, key: str, *, source_version=VERSION) -> pd.DataFrame:
         frame = pd.DataFrame(rows, columns=columns)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} table rows are not tabular") from exc
-    canonical = _normalise_table(frame, key)
+    canonical = _normalise_table(frame, key, next_number=next_number)
     _validate_canonical_table(canonical, key)
     return canonical
 
@@ -2350,6 +2356,19 @@ def engineer_error_message(error: Exception) -> str:
     )
 
 
+def recorded_input_sha256(payload: Mapping) -> str:
+    """Return the input digest that a project file of its schema records.
+
+    Schema 29 records the digest without the schema-29 fields (decision 7).
+    Schemas 25 to 28 record the digest of the complete input block.
+    """
+
+    content = {"tables": payload["tables"], "scalars": payload["scalars"]}
+    if payload.get("version") == VERSION:
+        content = _correlation_content(content)
+    return _input_digest(content)
+
+
 def project_provenance(text: str) -> dict:
     """Read provenance and verify current inputs/calculation correlation."""
     data = _decode(text)
@@ -2358,12 +2377,7 @@ def project_provenance(text: str) -> dict:
         "scalars": data["scalars"],
     }
     try:
-        actual = _input_digest(
-            _correlation_content(content) if data["version"] == VERSION else content
-        )
-        # A schema-29 file records the digest without the schema-29 fields. A
-        # digest of the complete input block is also a valid file identity.
-        complete = _input_digest(content)
+        actual = recorded_input_sha256(data)
     except (TypeError, ValueError) as exc:
         raise ProjectInputError(
             "project inputs are not canonical JSON",
@@ -2388,7 +2402,7 @@ def project_provenance(text: str) -> dict:
         "source_revision": provenance.get("source_revision"),
         "saved_at_utc": provenance.get("saved_at_utc"),
         "input_sha256": recorded,
-        "input_hash_valid": bool(recorded) and recorded in {actual, complete},
+        "input_hash_valid": bool(recorded) and recorded == actual,
         "results_included": False,
         "calculation": calculation,
     }
@@ -2564,9 +2578,19 @@ def parse_project_with_info(text: str):
     migration_warnings: tuple[str, ...] = ()
     migration_provenance = {"source_key": None}
     heightened_contract_migrated = False
+    # The region counters of the file number a row without a valid ID, so a
+    # load issues the same IDs as a save and never a deleted number.
+    counters = (
+        _stored_corner_counters(raw_scalars)
+        if section_ids.REGIONS_KEY in raw_scalars
+        else {}
+    )
     tables = {
         key: _obj_to_table(
-            data["tables"][key], key, source_version=source_version
+            data["tables"][key],
+            key,
+            source_version=source_version,
+            next_number=counters.get(key, 1),
         )
         for key in PROJECT_TABLE_KEYS
     }

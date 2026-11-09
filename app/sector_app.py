@@ -1428,7 +1428,8 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
                             locked=False):
     """Edit one catalogue and return it with the selected material preview law."""
     key = mat_catalog.catalog_key(kind)
-    protected_ids = (*protected_ids, *_group_material_ids(kind))
+    group_ids = set(_group_material_ids(kind))
+    protected_ids = (*protected_ids, *group_ids)
     reserved_ids = (*assigned_ids, *protected_ids)
     catalogue = mat_catalog.normalise_catalog(
         st.session_state[key], kind, reserved_ids=reserved_ids
@@ -1463,6 +1464,8 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
                   or selected in protected),
         help=("Assigned materials cannot be deleted. Reassign their elements first."
               if counts.get(selected, 0) > 0 else
+              "A bar group in the project uses this material."
+              if selected in group_ids else
               "This material is the active member-check reference. Select another "
               "reference first." if selected in protected else None),
     )

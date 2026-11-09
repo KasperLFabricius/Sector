@@ -1076,10 +1076,9 @@ def _mutated_project(
     data = json.loads(source.decode("utf-8"))
     mutation(data)
     if rehash:
-        data["provenance"]["input_sha256"] = project_io._input_digest({
-            "tables": data["tables"],
-            "scalars": data["scalars"],
-        })
+        data["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(data)
+    )
     return json.dumps(data, allow_nan=True).encode("utf-8")
 
 

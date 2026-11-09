@@ -5210,10 +5210,9 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
     ):
         payload["scalars"].pop(key)
     payload["scalars"][project_io.LEGACY_SHARED_CRACK_WIDTH_KEY] = 0.20
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     source = json.dumps(payload)
 
     at = _fresh()
@@ -5328,10 +5327,9 @@ def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
     payload["version"] = project_io.MIGRATABLE_VERSION
     payload["scalars"].pop("shear_gamma_v")
     payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY)
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
 
     at = _fresh()
     at.session_state["_pending_project"] = json.dumps(payload)
