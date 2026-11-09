@@ -2,11 +2,18 @@
 
 ``run_analysis`` runs every named action case and enabled calculation of one
 calculation input document (the ``inp`` mapping that the input pages build).
-The functions moved here unchanged from ``app/sector_app.py`` in 0.97.1
-(AR-07); ``sector_app`` imports them again for one release.
+The functions moved here from ``app/sector_app.py`` in 0.97.1 (AR-07),
+unchanged except the cache decorator of ``_warm_solver`` (``functools.cache``
+in place of ``st.cache_resource``) and one comment about the member-angle
+scan; ``sector_app`` imports them again for one release.
 
-``calculate_project`` is the headless entry. The command line calculates one
-project file and prints a short summary::
+``calculate_project`` is the headless entry. With the repository root on
+``sys.path``::
+
+    from app import calculation_service
+    result_set = calculation_service.calculate_project(project_text)
+
+The command line calculates one project file and prints a short summary::
 
     python app/calculation_service.py project.json
 """
@@ -23,11 +30,17 @@ import sys
 import tempfile
 import time
 
+# The flat app modules import each other by their bare names (for example
+# ``deferred_import``), so the ``app`` folder must be on ``sys.path``.
+# ``sector_app`` adds it for the application; this guard adds it for a caller
+# that has only the repository root on ``sys.path`` (until AR-03).
+_APP_FOLDER = str(pathlib.Path(__file__).resolve().parent)
+if _APP_FOLDER not in sys.path:
+    sys.path.insert(0, _APP_FOLDER)
 if __name__ == "__main__":  # command line: make ``app`` and ``sector`` importable
-    sys.path[:0] = [
-        str(pathlib.Path(__file__).resolve().parent.parent),
-        str(pathlib.Path(__file__).resolve().parent),
-    ]
+    _ROOT_FOLDER = str(pathlib.Path(__file__).resolve().parent.parent)
+    if _ROOT_FOLDER not in sys.path:
+        sys.path.insert(0, _ROOT_FOLDER)
 
 import numpy as np  # noqa: E402
 
@@ -1721,8 +1734,9 @@ def _run_uniaxial_capacity_checks(inp, out):
     AND torsion (EN 1992-1-1 6.3.2(2)), chosen to minimise the governing utilisation
     -- the sizeable strut-angle pass that used to sit inline in run_analysis.
     """
-    # Build angle-independent contexts in the headless calculation layer. The
-    # Streamlit app retains the shared member-angle scan and presentation only.
+    # Build the angle-independent contexts in sector.capacity. This function
+    # keeps the shared member-angle scan; result_presentation keeps the
+    # presentation.
     n_prestress = capacity.prestress_axial(inp)
     n_ed_comp = -inp["P_pl"] + n_prestress
     shear_payload, link_ctx = capacity.build_shear_context(
@@ -3322,7 +3336,11 @@ def project_inputs(project, *, timeout: float = 180.0) -> dict:
     so do not call it from the application.
     """
 
-    if isinstance(project, tuple) and len(project) == 2:
+    if (
+        isinstance(project, tuple)
+        and len(project) == 2
+        and all(isinstance(part, Mapping) for part in project)
+    ):
         text = project_io.dump_project(*project)
     elif isinstance(project, str):
         text = project
@@ -3395,7 +3413,9 @@ def calculate_project(project_or_list):
     return _calculate_one(project_or_list)
 
 
-def _summary_lines(name: str, result_set: dict, seconds: float) -> list[str]:
+def _summary_lines(
+    name: str, result_set: dict, input_seconds: float, calculation_seconds: float
+) -> list[str]:
     inp, results = result_set["inputs"], result_set["results"]
     lines = [f"Project: {name}"]
     if not results:
@@ -3414,7 +3434,8 @@ def _summary_lines(name: str, result_set: dict, seconds: float) -> list[str]:
         f"  {status}: {count}" for status, count in sorted(counts.items())
     )
     lines.append(f"Result SHA-256: {result_set['result_sha256']}")
-    lines.append(f"Calculation time: {seconds:.1f} s")
+    lines.append(f"Input build time: {input_seconds:.1f} s")
+    lines.append(f"Calculation time: {calculation_seconds:.1f} s")
     return lines
 
 
@@ -3433,14 +3454,28 @@ def main(argv=None) -> int:
     start = time.perf_counter()
     try:
         text = path.read_text(encoding="utf-8-sig")
-        result_set = calculate_project(text)
-    except (OSError, ValueError, RuntimeError) as error:
+    except FileNotFoundError:
+        print(f"Sector: File not found: {path}", file=sys.stderr)
+        return 1
+    except (OSError, UnicodeDecodeError):
+        print(
+            f"Sector: Cannot read the project file: {path}. Make sure that it "
+            "is a Sector project file that you can open.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        inp = project_inputs(text)
+        built = time.perf_counter()
+        result_set = calculate_project(inp)
+    except (ValueError, RuntimeError) as error:
         engineer_message = getattr(error, "engineer_message", None)
         detail = engineer_message.text if engineer_message is not None else error
         print(f"Sector: {detail}", file=sys.stderr)
         return 1
-    seconds = time.perf_counter() - start
-    print("\n".join(_summary_lines(path.name, result_set, seconds)))
+    done = time.perf_counter()
+    lines = _summary_lines(path.name, result_set, built - start, done - built)
+    print("\n".join(lines))
     return 0
 
 

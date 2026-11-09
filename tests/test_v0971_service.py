@@ -15,6 +15,7 @@ import copy
 import json
 import os
 import pathlib
+import pickle
 import re
 import subprocess
 import sys
@@ -91,19 +92,52 @@ def test_service_has_no_streamlit_import_at_module_level():
         for alias in node.names
     } | {node.module or "" for node in module_imports if isinstance(node, ast.ImportFrom)}
     assert not {name for name in imported if name.split(".")[0] == "streamlit"}
-    script = (
-        "import sys\n"
-        f"sys.path[:0] = [{str(ROOT)!r}, {str(ROOT / 'app')!r}]\n"
-        "from app import calculation_service\n"
-        "loaded = sorted(m for m in sys.modules if m.split('.')[0] == 'streamlit')\n"
-        "print(len(loaded))\n"
-    )
+
+
+def _run_isolated(script: str) -> str:
     result = subprocess.run(
         [sys.executable, "-I", "-c", script],
-        cwd=ROOT, capture_output=True, text=True, timeout=120, check=False,
+        cwd=ROOT, capture_output=True, text=True, timeout=300, check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "0"
+    return result.stdout.strip()
+
+
+@pytest.mark.parametrize("app_on_path", [False, True], ids=["root-only", "root-and-app"])
+def test_service_imports_with_the_repository_root_alone_and_loads_no_streamlit(
+    app_on_path,
+):
+    # -I gives a sys.path without the current folder; the script then adds only
+    # the folders of the case.
+    folders = [str(ROOT), str(ROOT / "app")] if app_on_path else [str(ROOT)]
+    output = _run_isolated(
+        "import sys\n"
+        f"sys.path[:0] = {folders!r}\n"
+        "from app import calculation_service\n"
+        "loaded = [m for m in sys.modules if m.split('.')[0] == 'streamlit']\n"
+        f"print(len(loaded), sys.path.count({str(ROOT / 'app')!r}))\n"
+    )
+    assert output == "0 1"
+
+
+def test_calculation_in_a_new_process_loads_no_streamlit(tmp_path):
+    # Inputs prepared here and pickled; the new process has never run the
+    # application, so a Streamlit import during the calculation would show.
+    inp = report_render_fixture._inputs()
+    expected = project_io.result_sha256(sector_app.run_analysis(copy.deepcopy(inp)))
+    prepared = tmp_path / "inputs.pickle"
+    prepared.write_bytes(pickle.dumps(inp))
+    output = _run_isolated(
+        "import pickle, sys\n"
+        f"sys.path.insert(0, {str(ROOT)!r})\n"
+        "from app import calculation_service\n"
+        "assert not [m for m in sys.modules if m.split('.')[0] == 'streamlit']\n"
+        f"inputs = pickle.loads(open({str(prepared)!r}, 'rb').read())\n"
+        "result_set = calculation_service.calculate_project(inputs)\n"
+        "loaded = [m for m in sys.modules if m.split('.')[0] == 'streamlit']\n"
+        "print(len(loaded), result_set['result_sha256'])\n"
+    )
+    assert output == f"0 {expected}"
 
 
 def test_calculate_project_matches_run_analysis_for_an_input_document():
@@ -122,7 +156,11 @@ def test_calculate_project_matches_run_analysis_for_an_input_document():
     assert [item["result_sha256"] for item in several] == [expected, expected]
 
 
-@pytest.mark.parametrize("item", [3, (1, 2, 3), b"{}"])
+@pytest.mark.parametrize(
+    "item",
+    [3, (1, 2, 3), b"{}", ("{}", "{}"), ({}, "{}")],
+    ids=["number", "three-tuple", "bytes", "two-texts", "mapping-and-text"],
+)
 def test_calculate_project_rejects_an_item_that_is_not_a_project(item):
     with pytest.raises(TypeError, match="project must be"):
         calculation_service.calculate_project(item)
@@ -133,7 +171,7 @@ def test_invalid_section_gives_an_empty_result_set_and_summary_message():
     inp["geometry_error"] = "The outline crosses itself"
     result_set = calculation_service.calculate_project(inp)
     assert result_set["results"] == {}
-    assert calculation_service._summary_lines("p.json", result_set, 0.0) == [
+    assert calculation_service._summary_lines("p.json", result_set, 0.0, 0.0) == [
         "Project: p.json",
         "No results. Correct the section, reinforcement or material inputs.",
     ]
@@ -238,9 +276,27 @@ def test_project_inputs_accepts_parsed_tables_and_scalars(monkeypatch):
     assert "SECTOR_AUTOSAVE_DIR" not in os.environ
 
 
-def test_command_line_rejects_a_missing_file(tmp_path, capsys):
-    assert calculation_service.main([str(tmp_path / "missing.json")]) == 1
-    assert "Sector:" in capsys.readouterr().err
+def test_command_line_rejects_a_missing_file_with_one_line(tmp_path, capsys):
+    missing = tmp_path / "missing.json"
+    assert calculation_service.main([str(missing)]) == 1
+    captured = capsys.readouterr()
+    assert captured.err == f"Sector: File not found: {missing}\n"
+    assert captured.out == ""
+
+
+@pytest.mark.parametrize("kind", ["folder", "not-utf-8"])
+def test_command_line_rejects_an_unreadable_file_with_one_line(tmp_path, capsys, kind):
+    if kind == "folder":
+        target = tmp_path / "project-folder"
+        target.mkdir()
+    else:
+        target = tmp_path / "binary.json"
+        target.write_bytes(b"\xff\xfe\x00\x81")
+    assert calculation_service.main([str(target)]) == 1
+    assert capsys.readouterr().err == (
+        f"Sector: Cannot read the project file: {target}. Make sure that it "
+        "is a Sector project file that you can open.\n"
+    )
 
 
 def test_command_line_prints_the_engineer_message_of_a_validation_error(
@@ -250,10 +306,13 @@ def test_command_line_prints_the_engineer_message_of_a_validation_error(
 
     message = EngineerMessage("TEST-CODE", "Increase the sweep increment")
 
-    def rejected(_project):
+    def rejected(_inputs, **_kwargs):
         raise calculation_service.engineer_messages.EngineerValidationError(message)
 
-    monkeypatch.setattr(calculation_service, "calculate_project", rejected)
+    monkeypatch.setattr(
+        calculation_service, "project_inputs", lambda _text: {"section": None}
+    )
+    monkeypatch.setattr(calculation_service, "run_analysis", rejected)
     path = tmp_path / "project.json"
     path.write_text("{}", encoding="utf-8")
     assert calculation_service.main([str(path)]) == 1
@@ -296,3 +355,6 @@ def test_command_line_result_equals_the_calculate_record_of_the_app(
     assert project_io.result_sha256(at.session_state["results"]) == service_hash
     rows = [line for line in printed if line.startswith("  ")]
     assert rows and all(":" in line for line in rows)
+    assert [line.split(":")[0] for line in printed[-2:]] == [
+        "Input build time", "Calculation time",
+    ]

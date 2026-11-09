@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import copy
-import dataclasses
 import functools
 import logging
 import math
@@ -112,8 +111,9 @@ torsion = deferred_module("sector.torsion")
 
 # The calculation orchestration moved to app/calculation_service.py in 0.97.1
 # (AR-07). Its names stay importable from sector_app for one release; new
-# code imports them from calculation_service.
-from app.calculation_service import (  # noqa: E402
+# code imports them from calculation_service. F401: the names are the
+# re-export, so an unused-import fix must not remove them.
+from app.calculation_service import (  # noqa: E402, F401
     solve_elastic_combined,
     transformed_properties,
     solve_interaction,
