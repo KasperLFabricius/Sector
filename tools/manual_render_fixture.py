@@ -27,6 +27,7 @@ from sector import __version__  # noqa: E402
 from tools.manual_current_program_statements import (  # noqa: E402
     validate_current_manual_program_statements,
 )
+from tools.kaleido_start import start_image_exporter  # noqa: E402
 from tools.manual_end_user_scope import validate_end_user_manual_scope  # noqa: E402
 from tools.manual_generated_html import manual_generated_html_text  # noqa: E402
 from tools.manual_product_references import (  # noqa: E402
@@ -84,6 +85,9 @@ def validate_rendered_pages(pages):
 
 @functools.lru_cache(maxsize=1)
 def build_fixture_pdf() -> bytes:
+    # A bounded start with one more attempt; the manual then finds the
+    # exporter ready (tools/kaleido_start.py).
+    start_image_exporter()
     return manual.build_manual_pdf_bytes(figures=True)
 
 

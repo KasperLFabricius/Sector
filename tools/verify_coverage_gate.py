@@ -482,10 +482,64 @@ CORE_SHARDS = (
 CORE_DOWNLOAD_STEP_NAME = "Download exact core shard evidence"
 CORE_DOWNLOAD_ACTION = "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333"
 CORE_DOWNLOAD_SETTINGS = {
-    "pattern": "sector-core-${{ github.run_id }}-${{ github.run_attempt }}-*",
+    # Every attempt of this run: a rerun of failed jobs keeps the evidence of
+    # the shards that did not run again (tools/qa_core_shards.py select_artifacts).
+    "pattern": "sector-core-${{ github.run_id }}-*",
     "path": "qa-core-inputs",
     "merge-multiple": False,
 }
+# The preflight and core jobs restore one locked environment. A miss installs it
+# from the hash-locked file, and the preflight job saves it. The key changes with
+# the exact Python pin and the lock file. The test job keeps its own locked
+# install, which the dependency audit policy requires.
+CACHE_RESTORE_ACTION = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+CACHE_SAVE_ACTION = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
+# The cache holds the installed packages of the pinned toolcache interpreter, so
+# `python` stays the real interpreter. A venv is not used: on Windows its
+# python.exe is a launcher that starts the interpreter as a child process, and a
+# test that stops a child process with terminate() then sees a late release.
+QA_ENV_PATH = "${{ env.pythonLocation }}/Lib/site-packages\n${{ env.pythonLocation }}/Scripts\n"
+QA_ENV_KEY = (
+    "sector-qa-env-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-path }}-"
+    "${{ hashFiles('.python-version', 'requirements-dev.txt') }}"
+)
+QA_ENV_HIT = "steps.qa_env.outputs.cache-hit == 'true'"
+QA_ENV_MISS = "steps.qa_env.outputs.cache-hit != 'true'"
+QA_ENV_CLEAR = (
+    'foreach ($folder in @("$env:pythonLocation\\Lib\\site-packages", "$env:pythonLocation\\Scripts")) '
+    "{ if (Test-Path $folder) { Remove-Item -Recurse -Force $folder } }"
+)
+# Hang limits of the shard step (owner rule, 9 November 2026): the real-image
+# shard normally takes 7 min, the longest core shard about 23 min.
+CORE_STEP_TIMEOUT = "${{ matrix.shard == 'real' && 20 || 60 }}"
+
+
+def _environment_steps(*, save: bool) -> list[dict[str, Any]]:
+    steps: list[dict[str, Any]] = [
+        {"name": "Look up cached QA environment", "id": "qa_env", "uses": CACHE_RESTORE_ACTION,
+         "with": {"path": QA_ENV_PATH, "key": QA_ENV_KEY, "lookup-only": True}},
+        {"name": "Clear base packages for the cached QA environment", "if": QA_ENV_HIT, "run": QA_ENV_CLEAR},
+        {"name": "Restore cached QA environment", "if": QA_ENV_HIT, "uses": CACHE_RESTORE_ACTION,
+         "with": {"path": QA_ENV_PATH, "key": "${{ steps.qa_env.outputs.cache-primary-key }}",
+                  "fail-on-cache-miss": True}},
+        {"name": "Install locked QA environment", "if": QA_ENV_MISS,
+         "run": "python -m pip install --require-hashes -r requirements-dev.txt"},
+    ]
+    if save:
+        steps.append({"name": "Save cached QA environment", "if": QA_ENV_MISS, "uses": CACHE_SAVE_ACTION,
+                      "with": {"path": QA_ENV_PATH, "key": "${{ steps.qa_env.outputs.cache-primary-key }}"}})
+    return steps
+
+
+def _setup_steps() -> list[dict[str, Any]]:
+    return [
+        {"name": CHECKOUT_STEP_NAME, "uses": CHECKOUT_ACTION, "with": {"fetch-depth": 0}},
+        {"name": "Set up pinned Python", "id": "python",
+         "uses": "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
+         "with": {"python-version-file": ".python-version", "cache": "pip", "cache-dependency-path": "requirements-dev.txt"}},
+        {"name": "Preflight locked dependency inputs",
+         "run": "python tools/verify_dependency_audit.py quality-dependency-audit.toml --preflight-locks"},
+    ]
 
 
 def expected_core_job() -> dict[str, Any]:
@@ -496,15 +550,9 @@ def expected_core_job() -> dict[str, Any]:
         "timeout-minutes": 120,
         "strategy": {"fail-fast": False, "matrix": {"shard": list(CORE_SHARDS)}},
         "steps": [
-            {"name": CHECKOUT_STEP_NAME, "uses": CHECKOUT_ACTION, "with": {"fetch-depth": 0}},
-            {"name": "Set up pinned Python",
-             "uses": "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-             "with": {"python-version-file": ".python-version", "cache": "pip", "cache-dependency-path": "requirements-dev.txt"}},
-            {"name": "Preflight locked dependency inputs",
-             "run": "python tools/verify_dependency_audit.py quality-dependency-audit.toml --preflight-locks"},
-            {"name": "Install locked QA environment",
-             "run": "python -m pip install --require-hashes -r requirements-dev.txt"},
-            {"name": "Run complete primary shard",
+            *_setup_steps(),
+            *_environment_steps(save=False),
+            {"name": "Run complete primary shard", "timeout-minutes": CORE_STEP_TIMEOUT,
              "run": 'python tools/qa_core_shards.py run --shard "${{ matrix.shard }}" --output qa-shard'},
             {"name": "Upload raw primary shard evidence", "if": "always()", "uses": QA_UPLOAD_ACTION,
              "with": {"name": "sector-core-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.shard }}",
@@ -518,7 +566,7 @@ def expected_preflight_job() -> dict[str, Any]:
         "name": "Fast source preflight",
         "runs-on": "windows-latest",
         "timeout-minutes": 15,
-        "steps": [*expected_core_job()["steps"][:4], {
+        "steps": [*_setup_steps(), *_environment_steps(save=True), {
             "name": "Run fast source contracts",
             "run": "python -m pytest tests/test_ascii_only.py tests/test_real_image_export_policy.py -n 0 -q",
         }],
@@ -531,6 +579,9 @@ def expected_coverage_command(data: Mapping[str, Any]) -> str:
 $phaseFailures = @()
 if ("${{{{ steps.core_download.outcome }}}}" -ne "success") {{
   $phaseFailures += "core artifact download"
+}}
+if ("${{{{ needs.core.result }}}}" -ne "success") {{
+  $phaseFailures += "primary jobs (${{{{ needs.core.result }}}})"
 }}
 
 python tools/qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts
