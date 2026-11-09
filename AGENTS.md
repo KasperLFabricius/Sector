@@ -217,8 +217,8 @@ Dependabot opens weekly pull requests for the pip-compile locks and one grouped
 pull request for the GitHub Actions. Each one runs the full QA workflow.
 
 - The policy validators and tests pin the SHA of each action in
-  `.github/workflows/qa.yml` (checkout, setup-python, upload-artifact and
-  download-artifact): `tools/verify_coverage_gate.py`,
+  `.github/workflows/qa.yml` (checkout, setup-python, cache, upload-artifact
+  and download-artifact): `tools/verify_coverage_gate.py`,
   `tools/verify_dependency_audit.py`, `tools/verify_mypy_policy.py`,
   `tools/verify_ruff_policy.py` and `tests/test_portable_windows_policy.py`.
   An action update must change the old SHA in each of these files that
