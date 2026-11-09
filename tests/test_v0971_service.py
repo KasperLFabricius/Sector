@@ -13,7 +13,9 @@ from __future__ import annotations
 import ast
 import copy
 import json
+import os
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -158,6 +160,82 @@ def test_project_that_sector_does_not_apply_is_not_calculated(text, detail):
     with pytest.raises(ValueError, match="New file was not applied") as caught:
         calculation_service.calculate_project(text)
     assert detail in str(caught.value)
+
+
+class _FakeElement:
+    def __init__(self, value):
+        self.value = value
+
+
+class _FakeSession:
+    """Replaces the headless session, so each incomplete state is direct."""
+
+    def __init__(self, *, exception=(), error=(), state=None):
+        self.exception = [_FakeElement(value) for value in exception]
+        self.error = [_FakeElement(value) for value in error]
+        self.session_state = dict(state or {})
+
+    def run(self):
+        return self
+
+
+def _install_fake_session(monkeypatch, session):
+    import streamlit.testing.v1 as testing
+
+    started = []
+
+    class FakeAppTest:
+        @staticmethod
+        def from_file(path, default_timeout):
+            started.append((path, default_timeout, os.environ.get("SECTOR_AUTOSAVE_DIR")))
+            return session
+
+    monkeypatch.setattr(testing, "AppTest", FakeAppTest)
+    return started
+
+
+_LOADED = {"_project_msg": ("success", "Project loaded")}
+
+
+@pytest.mark.parametrize(
+    ("session", "error", "detail"),
+    [
+        (dict(exception=["stop"]), RuntimeError, "The project input build stopped: stop"),
+        (dict(state={}), ValueError, "Sector did not confirm the project load"),
+        (
+            dict(state=_LOADED, error=["Enter a positive bar area"]),
+            ValueError,
+            "Correct the project inputs: Enter a positive bar area",
+        ),
+        (dict(state=_LOADED), RuntimeError, "The project input build gave no inputs"),
+    ],
+    ids=["exception", "no-load-message", "input-error", "no-inputs"],
+)
+def test_project_inputs_fails_closed_for_each_incomplete_session(
+    monkeypatch, session, error, detail,
+):
+    fake = _FakeSession(**session)
+    started = _install_fake_session(monkeypatch, fake)
+    monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", "kept-folder")
+    with pytest.raises(error, match=re.escape(detail)):
+        calculation_service.project_inputs("project text")
+    assert fake.session_state["_pending_project"] == "project text"
+    assert started[0][0] == APP
+    assert started[0][2] not in {None, "kept-folder"}
+    assert os.environ["SECTOR_AUTOSAVE_DIR"] == "kept-folder"
+
+
+def test_project_inputs_accepts_parsed_tables_and_scalars(monkeypatch):
+    tables, scalars = project_io.parse_project(reproducible_example.project_json())
+    inputs = {"section": None}
+    fake = _FakeSession(state=dict(_LOADED, _latest_inputs=inputs))
+    _install_fake_session(monkeypatch, fake)
+    monkeypatch.delenv("SECTOR_AUTOSAVE_DIR", raising=False)
+    assert calculation_service.project_inputs((tables, scalars)) is inputs
+    assert fake.session_state["_pending_project"] == project_io.dump_project(
+        tables, scalars
+    )
+    assert "SECTOR_AUTOSAVE_DIR" not in os.environ
 
 
 def test_command_line_rejects_a_missing_file(tmp_path, capsys):
