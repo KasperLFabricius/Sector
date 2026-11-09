@@ -721,8 +721,8 @@ def test_pr_a05_acceptance_freezes_mapping_boundaries_and_fallback() -> None:
 
 def test_live_identity_is_v0966_and_uses_current_schema_27() -> None:
     assert __version__ == "0.97.0"
-    # Sector 0.97.0 moved the live schema to 28; schema 27 stays migratable.
-    assert re.search(r"^VERSION\s*=\s*28$", _text(PROJECT_IO), re.MULTILINE)
+    # Sector 0.97.1 moved the live schema to 29; schema 27 stays migratable.
+    assert re.search(r"^VERSION\s*=\s*29$", _text(PROJECT_IO), re.MULTILINE)
     assert re.search(
         r"^PREVIOUS_VERSION\s*=\s*27$", _text(PROJECT_IO), re.MULTILINE
     )
@@ -911,8 +911,18 @@ def test_upload_vectors_regenerate_with_the_documented_frozen_clock(
         historical = json.loads(text)
         # Schema 28 (0.97.0) changed only the version number of an empty
         # project; the frozen vector keeps its schema-27 identity.
-        assert historical["version"] == project_io.VERSION == 28
+        assert historical["version"] == project_io.VERSION == 29
         historical["version"] = recipe["schema_version"]
+        # Schema 29 (0.97.1) adds three scalar defaults and the corner-ID,
+        # group-ID and case-attribute columns. Remove them to rebuild the
+        # schema-27 bytes.
+        for scalar in (
+            "section_regions", "reinforcement_groups", "auto_recalculate_on",
+        ):
+            del historical["scalars"][scalar]
+        for table_key, table in historical["tables"].items():
+            assert table["rows"] == []
+            table["columns"] = list(project_io._schema28_table_columns(table_key))
         for scalar, expected in recipe["post_dump_omitted_scalar_defaults"].items():
             actual = historical["scalars"][scalar]
             assert type(actual) is type(expected) and actual == expected

@@ -24,6 +24,10 @@ AREA = "area (mm2)"
 DIAMETER = "diameter (mm)"
 MATERIAL_ID = "material ID"
 FATIGUE_DETAIL_ID = "fatigue detail ID"
+# Schema 29: the bar group that generated the element. Blank for an element
+# that the engineer entered or edited directly. The editor columns stay
+# ``COLUMNS``; project files use ``PROJECT_COLUMNS``.
+GROUP_ID = "group ID"
 
 COLUMNS = [
     ELEMENT_ID,
@@ -35,8 +39,21 @@ COLUMNS = [
     MATERIAL_ID,
     FATIGUE_DETAIL_ID,
 ]
+PROJECT_COLUMNS = [*COLUMNS, GROUP_ID]
 NUMERIC_COLUMNS = {X, Y, AREA, DIAMETER}
 TEXT_COLUMNS = set(COLUMNS) - NUMERIC_COLUMNS
+PROJECT_TEXT_COLUMNS = set(PROJECT_COLUMNS) - NUMERIC_COLUMNS
+
+# Bar groups (schema 29). A group records the generator and the parameters
+# that made its elements and the material of these elements. The calculation
+# reads only the element tables, so a group has no engineering effect.
+GROUPS_KEY = "reinforcement_groups"
+GROUPS_VERSION = 1
+GROUP_ID_PREFIX = "G"
+GROUP_ELEMENTS = ("bar", "tendon")
+# n elements between two points, elements at a spacing along a face (an edge
+# ID) with cover, elements on a circle, and a mirrored copy of another group.
+GROUP_GENERATORS = ("line", "face", "ring", "mirror")
 
 AREA_MODE = "Area"
 DIAMETER_MODE = "Diameter"
@@ -98,11 +115,12 @@ def text_cell(value, default: str = "") -> str:
     return str(value).strip()
 
 
-def empty_table() -> pd.DataFrame:
+def empty_table(*, with_group: bool = False) -> pd.DataFrame:
     """An empty mixed-type table with the canonical column order."""
+    columns = PROJECT_COLUMNS if with_group else COLUMNS
     return pd.DataFrame({
         column: pd.Series(dtype="float64" if column in NUMERIC_COLUMNS else "object")
-        for column in COLUMNS
+        for column in columns
     })
 
 
@@ -138,12 +156,19 @@ def _allocate_id(prefix: str, used: set[str], next_number: int) -> tuple[str, in
     return value, next_number + 1
 
 
-def normalise_table(value, kind: str, *, default_mode: str = AREA_MODE) -> pd.DataFrame:
+def normalise_table(
+    value,
+    kind: str,
+    *,
+    default_mode: str = AREA_MODE,
+    with_group: bool = False,
+) -> pd.DataFrame:
     """Return a canonical mixed-type element table.
 
     Minimal ``x/y/area`` rows normalise to area-authoritative records. Missing or
     duplicate IDs are replaced deterministically; existing valid IDs never change.
     The non-authoritative size value is derived on every normalisation.
+    ``with_group`` adds the schema-29 group ID column of the project file.
     """
     kind = _kind(kind)
     if default_mode not in SIZE_MODES:
@@ -183,14 +208,16 @@ def normalise_table(value, kind: str, *, default_mode: str = AREA_MODE) -> pd.Da
             MATERIAL_ID: text_cell(raw.get(MATERIAL_ID), default_material_id(kind))
                          or default_material_id(kind),
             FATIGUE_DETAIL_ID: text_cell(raw.get(FATIGUE_DETAIL_ID)),
+            GROUP_ID: text_cell(raw.get(GROUP_ID)),
         })
 
+    columns = PROJECT_COLUMNS if with_group else COLUMNS
     if not rows:
-        return empty_table()
-    frame = pd.DataFrame(rows, columns=COLUMNS)
+        return empty_table(with_group=with_group)
+    frame = pd.DataFrame(rows, columns=columns)
     for column in NUMERIC_COLUMNS:
         frame[column] = pd.to_numeric(frame[column], errors="coerce").astype("float64")
-    for column in TEXT_COLUMNS:
+    for column in set(columns) - NUMERIC_COLUMNS:
         frame[column] = frame[column].astype("object")
     return frame
 

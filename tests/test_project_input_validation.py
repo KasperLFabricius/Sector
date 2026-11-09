@@ -880,6 +880,9 @@ def _table_object_with_row(key: str) -> dict:
             row.append(rebar_table.AREA_MODE)
         elif column in load_cases.PLASTIC_FACE_COLUMNS:
             row.append(load_cases.FACE_AUTO)
+        elif column in load_cases.ATTRIBUTE_COLUMNS:
+            # Schema 29: each case attribute has a validated set of values.
+            row.append(load_cases.ATTRIBUTE_DEFAULTS[column])
         elif column in text:
             row.append("")
         else:  # pragma: no cover - the production manifest owns every column

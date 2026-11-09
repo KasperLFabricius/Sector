@@ -31,10 +31,11 @@ from sector import capacity, torsion  # noqa: E402
 
 
 APP = str(ROOT / "app" / "sector_app.py")
-# 0.97.0 TB-05: the reference project gains the schema 28 input
-# shear_include_tendons = False; both input hashes change, no other value.
+# 0.97.1 D1: schema 29 adds the corner-ID, group-ID and case-attribute
+# columns and three scalar defaults to the canonical inputs; both input hashes
+# change, no engineering value.
 EXPECTED_INPUT_SHA256 = (
-    "214186e258e2cfe40af6138e69afd7dfcc9dba99c90a7ecf13c2d6bd63ebfcbf"
+    "f624a059e9d170e5a0f67c76be789f98452cc9a8989f61d7aef6cc898ddd24cf"
 )
 # Loading normalizes only these newly optional document-control/reference fields.
 # The original download identity remains unchanged above.
@@ -44,7 +45,7 @@ LOADED_REPORT_DEFAULTS = {
     "rep_source_register": [],
 }
 EXPECTED_LOADED_INPUT_SHA256 = (
-    "05dbf20af200d9f55c422fcdba2964c6a23f3b68e01cfb25e020a944d1dbf686"
+    "4d806761104c27f840067afcf31b7d2e38bcc25d4ead35155236981839c85064"
 )
 
 

@@ -1116,7 +1116,9 @@ def test_schema_27_serializes_exact_three_crack_width_inputs():
     elastic = payload["tables"][load_cases.ELASTIC_TABLE_KEY]
 
     assert payload["version"] == project_io.VERSION
-    assert tuple(elastic["columns"]) == load_cases.ELASTIC_COLUMNS
+    assert tuple(elastic["columns"]) == load_cases.PERSISTED_COLUMNS[
+        load_cases.ELASTIC_TABLE_KEY
+    ]
     assert project_io.LEGACY_SHARED_CRACK_WIDTH_KEY not in payload["scalars"]
     assert payload["scalars"][
         "sls_long_term_permitted_crack_width_mm"
@@ -1853,7 +1855,7 @@ def test_retired_schemas_name_the_current_and_migratable_versions(version):
             ValueError,
             match=(
                 rf"unsupported Sector project schema {version}; only current "
-                r"schema 28 and migrations from schemas 25, 26 and 27"
+                r"schema 29 and migrations from schemas 25, 26, 27 and 28"
             ),
         ):
             reader(text)
@@ -1865,8 +1867,8 @@ def test_noncurrent_non_v23_schema_names_current_and_migratable_versions():
     with pytest.raises(
         ValueError,
         match=(
-            r"unsupported Sector project schema 22; only current schema 28 "
-            r"and migrations from schemas 25, 26 and 27"
+            r"unsupported Sector project schema 22; only current schema 29 "
+            r"and migrations from schemas 25, 26, 27 and 28"
         ),
     ):
         project_io.parse_project(text)

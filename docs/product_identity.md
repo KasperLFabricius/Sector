@@ -39,7 +39,12 @@ Sector version, actual inputs, selected method and equation, action identity and
 calculation state. Stale, corrupt or input-mismatched results remain rejected.
 
 Sector 0.97.0 is the current internal product identity and uses project schema
-28. Schemas 25, 26 and 27 have bounded migrations. For schema 25, the former single
+29. Schemas 25, 26, 27 and 28 have bounded migrations. Schema 29 adds stable
+corner IDs, the region list with template parameters, bar groups, the case
+attributes (location tag, design situation and a reserved stage) and the
+automatic-recalculation preference. These fields have no engineering effect,
+and a schema-28 file loads with their defaults and gives the same results. For
+schema 25, the former single
 permitted crack width is copied to the independent long-term and short-term
 ordinary inputs, and is preserved separately as the Formula 7.100 NA operand
 only when that heightened calculation was enabled. Schemas 25 and 26 receive

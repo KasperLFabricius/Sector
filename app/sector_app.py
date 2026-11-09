@@ -3590,6 +3590,20 @@ def _reseed_section_tables(tables):
         _reseed_table(base, ed, canonical)
 
 
+def _live_point_table(base_key, df):
+    """Return a loaded point table with the columns of its live editor.
+
+    Schema 29 stores corner IDs and bar-group IDs in the project file. The
+    point editors do not show these columns yet, so the live tables keep their
+    present columns. A save then gives the corners their IDs in row order and
+    leaves the group IDs blank, which is the present behaviour.
+    """
+    kind = _reinforcement_kind(base_key)
+    if kind:
+        return rebar_table.normalise_table(df, kind)
+    return df.reindex(columns=_CORNER_COLS).copy(deep=True)
+
+
 def _clear_section_tables():
     """Empty every point table through the same grid-safe reseed path."""
     _reseed_section_tables({
@@ -4213,7 +4227,9 @@ def _apply_project_text(text: str) -> None:
             continue
         # Re-seed the grid (bump its version) so it rebuilds from the loaded points
         # rather than keeping the previous session's live state.
-        _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)
+        _reseed_table(
+            key, ed_for_base.get(key, key + "_ed"), _live_point_table(key, df)
+        )
     for key, value in scalars.items():
         st.session_state[key] = value
     if "torsion_gamma_ct" in scalars:

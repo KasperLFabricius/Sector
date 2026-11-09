@@ -44,9 +44,11 @@ def _schema27_text(*, tendons=None, **scalar_changes) -> str:
     return json.dumps(payload)
 
 
-def test_current_schema_is_28():
-    assert project_io.VERSION == 28
+def test_current_schema_is_29_and_schemas_27_and_28_migrate():
+    # Sector 0.97.1 moved the live schema to 29 (no engineering effect).
+    assert project_io.VERSION == 29
     assert 27 in project_io.MIGRATABLE_VERSIONS
+    assert 28 in project_io.MIGRATABLE_VERSIONS
 
 
 def test_schema27_project_loads_with_corrected_methods_and_message():
@@ -276,7 +278,16 @@ def _development_schema28_text(app_version, *, tendons=None, **scalar_changes) -
         )
     scalars = dict(reproducible_example.project_scalars(), **scalar_changes)
     scalars.pop(capacity.SHEAR_TENDONS_KEY)
-    return project_io.dump_project(tables, scalars, app_version=app_version)
+    payload = json.loads(
+        project_io.dump_project(tables, scalars, app_version=app_version)
+    )
+    # Schema 29 is current since Sector 0.97.1; these files are schema 28.
+    payload["version"] = project_io.SCHEMA28_VERSION
+    payload["provenance"]["input_sha256"] = project_io._input_digest({
+        "tables": payload["tables"],
+        "scalars": payload["scalars"],
+    })
+    return json.dumps(payload)
 
 
 def test_development_schema28_file_loads_with_the_message():
@@ -286,7 +297,7 @@ def test_development_schema28_file_loads_with_the_message():
                    shear_method=codes.EC2_2023.label, combined_on=False)
     text = _development_schema28_text("0.96.9", **changes)
     _tables, scalars, info = project_io.parse_project_with_info(text)
-    assert info["source_schema_version"] == project_io.VERSION
+    assert info["source_schema_version"] == project_io.SCHEMA28_VERSION
     assert scalars[capacity.SHEAR_TENDONS_KEY] is True
     message = " ".join(info["method_changes"])
     assert project_io.SCHEMA28_TENDON_CHANGE in message
