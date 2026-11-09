@@ -48,7 +48,7 @@ def test_preset_preview_is_explicit_and_leaves_the_supplied_state_unchanged():
 
 
 PDF = b"%PDF-1.7\nexact binary bytes \x00\xff\x01\n%%EOF"
-SIGNATURE = ("input", ("metadata", "Standard"), ("0.96.9", "revision"), "contract")
+SIGNATURE = ("input", ("metadata", "Standard"), ("0.97.0", "revision"), "contract")
 
 
 def _preview(**changes):

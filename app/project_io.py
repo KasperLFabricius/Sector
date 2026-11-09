@@ -96,14 +96,26 @@ SCHEMA28_METHOD_CHANGES = (
     "VRd when VEd > VRd,c (EN 1992-1-1 6.2.3(1)).",
 )
 
+# Added to the load message only for a 2023 shear project with tendons.
+SCHEMA28_TENDON_CHANGE = (
+    "Shear without shear reinforcement, DS/EN 1992-1-1:2023: the bonded "
+    "tendons on the tension side are included in Asl, d and rho_l (8.2.2(6), "
+    "Formulae (8.36) and (8.37)). You can clear this option in the shear panel."
+)
 
-def schema28_migration_warning(*, pivot_c_cleared: bool = False) -> str:
+
+def schema28_migration_warning(
+    *, pivot_c_cleared: bool = False, tendons_2023: bool = False
+) -> str:
     """Load message for a project saved before the 0.97.0 method corrections."""
 
+    changes = SCHEMA28_METHOD_CHANGES + (
+        (SCHEMA28_TENDON_CHANGE,) if tendons_2023 else ()
+    )
     return (
         "This project file is from an earlier Sector version. Sector now "
         "calculates it with corrected methods, so results can differ from the "
-        "earlier results: " + " ".join(SCHEMA28_METHOD_CHANGES)
+        "earlier results: " + " ".join(changes)
         + (
             " This project file clears the pivot C limit, so Sector does not "
             "apply it."
@@ -121,11 +133,56 @@ def _schema28_pivot_c_default(scalars: Mapping) -> bool:
     )
 
 
+def _schema28_tendon_change_applies(scalars: Mapping, tables: Mapping) -> bool:
+    """True when the migrated 2023 tendon option changes a shear result."""
+
+    if scalars.get(capacity.SHEAR_TENDONS_KEY) is not True:
+        return False
+    if scalars.get("shear_on") is not True:
+        return False
+    if not capacity.shear_tendons_default(_schema28_effective_shear_method(scalars)):
+        return False
+    if not capacity.shear_tendons_bonded(scalars):
+        return False
+    tendons = rebar_table.normalise_table(tables.get("tendons_base"), "tendon")
+    return len(tendons) > 0
+
+
+def _schema28_effective_shear_method(scalars: Mapping):
+    """Shear method that the app uses: the combined method when it is on."""
+
+    return (
+        scalars.get("combined_method")
+        if scalars.get("combined_on") is True
+        else scalars.get("shear_method")
+    )
+
+
+# The released Sector 0.96.9 wrote schema 27. Development builds between the
+# schema 28 change and the 0.97.0 release recorded 0.96.9 with schema 28. Their
+# files can lack later schema-28 inputs (the tendon option) and use the earlier
+# prestrain meaning, so they load like files from an earlier version.
+_DEVELOPMENT_SCHEMA28_VERSIONS = frozenset({"0.96.9"})
+
+
+def _development_schema28(source_version, provenance: Mapping) -> bool:
+    """True for a schema-28 file from a development build before 0.97.0."""
+
+    return (
+        source_version == VERSION
+        and provenance.get("sector_version") in _DEVELOPMENT_SCHEMA28_VERSIONS
+    )
+
+
 def _schema28_defaults(scalars: dict) -> None:
     """Add the schema-28 method inputs to a migrated project."""
 
     scalars.setdefault("conc_pivot_c", _schema28_pivot_c_default(scalars))
     scalars.setdefault(capacity.MED_MAX_ON_KEY, False)
+    scalars.setdefault(
+        capacity.SHEAR_TENDONS_KEY,
+        capacity.shear_tendons_default(_schema28_effective_shear_method(scalars)),
+    )
     for key in capacity.MED_MAX_KEYS.values():
         scalars.setdefault(key, 0.0)
 
@@ -322,7 +379,8 @@ SCALAR_KEYS = [
     "shear_vx_fitted_z", "shear_vy_fitted_z", "shear_duct_case",
     "shear_vx_duct_sum", "shear_vy_duct_sum", "shear_vx_duct_largest",
     "shear_vy_duct_largest",
-    "shear_dlower", "shear_gamma_v", "shear_links", "shear_vx_link_legs",
+    "shear_dlower", "shear_gamma_v", capacity.SHEAR_TENDONS_KEY,
+    "shear_links", "shear_vx_link_legs",
     "shear_vy_link_legs", "shear_link_dia", "shear_link_s",
     "shear_fywk", "shear_vx_transverse_leg_spacing",
     "shear_vy_transverse_leg_spacing", "strut_cot_min",
@@ -386,6 +444,7 @@ _BOOLEAN_SCALAR_KEYS = frozenset({
     "qsv_qs_cover_to_edge",
     "conc_pivot_c",
     capacity.MED_MAX_ON_KEY,
+    capacity.SHEAR_TENDONS_KEY,
     "mild_active_comp",
     "pl_check_util",
     "pl_interaction",
@@ -2350,7 +2409,7 @@ def parse_project_with_info(text: str):
         scalars = _canonical_scalars(raw_scalars, tables)
 
     method_changes: tuple[str, ...] = ()
-    if source_version != VERSION:
+    if source_version != VERSION or _development_schema28(source_version, provenance):
         _schema28_defaults(scalars)
         method_changes = (
             schema28_migration_warning(
@@ -2358,6 +2417,7 @@ def parse_project_with_info(text: str):
                     scalars["conc_pivot_c"] is False
                     and _schema28_pivot_c_default(scalars)
                 ),
+                tendons_2023=_schema28_tendon_change_applies(scalars, tables),
             ),
         )
     _apply_presentation(data, raw_scalars, scalars)

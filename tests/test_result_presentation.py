@@ -2257,6 +2257,14 @@ def _bind_concrete_publication_fixture(shear, inp):
         d=d_mm,
         asl=asl,
         asl_bar_ids=asl_ids,
+        # Schema 28 shear records carry the Asl split (review item TB-05).
+        asl_tendon_area=0.0,
+        asl_split=capacity.shear_tension_steel_record(
+            capacity.shear_tension_steel(
+                inp, axis, tension_low, cy if axis == "x" else cx,
+                model_2023=model_2023,
+            )
+        ),
         asl_cg=cg,
         ac=area,
         fck=inp["concrete"].fck,
@@ -5694,3 +5702,64 @@ def test_primary_plastic_depths_keep_existing_face_axis_identity():
     unavailable["effective_depths"][0]["d_mm"] = float("nan")
     assert presentation.plastic_face_depth_summary(unavailable)[0][1] is None
     assert presentation.plastic_face_depth_summary({}) == ()
+
+
+# TB-05 hand values: As = 1256.6 mm2 at ds = 540.0 mm, Ap = 600.0 mm2 at dp = 450.0 mm.
+# Area-weighted d = (540.0*1256.6 + 450.0*600.0)/1856.6 = 948564/1856.6 = 510.9 mm.
+# Formula (8.36) d = (540.0^2*1256.6 + 450.0^2*600.0)/948564 = 514.4 mm.
+_ASL_SPLIT = {"as": 1256.6, "ds": 540.0, "ap": 600.0, "dp": 450.0, "tendons_excluded": ""}
+
+
+@pytest.mark.parametrize("html", [True, False])
+def test_shear_asl_split_rows_follow_each_depth_rule(html):
+    mm2 = "mm<sup>2</sup>" if html else "mm2"
+
+    def rows(rule, d, **extra):
+        split = dict(_ASL_SPLIT, rule=rule, **extra)
+        return presentation.shear_asl_split_rows({"asl_split": split, "d": d}, html=html)
+
+    assert presentation.shear_asl_split_rows(None, html=html) == []
+    assert presentation.shear_asl_split_rows({"asl_split": None}, html=html) == []
+    assert rows(capacity.SHEAR_ASL_BARS, 540.0) == []
+
+    only = rows(capacity.SHEAR_ASL_TENDONS_ONLY, 450.0)
+    assert [row[0] for row in only] == ["Bonded tendons in Asl", "Effective depth rule"]
+    assert only[0][2] == f"600.0 {mm2}; 450.0 mm"
+    assert only[1][2] == "d = dp = 450.0 mm (tendons only)"
+
+    weighted = rows(capacity.SHEAR_ASL_AREA_WEIGHTED, 948564.0 / 1856.6)
+    assert [row[0] for row in weighted] == [
+        "Ordinary bars in Asl", "Bonded tendons in Asl", "Effective depth rule",
+    ]
+    assert weighted[0][2] == f"1256.6 {mm2}; 540.0 mm"
+    assert weighted[2][2].endswith(
+        "= 510.9 mm, area-weighted mean d (EN 1992-2 6.2.2(101))"
+    )
+
+    d_836 = (540.0**2 * 1256.6 + 450.0**2 * 600.0) / 948564.0
+    formula = rows(capacity.SHEAR_ASL_FORMULA_8_36, d_836)
+    assert [row[0] for row in formula] == [
+        "Ordinary bars in Asl", "Bonded tendons in Asl", "Effective depth rule",
+        "Reinforcement ratio rule",
+    ]
+    assert formula[2][2] == "(ds^2 As + dp^2 Ap)/(ds As + dp Ap) = 514.4 mm (8.36)"
+    assert formula[3][1] == ("rho<sub>l</sub>" if html else "rho_l")
+    assert formula[3][2] == "(ds As + dp Ap)/(bw d^2) (8.37)"
+
+    excluded = rows(capacity.SHEAR_ASL_BARS, 540.0, tendons_excluded="ungrouted")
+    assert excluded == [[
+        "Bonded tendons",
+        "A<sub>p</sub>" if html else "Ap",
+        "not included: the web duct condition 'ungrouted' does not establish "
+        "bonded tendons",
+    ]]
+
+
+def test_shear_asl_split_caption_is_one_plain_line():
+    split = dict(_ASL_SPLIT, rule=capacity.SHEAR_ASL_TENDONS_ONLY)
+    caption = presentation.shear_asl_split_caption({"asl_split": split, "d": 450.0})
+    assert caption == (
+        "Bonded tendons in Asl: 600.0 mm2; 450.0 mm. "
+        "Effective depth rule: d = dp = 450.0 mm (tendons only)."
+    )
+    assert presentation.shear_asl_split_caption({}) == ""

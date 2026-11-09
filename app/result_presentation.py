@@ -1918,18 +1918,22 @@ def concrete_shear_publication_input_is_current(inp, shear_result):
         _, mx_prestress, my_prestress = capacity.prestress_resultants(inp, cx, cy)
         n_prestress = capacity.prestress_axial(inp)
         centroid_coord = cy if axis == "x" else cx
-        asl, cg, asl_ids = shear_core.tension_reinforcement_selection(
-            bars, axis, tension_low, centroid_coord
+        tension_steel = capacity.shear_tension_steel(
+            inp, axis, tension_low, centroid_coord,
+            model_2023=bool(model_2023),
         )
-        d_mm = shear_core.effective_depth(outer, axis, tension_low, cg)
+        asl, cg, asl_ids, d_mm = (
+            tension_steel.asl, tension_steel.centroid, tension_steel.bar_ids,
+            tension_steel.d,
+        )
+        asl_kernel = tension_steel.rho_area
         bw_auto = shear_core.min_web_width(outer, holes, axis)
         bw_mm = expected_bw_override if expected_bw_override > 0.0 else bw_auto
         concrete = inp.get("concrete")
-        steel = inp.get("steel")
         fck = float(getattr(concrete, "fck"))
         fcd = float(getattr(concrete, "fcd"))
         gamma_c = float(getattr(concrete, "gamma_c"))
-        fyd_flex = float(capacity.design_yield(steel))
+        fyd_flex = float(capacity.shear_flexural_fyd(inp, tension_steel))
         p_pl = float(inp.get("P_pl"))
         mx_pl = float(inp.get("Mx_pl"))
         my_pl = float(inp.get("My_pl"))
@@ -2022,6 +2026,8 @@ def concrete_shear_publication_input_is_current(inp, shear_result):
         "d": d_mm,
         "asl": asl,
         "asl_bar_ids": asl_ids,
+        "asl_tendon_area": tension_steel.ap,
+        "asl_split": capacity.shear_tension_steel_record(tension_steel),
         "asl_cg": cg,
         "ac": area,
         "fck": fck,
@@ -2050,7 +2056,7 @@ def concrete_shear_publication_input_is_current(inp, shear_result):
         "fck": fck,
         "bw": expected_geometry.get("concrete_bw_mm"),
         "d": d_mm,
-        "asl": asl,
+        "asl": asl_kernel,
         "model": "2023" if model_2023 else "2005",
     }
     if model_2023:
@@ -2081,7 +2087,7 @@ def concrete_shear_publication_input_is_current(inp, shear_result):
             code,
             expected_geometry.get("concrete_bw_mm"),
             d_mm,
-            asl,
+            asl_kernel,
             n_ed_comp,
             area,
             fyd_mpa=fyd_flex,
@@ -2216,11 +2222,104 @@ def _concrete_route_chord_required(inp, shear_result):
     return selection.valid is True and selection.route == "concrete"
 
 
+def shear_asl_split_rows(shear_result, *, html: bool) -> list[list[str]]:
+    """Rows ``[quantity, symbol, value]`` that show how Asl and d include tendons.
+
+    Review item TB-05. The rows are empty when Asl has ordinary bars only. With
+    the tendon option, they give As at ds, Ap at dp and the depth rule, so that
+    an engineer can follow d and rho_l without the software.
+    """
+
+    split = (shear_result or {}).get("asl_split") or {}
+
+    def sym(html_text, plain_text):
+        return html_text if html else plain_text
+
+    mm2 = sym("mm<sup>2</sup>", "mm2")
+    excluded = split.get("tendons_excluded")
+    if excluded:
+        return [[
+            "Bonded tendons",
+            sym("A<sub>p</sub>", "Ap"),
+            f"not included: the web duct condition '{excluded}' does not "
+            "establish bonded tendons",
+        ]]
+    rule = split.get("rule")
+    if rule not in (
+        capacity.SHEAR_ASL_TENDONS_ONLY,
+        capacity.SHEAR_ASL_AREA_WEIGHTED,
+        capacity.SHEAR_ASL_FORMULA_8_36,
+    ):
+        return []
+    d_mm = float((shear_result or {}).get("d") or 0.0)
+    rows = []
+    if rule != capacity.SHEAR_ASL_TENDONS_ONLY:
+        rows.append([
+            "Ordinary bars in Asl",
+            sym("A<sub>s</sub>; d<sub>s</sub>", "As; ds"),
+            f"{float(split['as']):.1f} {mm2}; {float(split['ds']):.1f} mm",
+        ])
+    rows.append([
+        "Bonded tendons in Asl",
+        sym("A<sub>p</sub>; d<sub>p</sub>", "Ap; dp"),
+        f"{float(split['ap']):.1f} {mm2}; {float(split['dp']):.1f} mm",
+    ])
+    if rule == capacity.SHEAR_ASL_TENDONS_ONLY:
+        rows.append(["Effective depth rule", "d", f"d = dp = {d_mm:.1f} mm (tendons only)"])
+    elif rule == capacity.SHEAR_ASL_AREA_WEIGHTED:
+        rows.append([
+            "Effective depth rule",
+            "d",
+            f"(ds As + dp Ap)/(As + Ap) = {d_mm:.1f} mm, area-weighted mean d "
+            "(EN 1992-2 6.2.2(101))",
+        ])
+    else:
+        rows.append([
+            "Effective depth rule",
+            "d",
+            f"(ds^2 As + dp^2 Ap)/(ds As + dp Ap) = {d_mm:.1f} mm (8.36)",
+        ])
+        rows.append([
+            "Reinforcement ratio rule",
+            sym("rho<sub>l</sub>", "rho_l"),
+            "(ds As + dp Ap)/(bw d^2) (8.37)",
+        ])
+    return rows
+
+
+def shear_asl_split_caption(shear_result) -> str:
+    """One plain-text line of :func:`shear_asl_split_rows` for the shear view."""
+
+    return " ".join(
+        f"{quantity}: {value}."
+        for quantity, _symbol, value in shear_asl_split_rows(shear_result, html=False)
+    )
+
+
+def _current_shear_face_depth(inp, axis, tension_low, *, model_2023=None):
+    """Rebuild the shear effective depth ``d`` (mm) of one face as the producer does.
+
+    The producer takes ``d`` from :func:`capacity.shear_tension_steel`, so the
+    bonded tendons are in ``d`` when the tendon option is on (review item TB-05).
+    """
+
+    outer = inp.get("outer")
+    holes = inp.get("holes") or ()
+    _area, cx, cy = capacity.gross_area_centroid(outer, holes)
+    if model_2023 is None:
+        code = capacity.selected_shear_code(inp.get("shear_method"))
+        model_2023 = getattr(code, "shear_model", "2005") == "2023"
+    steel = capacity.shear_tension_steel(
+        inp, axis, tension_low, cy if axis == "x" else cx,
+        model_2023=bool(model_2023),
+    )
+    return float(steel.d)
+
+
 def _current_shear_face_lever_arm(inp, axis, tension_low):
     """Rebuild the shear lever arm ``z`` (mm) of one face, as the links route does."""
 
     outer = inp.get("outer")
-    holes = inp.get("holes") or ()
     bars = inp.get("bars")
     if not isinstance(outer, (list, tuple)) or not isinstance(bars, (list, tuple)):
         return None
@@ -2236,14 +2335,7 @@ def _current_shear_face_lever_arm(inp, axis, tension_low):
                 return None
             z_mm = float(circular["fitted_z_mm"])
         else:
-            _area, cx, cy = capacity.gross_area_centroid(outer, holes)
-            _asl, cg, _ids = shear_core.tension_reinforcement_selection(
-                bars,
-                axis,
-                tension_low,
-                cy if axis == "x" else cx,
-            )
-            d_mm = shear_core.effective_depth(outer, axis, tension_low, cg)
+            d_mm = _current_shear_face_depth(inp, axis, tension_low)
             z_mm, _source = _publication_solver_result(
                 capacity.shear_lever_arm,
                 inp,
@@ -2380,10 +2472,9 @@ def _current_concrete_route_chord(inp, shear_result, torsion_result=None):
         _n_pre, mx_pre, my_pre = capacity.prestress_resultants(
             calculation_input, cx, cy
         )
-        _asl, cg, _ids = shear_core.tension_reinforcement_selection(
-            bars, axis, tension_low, cy if axis == "x" else cx
+        d_mm = _current_shear_face_depth(
+            calculation_input, axis, tension_low, model_2023=model_2023
         )
-        d_mm = float(shear_core.effective_depth(outer, axis, tension_low, cg))
         shift = (
             p_ed * (cy if axis == "x" else cx) - (mx_pre if axis == "x" else my_pre)
             if model_2023
@@ -5007,17 +5098,8 @@ def provided_link_publication_assessment(
             bars = inp.get("bars")
             if not isinstance(bars, (list, tuple)):
                 return unavailable("calculated link lever-arm evidence is unavailable")
-            _asl, cg, _bar_ids = shear_core.tension_reinforcement_selection(
-                bars,
-                axis,
-                action["tension_low"],
-                cy if axis == "x" else cx,
-            )
-            current_d = shear_core.effective_depth(
-                outer,
-                axis,
-                action["tension_low"],
-                cg,
+            current_d = _current_shear_face_depth(
+                inp, axis, action["tension_low"], model_2023=model_2023
             )
             retained_d = _publication_metric(shear_result.get("d"))
             if (
@@ -5229,7 +5311,6 @@ def _current_link_chord_candidate(
         return None
 
     outer = inp.get("outer")
-    holes = inp.get("holes") or ()
     bars = inp.get("bars")
     if not isinstance(outer, (list, tuple)) or not isinstance(bars, (list, tuple)):
         return None
@@ -5246,14 +5327,9 @@ def _current_link_chord_candidate(
             z_mm = float(circular["fitted_z_mm"])
             z_source = "circular_fitted_section"
         else:
-            _area, cx, cy = capacity.gross_area_centroid(outer, holes)
-            _asl, cg, _ids = shear_core.tension_reinforcement_selection(
-                bars,
-                axis,
-                tension_low,
-                cy if axis == "x" else cx,
+            d_mm = _current_shear_face_depth(
+                inp, axis, tension_low, model_2023=model_2023
             )
-            d_mm = shear_core.effective_depth(outer, axis, tension_low, cg)
             z_mm, z_source = _publication_solver_result(
                 capacity.shear_lever_arm,
                 inp,

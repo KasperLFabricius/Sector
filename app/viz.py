@@ -1922,7 +1922,8 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                           centroid, asl_bar_ids, asl_cg_m, asl_mm2,
                           d_mm, z_mm, bw_mm, bw_source,
                           signed_v_ed=None, d_note=None, z_note=None,
-                          title="Shear geometry"):
+                          title="Shear geometry", tendons=None,
+                          asl_tendon_ids=None):
     """Annotated section used to audit the geometry behind a shear check.
 
     ``axis == 'x'`` means vertical shear / bending about x; ``axis == 'y'``
@@ -2062,6 +2063,19 @@ def shear_geometry_figure(outer, holes, bars, *, axis, tension_low,
                         line=dict(color="white", width=1.2)),
             customdata=[str(i) for i in selected],
             hovertemplate="Bar %{customdata}<br>included in Asl<extra></extra>",
+        ))
+    tendons = list(tendons or [])
+    selected_tendons = [i for i in asl_tendon_ids or [] if 1 <= i <= len(tendons)]
+    if selected_tendons:
+        pts = [tendons[i - 1] for i in selected_tendons]
+        fig.add_trace(go.Scatter(
+            x=[p[0] * 1000.0 for p in pts],
+            y=[p[1] * 1000.0 for p in pts],
+            mode="markers", name="tendon included in Asl",
+            marker=dict(size=16, symbol="diamond", color=LOAD_POINT,
+                        line=dict(color="white", width=1.2)),
+            customdata=[str(i) for i in selected_tendons],
+            hovertemplate="Tendon %{customdata}<br>included in Asl<extra></extra>",
         ))
 
     if axis == "x":
@@ -2459,12 +2473,16 @@ def interaction_figure(mx, my, applied=None, angles=None, util=None,
     return fig
 
 
-def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction"):
+def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction",
+                          limits=None):
     """Axial-moment (N-M) capacity diagram: N vertical, M horizontal.
 
     ``N`` (kN, tension positive) and ``M`` (kNm, about ``axis``) trace the closed
     capacity boundary -- the ``+M`` branch from pure tension to the squash load then
     the ``-M`` branch back. ``applied`` is ``(N, M)`` and marked on the diagram.
+    ``limits`` is ``(squash, tension)`` (kN, tension positive). When it is given,
+    the squash and tension labels mark only boundary points at these limits: a
+    boundary that ends before a limit gets no label there.
     """
     mlabel = "M<sub>x</sub>" if axis == "x" else "M<sub>y</sub>"
     scale = max((abs(v) for v in list(N) + list(M)), default=1.0) or 1.0
@@ -2504,18 +2522,28 @@ def interaction_nm_figure(N, M, axis="x", applied=None, title="N-M interaction")
         # asymmetric section the negative branch can have a larger |M|, so abs() would
         # place the label on the wrong side and contradict the numeric result.
         i_mm = max(range(len(Ms)), key=lambda i: Ms[i])       # positive max moment
+        # A boundary that holds a companion moment can end before an axial limit
+        # (TA-08). Then its end point is not the squash load or the tension limit.
+        n_tol = scale * 1e-6
+        at_squash = limits is None or abs(Ns[i_sq] - limits[0]) <= n_tol
+        at_tension = limits is None or abs(Ns[i_te] - limits[1]) <= n_tol
+        marks = ([i_sq] if at_squash else []) + ([i_te] if at_tension else []) + [i_mm]
         fig.add_trace(go.Scatter(
-            x=[Ms[i_sq], Ms[i_te], Ms[i_mm]], y=[Ns[i_sq], Ns[i_te], Ns[i_mm]],
+            x=[Ms[i] for i in marks], y=[Ns[i] for i in marks],
             mode="markers", marker=dict(size=7, color=ENVELOPE, symbol="diamond"),
             name="landmarks", hovertemplate=capacity_hover))
         # Short descriptors (the exact values are in the metrics row and on hover),
         # placed so they never clip the frame in the half-width side-by-side view:
         # squash below its apex, tension above its apex, max-moment just left of the
         # right-most apex.
-        fig.add_annotation(x=Ms[i_sq], y=Ns[i_sq], text="squash", showarrow=False,
-                           yshift=-11, yanchor="top", font=dict(size=11, color=ENVELOPE))
-        fig.add_annotation(x=Ms[i_te], y=Ns[i_te], text="tension", showarrow=False,
-                           yshift=11, yanchor="bottom", font=dict(size=11, color=ENVELOPE))
+        if at_squash:
+            fig.add_annotation(x=Ms[i_sq], y=Ns[i_sq], text="squash", showarrow=False,
+                               yshift=-11, yanchor="top",
+                               font=dict(size=11, color=ENVELOPE))
+        if at_tension:
+            fig.add_annotation(x=Ms[i_te], y=Ns[i_te], text="tension", showarrow=False,
+                               yshift=11, yanchor="bottom",
+                               font=dict(size=11, color=ENVELOPE))
         fig.add_annotation(x=Ms[i_mm], y=Ns[i_mm], text="max " + mlabel,
                            showarrow=False, xshift=-8, xanchor="right", yshift=11, yanchor="bottom",
                            font=dict(size=11, color=ENVELOPE))
