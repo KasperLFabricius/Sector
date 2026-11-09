@@ -2233,16 +2233,31 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
     locked_stress = 195_000.0 * bond_strain
     assert prestress_stress == pytest.approx([locked_stress * 1000.0], rel=1e-8)
 
-    # Independent Stage-I equilibrium in N and mm with the locked-in stress
-    # sigma_p(0) = Ep eps_p(0) = 601.97 MPa. The transformed tendon replaces
-    # its occupied concrete area, so its added area is (Ep/Ec - 1)Ap.
-    added_area = (6.85 * 0.975 - 1.0) * 1000.0
-    stress_intercept, stress_gradient = np.linalg.solve(
-        [[300.0 * 600.0 + added_area, -250.0 * added_area],
-         [-250.0 * added_area, 300.0 * 600.0**3 / 12.0 + 250.0**2 * added_area]],
-        [-locked_stress * 1000.0, locked_stress * 1000.0 * 250.0],
+    # Independent Stage-I equilibrium in N and mm (0.97.1, R2B-06): the Stage I
+    # check uses the locked-in stress of the uncracked section, so under
+    # prestress alone the tendon stress is Ep IS = 500 MPa also in Stage I.
+    # The concrete then carries P = Ap Ep IS = 500 kN at y = -250 mm on the
+    # section without tendon stiffness (the duct concrete is displaced):
+    # A_n = 179000 mm2, y_n = 250000/179000 = 1.39665 mm,
+    # I_n = 300 x 600^3/12 + 180000 y_n^2 - 1000 (250 + y_n)^2 = 5.337151e9 mm4.
+    # Top fibre: 4.23928 MPa (0.97.0, Stage II locked-in stress: 4.57167 MPa).
+    net_area = 300.0 * 600.0 - 1000.0
+    net_centroid = 1000.0 * 250.0 / net_area
+    net_inertia = (
+        300.0 * 600.0**3 / 12.0 + 300.0 * 600.0 * net_centroid**2
+        - 1000.0 * (250.0 + net_centroid) ** 2
     )
-    expected_sigma_ct = stress_intercept + 300.0 * stress_gradient
+    prestress_force = 1000.0 * 500.0
+
+    def stage_one_stress(y):
+        return (-prestress_force / net_area - prestress_force
+                * (-250.0 - net_centroid) * (y - net_centroid) / net_inertia)
+
+    expected_sigma_ct = stage_one_stress(300.0)
+    assert expected_sigma_ct == pytest.approx(4.23928, abs=1.0e-5)
+    assert latest["tendon_stage_one_stress"] == pytest.approx(
+        [(500.0 - 6.85 * 0.975 * stage_one_stress(-250.0)) * 1000.0], rel=1e-9
+    )
     elastic_results = (
         results["elastic"],
         results["elastic_cases"][0]["results"]["elastic"],
