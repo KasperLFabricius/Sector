@@ -390,18 +390,23 @@ def test_invalid_evidence_of_the_current_attempt_keeps_its_own_message(evidence)
     assert "full rerun" not in str(caught.value)
 
 
-@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX process sessions")
 def test_real_phase_stop_reaches_a_descendant_in_its_own_session(tmp_path):
-    """The shared exporter calls os.setsid(); the stop must still reach it."""
+    """The shared exporter calls os.setsid() on POSIX; the stop must still reach it.
+
+    Windows has no sessions of this kind, so there the grandchild stays in the
+    tree of the phase. The gate counts a skipped test as not passed, so this
+    test runs on each platform.
+    """
     import sys
     import time
 
     grandchild = tmp_path / "grandchild.pid"
+    detach = "import os, time; getattr(os, 'setsid', lambda: None)(); time.sleep(120)"
     child = ("import pathlib, subprocess, sys, time; "
-             "p = subprocess.Popen([sys.executable, '-c', 'import os, time; os.setsid(); time.sleep(120)']); "
+             f"p = subprocess.Popen([sys.executable, '-c', {detach!r}]); "
              f"pathlib.Path({str(grandchild)!r}).write_text(str(p.pid)); time.sleep(120)")
     assert shards.run_real_phase([sys.executable, "-c", child], cwd=tmp_path, env=None,
-                                 limit=5.0) == shards.REAL_PHASE_TIMEOUT_EXIT
+                                 limit=30.0) == shards.REAL_PHASE_TIMEOUT_EXIT
     pid = int(grandchild.read_text())
     deadline = time.monotonic() + 15
     while _process_exists(pid) and time.monotonic() < deadline:

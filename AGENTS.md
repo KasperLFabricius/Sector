@@ -205,6 +205,8 @@ Tests and coverage:
     `tests/conftest.py`.
 22. Before each push, run `tests/test_ascii_only.py`, `tests/test_user_copy.py`,
     `tests/test_manual.py` and `tests/test_manual_equation_contract.py`.
+    Do not add a skipped test: the CI gate counts each skip as not passed.
+    Write a platform-dependent test so that it runs on each platform.
 
 Release and dependencies:
 
