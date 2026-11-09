@@ -41,6 +41,24 @@ REAL_TESTS = (
 REAL_RENDERS = (("report", "tools/report_render_fixture.py"), ("manual", "tools/manual_render_fixture.py"))
 REAL_FILES = (".coverage", *(f"test-results-real-{name}.xml" for name, _ in REAL_TESTS))
 REAL_PHASES = (*(name for name, _ in REAL_TESTS), *(f"render-{name}" for name, _ in REAL_RENDERS))
+# Hang guard (owner rule, 9 November 2026): each real-image phase normally takes
+# less than 1 min. A phase that runs longer than this limit is a hang. Its process
+# tree is stopped, the phase is recorded with REAL_PHASE_TIMEOUT_EXIT and the next
+# phase runs, so that the shard fails in minutes with its evidence uploaded. All
+# phases together get at most REAL_SHARD_BUDGET_S, which is less than the 20 min
+# step limit in qa.yml, so the manifest is always written. A phase that starts
+# with less than REAL_PHASE_MIN_S of the budget left does not run and is recorded
+# as stopped. The real-image test guard (tests/real_image_guard.py) uses the same
+# exit code.
+REAL_PHASE_LIMIT_S = 480.0
+REAL_SHARD_BUDGET_S = 900.0
+REAL_PHASE_MIN_S = 30.0
+REAL_PHASE_TIMEOUT_EXIT = 124
+# A rerun of failed jobs uploads new evidence only for the shards that ran again.
+# When the kept evidence of an earlier attempt is absent or not valid, the gate
+# fails with this instruction.
+FULL_RERUN = "Run all jobs of the workflow again (a full rerun)."
+ARTIFACT_NAME = re.compile(r"sector-core-(?P<run>[1-9][0-9]*)-(?P<attempt>[1-9][0-9]*)-(?P<shard>[a-z]+(?:-[0-9]{2})?)")
 _deselected = []
 
 
@@ -212,6 +230,105 @@ def suite_command(suite):
     return [*branch["tests"], *(f"--cov={target}" for target in branch["targets"]), "--cov-branch"]
 
 
+def process_listing():
+    """Return one "pid ppid" line for each process of the machine."""
+    if os.name == "nt":
+        command = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                   "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }"]
+    else:
+        command = ["ps", "-A", "-o", "pid=,ppid="]
+    return subprocess.run(command, capture_output=True, text=True, timeout=120, check=False).stdout
+
+
+def descendants(pid):
+    """Return every process below ``pid`` by parent links, also in other sessions.
+
+    The shared image exporter calls ``os.setsid()`` on POSIX, so it and its
+    browser leave the process group of the phase, but their parent links stay.
+    """
+    listing = process_listing()
+    children = {}
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and all(field.isdigit() for field in fields):
+            children.setdefault(int(fields[1]), []).append(int(fields[0]))
+    found, pending = [], [pid]
+    while pending:
+        for child in children.get(pending.pop(), ()):
+            if child not in found and child != pid:
+                found.append(child)
+                pending.append(child)
+    return found
+
+
+def stop_descendants(pid):
+    """Stop every process below ``pid`` while its parent links exist.
+
+    The real-image test guard calls this before it stops its own process, so
+    that a hung browser or exporter does not survive into the next phase.
+    """
+    found = descendants(pid)
+    if os.name == "nt":
+        for child in found:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(child)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60, check=False)
+        return found
+    import signal
+
+    for child in found:
+        try:
+            os.kill(child, signal.SIGKILL)
+        except OSError:
+            pass
+    return found
+
+
+def stop_process_tree(process):
+    """Stop a timed-out phase and every browser or worker process below it."""
+    if os.name == "nt":
+        # taskkill follows the parent links, also into the exporter's job.
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    else:
+        import signal
+
+        # Collect the tree before the kill: an orphan loses its parent link.
+        below = descendants(process.pid)
+        groups = {process.pid}
+        for pid in below:
+            try:
+                groups.add(os.getpgid(pid))
+            except OSError:
+                pass
+        groups.discard(os.getpgrp())
+        for group in groups:
+            try:
+                os.killpg(group, signal.SIGKILL)
+            except OSError:
+                pass
+        for pid in below:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
+    if process.poll() is None:
+        process.kill()
+    process.wait(timeout=60)
+
+
+def run_real_phase(command, *, cwd, env, limit=None):
+    """Run one real-image phase, and stop it when it exceeds the hang limit."""
+    limit = REAL_PHASE_LIMIT_S if limit is None else limit
+    process = subprocess.Popen(command, cwd=cwd, env=env, start_new_session=os.name != "nt")
+    try:
+        return process.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        print(f"Real-image phase did not finish in {limit:.0f} s (hang limit); "
+              f"its process tree is stopped: {' '.join(command[1:4])}", file=sys.stderr, flush=True)
+        stop_process_tree(process)
+        return REAL_PHASE_TIMEOUT_EXIT
+
+
 def run_shard(shard, output):
     binding = identity()
     before = source_digest()
@@ -230,17 +347,27 @@ def run_shard(shard, output):
     if shard == "real":
         temporary.mkdir(parents=True)
         commands, phases = [], {}
+        deadline = started + REAL_SHARD_BUDGET_S
+
+        def bounded_phase(phase, command):
+            commands.append(command)
+            remaining = deadline - time.monotonic()
+            if remaining < REAL_PHASE_MIN_S:
+                print(f"Real-image phase {phase} does not start: the shard budget of "
+                      f"{REAL_SHARD_BUDGET_S:.0f} s is used.", file=sys.stderr, flush=True)
+                phases[phase] = REAL_PHASE_TIMEOUT_EXIT
+                return
+            phases[phase] = run_real_phase(command, cwd=ROOT, env=environment,
+                                           limit=min(REAL_PHASE_LIMIT_S, remaining))
+
         for name, selection in REAL_TESTS:
-            command = [sys.executable, "-m", "pytest", *selection, "-n", "0", "-m", "real_image_export",
-                       "--basetemp", str(temporary / f"real-{name}"),
-                       *(f"--cov={target}" for target in contract()["coverage"]["targets"]),
-                       "--cov-append", "--cov-report=", f"--junitxml={output / f'test-results-real-{name}.xml'}"]
-            commands.append(command)
-            phases[name] = subprocess.run(command, cwd=ROOT, env=environment, check=False).returncode
+            bounded_phase(name, [sys.executable, "-m", "pytest", *selection, "-n", "0", "-m", "real_image_export",
+                                 "--basetemp", str(temporary / f"real-{name}"),
+                                 *(f"--cov={target}" for target in contract()["coverage"]["targets"]),
+                                 "--cov-append", "--cov-report=",
+                                 f"--junitxml={output / f'test-results-real-{name}.xml'}"])
         for name, script in REAL_RENDERS:
-            command = [sys.executable, script, "--output", str(output / name)]
-            commands.append(command)
-            phases[f"render-{name}"] = subprocess.run(command, cwd=ROOT, env=environment, check=False).returncode
+            bounded_phase(f"render-{name}", [sys.executable, script, "--output", str(output / name)])
         exit_code = max(phases.values(), key=abs)
         names = REAL_FILES
         details = {"commands": commands, "phases": phases}
@@ -312,6 +439,12 @@ def read_shard(directory, shard, binding, expected_source_digest, expected_nodes
 
 
 def read_real(directory, binding, expected_source_digest):
+    recorded = directory / "manifest.json"
+    if directory.is_dir() and recorded.is_file():
+        phases = json.loads(recorded.read_text(encoding="utf-8")).get("phases")
+        stopped = sorted(name for name, code in (phases.items() if isinstance(phases, dict) else ())
+                         if code == REAL_PHASE_TIMEOUT_EXIT)
+        require(not stopped, f"real-image phase exceeded the hang limit: {', '.join(stopped)}")
     manifest = read_manifest(directory, "real", binding, expected_source_digest, REAL_FILES)
     require({path.name for path in directory.iterdir()} == {*REAL_FILES, *(name for name, _ in REAL_RENDERS), "manifest.json"},
             "unexpected real-image evidence")
@@ -353,7 +486,46 @@ def collect_reference(output, binding, suite):
     return rows
 
 
-def merge_suite(suite, inputs, output, binding, before, names):
+def select_artifacts(inputs, binding):
+    """Map each shard to the newest evidence of this run, up to this attempt.
+
+    A rerun of failed jobs runs only the failed shards and their dependants
+    again. The other shards keep the evidence of an earlier attempt of the same
+    run, which checked out the same source revision. The newest attempt of each
+    shard governs, so a shard that fails again stays failed. Each artifact must
+    also carry the run binding of its own attempt.
+    """
+    require(inputs.is_dir(), f"no shard evidence was downloaded. {FULL_RERUN}")
+    current = int(binding["run_attempt"])
+    newest = {}
+    for path in inputs.iterdir():
+        match = ARTIFACT_NAME.fullmatch(path.name)
+        require(match is not None and match["run"] == binding["run_id"] and match["shard"] in SHARDS
+                and int(match["attempt"]) <= current, f"foreign shard artifact: {path.name}")
+        attempt = int(match["attempt"])
+        if attempt > newest.get(match["shard"], (0, ""))[0]:
+            newest[match["shard"]] = (attempt, path.name)
+    missing = [shard for shard in SHARDS if shard not in newest]
+    require(not missing, f"no evidence in any attempt of run {binding['run_id']} for shard "
+                         f"{', '.join(missing)}. {FULL_RERUN}")
+    names = {shard: name for shard, (_, name) in newest.items()}
+    bindings = {shard: {**binding, "run_attempt": str(attempt)} for shard, (attempt, _) in newest.items()}
+    return names, bindings
+
+
+def read_kept(shard, binding, current_attempt, reader):
+    """Read one shard's evidence; name the full rerun when kept evidence fails."""
+    try:
+        return reader()
+    except (QaShardError, OSError, ValueError, KeyError, TypeError, ET.ParseError) as exc:
+        attempt = int(binding["run_attempt"])
+        if attempt < int(current_attempt):
+            raise QaShardError(f"kept evidence of shard {shard} from attempt {attempt} is not valid ({exc}). "
+                               f"{FULL_RERUN}") from exc
+        raise
+
+
+def merge_suite(suite, inputs, output, binding, before, names, bindings):
     rows = collect_reference(output, binding, suite)
     owners = assign(rows, SUITES[suite])
     shards = suite_shards(suite)
@@ -362,14 +534,18 @@ def merge_suite(suite, inputs, output, binding, before, names):
     for index, shard in enumerate(shards, 1):
         directory = inputs / names[shard]
         expected = [node for node, owner in owners.items() if owner == index]
-        manifest, selected, tree, counts = read_shard(directory, shard, binding, before, expected)
+        manifest, selected, tree, counts = read_kept(
+            shard, bindings[shard], binding["run_attempt"],
+            lambda directory=directory, shard=shard, expected=expected: read_shard(
+                directory, shard, bindings[shard], before, expected))
         nodes.extend(selected)
         located.update(dict.fromkeys(selected, shard))
         root = tree.getroot()
         require(root.tag in {"testsuites", "testsuite"}, "invalid JUnit root")
         joined.extend(list(root) if root.tag == "testsuites" else [root])
         data_files.append(str(directory / ".coverage"))
-        summaries.append({"shard": shard, "count": len(selected), "exit_code": manifest["exit_code"],
+        summaries.append({"shard": shard, "attempt": int(bindings[shard]["run_attempt"]),
+                          "count": len(selected), "exit_code": manifest["exit_code"],
                           "seconds": manifest.get("seconds"), "manifest_sha256": sha(directory / "manifest.json"), **counts})
     require(len(nodes) == len(set(nodes)), "test node appears in multiple shards")
     require(Counter(nodes) == Counter(node for node, _ in rows), f"shards do not cover the complete {suite} reference inventory")
@@ -414,8 +590,7 @@ def write_junit(element, destination):
 def merge_shards(inputs, output):
     binding = identity()
     before = source_digest()
-    names = {shard: f"sector-core-{binding['run_id']}-{binding['run_attempt']}-{shard}" for shard in SHARDS}
-    require(inputs.is_dir() and {path.name for path in inputs.iterdir()} == set(names.values()), "missing, duplicate or foreign shard artifacts")
+    names, bindings = select_artifacts(inputs, binding)
     output.mkdir(parents=True, exist_ok=True)
     evidence_copy = output / "core-shards"
     require(not evidence_copy.exists(), "core evidence destination already exists")
@@ -425,7 +600,9 @@ def merge_shards(inputs, output):
     require(not branch_data.exists(), "pre-existing branch coverage data would contaminate the union")
 
     real_directory = inputs / names["real"]
-    real_manifest, real_counts = read_real(real_directory, binding, before)
+    real_manifest, real_counts = read_kept(
+        "real", bindings["real"], binding["run_attempt"],
+        lambda: read_real(real_directory, bindings["real"], before))
     real_coverage = str(real_directory / ".coverage")
     raw = coverage_data(real_coverage)
     require(raw.measured_files() and not raw.has_arcs(), "real-image coverage must contain line data, not branch data")
@@ -434,11 +611,11 @@ def merge_shards(inputs, output):
         require(not destination.exists(), "real-image evidence destination already exists")
         (shutil.copytree if (real_directory / name).is_dir() else shutil.copy2)(real_directory / name, destination)
 
-    core, core_nodes, core_data, core_summaries = merge_suite("core", inputs, output, binding, before, names)
+    core, core_nodes, core_data, core_summaries = merge_suite("core", inputs, output, binding, before, names, bindings)
     write_junit(core, output / "test-results.xml")
     combine(ROOT / ".coverage", [*core_data, real_coverage])
 
-    branch, branch_nodes, branch_files, branch_summaries = merge_suite("branch", inputs, output, binding, before, names)
+    branch, branch_nodes, branch_files, branch_summaries = merge_suite("branch", inputs, output, binding, before, names, bindings)
     write_junit(branch, output / "test-results-branches.xml")
     measured = combine(branch_data, branch_files)
     results = output / "branch-coverage.json"
@@ -458,7 +635,8 @@ def merge_shards(inputs, output):
     }
     write_json(output / "core-shard-summary.json", {
         **binding, "source_digest": before, **summary, "shards": core_summaries,
-        "branch_shards": branch_summaries, "real": {"phases": real_manifest["phases"], "tests": real_counts},
+        "branch_shards": branch_summaries,
+        "real": {"attempt": int(bindings["real"]["run_attempt"]), "phases": real_manifest["phases"], "tests": real_counts},
         "coverage_inputs": [{"path": path, "sha256": sha(path)} for path in (*core_data, real_coverage)],
         "combined_coverage_sha256": sha(ROOT / ".coverage"),
         "branch_coverage_inputs": [{"path": path, "sha256": sha(path)} for path in branch_files],
