@@ -38,13 +38,15 @@ Published results retain the information needed to reproduce the calculation:
 Sector version, actual inputs, selected method and equation, action identity and
 calculation state. Stale, corrupt or input-mismatched results remain rejected.
 
-Sector 0.96.9 is the current internal product identity and uses project schema
-27. Schemas 25 and 26 have bounded migrations. For schema 25, the former single
+Sector 0.97.0 is the current internal product identity and uses project schema
+28. Schemas 25, 26 and 27 have bounded migrations. For schema 25, the former single
 permitted crack width is copied to the independent long-term and short-term
 ordinary inputs, and is preserved separately as the Formula 7.100 NA operand
 only when that heightened calculation was enabled. Schemas 25 and 26 receive
 the former fixed DS/EN 1992-1-1:2023 shear partial factor as the explicit
-`gamma_V = 1.40` input. Zero means no ordinary crack-width comparison and is
+`gamma_V = 1.40` input. Schemas 25, 26 and 27 open with the corrected 0.97.0
+calculation methods, and a load message lists the changes that apply to the
+project. Zero means no ordinary crack-width comparison and is
 never promoted to the heightened operand. Schema 24 and future schemas remain
 unsupported. Retired metadata outside the current calculation record is not
 carried forward. Its portable Windows ZIP is unsigned and has no

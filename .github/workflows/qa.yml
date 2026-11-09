@@ -278,7 +278,7 @@ jobs:
       - name: Upload portable ZIP
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: Sector-v0.96.9-windows-portable-${{ github.run_id }}
+          name: Sector-v0.97.0-windows-portable-${{ github.run_id }}
           path: |
             ${{ env.SECTOR_PORTABLE_OUTPUT }}/*.zip
             ${{ env.SECTOR_PORTABLE_OUTPUT }}/*.zip.sha256

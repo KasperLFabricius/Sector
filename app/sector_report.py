@@ -6844,12 +6844,27 @@ class ReportBuilder:
                 d = nm[axis]
                 self._h2(f"Axial-moment (N-{mlab}) interaction")
                 diagram_start = len(self.flow)
+                other_lab = "M<sub>y</sub>" if axis == "x" else "M<sub>x</sub>"
+                companion = float(d.get("companion", 0.0))
+                if not d["M"]:
+                    self._small(
+                        f"No diagram: the section cannot carry {other_lab} = "
+                        f"{_fmt(companion, 3)} kNm at any axial force."
+                    )
+                    self._keep_from(diagram_start)
+                    continue
                 if self.figures:
                     self._fig(viz.interaction_nm_figure(
                         d["N"], d["M"], axis=axis,
                         applied=d.get("applied") if pl.get("check_util", True) else None,
-                        title=f"N-{mtag} interaction"), 130, 95)
-                self._small(f"The capacity boundary about the {axis}-axis extends from pure tension to the squash load.")
+                        title=f"N-{mtag} interaction", limits=d.get("limits")), 130, 95)
+                self._small(
+                    f"The capacity boundary about the {axis}-axis is calculated with "
+                    f"{other_lab} = {_fmt(companion, 3)} kNm (the case value when the "
+                    "utilisation check is on, otherwise 0). It extends from pure "
+                    "tension to the squash load, or ends at the last axial force "
+                    f"where the section can carry this {other_lab}."
+                )
                 self._small("Concrete carries compression only. Reinforcement therefore controls the tension end.")
                 if pl.get("check_util", True) and d.get("applied") is not None:
                     self._small("The marked point is the applied plastic action.")
@@ -7220,7 +7235,8 @@ class ReportBuilder:
                     "Each d is measured from the opposite extreme concrete fiber "
                     "to the centroid of the listed ordinary reinforcing bars. Four face-aligned "
                     "values cover either bending direction, including off-axis "
-                    "states."
+                    "states. When the shear option includes the bonded tendons in "
+                    "A<sub>sl</sub> and d, the shear result gives that d."
                 )
         plane_values = (
             gov.get("strain_offset"), gov.get("strain_gradient_x"),
@@ -7550,7 +7566,11 @@ class ReportBuilder:
                 ["Standard-defined concrete-shear arm", "z",
                  f"{_fmt(res['z'], 1)} mm (0.9 d; 8.2.1(3))"],
                 ["Tension reinforcement", "A<sub>sl</sub>",
-                 f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"],
+                 f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"
+                 + (f" (includes bonded tendons A<sub>p</sub> = "
+                    f"{_fmt(sh['asl_tendon_area'], 1)} mm<sup>2</sup>)"
+                    if sh.get("asl_tendon_area") else "")],
+                *presentation.shear_asl_split_rows(sh, html=True),
                 ["Reinforcement ratio", "rho<sub>l</sub>", f"{_fmt(res['rho_l'], 4)}"],
                 ["Action moment at centroid", "M<sub>Ed</sub>",
                  f"{_fmt(sh.get('m_ed_2023'), 3)} kNm"],
@@ -7563,7 +7583,10 @@ class ReportBuilder:
                  f"{_fmt(res.get('d_kvp'), 1)} mm"],
                 ["Aggregate size", "d<sub>dg</sub>", f"{_fmt(res['ddg'], 1)} mm"],
                 ["Flexural design yield", "f<sub>yd</sub>",
-                 f"{_fmt(res['fyd'], 1)} MPa"],
+                 f"{_fmt(res['fyd'], 1)} MPa"
+                 + (" (f<sub>pd</sub> of the bonded tendons, 8.2.1(4))"
+                    if (sh.get("asl_split") or {}).get("rule")
+                    == capacity.SHEAR_ASL_TENDONS_ONLY else "")],
                 ["Shear partial factor (4.3.3; Table 4.3 NDP)",
                  "gamma<sub>V</sub>",
                  _fmt_gamma_v(res["gamma_v"])]]
@@ -8149,6 +8172,8 @@ class ReportBuilder:
                     tension_low=sh["tension_low"],
                     centroid=sh.get("centroid", (0.0, 0.0)),
                     asl_bar_ids=sh.get("asl_bar_ids", []),
+                    tendons=self.inp.get("tendons", []),
+                    asl_tendon_ids=(sh.get("asl_split") or {}).get("tendon_ids", []),
                     asl_cg_m=sh.get("asl_cg"), asl_mm2=sh["asl"],
                     d_mm=sh["d"], z_mm=z_geometry, bw_mm=sh["bw"],
                     bw_source=bw_src,
@@ -8283,7 +8308,11 @@ class ReportBuilder:
                 ["Web width", "b<sub>w</sub>",
                  f"{_fmt(calculation_bw, 1)} mm ({bw_src})"],
                 ["Tension reinforcement", "A<sub>sl</sub>",
-                 f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"],
+                 f"{_fmt(sh['asl'], 1)} mm<sup>2</sup>"
+                 + (f" (includes bonded tendons A<sub>p</sub> = "
+                    f"{_fmt(sh['asl_tendon_area'], 1)} mm<sup>2</sup>)"
+                    if sh.get("asl_tendon_area") else "")],
+                *presentation.shear_asl_split_rows(sh, html=True),
                 ["Reinforcement ratio", "rho<sub>l</sub>",
                  f"{_fmt(res['rho_l'], 4)} (&#8804; 0.02)"],
                 ["Size factor", "k", f"{_fmt(res['k'], 3)} (&#8804; 2.0)"],

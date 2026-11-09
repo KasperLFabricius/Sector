@@ -124,7 +124,8 @@ _REPORT_CROPS = (
         "report page furniture",
         2,
         (0.09, 0.02, 0.92, 0.98),
-        "05f7b27f6bd26842a587af349bf766608352172ac6d1359a7bfeb1f8953e8212",
+        # Re-pinned for the version 0.97.0 in the page footer (page 2 of 114).
+        "5f4e79e9a72f2ef411f696833d33a4f2669ddb7a61b962a1166fce80158b3bd7",
     ),
 )
 

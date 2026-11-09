@@ -71,8 +71,9 @@ _MANUAL_CROPS = (
         (0.09, 0.94, 0.92, 0.98),
         # The footer has the current version and the 151-page count (0.97.0 chord
         # and MEd,max text, then the SLS, prestress, fatigue and DK NA text and
-        # the five added status rows); the crop geometry is unchanged.
-        "eb5e7c5d78a37aa6c8fe999f6dd17ca9c022018b1a296221cf704f7dfa17ce0b",
+        # the five added status rows); the crop geometry is unchanged. Re-pinned
+        # for the version 0.97.0 in the footer (page count unchanged).
+        "67da90357fdcaee6050f37794ab8460bab85dd58cb99ff0031545c5206f9b0de",
     ),
 )
 

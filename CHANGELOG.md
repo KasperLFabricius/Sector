@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.97.0 - 2026-11-08
+
+Calculation corrections from an internal review. Pivot C limits the strain of a
+section in full compression (EN 1992-1-1:2004, 6.1(6)).
+
+The shear chord checks have three corrections. Only the member moment MEd,max
+limits the shear shift (6.2.3(7)). Each 2023 chord gets (NVd + NEd)/2. On the
+concrete route, the tension chord carries the moment MEd + |VEd| d. The DK NA
+6.3.2(6) sum uses the installed links for V alone. A new option includes bonded
+tendons in Asl and d of the shear check without links (DS/EN 1992-1-1:2023,
+8.2.2(6), Formulae (8.36) and (8.37)).
+
+N-M diagrams hold the moment about the other axis at the case value. The
+long-term crack width uses alpha_e = Es/Ecm. The prestrain IS is the tendon
+strain under prestress alone after all losses. The concrete fatigue search has
+a correct upper bound, and the DK NA:2024 fatigue partial factors are the
+defaults.
+
+Projects use schema 28. Projects of schemas 25, 26 and 27 open with the
+corrected methods and a load message. Sector uses Python 3.14.10 and
+Streamlit 1.66.1. See `docs/v0970_release_notes.md`.
+
 ## 0.96.9 - 2026-10-13
 
 The navigation separates section, materials, actions, analysis settings, results,
