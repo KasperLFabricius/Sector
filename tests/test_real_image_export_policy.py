@@ -167,7 +167,7 @@ def test_real_image_workflow_runs_every_marked_family_in_a_fresh_serial_process(
 
         def bounded(command, *, cwd, env, limit=None, shard=shard):
             # Each real-image phase runs under the hang limit of the shard tool.
-            assert limit is None and cwd == qa_core_shards.ROOT
+            assert 0 < limit <= qa_core_shards.REAL_PHASE_LIMIT_S and cwd == qa_core_shards.ROOT
             commands.setdefault(shard, []).append((command, env))
             return 0
         monkeypatch.setattr(qa_core_shards.subprocess, "run", capture)

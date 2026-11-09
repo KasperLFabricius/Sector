@@ -44,14 +44,21 @@ REAL_PHASES = (*(name for name, _ in REAL_TESTS), *(f"render-{name}" for name, _
 # Hang guard (owner rule, 9 November 2026): each real-image phase normally takes
 # less than 1 min. A phase that runs longer than this limit is a hang. Its process
 # tree is stopped, the phase is recorded with REAL_PHASE_TIMEOUT_EXIT and the next
-# phase runs, so that the shard fails in minutes with its evidence uploaded.
+# phase runs, so that the shard fails in minutes with its evidence uploaded. All
+# phases together get at most REAL_SHARD_BUDGET_S, which is less than the 20 min
+# step limit in qa.yml, so the manifest is always written. A phase that starts
+# with less than REAL_PHASE_MIN_S of the budget left does not run and is recorded
+# as stopped. The real-image test guard (tests/real_image_guard.py) uses the same
+# exit code.
 REAL_PHASE_LIMIT_S = 480.0
+REAL_SHARD_BUDGET_S = 900.0
+REAL_PHASE_MIN_S = 30.0
 REAL_PHASE_TIMEOUT_EXIT = 124
 # A rerun of failed jobs uploads new evidence only for the shards that ran again.
 # When the kept evidence of an earlier attempt is absent or not valid, the gate
 # fails with this instruction.
-FULL_RERUN = "run all jobs of the workflow again (a full rerun)"
-ARTIFACT_NAME =re.compile(r"sector-core-(?P<run>[1-9][0-9]*)-(?P<attempt>[1-9][0-9]*)-(?P<shard>[a-z]+(?:-[0-9]{2})?)")
+FULL_RERUN = "Run all jobs of the workflow again (a full rerun)."
+ARTIFACT_NAME = re.compile(r"sector-core-(?P<run>[1-9][0-9]*)-(?P<attempt>[1-9][0-9]*)-(?P<shard>[a-z]+(?:-[0-9]{2})?)")
 _deselected = []
 
 
@@ -308,17 +315,27 @@ def run_shard(shard, output):
     if shard == "real":
         temporary.mkdir(parents=True)
         commands, phases = [], {}
+        deadline = started + REAL_SHARD_BUDGET_S
+
+        def bounded_phase(phase, command):
+            commands.append(command)
+            remaining = deadline - time.monotonic()
+            if remaining < REAL_PHASE_MIN_S:
+                print(f"Real-image phase {phase} does not start: the shard budget of "
+                      f"{REAL_SHARD_BUDGET_S:.0f} s is used.", file=sys.stderr, flush=True)
+                phases[phase] = REAL_PHASE_TIMEOUT_EXIT
+                return
+            phases[phase] = run_real_phase(command, cwd=ROOT, env=environment,
+                                           limit=min(REAL_PHASE_LIMIT_S, remaining))
+
         for name, selection in REAL_TESTS:
-            command = [sys.executable, "-m", "pytest", *selection, "-n", "0", "-m", "real_image_export",
-                       "--basetemp", str(temporary / f"real-{name}"),
-                       *(f"--cov={target}" for target in contract()["coverage"]["targets"]),
-                       "--cov-append", "--cov-report=", f"--junitxml={output / f'test-results-real-{name}.xml'}"]
-            commands.append(command)
-            phases[name] = run_real_phase(command, cwd=ROOT, env=environment)
+            bounded_phase(name, [sys.executable, "-m", "pytest", *selection, "-n", "0", "-m", "real_image_export",
+                                 "--basetemp", str(temporary / f"real-{name}"),
+                                 *(f"--cov={target}" for target in contract()["coverage"]["targets"]),
+                                 "--cov-append", "--cov-report=",
+                                 f"--junitxml={output / f'test-results-real-{name}.xml'}"])
         for name, script in REAL_RENDERS:
-            command = [sys.executable, script, "--output", str(output / name)]
-            commands.append(command)
-            phases[f"render-{name}"] = run_real_phase(command, cwd=ROOT, env=environment)
+            bounded_phase(f"render-{name}", [sys.executable, script, "--output", str(output / name)])
         exit_code = max(phases.values(), key=abs)
         names = REAL_FILES
         details = {"commands": commands, "phases": phases}
@@ -446,7 +463,7 @@ def select_artifacts(inputs, binding):
     shard governs, so a shard that fails again stays failed. Each artifact must
     also carry the run binding of its own attempt.
     """
-    require(inputs.is_dir(), f"no shard evidence was downloaded; {FULL_RERUN}")
+    require(inputs.is_dir(), f"no shard evidence was downloaded. {FULL_RERUN}")
     current = int(binding["run_attempt"])
     newest = {}
     for path in inputs.iterdir():
@@ -458,7 +475,7 @@ def select_artifacts(inputs, binding):
             newest[match["shard"]] = (attempt, path.name)
     missing = [shard for shard in SHARDS if shard not in newest]
     require(not missing, f"no evidence in any attempt of run {binding['run_id']} for shard "
-                         f"{', '.join(missing)}; {FULL_RERUN}")
+                         f"{', '.join(missing)}. {FULL_RERUN}")
     names = {shard: name for shard, (_, name) in newest.items()}
     bindings = {shard: {**binding, "run_attempt": str(attempt)} for shard, (attempt, _) in newest.items()}
     return names, bindings
@@ -471,7 +488,7 @@ def read_kept(shard, binding, current_attempt, reader):
     except (QaShardError, OSError, ValueError, KeyError, TypeError, ET.ParseError) as exc:
         attempt = int(binding["run_attempt"])
         if attempt < int(current_attempt):
-            raise QaShardError(f"kept evidence of shard {shard} from attempt {attempt} is not valid ({exc}); "
+            raise QaShardError(f"kept evidence of shard {shard} from attempt {attempt} is not valid ({exc}). "
                                f"{FULL_RERUN}") from exc
         raise
 

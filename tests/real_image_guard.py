@@ -7,10 +7,15 @@ starts a browser in a new thread, which Kaleido 1.5 joins with no time limit
 test two limits:
 
 - Each in-process Kaleido start, with its export, has a time limit. After a
-  time-out or a Kaleido or browser error, the start is tried one more time.
-  Other errors are not tried again, and the test itself is never run again.
-- Each real-image test has a hard limit. A test that passes it writes the stack
-  of every thread and stops the test process, so the phase fails in minutes.
+  time-out or an error inside the one-shot runner, the start is tried one more
+  time. An error that occurs in both starts goes to the test. The test itself
+  is never run again. Plotly validates a figure before it calls Kaleido, so a
+  validation error does not get a second start.
+- Each real-image test has a hard limit from the start of the test call. A
+  test that passes it writes the stack of every thread and stops the test
+  process with the exit code of the shard hang limit. The phase and step
+  limits of ``tools/qa_core_shards.py`` and ``qa.yml`` cover fixtures and the
+  session finish.
 
 ``conftest.py`` applies the guard to every test with the ``real_image_export``
 marker.
@@ -32,8 +37,9 @@ from typing import Any, Self
 REAL_IMAGE_TEST_LIMIT_S = 300.0
 KALEIDO_START_LIMIT_S = 90.0
 KALEIDO_START_ATTEMPTS = 2
-HANG_EXIT_CODE = 3
-BROWSER_ERROR_PACKAGES = frozenset({"kaleido", "choreographer", "logistro"})
+# The same code as REAL_PHASE_TIMEOUT_EXIT in tools/qa_core_shards.py, so that
+# the gate names the phase. pytest itself uses the codes 0 to 5.
+HANG_EXIT_CODE = 124
 
 
 class KaleidoStartTimeout(TimeoutError):
@@ -72,7 +78,7 @@ def bounded_oneshot_async_run(
             value = result.get_nowait()
             if not isinstance(value, BaseException):
                 return value
-            if not is_browser_error(value) or attempt == attempts:
+            if not isinstance(value, Exception) or attempt == attempts:
                 raise value
             reason = f"failed ({type(value).__name__}: {value})"
         sys.stderr.write(f"Kaleido start {attempt} of {attempts} {reason}\n")
@@ -91,17 +97,6 @@ def _run_once(
         result.put(asyncio.run(func(*args, **kwargs)))
     except BaseException as exc:  # noqa: BLE001 - the caller raises it
         result.put(exc)
-
-
-def is_browser_error(error: BaseException) -> bool:
-    """Return whether an error comes from Kaleido or its browser layer.
-
-    These errors occur at the start of the browser and its page, also under
-    load. An error of Plotly or of the figure is not one of them, and it fails
-    at once.
-    """
-    module = type(error).__module__.split(".", 1)[0]
-    return module in BROWSER_ERROR_PACKAGES
 
 
 class RealImageTimeLimit:
@@ -131,6 +126,12 @@ class RealImageTimeLimit:
         self._timer.cancel()
 
     def _expire(self) -> None:
+        try:
+            self._report()
+        finally:
+            self._stop(HANG_EXIT_CODE)
+
+    def _report(self) -> None:
         # Show the dump on the console: pytest captures stderr during a test.
         capture = None
         if self._config is not None:
@@ -147,4 +148,3 @@ class RealImageTimeLimit:
             sys.stderr.write(f"\nThread {names.get(ident, ident)}:\n")
             sys.stderr.write("".join(traceback.format_stack(frame)))
         sys.stderr.flush()
-        self._stop(HANG_EXIT_CODE)

@@ -495,7 +495,10 @@ CORE_DOWNLOAD_SETTINGS = {
 CACHE_RESTORE_ACTION = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
 CACHE_SAVE_ACTION = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
 QA_ENV_PATH = "${{ runner.temp }}/sector-qa-env"
-QA_ENV_KEY = "sector-qa-env-v1-${{ runner.os }}-${{ hashFiles('.python-version', 'requirements-dev.txt') }}"
+QA_ENV_KEY = (
+    "sector-qa-env-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-path }}-"
+    "${{ hashFiles('.python-version', 'requirements-dev.txt') }}"
+)
 QA_ENV_MISS = "steps.qa_env.outputs.cache-hit != 'true'"
 # Hang limits of the shard step (owner rule, 9 November 2026): the real-image
 # shard normally takes 7 min, the longest core shard about 23 min.
@@ -522,7 +525,7 @@ def _environment_steps(*, save: bool) -> list[dict[str, Any]]:
 def _setup_steps() -> list[dict[str, Any]]:
     return [
         {"name": CHECKOUT_STEP_NAME, "uses": CHECKOUT_ACTION, "with": {"fetch-depth": 0}},
-        {"name": "Set up pinned Python",
+        {"name": "Set up pinned Python", "id": "python",
          "uses": "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
          "with": {"python-version-file": ".python-version", "cache": "pip", "cache-dependency-path": "requirements-dev.txt"}},
         {"name": "Preflight locked dependency inputs",
@@ -567,6 +570,9 @@ def expected_coverage_command(data: Mapping[str, Any]) -> str:
 $phaseFailures = @()
 if ("${{{{ steps.core_download.outcome }}}}" -ne "success") {{
   $phaseFailures += "core artifact download"
+}}
+if ("${{{{ needs.core.result }}}}" -ne "success") {{
+  $phaseFailures += "primary jobs (${{{{ needs.core.result }}}})"
 }}
 
 python tools/qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts

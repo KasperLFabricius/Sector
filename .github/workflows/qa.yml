@@ -25,6 +25,7 @@ jobs:
       with:
         fetch-depth: 0
     - name: Set up pinned Python
+      id: python
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version-file: .python-version
@@ -37,7 +38,7 @@ jobs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: ${{ runner.temp }}/sector-qa-env
-        key: sector-qa-env-v1-${{ runner.os }}-${{ hashFiles('.python-version', 'requirements-dev.txt') }}
+        key: sector-qa-env-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-path }}-${{ hashFiles('.python-version', 'requirements-dev.txt') }}
     - name: Install locked QA environment
       if: steps.qa_env.outputs.cache-hit != 'true'
       run: python -m venv "$env:RUNNER_TEMP\sector-qa-env"; & "$env:RUNNER_TEMP\sector-qa-env\Scripts\python.exe" -m pip install --require-hashes -r requirements-dev.txt
@@ -84,6 +85,7 @@ jobs:
       with:
         fetch-depth: 0
     - name: Set up pinned Python
+      id: python
       uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version-file: .python-version
@@ -96,7 +98,7 @@ jobs:
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
       with:
         path: ${{ runner.temp }}/sector-qa-env
-        key: sector-qa-env-v1-${{ runner.os }}-${{ hashFiles('.python-version', 'requirements-dev.txt') }}
+        key: sector-qa-env-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-path }}-${{ hashFiles('.python-version', 'requirements-dev.txt') }}
     - name: Install locked QA environment
       if: steps.qa_env.outputs.cache-hit != 'true'
       run: python -m venv "$env:RUNNER_TEMP\sector-qa-env"; & "$env:RUNNER_TEMP\sector-qa-env\Scripts\python.exe" -m pip install --require-hashes -r requirements-dev.txt
@@ -190,6 +192,9 @@ jobs:
           $phaseFailures = @()
           if ("${{ steps.core_download.outcome }}" -ne "success") {
             $phaseFailures += "core artifact download"
+          }
+          if ("${{ needs.core.result }}" -ne "success") {
+            $phaseFailures += "primary jobs (${{ needs.core.result }})"
           }
 
           python tools/qa_core_shards.py merge --input qa-core-inputs --output qa-artifacts

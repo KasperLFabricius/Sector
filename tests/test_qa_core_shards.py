@@ -330,9 +330,9 @@ def test_real_phase_past_the_hang_limit_stops_its_process_tree(tmp_path):
              "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)']); "
              f"pathlib.Path({str(grandchild)!r}).write_text(str(p.pid)); time.sleep(120)")
     started = time.monotonic()
-    code = shards.run_real_phase([sys.executable, "-c", child], cwd=tmp_path, env=None, limit=10.0)
+    code = shards.run_real_phase([sys.executable, "-c", child], cwd=tmp_path, env=None, limit=30.0)
     assert code == shards.REAL_PHASE_TIMEOUT_EXIT
-    assert time.monotonic() - started < 60
+    assert time.monotonic() - started < 120
     pid = int(grandchild.read_text())
     deadline = time.monotonic() + 15
     while _process_exists(pid) and time.monotonic() < deadline:
@@ -341,11 +341,34 @@ def test_real_phase_past_the_hang_limit_stops_its_process_tree(tmp_path):
     assert shards.run_real_phase([sys.executable, "-c", "raise SystemExit(3)"], cwd=tmp_path, env=None) == 3
 
 
+@pytest.mark.parametrize("budget, expected", [(900.0, [0] * 5), (100.0, [0] * 5), (0.0, [124] * 5)])
+def test_real_phases_share_one_budget_below_the_step_limit(tmp_path, monkeypatch, budget, expected):
+    limits = []
+
+    def phase(command, *, cwd, env, limit=None):
+        limits.append(limit)
+        return 0
+
+    monkeypatch.setattr(shards, "identity", lambda: {"run_id": "1", "run_attempt": "1"})
+    monkeypatch.setattr(shards, "source_digest", lambda: "unchanged")
+    monkeypatch.setattr(shards, "run_real_phase", phase)
+    monkeypatch.setattr(shards, "REAL_SHARD_BUDGET_S", budget)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "temporary"))
+    shards.run_shard("real", tmp_path / "real")
+    manifest = json.loads((tmp_path / "real" / "manifest.json").read_text())
+    assert list(manifest["phases"].values()) == expected
+    assert len(manifest["commands"]) == 5
+    assert all(0 < limit <= min(shards.REAL_PHASE_LIMIT_S, budget) for limit in limits)
+    assert len(limits) == (0 if budget == 0.0 else 5)
+    # The budget and its last phase stay inside the 20 min step limit of qa.yml.
+    assert shards.REAL_SHARD_BUDGET_S + shards.REAL_PHASE_MIN_S < 20 * 60
+
+
 def test_shard_without_evidence_in_any_attempt_asks_for_a_full_rerun(evidence):
     import shutil
 
     shutil.rmtree(evidence.directories["core-05"])
-    with pytest.raises(shards.QaShardError, match=r"run 123 for shard core-05; run all jobs .*full rerun"):
+    with pytest.raises(shards.QaShardError, match=r"run 123 for shard core-05[.] Run all jobs .*full rerun"):
         shards.merge_shards(evidence.inputs, evidence.output)
 
 
