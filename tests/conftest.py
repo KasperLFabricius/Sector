@@ -69,6 +69,23 @@ def _isolate_autosave(tmp_path, monkeypatch):
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path / "_autosave"))
 
 
+@pytest.fixture(autouse=True)
+def _real_image_hang_guard(request, monkeypatch):
+    """Bound each real-image test and each in-process Kaleido start.
+
+    See tests/real_image_guard.py (owner rule, 9 November 2026).
+    """
+    if request.node.get_closest_marker("real_image_export") is None:
+        yield
+        return
+    from kaleido import _sync_server
+    from real_image_guard import RealImageTimeLimit, bounded_oneshot_async_run
+
+    monkeypatch.setattr(_sync_server, "oneshot_async_run", bounded_oneshot_async_run)
+    with RealImageTimeLimit(request.node.nodeid, request.config):
+        yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _retain_callable_page_client():
     """Match browser page identity in module fixtures and native test bodies."""
