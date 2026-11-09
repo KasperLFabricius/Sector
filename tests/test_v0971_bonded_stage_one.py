@@ -4,8 +4,8 @@ Owner decision of 8 November 2026 (PR #577 owner items 2 and 3): under
 prestress alone the tendon stress is Ep IS also in Stage I. Sector derives the
 Stage I locked-in stress on the uncracked section with one linear solve, and a
 Newton step replaces the plain residual step of the correction. The block
-message names the tendon, its effective stress and the concrete strain at its
-level.
+message names the model, and the caption under it names the tendon, its
+effective stress and the concrete strain at its level.
 
 Hand calculation A (independent of Sector output): 300 x 600 mm, one tendon
 Ap = 1000 mm2 at y = -190 mm, Ep = 195 GPa, Ep IS = 500 MPa, nl = 18 with the
@@ -424,6 +424,8 @@ def test_block_message_names_the_tendon_its_stress_and_the_concrete_strain(
 ):
     # Reference concrete stress -5000 kN/m2 at nl = 18: Ec = 200000/18 MPa, so
     # eps_c = -5.0 x 18/200000 = -0.450 per mille. Ep IS = 110.7 MPa.
+    # The message is literal authored copy for each model; the caption under
+    # it gives the tendon, its effective stress and the concrete strain.
     error = BondedPrestressError(
         "the bonded prestress state did not converge",
         element=0, effective_stress=110.7e3, concrete_stress=-5000.0,
@@ -437,19 +439,30 @@ def test_block_message_names_the_tendon_its_stress_and_the_concrete_strain(
     inp["tendon_elements"] = [{"id": "P7"}]
     sector_app._apply_bonded_prestrain(inp)
     message = inp["material_error"]
+    assert message is sector_app._PRESTRESS_BOND_STATE_MESSAGES[
+        "cracked section at Es/Ecm"
+    ]
     assert message.code == "PRESTRESS-BOND-STATE"
     assert message.text == (
-        "Sector cannot find the bond strain difference of tendon P7. The "
-        "effective stress Ep IS is 110.7 MPa. Under prestress alone, the "
-        "concrete strain at the tendon is -0.450 " + chr(0x2030)
-        + " (tension positive, cracked section at Es/Ecm). Check the "
-        "prestrain IS and the tendon positions"
+        "Sector cannot find the bond strain difference of a tendon in the "
+        "cracked section at Es/Ecm. Check the prestrain IS and the tendon "
+        "positions"
     )
-    assert len(message.text.split()) <= 50
+    caption = (
+        "The effective stress Ep IS of tendon P7 is 110.7 MPa. Under prestress "
+        "alone, the concrete strain at this tendon is -0.450 " + chr(0x2030)
+        + " (tension positive)."
+    )
+    assert sector_app._bond_failure_details(inp) == {
+        "PRESTRESS-BOND-STATE": caption
+    }
+    assert len((message.text + " " + caption).split()) <= 50
     inp = _inp()
     inp["conc_Ec"] = 200.0 / 18.0
     sector_app._apply_bonded_prestrain(inp)
-    assert "tendon 1." in inp["material_error"].text
+    assert "of tendon 1 is" in sector_app._bond_failure_details(inp)[
+        "PRESTRESS-BOND-STATE"
+    ]
     # A failed Stage I state names its model; its ratio is nl = 18.
     monkeypatch.undo()
     monkeypatch.setattr(
@@ -458,9 +471,61 @@ def test_block_message_names_the_tendon_its_stress_and_the_concrete_strain(
     )
     inp = _inp()
     sector_app._apply_bonded_prestrain(inp)
-    assert "is -0.450 " + chr(0x2030) + " (tension positive, uncracked section at nl)." in (
-        inp["material_error"].text
+    assert inp["material_error"].text == (
+        "Sector cannot find the bond strain difference of a tendon in the "
+        "uncracked section at nl. Check the prestrain IS and the tendon "
+        "positions"
     )
+    assert "is -0.450 " + chr(0x2030) + " (tension positive)." in (
+        sector_app._bond_failure_details(inp)["PRESTRESS-BOND-STATE"]
+    )
+
+
+def test_each_model_has_one_literal_bond_message():
+    messages = sector_app._PRESTRESS_BOND_STATE_MESSAGES
+    assert set(messages) == {
+        "cracked section at Es/Ecm", "cracked section at nl",
+        "uncracked section at nl",
+    }
+    for state, message in messages.items():
+        assert message.code == "PRESTRESS-BOND-STATE"
+        assert f"in the {state}. Check the prestrain IS" in message.text
+    assert sector_app._bond_failure_details({}) == {}
+    assert sector_app._bond_failure_details(
+        {"tendon_bond_failure": {"tendon": "P1"}}
+    ) == {}
+
+
+def _render_bond_issue(caption):
+    """Native Streamlit harness for the bond message and its caption."""
+
+    import pathlib
+    import sys
+
+    sys.path.insert(0, str(pathlib.Path.cwd() / "app"))
+    import input_issues
+    import sector_app
+
+    message = sector_app._PRESTRESS_BOND_STATE_MESSAGES["cracked section at nl"]
+    sector_app._render_input_issues(
+        (input_issues.InputIssue("material-unmapped", message, None),),
+        key_prefix="bond-test",
+        details={message.code: caption},
+    )
+
+
+def test_the_caption_shows_under_the_bond_message():
+    from streamlit.testing.v1 import AppTest
+
+    caption = "The effective stress Ep IS of tendon P2 is 900.0 MPa."
+    at = AppTest.from_function(
+        _render_bond_issue, args=(caption,), default_timeout=90,
+    ).run()
+    assert not at.exception
+    assert [str(item.value) for item in at.error] == [
+        sector_app._PRESTRESS_BOND_STATE_MESSAGES["cracked section at nl"].text
+    ]
+    assert [str(item.value) for item in at.caption] == [caption]
 
 
 def test_an_error_without_a_tendon_keeps_the_general_message(monkeypatch):
@@ -471,6 +536,7 @@ def test_an_error_without_a_tendon_keeps_the_general_message(monkeypatch):
     inp = _inp()
     sector_app._apply_bonded_prestrain(inp)
     assert inp["material_error"] is sector_app._PRESTRESS_BOND_BLOCKER
+    assert sector_app._bond_failure_details(inp) == {}
     inp = _inp(mode="Plastic")
     sector_app._apply_bonded_prestrain(inp)
     assert inp["material_error"] is None
