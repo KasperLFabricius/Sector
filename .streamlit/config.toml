@@ -16,6 +16,11 @@ showErrorDetails = "type"
 [browser]
 gatherUsageStats = false
 
+[runner]
+# Sector writes every output with an explicit st call. Magic would only rewrite
+# the large main script on each new script compilation (a test-suite cost).
+magicEnabled = false
+
 [theme]
 base = "light"
 primaryColor = "#176b75"

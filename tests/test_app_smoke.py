@@ -10367,7 +10367,7 @@ def test_page_navigation_and_input_stages_follow_the_workflow_order():
     assert "_main_page" not in {widget.key for widget in at.segmented_control}
     _goto_input_tab(at, "Analysis settings")
     groups = at.segmented_control(key="_analysis_group")
-    assert groups.options == ["General", "Shear / torsion / M-V-T", "Crack width", "Detailing", "Fatigue"]
+    assert groups.options == ["General", "Member", "Shear / torsion / M-V-T", "Crack width", "Detailing", "Fatigue"]
     assert groups.value == "General"
     assert "mode" in {widget.key for widget in at.radio}
     assert "fatigue_on" not in {widget.key for widget in at.toggle}

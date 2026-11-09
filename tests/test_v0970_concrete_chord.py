@@ -352,10 +352,14 @@ def test_overall_status_less_severe_than_the_chord_is_not_published(failed_case)
     _assert_not_published(inp, out)
 
 
-def test_med_max_keys_route_to_the_shared_settings_page():
+def test_med_max_keys_route_to_the_member_settings_group():
+    # 0.97.1 L9: the MEd,max inputs moved to the Member settings group.
+    from app import input_issues
+
     keys = (capacity.MED_MAX_ON_KEY, *capacity.MED_MAX_KEYS.values(), "shear_med_max_copy")
     for key in keys:
-        assert mvt_workspace.field_page(key) == "Shared reinforcement"
+        assert mvt_workspace.field_page(key) is None
+        assert input_issues.settings_group(key) == "Member"
 
 
 def test_entered_med_max_limits_the_shift_through_the_app():
