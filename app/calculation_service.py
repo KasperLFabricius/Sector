@@ -14,7 +14,6 @@ project file and prints a short summary::
 from __future__ import annotations
 
 from collections.abc import Mapping
-import copy
 import dataclasses
 import functools
 import math
