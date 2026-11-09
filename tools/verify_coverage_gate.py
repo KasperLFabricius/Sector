@@ -494,12 +494,21 @@ CORE_DOWNLOAD_SETTINGS = {
 # install, which the dependency audit policy requires.
 CACHE_RESTORE_ACTION = "actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
 CACHE_SAVE_ACTION = "actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9"
-QA_ENV_PATH = "${{ runner.temp }}/sector-qa-env"
+# The cache holds the installed packages of the pinned toolcache interpreter, so
+# `python` stays the real interpreter. A venv is not used: on Windows its
+# python.exe is a launcher that starts the interpreter as a child process, and a
+# test that stops a child process with terminate() then sees a late release.
+QA_ENV_PATH = "${{ env.pythonLocation }}/Lib/site-packages\n${{ env.pythonLocation }}/Scripts\n"
 QA_ENV_KEY = (
-    "sector-qa-env-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-path }}-"
+    "sector-qa-env-v2-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.python-path }}-"
     "${{ hashFiles('.python-version', 'requirements-dev.txt') }}"
 )
+QA_ENV_HIT = "steps.qa_env.outputs.cache-hit == 'true'"
 QA_ENV_MISS = "steps.qa_env.outputs.cache-hit != 'true'"
+QA_ENV_CLEAR = (
+    'foreach ($folder in @("$env:pythonLocation\\Lib\\site-packages", "$env:pythonLocation\\Scripts")) '
+    "{ if (Test-Path $folder) { Remove-Item -Recurse -Force $folder } }"
+)
 # Hang limits of the shard step (owner rule, 9 November 2026): the real-image
 # shard normally takes 7 min, the longest core shard about 23 min.
 CORE_STEP_TIMEOUT = "${{ matrix.shard == 'real' && 20 || 60 }}"
@@ -507,18 +516,18 @@ CORE_STEP_TIMEOUT = "${{ matrix.shard == 'real' && 20 || 60 }}"
 
 def _environment_steps(*, save: bool) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = [
-        {"name": "Restore cached QA environment", "id": "qa_env", "uses": CACHE_RESTORE_ACTION,
-         "with": {"path": QA_ENV_PATH, "key": QA_ENV_KEY}},
+        {"name": "Look up cached QA environment", "id": "qa_env", "uses": CACHE_RESTORE_ACTION,
+         "with": {"path": QA_ENV_PATH, "key": QA_ENV_KEY, "lookup-only": True}},
+        {"name": "Clear base packages for the cached QA environment", "if": QA_ENV_HIT, "run": QA_ENV_CLEAR},
+        {"name": "Restore cached QA environment", "if": QA_ENV_HIT, "uses": CACHE_RESTORE_ACTION,
+         "with": {"path": QA_ENV_PATH, "key": "${{ steps.qa_env.outputs.cache-primary-key }}",
+                  "fail-on-cache-miss": True}},
         {"name": "Install locked QA environment", "if": QA_ENV_MISS,
-         "run": 'python -m venv "$env:RUNNER_TEMP\\sector-qa-env"; '
-                '& "$env:RUNNER_TEMP\\sector-qa-env\\Scripts\\python.exe" -m pip install --require-hashes '
-                "-r requirements-dev.txt"},
+         "run": "python -m pip install --require-hashes -r requirements-dev.txt"},
     ]
     if save:
         steps.append({"name": "Save cached QA environment", "if": QA_ENV_MISS, "uses": CACHE_SAVE_ACTION,
                       "with": {"path": QA_ENV_PATH, "key": "${{ steps.qa_env.outputs.cache-primary-key }}"}})
-    steps.append({"name": "Use QA environment",
-                  "run": 'Add-Content -Path $env:GITHUB_PATH -Value "$env:RUNNER_TEMP\\sector-qa-env\\Scripts"'})
     return steps
 
 
