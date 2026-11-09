@@ -9288,9 +9288,11 @@ def _apply_bonded_prestrain(inp):
         )
         ratios = (
             ("tendon_materials_uls",
-             STEEL_REFERENCE_MODULUS / (float(inp["conc_Ec"]) * 1000.0), True),
-            ("tendon_materials", float(inp["nl"]), True),
-            ("tendon_stage_one_stress", float(inp["nl"]), False),
+             STEEL_REFERENCE_MODULUS / (float(inp["conc_Ec"]) * 1000.0), True,
+             "cracked section at Es/Ecm"),
+            ("tendon_materials", float(inp["nl"]), True, "cracked section at nl"),
+            ("tendon_stage_one_stress", float(inp["nl"]), False,
+             "uncracked section at nl"),
         )
     except (
         AttributeError, KeyError, TypeError, ValueError, OverflowError,
@@ -9300,9 +9302,10 @@ def _apply_bonded_prestrain(inp):
         return
     bars_count = len(bar_laws)
 
-    def _bond_blocker(exc, ratio):
-        # A correction that does not converge names its tendon; the concrete
-        # strain is the reference stress Ec*eps_c divided by Ec = Es/ratio.
+    def _bond_blocker(exc, ratio, state):
+        # A correction that does not converge names its tendon and the model
+        # state; the concrete strain is the reference stress Ec*eps_c divided
+        # by Ec = Es/ratio.
         index = getattr(exc, "element", None)
         if index is None or not bars_count <= index < bars_count + len(materials):
             return _PRESTRESS_BOND_BLOCKER
@@ -9314,16 +9317,16 @@ def _apply_bonded_prestrain(inp):
         )
         return EngineerMessage(
             _PRESTRESS_BOND_BLOCKER.code,
-            "Sector cannot establish the bond strain difference of tendon "
-            f"{name}. Effective stress Ep IS = "
-            f"{float(exc.effective_stress) / 1000.0:.1f} MPa. Concrete strain "
-            "at the tendon under prestress alone (tension positive) = "
-            f"{strain * 1000.0:.3f} {_PERMILLE}. Check the prestrain IS and "
-            "the tendon positions",
+            "Sector cannot find the bond strain difference of tendon "
+            f"{name}. The effective stress Ep IS is "
+            f"{float(exc.effective_stress) / 1000.0:.1f} MPa. Under prestress "
+            "alone, the concrete strain at the tendon is "
+            f"{strain * 1000.0:.3f} {_PERMILLE} (tension positive, {state}). "
+            "Check the prestrain IS and the tendon positions",
         )
 
     laws = {}
-    for key, ratio, cracked in ratios:
+    for key, ratio, cracked, state in ratios:
         try:
             locked = elastic_core.bonded_prestress_stress(
                 sec, ratio, effective, n_mult=n_mult, tendon_mask=tendon_mask,
@@ -9342,7 +9345,7 @@ def _apply_bonded_prestrain(inp):
                 if cracked:
                     inp["tendon_bond_elastic_unavailable"] = True
                 continue
-            inp["material_error"] = _bond_blocker(exc, ratio)
+            inp["material_error"] = _bond_blocker(exc, ratio, state)
             return
     inp.update(laws)
 

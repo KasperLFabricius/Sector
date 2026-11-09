@@ -120,6 +120,12 @@ def test_stage_one_locked_stress_of_one_tendon_matches_the_hand_calculation():
         _section_a(), 18.0, A_EFF, n_mult=A_MULT, cracked=False
     )
     assert locked[0] / 1000.0 == pytest.approx(hand["locked"], rel=1.0e-9)
+    # Owner item 2: one linear solve. Without a Newton step the direct solution
+    # must already meet the tolerance and give the hand value.
+    direct = bonded_prestress_stress(
+        _section_a(), 18.0, A_EFF, n_mult=A_MULT, cracked=False, max_iter=0
+    )
+    assert direct[0] / 1000.0 == pytest.approx(hand["locked"], rel=1.0e-9)
     state = solve_elastic_uncracked(
         _section_a(), 0.0, 0.0, 0.0, 18.0, n_mult=A_MULT, prestress_stress=locked
     )
@@ -432,13 +438,29 @@ def test_block_message_names_the_tendon_its_stress_and_the_concrete_strain(
     sector_app._apply_bonded_prestrain(inp)
     message = inp["material_error"]
     assert message.code == "PRESTRESS-BOND-STATE"
-    assert "tendon P7." in message.text
-    assert "Ep IS = 110.7 MPa" in message.text
-    assert "= -0.450 " + chr(0x2030) in message.text
+    assert message.text == (
+        "Sector cannot find the bond strain difference of tendon P7. The "
+        "effective stress Ep IS is 110.7 MPa. Under prestress alone, the "
+        "concrete strain at the tendon is -0.450 " + chr(0x2030)
+        + " (tension positive, cracked section at Es/Ecm). Check the "
+        "prestrain IS and the tendon positions"
+    )
+    assert len(message.text.split()) <= 50
     inp = _inp()
     inp["conc_Ec"] = 200.0 / 18.0
     sector_app._apply_bonded_prestrain(inp)
     assert "tendon 1." in inp["material_error"].text
+    # A failed Stage I state names its model; its ratio is nl = 18.
+    monkeypatch.undo()
+    monkeypatch.setattr(
+        elastic, "bonded_prestress_stress",
+        _failing(cracked_only=False, error=error),
+    )
+    inp = _inp()
+    sector_app._apply_bonded_prestrain(inp)
+    assert "is -0.450 " + chr(0x2030) + " (tension positive, uncracked section at nl)." in (
+        inp["material_error"].text
+    )
 
 
 def test_an_error_without_a_tendon_keeps_the_general_message(monkeypatch):

@@ -226,7 +226,7 @@ def _tendon_stress_range_note(edition):
     """Clause basis of the tendon stress in the crack-width formula."""
     text = (
         "For a tendon, sigma<sub>s</sub> is the tendon stress range "
-        "Delta sigma<sub>p</sub> = sigma<sub>p</sub> - E<sub>p</sub> "
+        "&#916;sigma<sub>p</sub> = sigma<sub>p</sub> - E<sub>p</sub> "
         "eps<sub>p</sub><super>(0)</super>: the change of the tendon stress "
         "from the state of zero concrete strain at the tendon level"
     )
@@ -236,11 +236,10 @@ def _tendon_stress_range_note(edition):
             "tendons)."
         )
     return text + (
-        " (DS/EN 1992-1-1 &#167;7.3.4(2)). &#167;7.3.4(2) gives this for "
+        " (DS/EN 1992-1-1 &#167;7.3.4(2)). Clause 7.3.4(2) gives this for "
         "pretensioned members. Sector also uses it for bonded post-tensioned "
         "tendons, because eps<sub>sm</sub> in &#167;7.3.4(1) includes only "
-        "the strain beyond the state of zero concrete strain at the same "
-        "level."
+        "the additional strain beyond zero concrete strain at the same level."
     )
 
 
@@ -5294,7 +5293,7 @@ class ReportBuilder:
                 "E<sub>s</sub>/E<sub>cm</sub> for the plastic model, because "
                 "the creep strain does not recover in a short-term load to "
                 "failure. The plastic model uses the entered E<sub>cm</sub> = "
-                f"E<sub>c</sub> = {_fmt(self.inp.get('conc_Ec'), 3)} GPa. The elastic model applies sigma<sub>p</sub><super>(0)"
+                f"E<sub>c</sub> = {_fmt(self.inp.get('conc_Ec'), 3)} GPa. The cracked (Stage II) elastic model applies sigma<sub>p</sub><super>(0)"
                 "</super> = E<sub>p</sub> eps<sub>p</sub><super>(0)</super> to "
                 "the bonded section. Under prestress alone the tendon stress "
                 "then returns to sigma<sub>p,0</sub> = E<sub>p</sub> IS. "
@@ -5303,12 +5302,13 @@ class ReportBuilder:
                 "by more than IS. The Stage I cracking check takes "
                 "eps<sub>c,p</sub> on the uncracked section at "
                 "n<sub>l</sub>, so that the Stage I tendon stress under "
-                "prestress alone is also E<sub>p</sub> IS."
+                "prestress alone is also E<sub>p</sub> IS. The cracking "
+                "threshold gives its locked-in stress."
             )
             bond_rows = [[
                 "Tendon", "IS (&#8240;)",
-                "eps<sub>p</sub><super>(0)</super> elastic (&#8240;)",
-                "sigma<sub>p</sub><super>(0)</super> elastic (MPa)",
+                "eps<sub>p</sub><super>(0)</super> Stage II (&#8240;)",
+                "sigma<sub>p</sub><super>(0)</super> Stage II (MPa)",
                 "eps<sub>p</sub><super>(0)</super> plastic (&#8240;)",
             ]]
             for row in bond:
@@ -11518,10 +11518,14 @@ class ReportBuilder:
             if not publish_crack_width:
                 self._keep_measured_calculation_from(threshold_start)
             if prestressed:
-                self._small('Locked-in prestress stays fixed. If a prestress-only fiber stress exceeds f<sub>ct,eff</sub>, lambda<sub>cr</sub> = 0.')
-                self._small('In Stage I, the locked-in stress comes from the uncracked section, so that prestress alone gives the tendon stress E<sub>p</sub> IS. The prestress-only fiber stresses are then those of the section without tendon stiffness under the tendon forces A<sub>p</sub> E<sub>p</sub> IS.')
-                self._small('Otherwise, only the external N and M are scaled. The smallest positive fiber solution governs.')
-                self._small('The result is infinity if no fiber gains tension.')
+                self._small('Locked-in prestress stays fixed. In Stage I, the locked-in stress comes from the uncracked section at n<sub>l</sub>, so that prestress alone gives the tendon stress E<sub>p</sub> IS.')
+                stage_one = self._stage_one_locked_in_text()
+                if stage_one:
+                    self._small(stage_one)
+                self._small('The prestress-only fibre stresses are then those of the transformed section without the tendons and without the concrete at the tendons, under the tendon forces A<sub>p</sub> E<sub>p</sub> IS.')
+                self._small('If a prestress-only fibre stress exceeds f<sub>ct,eff</sub>, lambda<sub>cr</sub> = 0.')
+                self._small('Otherwise, only the external N and M are scaled. The smallest positive fibre solution governs.')
+                self._small('The result is infinity if no fibre gains tension.')
                 self._small(f"Calculated sigma<sub>ct,I</sub> = {_fmt(el.get('sigma_ct'), 3)} MPa.")
                 self._small(f"Calculated lambda<sub>cr</sub> = {_fmt(lam,3)}.")
                 self._small(f"The section is {verdict}. Below 1 means cracked. A value of 1 or above means uncracked." if valid else "INVALID.")
@@ -11694,6 +11698,24 @@ class ReportBuilder:
                 f"u<sub>w</sub> = {_fmt(assessment.get('ratio'), 3)}; "
                 f"{_html_escape(status)}"
             ),
+        )
+
+    def _stage_one_locked_in_text(self):
+        """Stage I locked-in stress of each tendon, or None when not retained."""
+        stresses = self.inp.get("tendon_stage_one_stress")
+        if not stresses:
+            return None
+        ids = [item.get("id") for item in self.inp.get("tendon_elements") or []]
+        if len(ids) != len(stresses):
+            ids = [f"tendon {index + 1}" for index in range(len(stresses))]
+        values = ", ".join(
+            f"{_html_escape(str(name))} = {_fmt(float(stress) / 1000.0, 3)} MPa"
+            for name, stress in zip(ids, stresses)
+        )
+        return (
+            "Stage I locked-in tendon stress sigma<sub>p,I</sub><super>(0)"
+            "</super> = E<sub>p</sub> eps<sub>p,I</sub><super>(0)</super>: "
+            + values + "."
         )
 
     def _crack_table(self, cl, cs, clc=None, csc=None):

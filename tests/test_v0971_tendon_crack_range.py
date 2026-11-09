@@ -182,10 +182,11 @@ def test_report_states_the_clause_of_the_tendon_stress_range():
     notes = _crack_table_notes(True, "2004")
     assert len(notes) == 1
     text = notes[0]
-    assert "Delta sigma<sub>p</sub> = sigma<sub>p</sub> - E<sub>p</sub>" in text
+    assert "&#916;sigma<sub>p</sub> = sigma<sub>p</sub> - E<sub>p</sub>" in text
+    assert "Delta" not in text
     assert "zero concrete strain at the tendon level" in text
     assert "DS/EN 1992-1-1 &#167;7.3.4(2)" in text
-    assert "pretensioned members" in text
+    assert "Clause 7.3.4(2) gives this for pretensioned members" in text
     assert "bonded post-tensioned tendons" in text
     modern = _crack_table_notes(True, "2023")[0]
     assert "DS/EN 1992-1-1:2023 &#167;9.2.3(3)" in modern
@@ -201,7 +202,7 @@ def test_manual_states_the_clause_of_the_tendon_stress_range():
     for expected in (
         r"$\Delta\sigma_p=\sigma_p-E_p\varepsilon^{(0)}_{p}$",
         "zero concrete strain at the tendon level (7.3.4(2))",
-        "7.3.4(2) gives this for pretensioned members",
+        "Clause 7.3.4(2) gives this for pretensioned members",
         "bonded post-tensioned tendons",
         "(9.2.3(3))",
     ):
