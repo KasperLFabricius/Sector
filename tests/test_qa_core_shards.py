@@ -341,6 +341,32 @@ def test_real_phase_past_the_hang_limit_stops_its_process_tree(tmp_path):
     assert shards.run_real_phase([sys.executable, "-c", "raise SystemExit(3)"], cwd=tmp_path, env=None) == 3
 
 
+def test_shard_without_evidence_in_any_attempt_asks_for_a_full_rerun(evidence):
+    import shutil
+
+    shutil.rmtree(evidence.directories["core-05"])
+    with pytest.raises(shards.QaShardError, match=r"run 123 for shard core-05; run all jobs .*full rerun"):
+        shards.merge_shards(evidence.inputs, evidence.output)
+
+
+@pytest.mark.parametrize("shard", ["core-03", "real"])
+def test_invalid_kept_evidence_of_an_earlier_attempt_asks_for_a_full_rerun(evidence, shard):
+    kept = _attempt_copy(evidence, shard, 1, move=True)
+    name = "test-results-real-viz.xml" if shard == "real" else "test-results.xml"
+    with (kept / name).open("ab") as stream:
+        stream.write(b" ")
+    with pytest.raises(shards.QaShardError, match=rf"kept evidence of shard {shard} from attempt 1 .*full rerun"):
+        shards.merge_shards(evidence.inputs, evidence.output)
+
+
+def test_invalid_evidence_of_the_current_attempt_keeps_its_own_message(evidence):
+    with (evidence.directories["core-03"] / "test-results.xml").open("ab") as stream:
+        stream.write(b" ")
+    with pytest.raises(shards.QaShardError, match="hash or size differs") as caught:
+        shards.merge_shards(evidence.inputs, evidence.output)
+    assert "full rerun" not in str(caught.value)
+
+
 def test_real_phase_stopped_at_the_hang_limit_fails_the_merge_by_name(evidence):
     _manifest(evidence.directories["real"], lambda value: value.update(
         exit_code=shards.REAL_PHASE_TIMEOUT_EXIT,

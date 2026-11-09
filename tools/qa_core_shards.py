@@ -48,7 +48,10 @@ REAL_PHASES = (*(name for name, _ in REAL_TESTS), *(f"render-{name}" for name, _
 REAL_PHASE_LIMIT_S = 480.0
 REAL_PHASE_TIMEOUT_EXIT = 124
 # A rerun of failed jobs uploads new evidence only for the shards that ran again.
-ARTIFACT_NAME = re.compile(r"sector-core-(?P<run>[1-9][0-9]*)-(?P<attempt>[1-9][0-9]*)-(?P<shard>[a-z]+(?:-[0-9]{2})?)")
+# When the kept evidence of an earlier attempt is absent or not valid, the gate
+# fails with this instruction.
+FULL_RERUN = "run all jobs of the workflow again (a full rerun)"
+ARTIFACT_NAME =re.compile(r"sector-core-(?P<run>[1-9][0-9]*)-(?P<attempt>[1-9][0-9]*)-(?P<shard>[a-z]+(?:-[0-9]{2})?)")
 _deselected = []
 
 
@@ -406,20 +409,34 @@ def select_artifacts(inputs, binding):
     shard governs, so a shard that fails again stays failed. Each artifact must
     also carry the run binding of its own attempt.
     """
-    require(inputs.is_dir(), "missing, duplicate or foreign shard artifacts")
+    require(inputs.is_dir(), f"no shard evidence was downloaded; {FULL_RERUN}")
     current = int(binding["run_attempt"])
     newest = {}
     for path in inputs.iterdir():
         match = ARTIFACT_NAME.fullmatch(path.name)
         require(match is not None and match["run"] == binding["run_id"] and match["shard"] in SHARDS
-                and int(match["attempt"]) <= current, "missing, duplicate or foreign shard artifacts")
+                and int(match["attempt"]) <= current, f"foreign shard artifact: {path.name}")
         attempt = int(match["attempt"])
         if attempt > newest.get(match["shard"], (0, ""))[0]:
             newest[match["shard"]] = (attempt, path.name)
-    require(set(newest) == set(SHARDS), "missing, duplicate or foreign shard artifacts")
+    missing = [shard for shard in SHARDS if shard not in newest]
+    require(not missing, f"no evidence in any attempt of run {binding['run_id']} for shard "
+                         f"{', '.join(missing)}; {FULL_RERUN}")
     names = {shard: name for shard, (_, name) in newest.items()}
     bindings = {shard: {**binding, "run_attempt": str(attempt)} for shard, (attempt, _) in newest.items()}
     return names, bindings
+
+
+def read_kept(shard, binding, current_attempt, reader):
+    """Read one shard's evidence; name the full rerun when kept evidence fails."""
+    try:
+        return reader()
+    except (QaShardError, OSError, ValueError, KeyError, TypeError, ET.ParseError) as exc:
+        attempt = int(binding["run_attempt"])
+        if attempt < int(current_attempt):
+            raise QaShardError(f"kept evidence of shard {shard} from attempt {attempt} is not valid ({exc}); "
+                               f"{FULL_RERUN}") from exc
+        raise
 
 
 def merge_suite(suite, inputs, output, binding, before, names, bindings):
@@ -431,7 +448,10 @@ def merge_suite(suite, inputs, output, binding, before, names, bindings):
     for index, shard in enumerate(shards, 1):
         directory = inputs / names[shard]
         expected = [node for node, owner in owners.items() if owner == index]
-        manifest, selected, tree, counts = read_shard(directory, shard, bindings[shard], before, expected)
+        manifest, selected, tree, counts = read_kept(
+            shard, bindings[shard], binding["run_attempt"],
+            lambda directory=directory, shard=shard, expected=expected: read_shard(
+                directory, shard, bindings[shard], before, expected))
         nodes.extend(selected)
         located.update(dict.fromkeys(selected, shard))
         root = tree.getroot()
@@ -494,7 +514,9 @@ def merge_shards(inputs, output):
     require(not branch_data.exists(), "pre-existing branch coverage data would contaminate the union")
 
     real_directory = inputs / names["real"]
-    real_manifest, real_counts = read_real(real_directory, bindings["real"], before)
+    real_manifest, real_counts = read_kept(
+        "real", bindings["real"], binding["run_attempt"],
+        lambda: read_real(real_directory, bindings["real"], before))
     real_coverage = str(real_directory / ".coverage")
     raw = coverage_data(real_coverage)
     require(raw.measured_files() and not raw.has_arcs(), "real-image coverage must contain line data, not branch data")
