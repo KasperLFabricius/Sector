@@ -7,12 +7,15 @@ are unique over all voids. Reinforcing bars and tendons keep their table IDs
 its identity is the ordered pair of its start and end corner IDs in the ring
 order of the table, for example ``C3-C4``.
 
-The editor keeps the IDs of the other rows when a row is deleted, so a deletion
-does not renumber the other IDs. A row without a valid ID gets the next free
-number above the largest number in the table.
+``normalise_geometry_table`` keeps each valid ID, so a deletion does not
+renumber the other IDs. A row without a valid ID gets the next number that the
+region has not issued (``next_corner`` or ``next_void_corner``), so a deleted ID
+is not used again. The point editors of Sector 0.97.1 do not keep the IDs yet
+(PR I1), so an application save numbers the corners in row order.
 
-The section model is a list of regions. Schema 29 accepts one region, ``R1``,
-which owns the corner and void tables. A region can record the parameters of
+The section model is a list of regions. Schema 29 accepts one region, ``A1``,
+which owns the corner and void tables. The prefix A keeps the region ID apart
+from the bar IDs R<n>. A region can record the parameters of
 the section template that made its geometry. The point tables stay the
 authority for the calculation, and the IDs, the region list and the template
 parameters have no engineering effect.
@@ -38,7 +41,7 @@ COLUMNS = (ID, X, Y)
 
 CORNER_PREFIX = "C"
 VOID_CORNER_PREFIX = "V"
-REGION_PREFIX = "R"
+REGION_PREFIX = "A"
 _PREFIXES = {
     CORNERS_TABLE_KEY: CORNER_PREFIX,
     VOIDS_TABLE_KEY: VOID_CORNER_PREFIX,
@@ -49,7 +52,12 @@ EDGE_SEPARATOR = "-"
 REGIONS_KEY = "section_regions"
 REGIONS_VERSION = 1
 MAX_REGIONS = 1
-DEFAULT_REGION_ID = "R1"
+DEFAULT_REGION_ID = "A1"
+# The counters of the issued corner numbers on the region record.
+COUNTER_FIELDS = {
+    CORNERS_TABLE_KEY: "next_corner",
+    VOIDS_TABLE_KEY: "next_void_corner",
+}
 
 # Section templates that can record their parameters on a region. These are the
 # Quick Section shapes; a later template (for example a parametric box girder)
@@ -132,14 +140,18 @@ def _records(value) -> list[dict]:
     return frame.to_dict("records")
 
 
-def normalise_geometry_table(value, key: str) -> pd.DataFrame:
+def normalise_geometry_table(
+    value, key: str, next_number: int = 1
+) -> pd.DataFrame:
     """Return a geometry table with the ID, x and y columns.
 
     Coordinates become floats, and a non-numeric cell becomes NaN as before. In
     the void table, a row with two blank coordinates separates two voids and has
     no ID. Each other row keeps its ID when the ID has the prefix of the table
-    and is unique. A row without a valid ID gets the next free number above the
-    largest number in the table, in row order. Existing valid IDs never change.
+    and is unique. A row without a valid ID gets the next number from
+    ``next_number`` (the counter of the region) or above the largest number in
+    the table, whichever is higher, in row order. A table without any valid
+    ID is numbered from 1 in row order. Valid IDs never change.
     """
 
     prefix = table_prefix(key)
@@ -159,7 +171,11 @@ def normalise_geometry_table(value, key: str) -> pd.DataFrame:
         for (element_id, _x, _y), blank in zip(rows, separator)
         if not blank and (match := pattern.fullmatch(element_id))
     ]
-    next_number = max(numbers, default=0) + 1
+    # A table with no valid ID (an older file, or a live table of 0.97.1)
+    # is numbered in row order from 1.
+    next_number = (
+        max(int(next_number), max(numbers) + 1) if numbers else 1
+    )
     used: set[str] = set()
     for row, blank in zip(rows, separator):
         if blank:
@@ -181,6 +197,18 @@ def normalise_geometry_table(value, key: str) -> pd.DataFrame:
     for column in COORDINATE_COLUMNS:
         frame[column] = frame[column].astype("float64")
     return frame
+
+
+def next_number_after(frame: pd.DataFrame, key: str) -> int:
+    """Return the number above the largest ID number of a normalised table."""
+
+    pattern = id_pattern(table_prefix(key))
+    numbers = [
+        int(match.group(1))
+        for element_id in frame[ID].tolist()
+        if (match := pattern.fullmatch(str(element_id)))
+    ]
+    return max(numbers, default=0) + 1
 
 
 def corner_ids(value, key: str) -> list[str]:
@@ -237,7 +265,12 @@ def _corner_prefix(value) -> str | None:
 def default_region() -> dict:
     """Return the one region of a schema-29 section."""
 
-    return {"id": DEFAULT_REGION_ID, "template": None}
+    return {
+        "id": DEFAULT_REGION_ID,
+        "template": None,
+        "next_corner": 1,
+        "next_void_corner": 1,
+    }
 
 
 def default_regions() -> dict:
@@ -326,13 +359,21 @@ def validate_regions(value) -> dict:
         label = f"{REGIONS_KEY} item {position}"
         if not isinstance(item, Mapping):
             raise ValueError(f"{label} must be an object")
-        if set(item) - {"id", "template"}:
+        if set(item) - {"id", "template", *COUNTER_FIELDS.values()}:
             raise ValueError(f"{label} contains unknown fields")
         region_id = item.get("id")
         if type(region_id) is not str or pattern.fullmatch(region_id) is None:
-            raise ValueError(f"{label} id must be R followed by a number")
-        regions.append({
+            raise ValueError(f"{label} id must be A followed by a number")
+        if region_id != DEFAULT_REGION_ID:
+            raise ValueError(f"{label} id must be {DEFAULT_REGION_ID}")
+        region = {
             "id": region_id,
             "template": validate_template(item.get("template"), label),
-        })
+        }
+        for field in COUNTER_FIELDS.values():
+            counter = item.get(field, 1)
+            if type(counter) is not int or counter < 1:
+                raise ValueError(f"{label} {field} must be a positive whole number")
+            region[field] = counter
+        regions.append(region)
     return {"version": REGIONS_VERSION, "items": regions}

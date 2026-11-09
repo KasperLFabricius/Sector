@@ -1305,6 +1305,26 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
     return pre, updated
 
 
+def _group_material_ids(kind):
+    """Return the material IDs of the bar groups of one material kind.
+
+    A group material gets the same protection as a bar material, so a project
+    with a group stays savable (schema 29).
+    """
+    element = "bar" if kind == "mild" else "tendon"
+    groups = st.session_state.get(rebar_table.GROUPS_KEY)
+    items = groups.get("items") if isinstance(groups, dict) else None
+    if not isinstance(items, list):
+        return ()
+    return tuple(
+        str(item["material_id"]).strip()
+        for item in items
+        if isinstance(item, dict)
+        and item.get("element") == element
+        and str(item.get("material_id") or "").strip()
+    )
+
+
 def _assigned_ids_in_base_table(table_key, column):
     """Return durable grid assignments before catalogues are normalized."""
 
@@ -1346,9 +1366,13 @@ def _ensure_material_catalog_state():
                 "bars_base", rebar_table.MATERIAL_ID
             ),
             *capacity_material_ids,
+            *_group_material_ids("mild"),
         ),
-        "prestress": _assigned_ids_in_base_table(
-            "tendons_base", rebar_table.MATERIAL_ID
+        "prestress": (
+            *_assigned_ids_in_base_table(
+                "tendons_base", rebar_table.MATERIAL_ID
+            ),
+            *_group_material_ids("prestress"),
         ),
     }
     for kind in mat_catalog.KINDS:
@@ -1404,6 +1428,7 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
                             locked=False):
     """Edit one catalogue and return it with the selected material preview law."""
     key = mat_catalog.catalog_key(kind)
+    protected_ids = (*protected_ids, *_group_material_ids(kind))
     reserved_ids = (*assigned_ids, *protected_ids)
     catalogue = mat_catalog.normalise_catalog(
         st.session_state[key], kind, reserved_ids=reserved_ids

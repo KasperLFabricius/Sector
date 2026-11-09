@@ -145,7 +145,8 @@ def test_new_project_saves_every_schema29_field_at_its_default():
     scalars = payload["scalars"]
     assert scalars[section_ids.REGIONS_KEY] == {
         "version": 1,
-        "items": [{"id": "R1", "template": None}],
+        "items": [{"id": "A1", "template": None, "next_corner": 5,
+                   "next_void_corner": 1}],
     }
     assert scalars[rebar.GROUPS_KEY] == {"version": 1, "next_id": 1, "items": []}
     assert scalars[project_io.AUTO_RECALCULATE_KEY] is False
@@ -235,7 +236,8 @@ def _schema29_project():
     scalars[section_ids.REGIONS_KEY] = {
         "version": 1,
         "items": [{
-            "id": "R1",
+            "id": "A1",
+            "next_corner": 12,
             "template": {
                 "kind": "Rectangle",
                 "parameters": {"b_mm": 200.0, "h_mm": 300, "flag": True},
@@ -317,7 +319,8 @@ def test_older_schema_loads_with_the_schema29_defaults(version, legacy_columns):
     tables, scalars, info = project_io.parse_project_with_info(text)
     assert info["source_schema_version"] == version
     assert info["target_schema_version"] == 29
-    assert info["migrated"] is True
+    # A 0.97.0 schema-28 file gets only defaults with no engineering effect.
+    assert info["migrated"] is (version < 28)
     assert list(tables["corners_base"].columns) == list(section_ids.COLUMNS)
     assert tables["corners_base"]["ID"].tolist() == ["C1", "C2", "C3", "C4"]
     for key in project_io.REINFORCEMENT_TABLE_KEYS:
@@ -328,7 +331,9 @@ def test_older_schema_loads_with_the_schema29_defaults(version, legacy_columns):
         assert set(frame[load_cases.LOCATION_TAG]) <= {""}
         assert set(frame[load_cases.DESIGN_SITUATION]) <= {"persistent"}
         assert set(frame[load_cases.STAGE]) <= {""}
-    assert scalars[section_ids.REGIONS_KEY] == section_ids.default_regions()
+    assert scalars[section_ids.REGIONS_KEY]["items"] == [{
+        "id": "A1", "template": None, "next_corner": 5, "next_void_corner": 1,
+    }]
     assert scalars[rebar.GROUPS_KEY] == project_io.default_reinforcement_groups()
     assert scalars[project_io.AUTO_RECALCULATE_KEY] is False
     message = " ".join(info["method_changes"])
@@ -397,7 +402,11 @@ def _regions(items):
         _regions([]),
         _regions([{"id": "R1"}, {"id": "R2"}]),
         _regions([{"id": "S1"}]),
-        _regions([{"id": "R1", "name": "deck"}]),
+        _regions([{"id": "R1"}]),
+        _regions([{"id": "A2"}]),
+        _regions([{"id": "A1", "next_corner": 0}]),
+        _regions([{"id": "A1", "next_void_corner": 2.0}]),
+        _regions([{"id": "A1", "name": "deck"}]),
         _regions([{"id": "R1", "template": {"kind": "Hexagon", "parameters": {}}}]),
         _regions([{"id": "R1", "template": {"kind": "Rectangle"}}]),
         _regions([{"id": "R1", "template": {
@@ -418,13 +427,33 @@ def test_invalid_region_lists_are_rejected(value):
         project_io._canonical_scalars({section_ids.REGIONS_KEY: value}, {})
 
 
-def test_a_region_without_a_template_field_gets_none():
+def test_a_region_without_optional_fields_gets_the_defaults():
     scalars = project_io._canonical_scalars(
-        {section_ids.REGIONS_KEY: _regions([{"id": "R2"}])}, {}
+        {section_ids.REGIONS_KEY: _regions([{"id": "A1"}])}, {}
     )
-    assert scalars[section_ids.REGIONS_KEY]["items"] == [
-        {"id": "R2", "template": None}
+    assert scalars[section_ids.REGIONS_KEY]["items"] == [{
+        "id": "A1", "template": None, "next_corner": 1, "next_void_corner": 1,
+    }]
+
+
+def test_a_deleted_highest_id_is_not_issued_again():
+    """D1-R1-02: the region counter keeps a deleted ID from being reused."""
+
+    tables, scalars = _reference()
+    corners = section_ids.normalise_geometry_table(
+        tables["corners_base"], "corners_base"
+    )
+    tables["corners_base"] = corners
+    tables, scalars = project_io.parse_project(project_io.dump_project(tables, scalars))
+    assert scalars[section_ids.REGIONS_KEY]["items"][0]["next_corner"] == 5
+    corners = tables["corners_base"].copy()
+    corners.loc[3, "ID"] = ""          # C4 deleted, a new row in its place
+    tables["corners_base"] = corners
+    saved = json.loads(project_io.dump_project(tables, scalars))
+    assert [row[0] for row in saved["tables"]["corners_base"]["rows"]] == [
+        "C1", "C2", "C3", "C5",
     ]
+    assert saved["scalars"][section_ids.REGIONS_KEY]["items"][0]["next_corner"] == 6
 
 
 def _group(**changes):
@@ -536,7 +565,7 @@ def test_void_separator_row_with_an_id_is_rejected():
         ["V4", None, None],
         ["V5", 50.0, 0.0], ["V6", 60.0, 0.0], ["V7", 50.0, 10.0],
     ]
-    with pytest.raises(project_io.ProjectInputError, match="separator"):
+    with pytest.raises(project_io.ProjectInputError, match="must have a blank ID"):
         project_io.parse_project(_rehash(payload))
 
 
@@ -566,7 +595,7 @@ def test_case_attributes_stay_out_of_records_and_row_signatures():
     assert load_cases.active_table(blank, PLASTIC).empty
 
 
-def test_schema29_fields_change_the_persistence_hashes_only():
+def test_schema29_fields_change_the_persistence_hash_only():
     tables, scalars = _reference()
     edited_tables, edited_scalars = _schema29_project()
     # The geometry, reinforcement and actions are the same.
@@ -580,7 +609,8 @@ def test_schema29_fields_change_the_persistence_hashes_only():
             }
         ]
         pd.testing.assert_frame_equal(left[engineering], right[engineering])
-    assert project_io.input_sha256(tables, scalars) != project_io.input_sha256(
+    # Decision 7: the schema-29 fields are outside input_sha256.
+    assert project_io.input_sha256(tables, scalars) == project_io.input_sha256(
         edited_tables, edited_scalars
     )
     assert project_io.persistence_sha256(
@@ -734,3 +764,34 @@ def test_attribute_and_table_helpers_fail_closed_for_unknown_input():
         load_cases.attribute_error("phase", "final")
     with pytest.raises(RuntimeError, match="unhandled project table"):
         project_io._normalise_table(None, "links_base")
+
+
+def test_app_load_of_a_0970_file_and_an_attribute_edit_keep_results_current(
+    _isolated_autosave,
+):
+    """D1-R1-03 and D1-R1-14: a 0.97.0 file asks for no review of converted
+    inputs, and an attribute edit does not change the engineering signature
+    that the staleness check compares."""
+
+    from streamlit.testing.v1 import AppTest
+
+    app = str(ROOT / "app" / "sector_app.py")
+    at = AppTest.from_file(app, default_timeout=180).run()
+    _upload(at, _older_text(28))
+    texts = " ".join(str(item.value) for item in (*at.success, *at.caption))
+    assert "Review the converted inputs" not in texts
+    assert "Project file updated" not in texts
+    signature = project_io.result_sha256(
+        at.session_state["_latest_inputs"]["signature"]
+    )
+    plastic = at.session_state[PLASTIC].copy(deep=True)
+    plastic[load_cases.LOCATION_TAG] = "Pier 3"
+    plastic[load_cases.DESIGN_SITUATION] = "transient"
+    at.session_state[PLASTIC] = plastic
+    at.session_state[f"_{PLASTIC}_editor_seed"] = plastic.copy(deep=True)
+    at.run()
+    assert not at.exception
+    assert set(at.session_state[PLASTIC][load_cases.LOCATION_TAG]) == {"Pier 3"}
+    assert project_io.result_sha256(
+        at.session_state["_latest_inputs"]["signature"]
+    ) == signature

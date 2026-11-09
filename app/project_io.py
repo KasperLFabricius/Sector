@@ -1087,7 +1087,7 @@ def _nonnegative_real(value, label: str) -> float:
     return 0.0 if number == 0.0 else number
 
 
-def _normalise_table(value, key: str) -> pd.DataFrame:
+def _normalise_table(value, key: str, *, next_number: int = 1) -> pd.DataFrame:
     if key in CASE_TABLE_KEYS:
         return load_cases.normalise_table(value, key)
     if key == fatigue_inputs.SPECTRUM_TABLE_KEY:
@@ -1096,7 +1096,7 @@ def _normalise_table(value, key: str) -> pd.DataFrame:
     if kind:
         return rebar_table.normalise_table(value, kind, with_group=True)
     if key in section_ids.GEOMETRY_TABLE_KEYS:
-        return section_ids.normalise_geometry_table(value, key)
+        return section_ids.normalise_geometry_table(value, key, next_number)
     raise RuntimeError(f"unhandled project table {key}")
 
 
@@ -1128,8 +1128,8 @@ def _validate_canonical_table(frame: pd.DataFrame, key: str) -> None:
             )
 
 
-def _table_to_obj(value, key: str) -> dict:
-    frame = _normalise_table(value, key)
+def _table_to_obj(value, key: str, *, next_number: int = 1) -> dict:
+    frame = _normalise_table(value, key, next_number=next_number)
     _validate_canonical_table(frame, key)
     columns = [str(column) for column in frame.columns]
     rows = [
@@ -1302,7 +1302,8 @@ def _validated_table_rows(
                 and record[section_ids.ID]
             ):
                 raise _invalid_input(
-                    f"{key} row {row_number}: a void separator row has no ID"
+                    f"{key} row {row_number}: a void separator row must have "
+                    "a blank ID"
                 )
         validated_rows.append(validated)
     return columns, validated_rows
@@ -1475,6 +1476,14 @@ def _canonical_scalars(
     payload.setdefault(section_ids.REGIONS_KEY, section_ids.default_regions())
     payload.setdefault(rebar_table.GROUPS_KEY, default_reinforcement_groups())
     payload.setdefault(AUTO_RECALCULATE_KEY, False)
+    region = payload[section_ids.REGIONS_KEY]["items"][0]
+    for key, field in section_ids.COUNTER_FIELDS.items():
+        frame = section_ids.normalise_geometry_table(
+            tables.get(key), key, region[field]
+        )
+        region[field] = max(
+            region[field], section_ids.next_number_after(frame, key)
+        )
     _validate_group_references(payload, tables)
     payload.setdefault(
         "torsion_design_basis",
@@ -1722,15 +1731,89 @@ def _canonical_scalars(
     return payload
 
 
+def _stored_corner_counters(scalars: Mapping) -> dict[str, int]:
+    """Return the corner counters that the project records, or 1."""
+
+    try:
+        region = section_ids.validate_regions(
+            _json_value(scalars.get(section_ids.REGIONS_KEY))
+        )["items"][0]
+    except (TypeError, ValueError):
+        # The scalar validation reports the invalid region list.
+        return {key: 1 for key in section_ids.COUNTER_FIELDS}
+    return {
+        key: region[field] for key, field in section_ids.COUNTER_FIELDS.items()
+    }
+
+
 def _canonical_inputs(tables: Mapping, scalars: Mapping) -> dict:
     _validate_geometry(tables)
+    counters = (
+        _stored_corner_counters(scalars)
+        if section_ids.REGIONS_KEY in scalars
+        else {key: 1 for key in section_ids.COUNTER_FIELDS}
+    )
     return {
         "tables": {
-            key: _table_to_obj(tables.get(key), key)
+            key: _table_to_obj(tables.get(key), key, next_number=counters.get(key, 1))
             for key in PROJECT_TABLE_KEYS
         },
         "scalars": _canonical_scalars(scalars, tables),
     }
+
+
+# Schema-29 fields with no engineering effect. They are outside the project
+# correlation hash input_sha256 (decision 7), so a file from Sector 0.97.0 keeps
+# its recorded correlation after a save with no edit. persistence_sha256 covers
+# them.
+SCHEMA29_SCALAR_KEYS = (
+    section_ids.REGIONS_KEY,
+    rebar_table.GROUPS_KEY,
+    AUTO_RECALCULATE_KEY,
+)
+
+
+def _schema29_columns(key: str) -> frozenset[str]:
+    if key in section_ids.GEOMETRY_TABLE_KEYS:
+        return frozenset({section_ids.ID})
+    if key in REINFORCEMENT_TABLE_KEYS:
+        return frozenset({rebar_table.GROUP_ID})
+    if key in CASE_TABLE_KEYS:
+        return frozenset(load_cases.ATTRIBUTE_COLUMNS)
+    return frozenset()
+
+
+def _correlation_content(content: Mapping) -> dict:
+    """Return the inputs without the schema-29 fields, for ``input_sha256``.
+
+    A malformed table stays as it is, so that the validation reports it.
+    """
+
+    tables = {}
+    for key, table in dict(content.get("tables", {})).items():
+        drop = _schema29_columns(key)
+        columns = table.get("columns") if isinstance(table, Mapping) else None
+        rows = table.get("rows") if isinstance(table, Mapping) else None
+        if (
+            not drop
+            or type(columns) is not list
+            or type(rows) is not list
+            or any(type(row) is not list or len(row) != len(columns) for row in rows)
+        ):
+            tables[key] = table
+            continue
+        keep = [i for i, column in enumerate(columns) if column not in drop]
+        tables[key] = {
+            **table,
+            "columns": [columns[i] for i in keep],
+            "rows": [[row[i] for i in keep] for row in rows],
+        }
+    scalars = {
+        key: value
+        for key, value in dict(content.get("scalars", {})).items()
+        if key not in SCHEMA29_SCALAR_KEYS
+    }
+    return {"tables": tables, "scalars": scalars}
 
 
 def _canonical_presentation(scalars: Mapping) -> dict:
@@ -1775,8 +1858,11 @@ def _input_digest(content: Mapping) -> str:
 
 
 def input_sha256(tables: Mapping, scalars: Mapping) -> str:
-    """Hash the complete canonical schema input block for project correlation."""
-    return _input_digest(_canonical_inputs(tables, scalars))
+    """Hash the canonical input block for project correlation.
+
+    The schema-29 fields with no engineering effect are outside this hash.
+    """
+    return _input_digest(_correlation_content(_canonical_inputs(tables, scalars)))
 
 
 def persistence_sha256(tables: Mapping, scalars: Mapping) -> str:
@@ -2150,7 +2236,7 @@ def dump_project(
 ) -> str:
     """Serialize one current-schema project."""
     content = _canonical_inputs(tables, scalars)
-    digest = _input_digest(content)
+    digest = _input_digest(_correlation_content(content))
     app_version = _validated_recorded_version(
         app_version or sector_version,
         "project sector_version",
@@ -2272,7 +2358,12 @@ def project_provenance(text: str) -> dict:
         "scalars": data["scalars"],
     }
     try:
-        actual = _input_digest(content)
+        actual = _input_digest(
+            _correlation_content(content) if data["version"] == VERSION else content
+        )
+        # A schema-29 file records the digest without the schema-29 fields. A
+        # digest of the complete input block is also a valid file identity.
+        complete = _input_digest(content)
     except (TypeError, ValueError) as exc:
         raise ProjectInputError(
             "project inputs are not canonical JSON",
@@ -2297,7 +2388,7 @@ def project_provenance(text: str) -> dict:
         "source_revision": provenance.get("source_revision"),
         "saved_at_utc": provenance.get("saved_at_utc"),
         "input_sha256": recorded,
-        "input_hash_valid": bool(recorded) and recorded == actual,
+        "input_hash_valid": bool(recorded) and recorded in {actual, complete},
         "results_included": False,
         "calculation": calculation,
     }
@@ -2625,8 +2716,15 @@ def parse_project_with_info(text: str):
     info = {
         "source_schema_version": source_version,
         "target_schema_version": VERSION,
+        # A schema-28 file from Sector 0.97.0 gets only the schema-29 defaults,
+        # which have no engineering effect and no editor yet, so its load is
+        # not a conversion that the engineer must review.
         "migrated": (
-            source_version != VERSION or heightened_contract_migrated
+            (
+                source_version != VERSION
+                and _schema28_methods_apply(source_version, provenance)
+            )
+            or heightened_contract_migrated
         ),
         "migration_warnings": migration_warnings,
         "method_changes": method_changes,

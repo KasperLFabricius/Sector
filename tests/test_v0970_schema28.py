@@ -281,8 +281,16 @@ def _development_schema28_text(app_version, *, tendons=None, **scalar_changes) -
     payload = json.loads(
         project_io.dump_project(tables, scalars, app_version=app_version)
     )
-    # Schema 29 is current since Sector 0.97.1; these files are schema 28.
+    # Schema 29 is current since Sector 0.97.1; these files are schema 28,
+    # without the schema-29 columns and scalars.
     payload["version"] = project_io.SCHEMA28_VERSION
+    for key in project_io.SCHEMA29_SCALAR_KEYS:
+        payload["scalars"].pop(key)
+    for key, table in payload["tables"].items():
+        legacy = list(project_io._schema28_table_columns(key))
+        keep = [table["columns"].index(column) for column in legacy]
+        table["columns"] = legacy
+        table["rows"] = [[row[i] for i in keep] for row in table["rows"]]
     payload["provenance"]["input_sha256"] = project_io._input_digest({
         "tables": payload["tables"],
         "scalars": payload["scalars"],
