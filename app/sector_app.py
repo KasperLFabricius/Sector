@@ -9235,14 +9235,20 @@ def _apply_bonded_prestrain(inp):
     * ``tendon_materials_uls`` (plastic): eps_c,p at ``Es/Ecm`` with the entered
       short-term modulus ``Ec`` (``Ecm``). The creep strain under prestress does
       not recover in a short-term load to failure.
+    * ``tendon_stage_one_stress`` (Stage I cracking check): the locked-in stress
+      ``Ep*eps_p(0)`` (kN/m2) of each tendon from the uncracked section at
+      ``nl``, so that the Stage I state also gives ``Ep*IS`` under prestress
+      alone.
 
     eps_p(0) is negative for a lightly stressed tendon where prestress alone
     elongates the concrete by more than ``IS``. ``tendon_effective_prestrain``
     keeps the entered values for the effective prestress force. When the bond
     state of an active model cannot be established, the input is blocked with a
-    message (fail closed). When only the long-term state fails and the elastic
+    message (fail closed). The message names the tendon, its effective stress
+    and the concrete strain at its level when the correction of the locked-in
+    stress does not converge. When only a long-term state fails and the elastic
     and fatigue models are off, the plastic model continues and
-    ``tendon_bond_elastic_unavailable`` marks the missing state.
+    ``tendon_bond_elastic_unavailable`` marks a missing Stage II state.
     """
     tendons = list(inp.get("tendons") or [])
     materials = list(inp.get("tendon_materials") or [])
@@ -9282,8 +9288,9 @@ def _apply_bonded_prestrain(inp):
         )
         ratios = (
             ("tendon_materials_uls",
-             STEEL_REFERENCE_MODULUS / (float(inp["conc_Ec"]) * 1000.0)),
-            ("tendon_materials", float(inp["nl"])),
+             STEEL_REFERENCE_MODULUS / (float(inp["conc_Ec"]) * 1000.0), True),
+            ("tendon_materials", float(inp["nl"]), True),
+            ("tendon_stage_one_stress", float(inp["nl"]), False),
         )
     except (
         AttributeError, KeyError, TypeError, ValueError, OverflowError,
@@ -9291,24 +9298,51 @@ def _apply_bonded_prestrain(inp):
     ):
         inp["material_error"] = _PRESTRESS_BOND_BLOCKER
         return
+    bars_count = len(bar_laws)
+
+    def _bond_blocker(exc, ratio):
+        # A correction that does not converge names its tendon; the concrete
+        # strain is the reference stress Ec*eps_c divided by Ec = Es/ratio.
+        index = getattr(exc, "element", None)
+        if index is None or not bars_count <= index < bars_count + len(materials):
+            return _PRESTRESS_BOND_BLOCKER
+        ids = [item.get("id") for item in inp.get("tendon_elements") or []]
+        name = (ids[index - bars_count] if len(ids) == len(materials)
+                else str(index - bars_count + 1))
+        strain = float(exc.concrete_stress) * ratio / (
+            STEEL_REFERENCE_MODULUS * 1000.0
+        )
+        return EngineerMessage(
+            _PRESTRESS_BOND_BLOCKER.code,
+            "Sector cannot establish the bond strain difference of tendon "
+            f"{name}. Effective stress Ep IS = "
+            f"{float(exc.effective_stress) / 1000.0:.1f} MPa. Concrete strain "
+            "at the tendon under prestress alone (tension positive) = "
+            f"{strain * 1000.0:.3f} {_PERMILLE}. Check the prestrain IS and "
+            "the tendon positions",
+        )
+
     laws = {}
-    for key, ratio in ratios:
+    for key, ratio, cracked in ratios:
         try:
             locked = elastic_core.bonded_prestress_stress(
-                sec, ratio, effective, n_mult=n_mult, tendon_mask=tendon_mask
+                sec, ratio, effective, n_mult=n_mult, tendon_mask=tendon_mask,
+                cracked=cracked,
             )
             laws[key] = [
                 item.with_bond_strain(float(stress) / 1000.0 / float(item.Es))
-                for item, stress in zip(materials, locked[len(bar_laws):])
+                if cracked else float(stress)
+                for item, stress in zip(materials, locked[bars_count:])
             ]
         except (
             AttributeError, TypeError, ValueError, OverflowError,
             ZeroDivisionError,
-        ):
-            if key == "tendon_materials" and not elastic_needed:
-                inp["tendon_bond_elastic_unavailable"] = True
+        ) as exc:
+            if key != "tendon_materials_uls" and not elastic_needed:
+                if cracked:
+                    inp["tendon_bond_elastic_unavailable"] = True
                 continue
-            inp["material_error"] = _PRESTRESS_BOND_BLOCKER
+            inp["material_error"] = _bond_blocker(exc, ratio)
             return
     inp.update(laws)
 
@@ -10334,6 +10368,14 @@ def _run_single_analysis(
         # cr_l provides the long-term cracked state and the sustained cracking
         # factor; its own crack width is unused (the crack widths are computed
         # below per system), so the coarse flag here is immaterial.
+        # The Stage I solves use the locked-in stress of the uncracked section
+        # (_apply_bonded_prestrain), so that prestress alone gives Ep*IS also in
+        # Stage I. An input without that state keeps the Stage II stress.
+        stage_one = inp.get("tendon_stage_one_stress")
+        stage_one_stress = (
+            None if prestress_stress is None or stage_one is None
+            else np.asarray([0.0] * len(inp["bars"]) + list(stage_one), dtype=float)
+        )
         cr_l = analyse_cracking(
             sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             fctm=inp["sls_fctm"], Es=[material.Es for material in all_laws],
@@ -10347,7 +10389,8 @@ def _run_single_analysis(
             physical_geometry_reason=physical_geometry_reason,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
             edition=ordinary_route.edition,
-            n_mult=n_mult, prestress_stress=prestress_stress)
+            n_mult=n_mult, prestress_stress=prestress_stress,
+            stage_one_prestress_stress=stage_one_stress)
         sls_converged = (
             r.converged
             and cr_l.uncracked.converged
@@ -10360,7 +10403,8 @@ def _run_single_analysis(
         crk_t, lam_t, sig_t = combined_cracking(
             sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             p_el_s, inp["Mx_el_s"], inp["My_el_s"], inp["ns"],
-            fctm=inp["sls_fctm"], n_mult=n_mult, prestress_stress=prestress_stress)
+            fctm=inp["sls_fctm"], n_mult=n_mult, prestress_stress=prestress_stress,
+            stage_one_prestress_stress=stage_one_stress)
         # Governing case. Its cracked state (for the reported cracked properties) is
         # the combined creep total state (r.short_term) when the peak strictly
         # governs, or the long-term cracked state when the sustained action governs.

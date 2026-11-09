@@ -2018,6 +2018,7 @@ def analyse_cracking(
     prestress_stress: Optional[np.ndarray] = None,
     reinforcement_types: Optional[Sequence[str]] = None,
     bond_ratio_xi: Optional[Union[float, Sequence[float]]] = None,
+    stage_one_prestress_stress: Optional[np.ndarray] = None,
 ) -> CrackingResult:
     """Serviceability analysis of the section under one action combination.
 
@@ -2067,6 +2068,16 @@ def analyse_cracking(
         Per-element ``mild``/``prestress`` classification and the 2023 tendon
         bond-strength ratio ``xi`` used to derive ``xi1``. If no types are
         supplied, all elements are treated as mild reinforcement.
+    n_mult, prestress_stress:
+        Per-element modular-ratio multiplier and locked-in tendon stress
+        ``Ep*eps_p(0)`` of the cracked (Stage II) section (see
+        :func:`sector.elastic.solve_elastic_combined`).
+    stage_one_prestress_stress:
+        Locked-in tendon stress of the uncracked (Stage I) solves, from
+        :func:`sector.elastic.bonded_prestress_stress` with ``cracked=False``,
+        so that under prestress alone the Stage I tendon stress is also
+        ``Ep*IS``. ``None`` uses ``prestress_stress``. It requires
+        ``prestress_stress``.
 
     Returns
     -------
@@ -2075,10 +2086,11 @@ def analyse_cracking(
         solves, the mean tension-stiffened strain plane, and the crack width.
     """
     section.require_valid_geometry()
+    stage_one = _stage_one_prestress(prestress_stress, stage_one_prestress_stress)
     uncr = solve_elastic_uncracked(section, P, Mx, My, n, n_mult=n_mult,
-                                   prestress_stress=prestress_stress)
+                                   prestress_stress=stage_one)
     sigma_ct = uncr.max_concrete_tension / _KPA_PER_MPA  # MPa, peak total tension
-    if prestress_stress is None:
+    if stage_one is None:
         lam = cracking_factor(sigma_ct, fctm)
     else:
         # The tendon prestress is a fixed (permanent) action; only the external
@@ -2129,8 +2141,20 @@ def analyse_cracking(
     )
 
 
+def _stage_one_prestress(prestress_stress, stage_one_prestress_stress):
+    """Locked-in tendon stress of the Stage I solves (see analyse_cracking)."""
+    if stage_one_prestress_stress is None:
+        return prestress_stress
+    if prestress_stress is None:
+        raise ValueError(
+            "a Stage I locked-in tendon stress requires the Stage II stress"
+        )
+    return stage_one_prestress_stress
+
+
 def combined_cracking(section, P_l, Mx_l, My_l, n_l, P_s, Mx_s, My_s, n_s, *,
-                      fctm, n_mult=None, prestress_stress=None):
+                      fctm, n_mult=None, prestress_stress=None,
+                      stage_one_prestress_stress=None):
     """Cracking check under the combined creep (peak instantaneous) state.
 
     The peak uncracked concrete tension is the long-term action at the long-term
@@ -2141,9 +2165,14 @@ def combined_cracking(section, P_l, Mx_l, My_l, n_l, P_s, Mx_s, My_s, n_s, *,
     at a single ratio). Returns ``(cracked, lambda_cr, sigma_ct)``: ``sigma_ct`` is
     the peak concrete tension (MPa) and ``lambda_cr = f_ctm/sigma_ct`` (or the
     decompression factor with prestress), mirroring :func:`analyse_cracking`.
+    All solves are uncracked, so the prestress is ``stage_one_prestress_stress``
+    when it is given (see :func:`analyse_cracking`).
     """
     section.require_valid_geometry()
     verts = section.concrete_vertices()
+    prestress_stress = _stage_one_prestress(
+        prestress_stress, stage_one_prestress_stress
+    )
 
     def _sig(P, Mx, My, n, pre):
         u = solve_elastic_uncracked(section, P, Mx, My, n, n_mult=n_mult,
