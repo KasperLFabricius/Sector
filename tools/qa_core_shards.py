@@ -230,13 +230,23 @@ def suite_command(suite):
     return [*branch["tests"], *(f"--cov={target}" for target in branch["targets"]), "--cov-branch"]
 
 
-def posix_descendants(pid):
+def process_listing():
+    """Return one "pid ppid" line for each process of the machine."""
+    if os.name == "nt":
+        command = ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                   "Get-CimInstance Win32_Process | ForEach-Object { \"$($_.ProcessId) $($_.ParentProcessId)\" }"]
+    else:
+        command = ["ps", "-A", "-o", "pid=,ppid="]
+    return subprocess.run(command, capture_output=True, text=True, timeout=120, check=False).stdout
+
+
+def descendants(pid):
     """Return every process below ``pid`` by parent links, also in other sessions.
 
-    The shared image exporter calls ``os.setsid()``, so it and its browser leave
-    the process group of the phase, but their parent links stay.
+    The shared image exporter calls ``os.setsid()`` on POSIX, so it and its
+    browser leave the process group of the phase, but their parent links stay.
     """
-    listing = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, check=False).stdout
+    listing = process_listing()
     children = {}
     for line in listing.splitlines():
         fields = line.split()
@@ -245,9 +255,31 @@ def posix_descendants(pid):
     found, pending = [], [pid]
     while pending:
         for child in children.get(pending.pop(), ()):
-            if child not in found:
+            if child not in found and child != pid:
                 found.append(child)
                 pending.append(child)
+    return found
+
+
+def stop_descendants(pid):
+    """Stop every process below ``pid`` while its parent links exist.
+
+    The real-image test guard calls this before it stops its own process, so
+    that a hung browser or exporter does not survive into the next phase.
+    """
+    found = descendants(pid)
+    if os.name == "nt":
+        for child in found:
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(child)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=60, check=False)
+        return found
+    import signal
+
+    for child in found:
+        try:
+            os.kill(child, signal.SIGKILL)
+        except OSError:
+            pass
     return found
 
 
@@ -261,9 +293,9 @@ def stop_process_tree(process):
         import signal
 
         # Collect the tree before the kill: an orphan loses its parent link.
-        descendants = posix_descendants(process.pid)
+        below = descendants(process.pid)
         groups = {process.pid}
-        for pid in descendants:
+        for pid in below:
             try:
                 groups.add(os.getpgid(pid))
             except OSError:
@@ -274,7 +306,7 @@ def stop_process_tree(process):
                 os.killpg(group, signal.SIGKILL)
             except OSError:
                 pass
-        for pid in descendants:
+        for pid in below:
             try:
                 os.kill(pid, signal.SIGKILL)
             except OSError:

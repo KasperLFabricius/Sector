@@ -129,7 +129,14 @@ class RealImageTimeLimit:
         try:
             self._report()
         finally:
-            self._stop(HANG_EXIT_CODE)
+            try:
+                # Stop the hung browser or exporter while its parent links
+                # exist: os._exit skips their normal shutdown.
+                from tools.qa_core_shards import stop_descendants
+
+                stop_descendants(os.getpid())
+            finally:
+                self._stop(HANG_EXIT_CODE)
 
     def _report(self) -> None:
         # Show the dump on the console: pytest captures stderr during a test.

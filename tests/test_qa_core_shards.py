@@ -409,11 +409,21 @@ def test_real_phase_stop_reaches_a_descendant_in_its_own_session(tmp_path):
     assert not _process_exists(pid)
 
 
-def test_posix_descendants_follow_parent_links(monkeypatch):
-    listing = " 10  1\n 11 10\n 12 11\n 13  1\n 14 12\n"
-    monkeypatch.setattr(shards.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(stdout=listing))
-    assert shards.posix_descendants(10) == [11, 12, 14]
-    assert shards.posix_descendants(13) == []
+def test_descendants_follow_parent_links(monkeypatch):
+    # The Windows listing gives "pid ppid" lines too; process 0 is its own parent there.
+    listing = " 0 0\n 10  1\n 11 10\n 12 11\n 13  1\n 14 12\n"
+    monkeypatch.setattr(shards, "process_listing", lambda: listing)
+    assert shards.descendants(10) == [11, 12, 14]
+    assert shards.descendants(13) == []
+    assert shards.descendants(0) == []
+
+
+def test_process_listing_contains_this_process_and_its_parent():
+    import os
+
+    rows = {tuple(map(int, line.split())) for line in shards.process_listing().splitlines()
+            if len(line.split()) == 2 and all(part.isdigit() for part in line.split())}
+    assert (os.getpid(), os.getppid()) in rows
 
 
 def test_real_phase_stopped_at_the_hang_limit_fails_the_merge_by_name(evidence):

@@ -119,25 +119,37 @@ def test_hung_test_stops_a_real_pytest_process_with_its_stacks_on_the_console(tm
     (tmp_path / "conftest.py").write_text(
         "import sys\n"
         f"sys.path.insert(0, {str(tests)!r})\n"
+        f"sys.path.insert(0, {str(tests.parent)!r})\n"
         "import pytest\n"
         "from real_image_guard import RealImageTimeLimit\n\n"
         "@pytest.fixture(autouse=True)\n"
         "def _limit(request):\n"
-        "    with RealImageTimeLimit(request.node.nodeid, request.config, limit=2.0):\n"
+        "    with RealImageTimeLimit(request.node.nodeid, request.config, limit=4.0):\n"
         "        yield\n", encoding="utf-8")
+    browser = tmp_path / "browser.pid"
     (tmp_path / "test_hang.py").write_text(
-        "import threading\n\n"
+        "import pathlib, subprocess, sys, threading\n\n"
         "def test_passes():\n    pass\n\n"
         "def test_waits_in_a_join():\n"
+        "    # A browser-like child process that the hung test leaves behind.\n"
+        "    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(120)'])\n"
+        f"    pathlib.Path({str(browser)!r}).write_text(str(child.pid))\n"
         "    worker = threading.Thread(target=threading.Event().wait)\n"
         "    worker.daemon = True\n    worker.start()\n    worker.join()\n", encoding="utf-8")
     started = time.monotonic()
     result = subprocess.run([sys.executable, "-m", "pytest", "test_hang.py", "-q", "-p", "no:cacheprovider"],
-                            cwd=tmp_path, capture_output=True, text=True, timeout=120, check=False)
-    assert result.returncode == guard.HANG_EXIT_CODE and time.monotonic() - started < 60
+                            cwd=tmp_path, capture_output=True, text=True, timeout=180, check=False)
+    assert result.returncode == guard.HANG_EXIT_CODE and time.monotonic() - started < 120
     output = result.stdout + result.stderr
-    assert "REAL-IMAGE HANG GUARD: test_hang.py::test_waits_in_a_join did not finish in 2 s" in output
+    assert "REAL-IMAGE HANG GUARD: test_hang.py::test_waits_in_a_join did not finish in 4 s" in output
     assert "Thread MainThread:" in output and "worker.join()" in output
+    from test_qa_core_shards import _process_exists
+
+    pid = int(browser.read_text())
+    deadline = time.monotonic() + 15
+    while _process_exists(pid) and time.monotonic() < deadline:
+        time.sleep(0.5)
+    assert not _process_exists(pid), "the child process of the hung test survived the guard"
 
 
 def test_test_time_limit_is_cancelled_when_the_test_ends():
