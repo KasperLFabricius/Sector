@@ -288,7 +288,9 @@ _TABLE_METHOD_DEPENDENCIES = MappingProxyType({
 })
 
 
-CASE_ATTRIBUTE_DEPENDENCY = "No calculation. Sector keeps the value with the case"
+CASE_ATTRIBUTE_DEPENDENCY = (
+    "No calculation uses this value. Sector saves it with the case"
+)
 
 
 def validation_rule(definition: FieldDefinition) -> str:
@@ -314,7 +316,7 @@ def validation_rule(definition: FieldDefinition) -> str:
     if definition.key == "location_tag":
         return "Optional. One line of at most 60 characters."
     if definition.key == "design_situation":
-        return "persistent, transient, accidental or seismic."
+        return "One of: persistent, transient, accidental, seismic."
     if definition.key == "stage":
         return 'Blank or "final".'
     if definition.unit != "-" or definition.math_symbol != "-":

@@ -13,7 +13,7 @@ from collections.abc import Mapping
 import pandas as pd
 from input_stage_host import stateful_input_tabs
 
-from app import action_csv, input_issues, load_cases
+from app import action_csv, fatigue_inputs, input_issues, load_cases
 from app.table_field_definitions import field_definition
 
 FAMILY_KEY = "_actions_family"
@@ -185,7 +185,7 @@ def edit_cases(tables, authorities, *, table, operation, row=None,
         errors = load_cases.validation_errors(result[load_cases.PLASTIC_TABLE_KEY],
                                              result[load_cases.ELASTIC_TABLE_KEY])
         if errors:
-            raise ValueError("; ".join(str(error) for error in errors))
+            raise ValueError(" ".join(f"{error.text}." for error in errors))
         selected = len(frame)
         for name in added[load_cases.NAME]:
             mapping.pop(str(name), None)
@@ -245,19 +245,30 @@ def consume_command(state, reseed):
 CSV_FILE_VERSION_KEY = "_actions_csv_file_version"
 
 
-def import_cases(tables, authorities, *, text, mode, expected_digest=None):
-    """Return both case tables, declarations and counts for one CSV v1 import."""
+def _fatigue_bin_names(state):
+    frame = fatigue_inputs.active_spectrum_table(state.get(fatigue_inputs.SPECTRUM_TABLE_KEY))
+    return tuple(str(name) for name in frame["name"]) if "name" in frame else ()
+
+
+def import_cases(tables, authorities, *, text, mode, expected_digest=None, reserved_names=()):
+    """Return tables, declarations, counts and the imported cases of one CSV v1 import."""
     if expected_digest is not None and table_digest(tables) != expected_digest:
         raise ValueError("The action tables changed. Review them and repeat the command.")
-    return action_csv.import_cases(tables, authorities, text=text, mode=mode)
+    return action_csv.import_cases(tables, authorities, text=text, mode=mode,
+                                   reserved_names=reserved_names)
+
+
+def _cases_text(count, limit_state):
+    return f"{count} {limit_state} case" + ("" if count == 1 else "s")
 
 
 def _consume_import(state, reseed, command):
     try:
-        result, mapping, counts = import_cases(
+        result, mapping, counts, _imported = import_cases(
             {key: state.get(key) for key in load_cases.CASE_TABLE_KEYS},
             state.get(AUTHORITY_KEY), text=command.get("text", ""),
             mode=command.get("mode"), expected_digest=command.get("expected_digest"),
+            reserved_names=_fatigue_bin_names(state),
         )
     except (ValueError, csv.Error) as exc:
         state[NOTICE_KEY] = (False, str(exc))
@@ -276,10 +287,10 @@ def _consume_import(state, reseed, command):
     state.pop(FOCUS_KEY, None)
     # A new uploader key clears the imported file from the panel.
     state[CSV_FILE_VERSION_KEY] = int(state.get(CSV_FILE_VERSION_KEY, 0)) + 1
-    uls = counts[load_cases.PLASTIC_TABLE_KEY]
-    sls = counts[load_cases.ELASTIC_TABLE_KEY]
+    uls = _cases_text(counts[load_cases.PLASTIC_TABLE_KEY], "ULS")
+    sls = _cases_text(counts[load_cases.ELASTIC_TABLE_KEY], "SLS")
     state[NOTICE_KEY] = (
-        True, f"Imported {uls} ULS and {sls} SLS cases. Review the cases and "
+        True, f"Sector imported {uls} and {sls}. Review the cases and "
               "the torsion declarations before calculation.")
 
 
@@ -372,8 +383,9 @@ def conventions(host):
         "**Axial force:** positive N is tension; negative N is compression.",
         "**Bending:** positive Mx compresses the top face and positive My compresses the right face for centred pure bending.",
         "**Moment reference:** Mx and My act about the x and y axes through the section origin O (0, 0). "
-        "For moments about a centroid C at (xc, yc), enter Mx = Mx,C - N yc and My = My,C - N xc, "
-        "with N positive in tension.",
+        "For moments about a centroid C at (xc, yc), enter Mx = Mx,C - N yc and My = My,C - N xc.",
+        "**Units of the conversion:** N in kN, positive in tension. xc and yc in m, that is the "
+        "section coordinates in mm divided by 1000. Moments in kNm.",
         "**Shear:** Vx pairs with My; Vy pairs with Mx. Negative-coordinate faces are left for Vx and bottom for Vy. "
         "Positive-coordinate faces are right for Vx and top for Vy. Automatic uses the adjusted moment and checks both faces when it is effectively zero.",
         "**Torsion:** retain the source model's documented signed torsion action. The current resistance check uses its magnitude.",
@@ -404,7 +416,7 @@ def sign_convention(host):
                       config={"displayModeBar": False, "staticPlot": True},
                       key="_actions_sign_figure")
     host.caption(
-        "Positive actions on the section as drawn. Moments act about the origin O. "
+        "The figure shows the positive actions on the section as drawn. Moments act about the origin O. "
         "The bending panels show centred pure bending, with the neutral axis dashed. "
         "Sector keeps the sign of T and uses |T| in the torsion check."
     )
@@ -439,7 +451,7 @@ def csv_panel(host, *, state, on_change=None):
     version = int(state.get(CSV_FILE_VERSION_KEY, 0))
     upload = panel.file_uploader(
         "CSV v1 file to import", type=["csv", "txt"], key=f"_actions_csv_file::{version}",
-        help="Comma, semicolon or tab delimiters. Numeric cells accept a dot or comma decimal.")
+        help="The file can use comma, semicolon or tab delimiters. Numeric cells accept a dot or comma decimal.")
     if upload is None:
         return
     mode_label = panel.radio(
@@ -450,20 +462,20 @@ def csv_panel(host, *, state, on_change=None):
     digest = table_digest(tables)
     try:
         text = action_csv.decode(upload.getvalue())
-        preview = action_csv.parse(text)
-        import_cases(tables, state.get(AUTHORITY_KEY), text=text, mode=mode,
-                     expected_digest=digest)
+        _result, _mapping, counts, preview = import_cases(
+            tables, state.get(AUTHORITY_KEY), text=text, mode=mode,
+            expected_digest=digest, reserved_names=_fatigue_bin_names(state))
     except (ValueError, csv.Error) as exc:
         panel.error(str(exc))
         return
-    counts = {key: len(preview[key]) for key in load_cases.CASE_TABLE_KEYS}
     for family, key in TABLES.items():
         if counts[key]:
             panel.markdown(f"**{family} cases ({action_csv.TABLE_LIMIT_STATES[key]})**")
             panel.dataframe(load_cases.editor_table(preview[key], key), hide_index=True, width="stretch")
-    uls, sls = counts[load_cases.PLASTIC_TABLE_KEY], counts[load_cases.ELASTIC_TABLE_KEY]
+    uls = _cases_text(counts[load_cases.PLASTIC_TABLE_KEY], "ULS")
+    sls = _cases_text(counts[load_cases.ELASTIC_TABLE_KEY], "SLS")
     panel.button(
-        f"Import {uls} ULS and {sls} SLS cases", key="_actions_csv_apply",
+        f"Import {uls} and {sls}", key="_actions_csv_apply",
         help="Apply this validated preview. Review the torsion declarations after the import.",
         on_click=queue_command, args=(state, {
             "operation": "import", "text": text, "mode": mode, "expected_digest": digest,

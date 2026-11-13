@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import functools
 import io
 import re
 from collections.abc import Mapping
@@ -56,6 +57,7 @@ COLUMNS = (
 )
 MAX_BYTES = 2_000_000
 MAX_MESSAGES = 5
+MAX_CASE_ROWS = 5000
 _FLAG_TOKENS = {"", "0", "1", "true", "false", "yes", "no", "on", "off"}
 NO_VERSION_MESSAGE = (
     f'Line 1 must be the version line "{VERSION_LINE}". To add a block '
@@ -156,11 +158,20 @@ def template(*, delimiter: str = ",") -> str:
                       delimiter=delimiter)
 
 
+_UTF16_BOMS = (bytes((0xFF, 0xFE)), bytes((0xFE, 0xFF)))
+_SAVE_AS_UTF8 = "Save the file as CSV UTF-8 and import it again."
+
+
 def decode(data: bytes) -> str:
-    """Decode an uploaded file: UTF-8 (with or without BOM), else Windows-1252."""
+    """Decode an uploaded file: UTF-8 (with or without BOM), else Windows-1252.
+
+    A UTF-16 file (for example Excel "Unicode text") gives one message.
+    """
 
     if len(data) > MAX_BYTES:
         raise ValueError("The file is too large. Sector reads at most 2 MB.")
+    if data.startswith(_UTF16_BOMS) or bytes(1) in data:
+        raise ValueError("The file uses UTF-16 or contains null characters. " + _SAVE_AS_UTF8)
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -168,15 +179,18 @@ def decode(data: bytes) -> str:
     try:
         return data.decode("cp1252")
     except UnicodeDecodeError as exc:
-        raise ValueError("Save the file as CSV UTF-8 and import it again.") from exc
+        raise ValueError(_SAVE_AS_UTF8) from exc
+
+
+_VERSION_MARK_RE = re.compile(r'"?#\s*sector-actions-csv\b', re.IGNORECASE)
 
 
 def is_versioned(text: str) -> bool:
-    """Whether the first nonblank line starts with a version mark."""
+    """Whether the first nonblank line starts with the CSV version mark."""
 
     for line in str(text).lstrip(_BOM).splitlines():
         if line.strip():
-            return line.strip().lstrip('"').startswith("#")
+            return _VERSION_MARK_RE.match(line.strip()) is not None
     return False
 
 
@@ -195,14 +209,34 @@ def _fail(messages: list[str]) -> None:
     if messages:
         shown = messages[:MAX_MESSAGES]
         if len(messages) > MAX_MESSAGES:
-            shown.append(f"{len(messages) - MAX_MESSAGES} more issues")
-        raise ValueError("; ".join(shown))
+            shown.append(f"The file has {len(messages) - MAX_MESSAGES} more issues.")
+        raise ValueError(" ".join(shown))
 
 
-def _width(cells: list[str], width: int, line: int, messages: list[str]):
+def _width(cells: list[str], width: int, raw_width: int, line: int,
+           messages: list[str]):
+    """Return the cells of one row, or ``None`` with a message.
+
+    A spreadsheet pads the heading row and the data rows to one width, so the
+    raw width of the heading row (with its blank cells at the end) is the
+    limit. A row with more cells (for example an unquoted comma decimal) is
+    rejected, so that no value moves to the next column. Cells under a blank
+    heading must be blank.
+    """
+
     cells = list(cells)
-    while len(cells) > width and not cells[-1]:
-        cells.pop()
+    if len(cells) > raw_width:
+        messages.append(
+            f"Line {line} has {len(cells)} cells. The heading row has "
+            f"{raw_width}. Put each comma decimal in quotes."
+        )
+        return None
+    if any(cells[width:]):
+        messages.append(
+            f"Line {line} has a value in a column without a heading."
+        )
+        return None
+    cells = cells[:width]
     if len(cells) != width:
         messages.append(
             f"Line {line} has {len(cells)} cells. The heading row has {width}."
@@ -211,21 +245,35 @@ def _width(cells: list[str], width: int, line: int, messages: list[str]):
     return cells
 
 
-def parse(text: str) -> dict[str, pd.DataFrame]:
-    """Read a CSV v1 text into the canonical Plastic and Elastic tables.
+def _records(text: str, delimiter: str) -> list[tuple[int, list[str]]]:
+    """Return the nonblank records with the first physical line of each."""
 
-    Raise ``ValueError`` with line numbers when the file form or a value is
-    not valid. No partial result is returned.
-    """
-
-    text = str(text).lstrip(_BOM)
-    delimiter = _delimiter(text.splitlines())
     reader = csv.reader(io.StringIO(text), delimiter=delimiter, strict=True)
     rows = []
-    for cells in reader:
+    start = 1
+    while True:
+        try:
+            cells = next(reader)
+        except StopIteration:
+            return rows
+        except csv.Error as exc:
+            reason = str(exc)
+            if "field larger than field limit" in reason:
+                detail = "A cell has more than 131072 characters."
+            else:
+                detail = ("A quoted cell is not closed correctly. Put each quoted "
+                          "value between two quote characters.")
+            raise ValueError(f"Line {start}: Sector cannot read this line. {detail}") from exc
         cells = [cell.strip() for cell in cells]
         if any(cells):
-            rows.append((reader.line_num, cells))
+            rows.append((start, cells))
+        start = reader.line_num + 1
+
+
+@functools.lru_cache(maxsize=4)
+def _parse_cached(text: str):
+    text = str(text).lstrip(_BOM)
+    rows = _records(text, _delimiter(text.splitlines()))
     if not rows:
         raise ValueError("The file is empty. " + NO_VERSION_MESSAGE)
     first = rows[0][1]
@@ -242,9 +290,12 @@ def parse(text: str) -> dict[str, pd.DataFrame]:
             "Add the heading row and the units row after the version line."
         )
     line, header = rows[1]
+    raw_width = len(header)
+    header = list(header)
     while header and not header[-1]:
         header.pop()
     header = [cell.casefold() for cell in header]
+    width = len(header)
     messages: list[str] = []
     if not all(header):
         raise ValueError(f"Line {line}: give each column a heading.")
@@ -253,35 +304,41 @@ def parse(text: str) -> dict[str, pd.DataFrame]:
     unknown = [cell for cell in header if cell not in COLUMNS]
     if unknown:
         raise ValueError(
-            f"Line {line}: unknown column headings {', '.join(unknown)}. "
-            "Use the headings of the template."
+            f'Line {line}: the column headings "{", ".join(unknown)}" are not '
+            "known. Use the headings of the template."
         )
     for required in (LIMIT_STATE, load_cases.NAME):
         if required not in header:
             raise ValueError(f"Line {line}: add the {required} column.")
     line, units = rows[2]
-    units = _width(units, len(header), line, messages)
+    units = _width(units, width, raw_width, line, messages)
     _fail(messages)
     for column, unit in zip(header, units):
         if _unit_token(unit) != _unit_token(UNITS[column]):
+            expected = (f'"{UNITS[column]}"' if UNITS[column] != "-"
+                        else '"-" or blank')
             messages.append(
-                f"Line {line} (units row): use {UNITS[column]} for {column}, "
-                f"not {unit!r}"
+                f"Line {line} (units row): the unit of {column} must be "
+                f'{expected}. The file has "{unit}".'
             )
     _fail(messages)
+    if len(rows) - 3 > MAX_CASE_ROWS:
+        raise ValueError(
+            f"The file has more than {MAX_CASE_ROWS} case rows. Split the file."
+        )
     if len(rows) < 4:
         raise ValueError("Add at least one case row after the units row.")
     records = {key: [] for key in load_cases.CASE_TABLE_KEYS}
     lines = {key: [] for key in load_cases.CASE_TABLE_KEYS}
     for line, cells in rows[3:]:
-        cells = _width(cells, len(header), line, messages)
+        cells = _width(cells, width, raw_width, line, messages)
         if cells is None:
             continue
         record = dict(zip(header, cells))
         limit_state = record[LIMIT_STATE].upper()
         key = LIMIT_STATE_TABLES.get(limit_state)
         if key is None:
-            messages.append(f"Line {line}: {LIMIT_STATE} must be ULS or SLS")
+            messages.append(f"Line {line}: {LIMIT_STATE} must be ULS or SLS.")
             continue
         foreign = [
             column for column in header
@@ -290,13 +347,13 @@ def parse(text: str) -> dict[str, pd.DataFrame]:
         if foreign:
             messages.append(
                 f"Line {line}: leave {', '.join(foreign)} blank in a "
-                f"{limit_state} row"
+                f"{limit_state} row."
             )
         if not record[load_cases.NAME]:
-            messages.append(f"Line {line}: enter a case name")
+            messages.append(f"Line {line}: enter a case name.")
         for flag in load_cases.FLAG_COLUMNS[key]:
             if flag in record and record[flag].casefold() not in _FLAG_TOKENS:
-                messages.append(f"Line {line}: use true or false in {flag}")
+                messages.append(f"Line {line}: use true or false in {flag}.")
         records[key].append({
             column: record[column] for column in header
             if column in load_cases.PERSISTED_COLUMNS[key]
@@ -312,24 +369,40 @@ def parse(text: str) -> dict[str, pd.DataFrame]:
         for (position, column), entered in sorted(issues.items()):
             messages.append(
                 f"Line {lines[key][position]}: {column} must be one decimal "
-                f"number, not {entered!r}"
+                f'number. The file has "{entered}".'
             )
         for position, row in enumerate(frame.to_dict("records")):
             for column in load_cases.PLASTIC_FACE_COLUMNS:
                 if column in row and row[column] not in load_cases.FACE_OPTIONS:
                     messages.append(
                         f"Line {lines[key][position]}: {column} must be auto, "
-                        "negative or positive"
+                        "negative or positive."
                     )
             for column in load_cases.ATTRIBUTE_COLUMNS:
                 reason = load_cases.attribute_error(column, row[column])
                 if reason is not None:
                     messages.append(
-                        f"Line {lines[key][position]}: {column} {reason}"
+                        f"Line {lines[key][position]}: {column} {reason}."
                     )
         tables[key] = frame
     _fail(messages)
-    return tables
+    return tables, {key: tuple(value) for key, value in lines.items()}
+
+
+def _parse(text: str):
+    tables, lines = _parse_cached(str(text))
+    return {key: frame.copy(deep=True) for key, frame in tables.items()}, lines
+
+
+def parse(text: str) -> dict[str, pd.DataFrame]:
+    """Read a CSV v1 text into the canonical Plastic and Elastic tables.
+
+    Raise ``ValueError`` with the line number when the file form, a CSV quote
+    or a value is not valid. No partial result is returned. The last parsed
+    texts are kept, so a rerun with the same file does not parse it again.
+    """
+
+    return _parse(text)[0]
 
 
 def _plastic_rows(value) -> dict[str, tuple]:
@@ -343,21 +416,47 @@ def _plastic_rows(value) -> dict[str, tuple]:
     }
 
 
-def import_cases(tables: Mapping, authorities, *, text: str, mode: str):
+def _names(value, key) -> list[str]:
+    frame = load_cases.active_table(value, key)
+    return [str(name).strip() for name in frame[load_cases.NAME]]
+
+
+def import_cases(tables: Mapping, authorities, *, text: str, mode: str,
+                 reserved_names=()):
     """Return the new case tables, torsion declarations and imported counts.
 
     ``mode`` "append" adds the imported cases after the current cases. The
     torsion declarations of the imported names are removed, as for a paste.
     ``mode`` "replace" replaces both tables. A declaration stays only for a
-    Plastic case with the same name and the same action values.
+    Plastic case with the same name and the same entries in each Plastic
+    column (the case attributes are not compared). ``reserved_names`` are
+    other names in use, for example the fatigue bins.
     """
 
-    imported = parse(text)
+    imported, lines = _parse(text)
     current = {
         key: load_cases.normalise_table(tables.get(key), key)
         for key in load_cases.CASE_TABLE_KEYS
     }
     mapping = copy.deepcopy(authorities) if isinstance(authorities, Mapping) else {}
+    if mode not in {"append", "replace"}:
+        raise ValueError("Select append or replace.")
+    used = {str(name).strip().casefold(): "a fatigue bin" for name in reserved_names}
+    if mode == "append":
+        for key in load_cases.CASE_TABLE_KEYS:
+            for name in _names(current[key], key):
+                used.setdefault(name.casefold(), "a current case")
+    messages = []
+    for key in load_cases.CASE_TABLE_KEYS:
+        for name, line in zip(_names(imported[key], key), lines[key]):
+            folded = name.casefold()
+            if folded in used:
+                messages.append(
+                    f'Line {line}: the case name "{name}" is already used by '
+                    f"{used[folded]}. Use a unique name for each case."
+                )
+            used[folded] = "an earlier line of the file"
+    _fail(messages)
     if mode == "replace":
         result = imported
         before = _plastic_rows(current[load_cases.PLASTIC_TABLE_KEY])
@@ -366,7 +465,7 @@ def import_cases(tables: Mapping, authorities, *, text: str, mode: str):
             name: value for name, value in mapping.items()
             if name in after and before.get(name) == after[name]
         }
-    elif mode == "append":
+    else:
         result = {}
         for key in load_cases.CASE_TABLE_KEYS:
             joined = pd.concat(
@@ -377,12 +476,10 @@ def import_cases(tables: Mapping, authorities, *, text: str, mode: str):
             result[key] = load_cases.normalise_table(joined, key)
             for name in imported[key][load_cases.NAME]:
                 mapping.pop(str(name), None)
-    else:
-        raise ValueError("Select append or replace.")
     errors = load_cases.validation_errors(
         result[load_cases.PLASTIC_TABLE_KEY], result[load_cases.ELASTIC_TABLE_KEY]
     )
     if errors:
-        raise ValueError("; ".join(str(error) for error in errors))
+        raise ValueError(" ".join(f"{error.text}." for error in errors))
     counts = {key: len(imported[key]) for key in load_cases.CASE_TABLE_KEYS}
-    return result, mapping, counts
+    return result, mapping, counts, imported

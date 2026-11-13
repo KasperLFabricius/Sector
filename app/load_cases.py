@@ -411,6 +411,8 @@ def case_attributes(value, key: str) -> dict[str, dict[str, str]]:
 
 
 _MEMO_SIZE = 64
+# A larger table is normalised without the memo, so the memo stays small.
+_MEMO_MAX_CELLS = 10_000
 _MEMO: OrderedDict = OrderedDict()
 _MEMO_LOCK = threading.Lock()
 _UNMEMOISABLE = object()
@@ -447,7 +449,11 @@ def _memo_key(value, key: str):
     issue ledger. A cell of another type disables the memo for that call.
     """
 
-    if not isinstance(value, pd.DataFrame) or not value.columns.is_unique:
+    if (
+        not isinstance(value, pd.DataFrame)
+        or not value.columns.is_unique
+        or value.size > _MEMO_MAX_CELLS
+    ):
         return None
     canonical = bool(
         value.attrs.get("sector_load_case_table") == key

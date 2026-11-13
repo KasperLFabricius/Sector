@@ -100,7 +100,7 @@ def test_export_and_import_give_the_same_canonical_tables(delimiter):
 def test_reference_project_round_trip_keeps_the_project_hashes():
     tables, scalars = _reference()
     text = action_csv.export_csv(tables)
-    result, mapping, counts = action_csv.import_cases(
+    result, mapping, counts, _imported = action_csv.import_cases(
         tables, scalars.get(capacity.TORSION_CASE_AUTHORITIES_KEY), text=text, mode="replace")
     assert counts == {PLASTIC: len(load_cases.active_table(tables[PLASTIC], PLASTIC)),
                       ELASTIC: len(load_cases.active_table(tables[ELASTIC], ELASTIC))}
@@ -119,7 +119,7 @@ def test_reference_project_round_trip_keeps_the_result_sha256():
     from app import calculation_service
 
     tables, scalars = _reference()
-    result, mapping, _counts = action_csv.import_cases(
+    result, mapping, _counts, _imported = action_csv.import_cases(
         tables, scalars.get(capacity.TORSION_CASE_AUTHORITIES_KEY),
         text=action_csv.export_csv(tables, delimiter=";"), mode="replace")
     new_scalars = dict(scalars)
@@ -163,10 +163,10 @@ def test_decode_reads_utf8_and_windows_1252():
     (_csv("# sector-actions-csv v2", _HEAD, _UNITS, "ULS,P1,1,2,"), 'schema "v2"'),
     (_csv(action_csv.VERSION_LINE), "heading row and the units row"),
     (_csv(action_csv.VERSION_LINE, _HEAD + ",n_ed", _UNITS + ",kN", "ULS,P1,1,2,,1"),
-     "unknown column headings n_ed"),
+     'the column headings "n_ed" are not known'),
     (_csv(action_csv.VERSION_LINE, "name,n_ed_kn", "-,kN", "P1,1"), "add the limit_state column"),
     (_csv(action_csv.VERSION_LINE, _HEAD, "-,-,kN,MNm,kN", "ULS,P1,1,2,"),
-     "use kNm for mx_ed_knm, not 'MNm'"),
+     'the unit of mx_ed_knm must be "kNm". The file has "MNm".'),
     (_csv(action_csv.VERSION_LINE, _HEAD, _UNITS, "ULS,P1,1,2,5"),
      "Line 4: leave n_long_ed_kn blank in a ULS row"),
     (_csv(action_csv.VERSION_LINE, _HEAD, _UNITS, "QLS,P1,1,2,"),
@@ -174,7 +174,7 @@ def test_decode_reads_utf8_and_windows_1252():
     (_csv(action_csv.VERSION_LINE, _HEAD, _UNITS, "ULS,,1,2,"), "Line 4: enter a case name"),
     (_csv(action_csv.VERSION_LINE, _HEAD, _UNITS, "ULS,P1,1,2"), "Line 4 has 4 cells"),
     (_csv(action_csv.VERSION_LINE, _HEAD, _UNITS, "ULS,P1,1;5,2,"),
-     "Line 4: n_ed_kn must be one decimal number, not '1;5'"),
+     'Line 4: n_ed_kn must be one decimal number. The file has "1;5".'),
     (_csv(action_csv.VERSION_LINE, "limit_state,name,design_situation", "-,-,-",
           "ULS,P1,frequent"), "Line 4: design_situation must be persistent"),
     (_csv(action_csv.VERSION_LINE, "limit_state,name,stage", "-,-,-", "SLS,E1,erection"),
@@ -209,7 +209,7 @@ def test_form_edges_trailing_cells_headings_and_message_limit():
     many = _csv(action_csv.VERSION_LINE, _HEAD, _UNITS, *[f"XLS,P{i},1,2," for i in range(7)])
     with pytest.raises(ValueError) as error:
         action_csv.parse(many)
-    assert str(error.value).endswith("; 2 more issues")
+    assert str(error.value).endswith(". The file has 2 more issues.")
 
 
 def test_older_form_paste_still_imports_and_older_file_gives_one_message():
@@ -244,7 +244,7 @@ def test_replace_keeps_a_declaration_only_for_an_unchanged_case():
     changed = {key: table.copy(deep=True) for key, table in tables.items()}
     changed[PLASTIC].loc[1, "n_ed_kn"] = 0.5
     text = action_csv.export_csv(changed)
-    result, mapping, counts = action_csv.import_cases(
+    result, mapping, counts, _imported = action_csv.import_cases(
         tables, authorities, text=text, mode="replace")
     assert set(mapping) == {"ULS-1"}
     assert counts == {PLASTIC: 2, ELASTIC: 1}
@@ -254,7 +254,7 @@ def test_replace_keeps_a_declaration_only_for_an_unchanged_case():
 def test_append_adds_cases_and_rejects_a_repeated_name():
     tables = _cases()
     text = _csv(action_csv.VERSION_LINE, _HEAD, _UNITS, "ULS,NEW-1,1,2,", "SLS,NEW-2,,,7")
-    result, mapping, counts = action_csv.import_cases(
+    result, mapping, counts, _imported = action_csv.import_cases(
         tables, {"NEW-1": _authority(), "ULS-1": _authority()}, text=text, mode="append")
     assert list(result[PLASTIC]["name"]) == ["ULS-1", "ULS-2", "NEW-1"]
     assert list(result[ELASTIC]["name"]) == ["SLS-1", "NEW-2"]
@@ -281,8 +281,8 @@ def test_queued_import_replaces_both_tables_and_clears_the_upload():
     actions.consume_command(state, reseed)
     assert set(reseeded) == set(load_cases.CASE_TABLE_KEYS)
     assert state[actions.NOTICE_KEY] == (
-        True, "Imported 1 ULS and 1 SLS cases. Review the cases and the torsion "
-              "declarations before calculation.")
+        True, "Sector imported 1 ULS case and 1 SLS case. Review the cases and the "
+              "torsion declarations before calculation.")
     assert state[actions.AUTHORITY_KEY] == {}
     assert state[actions.CSV_FILE_VERSION_KEY] == 1
     assert state[actions.selection_key(PLASTIC)] == 0
@@ -332,7 +332,7 @@ def test_csv_panel_previews_a_valid_file_and_reports_an_invalid_file():
     valid = _Host(text.encode("utf-8"))
     actions.csv_panel(valid, state=state)
     button = next(call for call in valid.calls if call[0] == "button")
-    assert button[1][0] == "Import 1 ULS and 0 SLS cases"
+    assert button[1][0] == "Import 1 ULS case and 0 SLS cases"
     command = button[2]["args"][1]
     assert (command["operation"], command["mode"], command["text"]) == ("import", "replace", text)
     assert ("markdown", ("**Plastic cases (ULS)**",), {}) in valid.calls
@@ -365,7 +365,7 @@ def test_actions_page_shows_attributes_figure_and_csv_panel(tmp_path, monkeypatc
     assert not app.exception
     assert list(app.session_state[PLASTIC]["name"]) == ["IMP-1"]
     assert list(app.session_state[ELASTIC]["n_long_ed_kn"]) == [-9.0]
-    assert any("Imported 1 ULS and 1 SLS cases" in item.value for item in app.success)
+    assert any("Sector imported 1 ULS case and 1 SLS case" in item.value for item in app.success)
 
 
 # --- Field registry, help texts and conventions ------------------------------
@@ -402,6 +402,7 @@ def test_moment_help_and_conventions_state_the_origin_reference():
     text = " ".join(guide.paragraphs)
     assert "through the section origin O (0, 0)" in text
     assert "Mx = Mx,C - N yc and My = My,C - N xc" in text
+    assert "xc and yc in m, that is the section coordinates in mm divided by 1000" in text
     assert all(len(paragraph.split()) <= 50 for paragraph in guide.paragraphs)
 
 
@@ -478,6 +479,141 @@ def test_memo_gives_the_uncached_result_and_detached_copies():
     again = load_cases.normalise_table(sources[2], PLASTIC)
     assert again.loc[0, "name"] == "A"
     assert fields.decimal_issue_ledger(again.attrs) == {(0, "mx_ed_knm"): "x1"}
+
+
+def test_memo_is_used_for_a_repeated_table(monkeypatch):
+    calls = []
+    original = load_cases._normalise_table
+
+    def counted(value, key):
+        calls.append(key)
+        return original(value, key)
+
+    monkeypatch.setattr(load_cases, "_normalise_table", counted)
+    source = pd.DataFrame([{"name": "MEMO-COUNT", "n_ed_kn": "-7,25"}])
+    first = load_cases.normalise_table(source, PLASTIC)
+    second = load_cases.normalise_table(source.copy(deep=True), PLASTIC)
+    assert len(calls) == 1
+    pd.testing.assert_frame_equal(first, second, check_exact=True)
+    large = pd.DataFrame({"name": [f"L{i}" for i in range(load_cases._MEMO_MAX_CELLS + 1)]})
+    load_cases.normalise_table(large, PLASTIC)
+    load_cases.normalise_table(large, PLASTIC)
+    assert len(calls) == 3
+
+
+def test_memo_keeps_the_ledger_of_each_canonical_frame():
+    one = load_cases.normalise_table(pd.DataFrame([{"name": "A", "n_ed_kn": "1.2.3"}]), PLASTIC)
+    two = load_cases.normalise_table(pd.DataFrame([{"name": "A", "n_ed_kn": "4..5"}]), PLASTIC)
+    # The same sentinel cells, different issue texts.
+    assert fields.is_invalid_decimal_sentinel(one.loc[0, "n_ed_kn"])
+    assert fields.is_invalid_decimal_sentinel(two.loc[0, "n_ed_kn"])
+    for frame, entered in ((one, "1.2.3"), (two, "4..5"), (one, "1.2.3")):
+        again = load_cases.normalise_table(frame, PLASTIC)
+        assert fields.decimal_issue_ledger(again.attrs) == {(0, "n_ed_kn"): entered}
+
+
+def _template_row(**values):
+    cells = dict.fromkeys(action_csv.COLUMNS, "")
+    cells.update(values)
+    return [cells[column] for column in action_csv.COLUMNS]
+
+
+def test_an_extra_cell_never_moves_a_value_to_the_next_column():
+    # I2-R1-01: the template row "ULS,P1,,,,,-1250,5,310,0,..." with an
+    # unquoted comma decimal has one cell more than the heading row.
+    row = _template_row(limit_state="ULS", name="P1", n_ed_kn="-1250,5",
+                        mx_ed_knm="310", my_ed_knm="0")
+    lines = action_csv.template().splitlines()
+    shifted = _csv(*lines, ",".join(row))
+    width = len(action_csv.COLUMNS)
+    with pytest.raises(ValueError) as error:
+        action_csv.parse(shifted)
+    assert str(error.value) == (
+        f"Line 4 has {width + 1} cells. The heading row has {width}. "
+        "Put each comma decimal in quotes.")
+    quoted = _csv(*lines, ",".join(cell if "," not in cell else f'"{cell}"' for cell in row))
+    parsed = action_csv.parse(quoted)[PLASTIC]
+    assert (parsed.loc[0, "n_ed_kn"], parsed.loc[0, "mx_ed_knm"]) == (-1250.5, 310.0)
+
+
+@pytest.mark.parametrize("delimiter", [",", ";", "\t"])
+def test_each_delimiter_rejects_a_row_wider_than_the_heading_row(delimiter):
+    head = delimiter.join(("limit_state", "name", "n_ed_kn", "mx_ed_knm"))
+    units = delimiter.join(("-", "-", "kN", "kNm"))
+    pad = delimiter * 2
+    padded = _csv(action_csv.VERSION_LINE, head + pad, units + pad,
+                  delimiter.join(("ULS", "P1", "1", "2", "", "")))
+    assert action_csv.parse(padded)[PLASTIC].loc[0, "mx_ed_knm"] == 2.0
+    trailing = _csv(action_csv.VERSION_LINE, head, units, delimiter.join(("ULS", "P1", "1", "2", "")))
+    with pytest.raises(ValueError, match="Line 4 has 5 cells. The heading row has 4."):
+        action_csv.parse(trailing)
+    wide = _csv(action_csv.VERSION_LINE, head, units, delimiter.join(("ULS", "P1", "1", "5", "2")))
+    with pytest.raises(ValueError, match="Line 4 has 5 cells. The heading row has 4."):
+        action_csv.parse(wide)
+    # A padded heading row: a value under a blank heading is rejected.
+    under_blank = _csv(action_csv.VERSION_LINE, head + delimiter, units + delimiter,
+                       delimiter.join(("ULS", "P1", "1", "2", "9")))
+    with pytest.raises(ValueError, match="Line 4 has a value in a column without a heading."):
+        action_csv.parse(under_blank)
+
+
+def test_repeated_names_and_fatigue_bins_give_the_line_and_the_name():
+    tables = _cases()
+    again = _csv(action_csv.VERSION_LINE, _HEAD, _UNITS, "ULS,X1,1,2,", "SLS,uls-1,,,7")
+    with pytest.raises(ValueError) as error:
+        action_csv.import_cases(tables, {}, text=again, mode="append")
+    assert str(error.value) == ('Line 5: the case name "uls-1" is already used by a current '
+                                "case. Use a unique name for each case.")
+    inside = _csv(action_csv.VERSION_LINE, _HEAD, _UNITS, "ULS,D1,1,2,", "SLS,d1,,,7")
+    with pytest.raises(ValueError, match='Line 5: the case name "d1" is already used by an '
+                                         "earlier line of the file."):
+        action_csv.import_cases(tables, {}, text=inside, mode="replace")
+    with pytest.raises(ValueError, match='Line 4: the case name "D1" is already used by a fatigue bin.'):
+        action_csv.import_cases(tables, {}, text=inside, mode="replace", reserved_names=("d1",))
+    assert "EngineerMessage" not in str(error.value)
+
+
+def test_paste_errors_use_the_message_text():
+    state = dict(_cases())
+    with pytest.raises(ValueError) as error:
+        actions.edit_cases(state, {}, table=PLASTIC, operation="paste", text="name\tn_ed_kn\nULS-1\t1\n")
+    assert str(error.value) == "Use a unique name for every Plastic and Elastic case."
+
+
+@pytest.mark.parametrize(("text", "message"), [
+    (_csv(action_csv.VERSION_LINE, _HEAD, _UNITS, 'ULS,"P1"x,1,2,'),
+     "Line 4: Sector cannot read this line. A quoted cell is not closed correctly."),
+    (_csv(action_csv.VERSION_LINE, _HEAD, _UNITS, 'ULS,"P1,1,2,'),
+     "Line 4: Sector cannot read this line. A quoted cell is not closed correctly."),
+    (_csv(action_csv.VERSION_LINE, _HEAD, _UNITS, 'ULS,"' + "x" * 131073 + '",1,2,'),
+     "A cell has more than 131072 characters."),
+    (_csv(action_csv.VERSION_LINE, _HEAD, _UNITS, 'ULS,P1,1,2,', 'ULS,"two\nlines",1,2,', "XLS,P3,1,2,"),
+     "Line 7: limit_state must be ULS or SLS."),
+], ids=["text-after-quote", "open-quote", "long-cell", "multi-line-record"])
+def test_csv_reader_errors_and_line_numbers(text, message):
+    with pytest.raises(ValueError) as error:
+        action_csv.parse(text)
+    assert message in str(error.value)
+
+
+def test_utf16_files_and_other_hash_lines_give_one_message():
+    data = (chr(0xFEFF) + action_csv.VERSION_LINE).encode("utf-16-le")
+    with pytest.raises(ValueError, match="CSV UTF-8"):
+        action_csv.decode(bytes((0xFF, 0xFE)) + data[2:])
+    with pytest.raises(ValueError, match="CSV UTF-8"):
+        action_csv.decode(action_csv.VERSION_LINE.encode("utf-16-be"))
+    comment = "# my comment\nname\tn_ed_kn\nP1\t1\n"
+    assert action_csv.is_versioned(comment) is False
+    assert action_csv.is_versioned('"# Sector-actions-csv v1",,') is True
+    with pytest.raises(ValueError, match="Use the template column headings"):
+        actions.prepare_paste(comment, PLASTIC)
+
+
+def test_case_row_limit(monkeypatch):
+    monkeypatch.setattr(action_csv, "MAX_CASE_ROWS", 2)
+    text = _csv(action_csv.VERSION_LINE, _HEAD, _UNITS, "ULS,R1,1,2,", "ULS,R2,1,2,", "ULS,R3,1,2,")
+    with pytest.raises(ValueError, match="more than 2 case rows"):
+        action_csv.parse(text)
 
 
 def test_memo_separates_a_cleared_cell_from_a_malformed_cell():

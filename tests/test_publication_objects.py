@@ -75,6 +75,7 @@ EXPECTED_LABELS = (
     'Table B7-2',
     'Table B7-3',
     'Table B7-4',
+    'Table B7-5',
     'Table B8-1',
     'Figure B8-1',
     'Figure B8-2',
@@ -208,7 +209,7 @@ def test_manual_inventory_has_exact_objects_labels_and_destinations():
     assert tuple(item.label for item in items) == EXPECTED_LABELS
     assert len(MANUAL_FIGURE_SPECS) == 40
     assert len({spec.factory for spec in MANUAL_FIGURE_SPECS}) == 36
-    assert len(MANUAL_TABLE_SPECS) == 77
+    assert len(MANUAL_TABLE_SPECS) == 78
     assert len({item.label for item in items}) == len(items)
     assert len({item.anchor for item in items}) == len(items)
     assert all(item.caption.strip() for item in items)
@@ -417,14 +418,15 @@ def test_manual_long_table_repeats_caption_and_header_when_forced_to_split(
     table = next(
         item
         for item in flow
-        if getattr(item, "_sector_publication_label", None) == "Table B7-2"
+        # The Plastic field reference: B7-1 is the CSV v1 table, B7-2 the action-table matrix.
+        if getattr(item, "_sector_publication_label", None) == "Table B7-3"
     )
     leading, page_break, trailing = table.split(170 * mm, 60 * mm)
     assert table.repeatRows == 2
     assert table.splitInRow == 0
     assert isinstance(page_break, NotAtTopPageBreak)
     assert "(continued)" not in leading._cellvalues[0][0].getPlainText()
-    assert "Table B7-2 (continued)." in (
+    assert "Table B7-3 (continued)." in (
         trailing._cellvalues[0][0].getPlainText()
     )
     expected_header = [
