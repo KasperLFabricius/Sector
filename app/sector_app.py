@@ -3550,8 +3550,12 @@ def _render_input_issues(
     issues: tuple[input_issues.InputIssue, ...],
     *,
     key_prefix: str,
+    details: Mapping[str, str] | None = None,
 ) -> None:
-    """Render one alert per issue and a control only for a trusted target."""
+    """Render one alert per issue and a control only for a trusted target.
+
+    ``details`` maps a message code to a caption of values under its alert.
+    """
 
     for index, issue in enumerate(issues, start=1):
         message = engineer_messages.error_detail(
@@ -3559,8 +3563,11 @@ def _render_input_issues(
             fallback=_INPUT_ISSUE_DISPLAY,
             context="input issue renderer",
         )
+        detail = (details or {}).get(issue.message.code)
         if issue.target is None:
             st.error(message)
+            if detail:
+                st.caption(detail)
             continue
         row = st.container(
             horizontal=True,
@@ -3568,6 +3575,8 @@ def _render_input_issues(
             gap="small",
         )
         row.error(message)
+        if detail:
+            st.caption(detail)
         button_key = re.sub(
             r"[^a-zA-Z0-9_-]+",
             "-",
@@ -9187,6 +9196,29 @@ def build_inputs(host=st):
     return inp
 
 
+# One authored message for each model of the bond calculation. The values of
+# the tendon that stops the calculation follow in ``_bond_failure_details``.
+_PRESTRESS_BOND_STATE_MESSAGES = {
+    "cracked section at Es/Ecm": EngineerMessage(
+        "PRESTRESS-BOND-STATE",
+        "Sector cannot find the bond strain difference of a tendon in the "
+        "cracked section at Es/Ecm. Check the prestrain IS and the tendon "
+        "positions",
+    ),
+    "cracked section at nl": EngineerMessage(
+        "PRESTRESS-BOND-STATE",
+        "Sector cannot find the bond strain difference of a tendon in the "
+        "cracked section at nl. Check the prestrain IS and the tendon positions",
+    ),
+    "uncracked section at nl": EngineerMessage(
+        "PRESTRESS-BOND-STATE",
+        "Sector cannot find the bond strain difference of a tendon in the "
+        "uncracked section at nl. Check the prestrain IS and the tendon "
+        "positions",
+    ),
+}
+
+
 def _apply_bonded_prestrain(inp):
     """Replace the entered tendon prestrain by the bond strain difference.
 
@@ -9201,14 +9233,21 @@ def _apply_bonded_prestrain(inp):
     * ``tendon_materials_uls`` (plastic): eps_c,p at ``Es/Ecm`` with the entered
       short-term modulus ``Ec`` (``Ecm``). The creep strain under prestress does
       not recover in a short-term load to failure.
+    * ``tendon_stage_one_stress`` (Stage I cracking check): the locked-in stress
+      ``Ep*eps_p(0)`` (kN/m2) of each tendon from the uncracked section at
+      ``nl``, so that the Stage I state also gives ``Ep*IS`` under prestress
+      alone.
 
     eps_p(0) is negative for a lightly stressed tendon where prestress alone
     elongates the concrete by more than ``IS``. ``tendon_effective_prestrain``
     keeps the entered values for the effective prestress force. When the bond
     state of an active model cannot be established, the input is blocked with a
-    message (fail closed). When only the long-term state fails and the elastic
+    message (fail closed). When the correction of the locked-in stress does not
+    converge, the message names the model and ``tendon_bond_failure`` keeps the
+    tendon, its effective stress (MPa) and the concrete strain at its level for
+    the caption under the message. When only a long-term state fails and the elastic
     and fatigue models are off, the plastic model continues and
-    ``tendon_bond_elastic_unavailable`` marks the missing state.
+    ``tendon_bond_elastic_unavailable`` marks a missing Stage II state.
     """
     tendons = list(inp.get("tendons") or [])
     materials = list(inp.get("tendon_materials") or [])
@@ -9248,8 +9287,11 @@ def _apply_bonded_prestrain(inp):
         )
         ratios = (
             ("tendon_materials_uls",
-             STEEL_REFERENCE_MODULUS / (float(inp["conc_Ec"]) * 1000.0)),
-            ("tendon_materials", float(inp["nl"])),
+             STEEL_REFERENCE_MODULUS / (float(inp["conc_Ec"]) * 1000.0), True,
+             "cracked section at Es/Ecm"),
+            ("tendon_materials", float(inp["nl"]), True, "cracked section at nl"),
+            ("tendon_stage_one_stress", float(inp["nl"]), False,
+             "uncracked section at nl"),
         )
     except (
         AttributeError, KeyError, TypeError, ValueError, OverflowError,
@@ -9257,26 +9299,78 @@ def _apply_bonded_prestrain(inp):
     ):
         inp["material_error"] = _PRESTRESS_BOND_BLOCKER
         return
+    bars_count = len(bar_laws)
+
+    def _bond_blocker(exc, ratio, state):
+        # A correction that does not converge names its model in the authored
+        # message and keeps the typed values of its tendon. The concrete strain
+        # is the reference stress Ec*eps_c divided by Ec = Es/ratio.
+        index = getattr(exc, "element", None)
+        if index is None or not bars_count <= index < bars_count + len(materials):
+            return _PRESTRESS_BOND_BLOCKER
+        ids = [item.get("id") for item in inp.get("tendon_elements") or []]
+        name = (ids[index - bars_count] if len(ids) == len(materials)
+                else str(index - bars_count + 1))
+        inp["tendon_bond_failure"] = {
+            "tendon": str(name),
+            "effective_stress": float(exc.effective_stress) / 1000.0,
+            "concrete_strain": float(exc.concrete_stress) * ratio / (
+                STEEL_REFERENCE_MODULUS * 1000.0
+            ),
+        }
+        return engineer_messages.resolve_state(
+            state,
+            authored=_PRESTRESS_BOND_STATE_MESSAGES,
+            fallback=_PRESTRESS_BOND_BLOCKER,
+            context="bonded prestress state",
+        )
+
     laws = {}
-    for key, ratio in ratios:
+    for key, ratio, cracked, state in ratios:
         try:
             locked = elastic_core.bonded_prestress_stress(
-                sec, ratio, effective, n_mult=n_mult, tendon_mask=tendon_mask
+                sec, ratio, effective, n_mult=n_mult, tendon_mask=tendon_mask,
+                cracked=cracked,
             )
             laws[key] = [
                 item.with_bond_strain(float(stress) / 1000.0 / float(item.Es))
-                for item, stress in zip(materials, locked[len(bar_laws):])
+                if cracked else float(stress)
+                for item, stress in zip(materials, locked[bars_count:])
             ]
         except (
             AttributeError, TypeError, ValueError, OverflowError,
             ZeroDivisionError,
-        ):
-            if key == "tendon_materials" and not elastic_needed:
-                inp["tendon_bond_elastic_unavailable"] = True
+        ) as exc:
+            if key != "tendon_materials_uls" and not elastic_needed:
+                if cracked:
+                    inp["tendon_bond_elastic_unavailable"] = True
                 continue
-            inp["material_error"] = _PRESTRESS_BOND_BLOCKER
+            inp["material_error"] = _bond_blocker(exc, ratio, state)
             return
     inp.update(laws)
+
+
+def _bond_failure_details(inp):
+    """Return the caption of values under the bond message, by message code.
+
+    The authored message names the model. The caption gives the tendon, its
+    effective stress Ep*IS and the concrete strain at its level under prestress
+    alone, from the typed values in ``tendon_bond_failure``.
+    """
+    failure = inp.get("tendon_bond_failure")
+    if not isinstance(failure, Mapping):
+        return {}
+    try:
+        caption = (
+            f"The effective stress Ep IS of tendon {failure['tendon']} is "
+            f"{float(failure['effective_stress']):.1f} MPa. Under prestress "
+            "alone, the concrete strain at this tendon is "
+            f"{float(failure['concrete_strain']) * 1000.0:.3f} {_PERMILLE} "
+            "(tension positive)."
+        )
+    except (KeyError, TypeError, ValueError):
+        return {}
+    return {_PRESTRESS_BOND_BLOCKER.code: caption}
 
 
 def _commit_input_fragment(inp) -> None:
@@ -15249,6 +15343,7 @@ def _analysis_workspace(inp):
     _render_input_issues(
         tuple(visible_input_issues),
         key_prefix="analysis-input-issue",
+        details=_bond_failure_details(inp),
     )
     result_snapshot = st.session_state.get("result_input_snapshot")
     if input_stale and view in _RESULT_VIEWS and result_snapshot is None:

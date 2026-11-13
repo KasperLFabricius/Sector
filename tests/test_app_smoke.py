@@ -2237,16 +2237,31 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
     locked_stress = 195_000.0 * bond_strain
     assert prestress_stress == pytest.approx([locked_stress * 1000.0], rel=1e-8)
 
-    # Independent Stage-I equilibrium in N and mm with the locked-in stress
-    # sigma_p(0) = Ep eps_p(0) = 601.97 MPa. The transformed tendon replaces
-    # its occupied concrete area, so its added area is (Ep/Ec - 1)Ap.
-    added_area = (6.85 * 0.975 - 1.0) * 1000.0
-    stress_intercept, stress_gradient = np.linalg.solve(
-        [[300.0 * 600.0 + added_area, -250.0 * added_area],
-         [-250.0 * added_area, 300.0 * 600.0**3 / 12.0 + 250.0**2 * added_area]],
-        [-locked_stress * 1000.0, locked_stress * 1000.0 * 250.0],
+    # Independent Stage-I equilibrium in N and mm (0.97.1, R2B-06): the Stage I
+    # check uses the locked-in stress of the uncracked section, so under
+    # prestress alone the tendon stress is Ep IS = 500 MPa also in Stage I.
+    # The concrete then carries P = Ap Ep IS = 500 kN at y = -250 mm on the
+    # section without tendon stiffness (the duct concrete is displaced):
+    # A_n = 179000 mm2, y_n = 250000/179000 = 1.39665 mm,
+    # I_n = 300 x 600^3/12 + 180000 y_n^2 - 1000 (250 + y_n)^2 = 5.337151e9 mm4.
+    # Top fibre: 4.23928 MPa (0.97.0, Stage II locked-in stress: 4.57167 MPa).
+    net_area = 300.0 * 600.0 - 1000.0
+    net_centroid = 1000.0 * 250.0 / net_area
+    net_inertia = (
+        300.0 * 600.0**3 / 12.0 + 300.0 * 600.0 * net_centroid**2
+        - 1000.0 * (250.0 + net_centroid) ** 2
     )
-    expected_sigma_ct = stress_intercept + 300.0 * stress_gradient
+    prestress_force = 1000.0 * 500.0
+
+    def stage_one_stress(y):
+        return (-prestress_force / net_area - prestress_force
+                * (-250.0 - net_centroid) * (y - net_centroid) / net_inertia)
+
+    expected_sigma_ct = stage_one_stress(300.0)
+    assert expected_sigma_ct == pytest.approx(4.23928, abs=1.0e-5)
+    assert latest["tendon_stage_one_stress"] == pytest.approx(
+        [(500.0 - 6.85 * 0.975 * stage_one_stress(-250.0)) * 1000.0], rel=1e-9
+    )
     elastic_results = (
         results["elastic"],
         results["elastic_cases"][0]["results"]["elastic"],
@@ -2311,9 +2326,9 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
         "P1 P1 195000.0 0.002564 500.000 1000.0 500.000",
         "Long-term 0.000 0.000 0.000 Short-term 0.000 0.000 0.000",
         "Locked-in prestress stays fixed.",
-        "If a prestress-only fiber stress exceeds fct,eff, " + chr(0x03BB) + "cr = 0.",
+        "If a prestress-only fibre stress exceeds fct,eff, " + chr(0x03BB) + "cr = 0.",
         "only the external N and M are scaled.",
-        "The smallest positive fiber solution governs.",
+        "The smallest positive fibre solution governs.",
         f"Calculated {chr(0x03C3)}ct,I = {expected_sigma_ct:.3f} MPa.",
         f"{expected_sigma_ct:.3f} MPa",
         "Calculated " + chr(0x03BB) + "cr = 0.000.", "The section is cracked.",
@@ -2322,6 +2337,27 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
         assert expected in report_text
     assert "Report profile Standard" in report_text
     assert "= 1 - 6.85 / 6.85" not in report_text
+    assert "The cracking threshold gives its locked-in stress." in report_text
+    # 0.97.1 E1 (review T03): the printed Stage I locked-in stress reproduces the
+    # printed sigma_ct,I. Hand solve of the bonded uncracked section in N and mm:
+    # the transformed tendon adds (Ep/Ec - 1) Ap, and the locked-in force
+    # Ap sigma_p,I(0) acts at y = -250 mm.
+    printed_locked = float(re.search(
+        r"Stage I locked-in tendon stress .*?P1 = ([0-9.]+) MPa", report_text
+    ).group(1))
+    printed_sigma_ct = float(re.search(
+        "Calculated " + chr(0x03C3) + r"ct,I = ([0-9.]+) MPa", report_text
+    ).group(1))
+    assert printed_locked == pytest.approx(558.199, abs=1.0e-3)
+    added_area = (6.85 * 0.975 - 1.0) * 1000.0
+    stress_intercept, stress_gradient = np.linalg.solve(
+        [[300.0 * 600.0 + added_area, -250.0 * added_area],
+         [-250.0 * added_area, 300.0 * 600.0**3 / 12.0 + 250.0**2 * added_area]],
+        [-printed_locked * 1000.0, printed_locked * 1000.0 * 250.0],
+    )
+    assert stress_intercept + 300.0 * stress_gradient == pytest.approx(
+        printed_sigma_ct, abs=1.0e-3
+    )
 
     # The same calculated state supplies Audit's detailed substitution chain;
     # Standard above must still build and retain its relation and cracked result.

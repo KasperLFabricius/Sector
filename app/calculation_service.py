@@ -1156,6 +1156,14 @@ def _run_single_analysis(
         # cr_l provides the long-term cracked state and the sustained cracking
         # factor; its own crack width is unused (the crack widths are computed
         # below per system), so the coarse flag here is immaterial.
+        # The Stage I solves use the locked-in stress of the uncracked section
+        # (_apply_bonded_prestrain), so that prestress alone gives Ep*IS also in
+        # Stage I. An input without that state keeps the Stage II stress.
+        stage_one = inp.get("tendon_stage_one_stress")
+        stage_one_stress = (
+            None if prestress_stress is None or stage_one is None
+            else np.asarray([0.0] * len(inp["bars"]) + list(stage_one), dtype=float)
+        )
         cr_l = analyse_cracking(
             sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             fctm=inp["sls_fctm"], Es=[material.Es for material in all_laws],
@@ -1169,7 +1177,8 @@ def _run_single_analysis(
             physical_geometry_reason=physical_geometry_reason,
             k3_cover_dependent=dk_na, include_hx_term=include_hx,
             edition=ordinary_route.edition,
-            n_mult=n_mult, prestress_stress=prestress_stress)
+            n_mult=n_mult, prestress_stress=prestress_stress,
+            stage_one_prestress_stress=stage_one_stress)
         sls_converged = (
             r.converged
             and cr_l.uncracked.converged
@@ -1182,7 +1191,8 @@ def _run_single_analysis(
         crk_t, lam_t, sig_t = combined_cracking(
             sec, p_el_l, inp["Mx_el_l"], inp["My_el_l"], inp["nl"],
             p_el_s, inp["Mx_el_s"], inp["My_el_s"], inp["ns"],
-            fctm=inp["sls_fctm"], n_mult=n_mult, prestress_stress=prestress_stress)
+            fctm=inp["sls_fctm"], n_mult=n_mult, prestress_stress=prestress_stress,
+            stage_one_prestress_stress=stage_one_stress)
         # Governing case. Its cracked state (for the reported cracked properties) is
         # the combined creep total state (r.short_term) when the peak strictly
         # governs, or the long-term cracked state when the sustained action governs.
