@@ -246,6 +246,33 @@ def test_publication_scan_builds_the_tube_payload_only_at_the_selected_angle(
     assert abs(selection["cot"] - expected_cot) <= step
 
 
+def test_calculate_builds_tube_payloads_only_at_the_selected_angle(monkeypatch):
+    """All scan sites of one Calculate, producer and publication validators."""
+    from app import calculation_service
+    from tools import report_render_fixture
+
+    inp = report_render_fixture._inputs()
+    inp.update(mode="Plastic", fatigue_on=False, elastic_cases=[],
+               sls_heightened_on=False)
+    inp["plastic_cases"] = inp["plastic_cases"][:1]
+    payload_calls = []
+    original = capacity.tube_torsion
+
+    def counted(*args, **kwargs):
+        payload_calls.append((kwargs["cot_min"], kwargs["cot_max"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(capacity, "tube_torsion", counted)
+    scan_calls = _count_calls(monkeypatch, capacity, "tube_torsion_scan_values")
+    results = calculation_service.run_analysis(inp)
+
+    selected = results["torsion"]["cot"]
+    entered = (inp["strut_cot_min"], inp["strut_cot_max"])
+    assert payload_calls
+    assert set(payload_calls) <= {(selected, selected), entered}
+    assert len(set(scan_calls)) == 1501
+
+
 def test_scan_never_reaches_a_tube_with_incomplete_wall_evidence(monkeypatch):
     from app import calculation_service
 
