@@ -246,7 +246,7 @@ def _width(cells: list[str], width: int, raw_width: int, line: int,
 
 
 def _records(text: str, delimiter: str) -> list[tuple[int, list[str]]]:
-    """Return the nonblank records with the first physical line of each."""
+    """Return the records (empty lines left out) with the first physical line of each."""
 
     reader = csv.reader(io.StringIO(text), delimiter=delimiter, strict=True)
     rows = []
@@ -265,7 +265,7 @@ def _records(text: str, delimiter: str) -> list[tuple[int, list[str]]]:
                           "value between two quote characters.")
             raise ValueError(f"Line {start}: Sector cannot read this line. {detail}") from exc
         cells = [cell.strip() for cell in cells]
-        if any(cells):
+        if cells:
             rows.append((start, cells))
         start = reader.line_num + 1
 
@@ -273,7 +273,12 @@ def _records(text: str, delimiter: str) -> list[tuple[int, list[str]]]:
 @functools.lru_cache(maxsize=4)
 def _parse_cached(text: str):
     text = str(text).lstrip(_BOM)
-    rows = _records(text, _delimiter(text.splitlines()))
+    rows = []
+    for record in _records(text, _delimiter(text.splitlines())):
+        # Keep the units row (the record after the heading row) also when all
+        # its cells are blank, for example "," for limit_state and name.
+        if any(record[1]) or len(rows) == 2:
+            rows.append(record)
     if not rows:
         raise ValueError("The file is empty. " + NO_VERSION_MESSAGE)
     first = rows[0][1]

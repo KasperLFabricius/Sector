@@ -609,6 +609,17 @@ def test_utf16_files_and_other_hash_lines_give_one_message():
         actions.prepare_paste(comment, PLASTIC)
 
 
+def test_file_with_only_the_two_necessary_columns_imports():
+    # Both columns are unitless, so the units row is all blank (",").
+    text = _csv(action_csv.VERSION_LINE, "limit_state,name", ",", "ULS,P-ONLY", ",", "SLS,E-ONLY")
+    parsed = action_csv.parse(text)
+    assert list(parsed[PLASTIC]["name"]) == ["P-ONLY"]
+    assert list(parsed[ELASTIC]["name"]) == ["E-ONLY"]
+    assert parsed[PLASTIC].loc[0, "n_ed_kn"] == 0.0
+    with pytest.raises(ValueError, match="Add at least one case row after the units row."):
+        action_csv.parse(_csv(action_csv.VERSION_LINE, "limit_state,name", ",", ","))
+
+
 def test_case_row_limit(monkeypatch):
     monkeypatch.setattr(action_csv, "MAX_CASE_ROWS", 2)
     text = _csv(action_csv.VERSION_LINE, _HEAD, _UNITS, "ULS,R1,1,2,", "ULS,R2,1,2,", "ULS,R3,1,2,")
