@@ -7508,6 +7508,8 @@ def build_inputs(host=st):
         alias=modelled_direction_alias,
     )
     det.info(f"Modelled reinforcement direction: {direction_label}")
+    # The cut direction is in the Member group, so its result shows there too.
+    member_detailing.info(f"Modelled reinforcement direction: {direction_label}")
 
     detailing_help_edition = st.session_state.get(
         "detailing_edition", detailing.EC2_2005_DKNA
