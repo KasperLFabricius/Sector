@@ -822,7 +822,7 @@ class SectionPart:
 
 
 @dataclass(frozen=True, slots=True)
-class SectionProperties:
+class TransformedAreaProperties:
     """Transformed area properties of a list of section parts.
 
     ``area`` is the sum of ``modulus_ratio * A`` over the parts. ``centroid``
@@ -842,7 +842,9 @@ class SectionProperties:
     part_areas: tuple[float, ...]
 
 
-def section_properties(parts: Iterable[SectionPart]) -> SectionProperties:
+def section_properties(
+    parts: Iterable[SectionPart],
+) -> TransformedAreaProperties:
     """Return the transformed area properties of a list of section parts.
 
     Each part contributes ``modulus_ratio`` times the exact polygon moments of
@@ -876,7 +878,7 @@ def section_properties(parts: Iterable[SectionPart]) -> SectionProperties:
     if not total.area > 0.0:
         raise ValueError("the section parts have no positive area")
     cx, cy = total.centroid
-    return SectionProperties(
+    return TransformedAreaProperties(
         area=total.area,
         centroid=(cx, cy),
         i_x=total.syy - total.area * cy * cy,

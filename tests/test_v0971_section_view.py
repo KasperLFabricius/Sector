@@ -251,6 +251,35 @@ def test_section_view_marks_ids_edges_selection_origin_and_centroid():
             hole_ids=[["V1", "V2", "V3", "V4"]], selection=selection,
         )
         assert name in [trace.name for trace in marked.data]
+    # A click maps to its reference through the trace metadata; a label or the
+    # origin mark selects nothing.
+    curves = {
+        trace.name: number for number, trace in enumerate(figure.data)
+        if trace.name
+    }
+    edge_curve = next(
+        number for number, trace in enumerate(figure.data)
+        if isinstance(trace.meta, dict)
+        and ["edge", "C1-C3"] in trace.meta.get(section_drawing.SELECT_META, [])
+    )
+    assert section_drawing.selected_reference(
+        figure, [{"curve_number": edge_curve, "point_index": 0}]
+    ) == ("edge", "C1-C3")
+    assert section_drawing.selected_reference(
+        figure, [{"curve_number": curves["reinforcing bar"], "point_index": 0}]
+    ) == ("bar", "R1")
+    assert section_drawing.selected_reference(
+        figure,
+        [{"curve_number": curves["origin O (moment reference)"],
+          "point_index": 0}],
+    ) is None
+    assert section_drawing.selected_reference(figure, [{"x": 1}]) is None
+    # O far outside the section is named in the legend only (I1-R1-N05).
+    far = section_drawing.section_figure(
+        _rectangle(10.0, 10.0, 10.2, 10.3), show_origin=True,
+    )
+    names = [trace.name for trace in far.data]
+    assert "origin O (moment reference) outside the view" in names
     # A result figure without IDs keeps the ring-order numbers and no targets.
     plain = section_drawing.section_figure(outer, holes, show_labels=True)
     assert _meta_references(plain) == []
@@ -308,20 +337,34 @@ state.configure({
   data_version: "1",
 })
 const number = { type: "number" }
-const paste = ["12,5", "-3,25", "1.5", "1,234,5", "1,5.0", "abc", ""]
-  .map(value => state.pasteValue(value, number))
+const paste = [
+  "12,5", "-3,25", "1.5", "0,125", "1,200", "-12,000", "1,2000",
+  "1,234,5", "1,5.0", "abc", "",
+].map(value => state.pasteValue(value, number))
 const rows = [
   { ID: "V1", "x (mm)": 1, "y (mm)": 1 },
   { ID: "", "x (mm)": 2, "y (mm)": 2 },
   { ID: "V3", "x (mm)": null, "y (mm)": null },
   { ID: "V1", "x (mm)": 3, "y (mm)": 3 },
   { ID: "", "x (mm)": 4, "y (mm)": null },
+  { ID: "V5", "x (mm)": "x (mm)", "y (mm)": "y (mm)" },
+  { ID: "", "x (mm)": "abc", "y (mm)": 0 },
 ]
 state.applyIds(rows)
 const blank = state.blankRow()
+globalThis.document = { createElement: tag => ({ tag, textContent: "" }) }
+const cellElement = {
+  classList: { toggle() {} }, setAttribute() {}, removeAttribute() {},
+}
+const markup = "<img src=x onerror=alert(1)>"
+const formatted = state.formatNumber({
+  getValue: () => markup, getElement: () => cellElement,
+})
 console.log(JSON.stringify({
   paste, ids: rows.map(row => row.ID), next: state.nextId,
   coerced: state.coerceValue("abc", number), blank: blank.ID,
+  text: rows.map(row => state.hasTextCell(row)),
+  formatted: { type: typeof formatted, tag: formatted.tag, text: formatted.textContent },
 }))
 """,
         encoding="utf-8",
@@ -332,16 +375,28 @@ console.log(JSON.stringify({
     )
     assert completed.returncode == 0, completed.stderr
     out = json.loads(completed.stdout)
-    # One comma and no dot is a decimal comma; other text stays as an error cell.
-    assert out["paste"] == [12.5, -3.25, 1.5, "1,234,5", "1,5.0", "abc", None]
+    # One comma and no dot is a decimal comma. A comma that can be a thousands
+    # separator (1,200 and -12,000) is not read; other text stays as an error
+    # cell (I1-R1-03).
+    assert out["paste"] == [
+        12.5, -3.25, 1.5, 0.125, "1,200", "-12,000", 1.2,
+        "1,234,5", "1,5.0", "abc", None,
+    ]
     # The emitted value of an error cell is blank, so the row is incomplete.
     assert out["coerced"] is None
     # Valid IDs stay, a duplicate or a missing ID gets the next counter number
     # (9 from the region, not 4 above the largest ID), a separator has no ID.
-    assert out["ids"] == ["V1", "V9", "", "V10", "V11"]
-    assert out["next"] == 12
+    # A row with text but no number is a separator in the browser and in Python
+    # (I1-R1-04); the payload names it in text_rows.
+    assert out["ids"] == ["V1", "V9", "", "V10", "V11", "", "V12"]
+    assert out["text"] == [False, False, False, False, False, True, True]
+    assert out["next"] == 13
     # A new void row starts blank, so it is a separator until it has a value.
     assert out["blank"] == ""
+    # An error cell is a text node, never HTML from the clipboard (Codex P2).
+    assert out["formatted"] == {
+        "type": "object", "tag": "span", "text": "<img src=x onerror=alert(1)>",
+    }
 
 
 # --- Decision 28 and the section view in the application ------------------
@@ -406,18 +461,25 @@ def _upload(at, text: str):
     return at
 
 
-def _submit(at, editor, rows, *, next_id=None):
-    """Submit one grid report as the browser sends it."""
+def _submit(at, editor, rows, *, next_id=None, text_rows=None):
+    """Submit one grid report as the browser sends it.
+
+    The report carries the seed version that the grid last rendered with, as
+    in the browser, not the version that Python stores.
+    """
 
     from app_workflow_navigation import goto_input_stage
 
     goto_input_stage(at, "Section")
-    payload = {
-        "data_version": str(at.session_state[editor + "_ver"]),
-        "rows": copy.deepcopy(rows),
-    }
+    try:
+        version = at.session_state[editor]["payload"]["data_version"]
+    except (KeyError, TypeError):
+        version = str(at.session_state[editor + "_ver"])
+    payload = {"data_version": str(version), "rows": copy.deepcopy(rows)}
     if next_id is not None:
         payload["next_id"] = next_id
+    if text_rows is not None:
+        payload["text_rows"] = text_rows
     at.session_state[editor] = {"payload": payload, "selection": None}
     at.run()
     assert not at.exception
@@ -529,6 +591,38 @@ def test_app_load_edit_save_keeps_each_corner_and_void_id(_isolated_autosave):
     assert at.session_state["hole_base"]["ID"].tolist() == [
         "V1", "V9", "V3", "V4", "",
     ]
+    void_rows = [
+        _row("V1", -30.0, -80.0), _row("V9", 30.0, -80.0),
+        _row("V3", 30.0, -20.0), _row("V4", -30.0, -20.0),
+    ]
+    # I1-R1-01 probe: a report where Python clears an ID (a row with the ID
+    # V20 and no number, as an older grid sent a pasted text-only row). The grid
+    # re-seeds before it renders, so the next browser report, with the version
+    # that the grid rendered with, keeps its edit of V1.
+    _submit(at, "ed_hole", void_rows + [_row("V20", None, None)])
+    assert at.session_state["hole_base"]["ID"].tolist() == [
+        "V1", "V9", "V3", "V4", "",
+    ]
+    edited = copy.deepcopy(void_rows)
+    edited[0]["x (mm)"] = -40.0
+    _submit(at, "ed_hole", edited)
+    assert at.session_state["hole_base"]["x (mm)"].iloc[0] == -40.0
+    # I1-R1-04 and -05: a text-only row (reported in text_rows) and a row with
+    # one blank coordinate are named under the grid and block the calculation;
+    # neither joins two voids.
+    _submit(at, "ed_hole", [
+        void_rows[0], void_rows[1], _row("", None, None),
+        void_rows[2], _row("V4", None, -20.0),
+    ], text_rows=[2])
+    warnings = [str(item.value) for item in at.warning]
+    assert any(
+        "Incomplete rows: V4, void table row 3." in text for text in warnings
+    ), warnings
+    error = at.session_state["_latest_inputs"]["geometry_error"]
+    assert error is not None and "V4, void table row 3" in error.text
+    # The corrected rows calculate again.
+    _submit(at, "ed_hole", void_rows)
+    assert at.session_state["_latest_inputs"]["geometry_error"] is None
 
 
 def test_section_view_properties_selection_and_origin_move(_isolated_autosave):
@@ -552,9 +646,11 @@ def test_section_view_properties_selection_and_origin_move(_isolated_autosave):
     goto_input_stage(at, "Section")
     table = next(
         str(item.value) for item in at.markdown
-        if "Net concrete area" in str(item.value)
+        if "Area $A_c$" in str(item.value)
     )
-    assert "| 56 000 mm$^2$ |" in table
+    assert "| Area $A_c$ | 56 000 mm$^2$ |" in table
+    assert "Reinforcement ratio $A_s / A_c$ (all bars)" in table
+    assert "rho" not in table
     assert "(104.3, 150.0) mm" in table
     assert "$4.467 \\times 10^{8}$ mm$^4$" in table
     assert "$1.840 \\times 10^{8}$ mm$^4$" in table
@@ -576,14 +672,43 @@ def test_section_view_properties_selection_and_origin_move(_isolated_autosave):
         assert "section_compact" in at.session_state["_fig_cache"]
     goto_input_stage(at, "Section")
     cases_before = at.session_state["plastic_cases_base"].copy(deep=True)
+    # Two torsion sub-rectangles (centre x, centre y, b, h) that partition the
+    # outer 200 x 300 rectangle (EN 1992-1-1 6.3.1(3) input), stored as the
+    # torsion inputs of the project.
+    subrects = [(100.0, 75.0, 200.0, 150.0), (100.0, 225.0, 200.0, 150.0)]
+    for index, (x0, y0, _b, _h) in enumerate(subrects):
+        at.session_state[f"torsion_sub_x{index}"] = x0
+        at.session_state[f"torsion_sub_y{index}"] = y0
+    outer_before = [(0.0, 0.0), (200.0, 0.0), (200.0, 300.0), (0.0, 300.0)]
+    assert geometry.rectangles_partition_concrete(
+        outer_before, [], subrects
+    ) == (True, "")
     at.button(key="move_origin_to_centroid").click().run()
     assert any(
-        "Sector does not change the entered moments" in str(item.value)
+        "keep their values and then act about the new origin, so the results "
+        "of a case with N not 0 change" in str(item.value)
         for item in at.warning
     )
     at.button(key="confirm_move_origin").click().run()
     assert not at.exception
     xc = (60_000.0 * 100.0 - 4_000.0 * 40.0) / 56_000.0
+    # I1-R1-02: the torsion sub-rectangles move with the section, so the
+    # partition of the moved outline stays valid.
+    moved_rects = [
+        (
+            at.session_state[f"torsion_sub_x{index}"],
+            at.session_state[f"torsion_sub_y{index}"],
+            b, h,
+        )
+        for index, (_x, _y, b, h) in enumerate(subrects)
+    ]
+    assert [value for rect in moved_rects for value in rect[:2]] == pytest.approx(
+        [100.0 - xc, -75.0, 100.0 - xc, 75.0], abs=1e-6
+    )
+    outer_after = [(x - xc, y - 150.0) for x, y in outer_before]
+    assert geometry.rectangles_partition_concrete(
+        outer_after, [], moved_rects
+    ) == (True, "")
     moved = at.session_state["corners_base"]
     assert moved["ID"].tolist() == ["C1", "C2", "C3", "C4"]
     assert moved["x (mm)"].tolist() == pytest.approx(
@@ -603,10 +728,12 @@ def test_section_view_properties_selection_and_origin_move(_isolated_autosave):
     )
     # Decision 10: the entered moments do not change.
     pd.testing.assert_frame_equal(at.session_state["plastic_cases_base"], cases_before)
-    # An incomplete corner row is reported under its grid (UI-02).
+    # An incomplete corner row is reported under its grid and blocks the
+    # calculation (UI-02, I1-R1-05).
     rows = at.session_state["corners_base"].to_dict("records")
     rows.append(_row("", 10.0, None))
     _submit(at, "ed_corners", rows)
     assert any(
-        "1 incomplete row not used (C5)" in str(item.value) for item in at.warning
+        "Incomplete rows: C5." in str(item.value) for item in at.warning
     )
+    assert at.session_state["_latest_inputs"]["geometry_error"] is not None

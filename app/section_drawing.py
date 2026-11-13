@@ -230,6 +230,30 @@ def _marker_sizes(points, base, lo, hi):
     return [min(max(base * (d / med), lo), hi) if d > 0.0 else base for d in dias]
 
 
+def selected_reference(figure, points):
+    """Return ``(family, ID)`` of the first selectable clicked point, or None.
+
+    ``points`` is the Plotly selection (``curve_number`` and ``point_index``).
+    Only traces with ``SELECT_META`` are selectable; a label, the origin or the
+    selection mark gives None.
+    """
+
+    for point in points or ():
+        try:
+            trace = figure.data[int(point["curve_number"])]
+            index = int(point.get("point_index", point.get("point_number")))
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+        meta = getattr(trace, "meta", None)
+        if not isinstance(meta, dict):
+            continue
+        references = meta.get(SELECT_META) or []
+        if 0 <= index < len(references):
+            family, element_id = references[index]
+            return family, element_id
+    return None
+
+
 def _ring_edges(ids, ring):
     """Return ``(edge ID, start, end)`` of one closed ring with corner IDs."""
 
@@ -484,7 +508,26 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
             fig, outer, holes, bars, tendons, label_scale, label_min_gap,
             bar_ids, tendon_ids, corner_labels,
         )
-    if show_origin:
+    origin_far = False
+    if show_origin and outer:
+        oxs = [p[0] for p in outer]
+        oys = [p[1] for p in outer]
+        reach = max(max(oxs) - min(oxs), max(oys) - min(oys))
+        # A plotted O far from the section makes the drawing small. Name O in
+        # the legend only when it lies more than one section size outside.
+        origin_far = not (
+            min(oxs) - reach <= 0.0 <= max(oxs) + reach
+            and min(oys) - reach <= 0.0 <= max(oys) + reach
+        )
+    if show_origin and origin_far:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers",
+            marker=dict(size=14, symbol="cross-thin-open",
+                        line=dict(width=2, color=ORIGIN_MARK)),
+            name="origin O (moment reference) outside the view",
+            hoverinfo="skip", showlegend=True,
+        ))
+    elif show_origin:
         fig.add_trace(go.Scatter(
             x=[0.0], y=[0.0], mode="markers+text", text=["O"],
             textposition="bottom left",

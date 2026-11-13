@@ -6,8 +6,10 @@ header, freely editable numeric cells and Excel-style block paste -- features
 ``st.data_editor`` cannot combine. The corner, void, bar and tendon grids keep
 persistent IDs (the same IDs as the section view); a grid without an ID column
 auto-numbers its complete rows. A pasted cell with one comma and no dot is a
-decimal comma, and a pasted text that is not a number stays visible as an error
-cell. A click on an ID selects that element in the section view. It is a self-contained Streamlit Components v2 component: the
+decimal comma (except a possible thousands separator such as 1,200), and a
+pasted text that is not a number stays visible as an error cell. A click on an
+ID selects that element in the section view. It is a self-contained Streamlit
+Components v2 component: the
 vendored Tabulator assets and Sector renderer under ``point_grid_frontend/`` are
 passed as inline content, so the frozen desktop app needs no separately installed
 component package and no frontend build step.
@@ -225,6 +227,28 @@ def reported_next_id(value, data_version) -> int | None:
     if type(number) is float and number.is_integer():
         number = int(number)
     return number if type(number) is int and number >= 1 else None
+
+
+def reported_text_rows(value, data_version) -> list[int]:
+    """Return the row positions with text in a number cell, from the last report.
+
+    The browser sends such a cell as a blank cell, so Python can only name the
+    row from this list.
+    """
+    if not isinstance(value, dict):
+        return []
+    nested = value.get("payload")
+    if isinstance(nested, dict):
+        value = nested
+    if str(value.get("data_version")) != str(data_version):
+        return []
+    rows = value.get("text_rows")
+    if not isinstance(rows, list):
+        return []
+    return sorted({
+        int(index) for index in rows
+        if type(index) is int and index >= 0
+    })
 
 
 def selection_event(value, data_version) -> tuple[str, str] | None:

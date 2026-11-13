@@ -54,12 +54,26 @@ function createPointGridInstance(parentElement) {
 
   state.isPersistentId = () => Boolean(state.idColumn)
 
-  // A void-table row with every number cell blank separates two voids. It has
-  // no ID, so the ID column shows the voids as separate groups.
-  state.isSeparator = row => state.separatorRows && state.columnSpecs.every(spec => {
-    if (spec.type !== "number") return true
+  // A number cell is usable only with a finite number. Number("") and
+  // Number(null) are 0, so test the blank forms first.
+  state.isNumberValue = value => (
+    value !== null && value !== undefined && value !== ""
+    && Number.isFinite(Number(value))
+  )
+
+  // Python receives a text cell as a blank cell. A void-table row without any
+  // usable number therefore separates two voids in Python and in the browser
+  // alike, and it has no ID. A row with text in a number cell is reported in
+  // ``text_rows``, so Python names it and blocks the calculation.
+  state.isSeparator = row => state.separatorRows && state.columnSpecs.every(
+    spec => spec.type !== "number" || !state.isNumberValue(row[spec.field]),
+  )
+
+  state.hasTextCell = row => state.columnSpecs.some(spec => {
+    if (spec.type !== "number") return false
     const value = row[spec.field]
-    return value === null || value === undefined || value === ""
+    return typeof value === "string" && value.trim().length > 0
+      && !Number.isFinite(Number(value))
   })
 
   state.idPattern = () => new RegExp(
@@ -150,13 +164,16 @@ function createPointGridInstance(parentElement) {
   }
 
   // Paste rule: a cell with exactly one comma and no dot is a decimal comma.
-  // A non-numeric text stays in the cell as an error cell. It is not a number,
-  // so the row is incomplete until the engineer corrects it.
+  // A comma after a non-zero integer of one to three digits and before exactly
+  // three digits (1,200) can also be a thousands separator, so the cell is not
+  // read. A non-numeric text stays in the cell as an error cell. It is not a
+  // number, so the row is incomplete until the engineer corrects it.
   state.pasteValue = (raw, spec) => {
     if (spec.type !== "number") return state.coerceValue(raw, spec)
     const text = String(raw ?? "").trim()
     if (!text.length) return null
     const commas = (text.match(/,/g) || []).length
+    if (commas === 1 && /^[+-]?[1-9][0-9]{0,2},[0-9]{3}$/.test(text)) return text
     const candidate = commas === 1 && !text.includes(".")
       ? text.replace(",", ".")
       : text
@@ -198,6 +215,9 @@ function createPointGridInstance(parentElement) {
     const payload = {
       data_version: state.dataVersion,
       rows: state.currentRows(),
+      text_rows: state.table.getData()
+        .map((row, index) => (state.hasTextCell(row) ? index : -1))
+        .filter(index => index >= 0),
     }
     // The next number of the browser counter, so Python can keep a number that
     // was issued and deleted between two reports out of use.
@@ -290,8 +310,15 @@ function createPointGridInstance(parentElement) {
       && !Number.isFinite(Number(value))
     element.classList.toggle("pg-invalid", invalid)
     if (invalid) {
-      element.setAttribute("title", "Not a number. Enter a number.")
-      return value
+      element.setAttribute(
+        "title",
+        "Not read as a number. Enter a number with a decimal point.",
+      )
+      // Tabulator writes a string result as HTML. Return a text node, so
+      // pasted clipboard text can never become markup.
+      const text = document.createElement("span")
+      text.textContent = value
+      return text
     }
     element.removeAttribute("title")
     if (value === null || value === undefined || value === "") return ""

@@ -51,6 +51,7 @@ from point_grid import (  # noqa: E402
     _versioned_rows,
     point_grid,
     reported_next_id,
+    reported_text_rows,
     selection_event,
 )
 from sector import __author__ as sector_author  # noqa: E402
@@ -2413,11 +2414,17 @@ def _record_point_table_event(base_key, ed_key, cols) -> None:
 def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     """Draw the editable grid and return its current contents as a DataFrame.
 
-    One Tabulator grid carries the frozen, auto-numbered ID column (from
-    ``id_start``, matching the plot), a frozen header and freely editable numeric
-    cells with Excel block paste. The grid owns its live state across reruns and
-    only re-seeds when its version token changes (see ``_reseed_table``), so a
-    typed or pasted value sticks on the first keystroke instead of lagging behind.
+    One Tabulator grid carries a frozen ID column, a frozen header and freely
+    editable numeric cells with Excel block paste. The corner, void, bar and
+    tendon grids show their persistent IDs; a grid without an ID column numbers
+    its complete rows from ``id_start``. The grid owns its live state across
+    reruns and only re-seeds when its version token changes (see
+    ``_reseed_table``), so a typed or pasted value sticks on the first keystroke
+    instead of lagging behind.
+
+    When Python must issue a corner ID that the last grid report does not show
+    (a row without a valid ID), the grid re-seeds before it renders in the same
+    run. The next report then carries the new version, so no edit is lost.
     """
     if not bool(getattr(box, "open", True)):
         base = st.session_state[base_key]
@@ -2447,6 +2454,30 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
         if kind else {}
     )
     if geometry:
+        # The browser counter first, so a number issued and deleted between
+        # two reports is not issued again here.
+        _advance_region_counter(
+            base_key,
+            section_ids.empty_geometry_table(),
+            reported_next_id(st.session_state.get(ed_key), data_version),
+        )
+        reported = _versioned_rows(st.session_state.get(ed_key), data_version)
+        if reported is not None:
+            frame = _rows_to_df(reported, cols, specs)
+            normalised = _geometry_table(frame, base_key)
+            reported_ids = [
+                value.strip() if isinstance(value, str) else ""
+                for value in frame[section_ids.ID].tolist()
+            ]
+            if normalised[section_ids.ID].tolist() != reported_ids:
+                # Re-seed before the grid renders: the grid then shows the new
+                # ID in this run, and its next report has the current version.
+                _advance_region_counter(base_key, normalised)
+                st.session_state[base_key] = normalised
+                version += 1
+                st.session_state[ed_key + "_ver"] = version
+                st.session_state.pop(ed_key, None)
+                data_version = _point_data_version(base_key, version)
         options.update({
             "id_column": section_ids.ID,
             "id_prefix": section_ids.table_prefix(base_key),
@@ -2483,24 +2514,8 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     if kind:
         stable = rebar_table.normalise_table(edited, kind)
     elif geometry:
-        # The browser counter first, so a number issued and deleted between
-        # two reports is not issued again here.
-        _advance_region_counter(
-            base_key,
-            section_ids.empty_geometry_table(),
-            reported_next_id(st.session_state.get(ed_key), data_version),
-        )
         stable = _geometry_table(edited, base_key)
         _advance_region_counter(base_key, stable)
-        reported_ids = edited.reindex(columns=[section_ids.ID])[section_ids.ID]
-        if stable[section_ids.ID].tolist() != [
-            str(value).strip() if isinstance(value, str) else ""
-            for value in reported_ids.tolist()
-        ]:
-            # Python issued an ID that the grid does not show (a row without
-            # a valid ID). Re-seed the grid, so the same report cannot issue a
-            # second number on the next run and the grid shows the new ID.
-            st.session_state[ed_key + "_ver"] = version + 1
     else:
         stable = edited.reindex(columns=cols).copy(deep=True)
     current_geometry = _point_table_geometry_frame(stable, base_key, cols)
@@ -2515,14 +2530,6 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
         _prune_applied_quick_section_settings(base_key)
     st.session_state[base_key] = stable.copy(deep=True)
     return stable
-
-
-def _point_editor(box, base_key, ed_key, cols, id_start=1):
-    """Editable point table. A row is only used once all its coordinates are
-    filled, so a half-typed point is ignored rather than rejected. Returns the
-    valid points, numbered by position (the order they appear)."""
-    return _pts_from_df(_render_point_table(box, base_key, ed_key, cols, id_start),
-                        cols)
 
 
 def _reinforcement_kind(base_key):
@@ -2791,48 +2798,70 @@ def _void_groups(df, cols):
     return groups
 
 
-def _incomplete_rows_notice(box, frame, base_key) -> None:
-    """Show the rows of one geometry grid that the section does not use (UI-02)."""
+_GEOMETRY_TABLE_NAMES = {"corners_base": "corner", "hole_base": "void"}
 
-    if not bool(getattr(box, "open", True)):
+
+def _geometry_row_issues(frame, base_key, ed_key) -> list[str]:
+    """Return the incomplete rows of one corner or void grid (UI-02).
+
+    A row with one blank or non-numeric coordinate has an ID and is named by
+    it. In the void table, a row with text but no number has no ID (it reads
+    as a separator); the last grid report names it by its row position.
+    """
+
+    issues = list(section_ids.incomplete_row_ids(frame, base_key))
+    version = st.session_state.get(ed_key + "_ver", 0)
+    text_rows = reported_text_rows(
+        st.session_state.get(ed_key), _point_data_version(base_key, version)
+    )
+    ids = frame[section_ids.ID].tolist() if section_ids.ID in frame else []
+    for index in text_rows:
+        if index < len(ids) and not ids[index]:
+            issues.append(
+                f"{_GEOMETRY_TABLE_NAMES[base_key]} table row {index + 1}"
+            )
+    return issues
+
+
+def _incomplete_rows_notice(box, issues) -> None:
+    """Name the incomplete rows under their grid (UI-02, fail closed)."""
+
+    if not issues or not bool(getattr(box, "open", True)):
         return
-    missing = section_ids.incomplete_row_ids(frame, base_key)
-    if not missing:
-        return
-    shown = ", ".join(missing[:8]) + (", ..." if len(missing) > 8 else "")
-    count = len(missing)
+    shown = ", ".join(issues[:8]) + (", ..." if len(issues) > 8 else "")
     _manual_warning(
         box,
         "geometry-invalid",
-        f"{count} incomplete row{'s' if count != 1 else ''} not used "
-        f"({shown}). Enter a number for x and y, or delete the "
-        f"row{'s' if count != 1 else ''}.",
+        f"Incomplete rows: {shown}. Sector does not calculate until each row "
+        "has a number for x and y. Correct or delete these rows.",
     )
 
 
 def _geometry_editor(box, base_key, ed_key):
-    """Render one corner or void grid and return its rings with their IDs.
+    """Render one corner or void grid; return its rings and incomplete rows.
 
     Each ring is a list of ``{"id", "x", "y"}`` rows in millimetres
     (``section_ids.ring_rows``). The corner table is one ring; the void table
-    has one ring for each void.
+    has one ring for each void. An incomplete row is not a corner of a ring;
+    the caller blocks the calculation while the list of incomplete rows is not
+    empty, so that a row with one blank coordinate cannot join two voids.
     """
 
     frame = _render_point_table(box, base_key, ed_key, _GEOMETRY_COLS)
-    _incomplete_rows_notice(box, frame, base_key)
-    return section_ids.ring_rows(frame, base_key, _region_counter(base_key))
+    issues = _geometry_row_issues(frame, base_key, ed_key)
+    _incomplete_rows_notice(box, issues)
+    rings = section_ids.ring_rows(frame, base_key, _region_counter(base_key))
+    return rings, issues
 
 
-def _void_editor(box, base_key, ed_key, id_start=1):
+def _void_editor(box, base_key, ed_key):
     """Editable void table: several voids in one table, separated by a blank row.
     Returns the hole rings (each void with 3 or more corners) as rows with their
     IDs, capped at ``_MAX_VOIDS`` -- the cap is enforced here, not only on the
     Add button, so a paste of more voids cannot push extra holes into the drawing
-    and analysis."""
-    rings = [
-        ring for ring in _geometry_editor(box, base_key, ed_key)
-        if len(ring) >= 3
-    ]
+    and analysis -- and the incomplete rows of the table."""
+    all_rings, issues = _geometry_editor(box, base_key, ed_key)
+    rings = [ring for ring in all_rings if len(ring) >= 3]
     if len(rings) > _MAX_VOIDS:
         _manual_warning(
             box,
@@ -2840,12 +2869,20 @@ def _void_editor(box, base_key, ed_key, id_start=1):
             f"Only the first {_MAX_VOIDS} voids are used; "
             f"{len(rings) - _MAX_VOIDS} extra ignored.",
         )
-    return rings[:_MAX_VOIDS]
+    return rings[:_MAX_VOIDS], issues
 
 
 def _void_table_with_new_void(frame):
-    """Append one separator row, so the next corners start a new void."""
+    """Append one separator row, so the next corners start a new void.
 
+    A table that already ends with a separator row stays as it is.
+    """
+
+    frame = frame.reindex(columns=_GEOMETRY_COLS).reset_index(drop=True)
+    if not frame.empty and all(
+        _to_number(frame[column].iloc[-1]) is None for column in _CORNER_COLS
+    ):
+        return frame
     blank = pd.DataFrame(
         [{section_ids.ID: "", _CORNER_COLS[0]: None, _CORNER_COLS[1]: None}],
         columns=_GEOMETRY_COLS,
@@ -8702,12 +8739,18 @@ def build_inputs(host=st):
     if provenance_notice:
         sec.success(provenance_notice)
     sec.caption("Concrete corners define the outline; voids are optional inner "
-                "rings. Reinforcement IDs remain fixed. Choose Area, Diameter or "
-                "Independent; derived cells are shaded. Paste x/y/area or all "
-                "editable columns.")
+                "rings. Corner, void, bar and tendon IDs remain fixed. Choose "
+                "Area, Diameter or Independent; derived cells are shaded. Paste "
+                "x/y/area or all editable columns.")
+    sec.caption("Paste reads one comma as a decimal comma: 12,5 gives 12.5. A "
+                "value such as 1,200 is not read, because the comma can be a "
+                "thousands separator. A cell that is not read shows its text in "
+                "red. Examine the value that each cell shows.")
     sec.markdown("_Concrete corners_")
     _table_field_guide(sec, table_fields.CONCRETE_CORNERS_TABLE_KEY)
-    outer_rings = _geometry_editor(sec, "corners_base", "ed_corners")
+    outer_rings, outer_row_issues = _geometry_editor(
+        sec, "corners_base", "ed_corners"
+    )
     outer_rows = outer_rings[0] if outer_rings else []
     outer_mm = [(row["x"], row["y"]) for row in outer_rows]
     outer_ids = [row["id"] for row in outer_rows]
@@ -8742,7 +8785,7 @@ def build_inputs(host=st):
             "hole_base", "ed_hole", _void_table_without_last_void(void_now)
         )
         _prune_applied_quick_section_settings("hole_base")
-    hole_rows = _void_editor(sec, "hole_base", "ed_hole")
+    hole_rows, hole_row_issues = _void_editor(sec, "hole_base", "ed_hole")
     holes_mm = [[(row["x"], row["y"]) for row in ring] for ring in hole_rows]
     hole_ids = [[row["id"] for row in ring] for ring in hole_rows]
     holes = [_pts_to_m(ring) for ring in holes_mm]
@@ -9171,6 +9214,17 @@ def build_inputs(host=st):
                 fallback=_SECTION_GEOMETRY_DISPLAY,
                 context="section geometry construction",
             )
+    # An incomplete corner or void row blocks the calculation (fail closed, as
+    # project_io at load and save): such a row could join two voids.
+    geometry_row_issues = tuple(outer_row_issues) + tuple(hole_row_issues)
+    if geometry_row_issues and geometry_error is None:
+        geometry_error = EngineerMessage(
+            "GEOMETRY-ROW-INPUT",
+            "Enter a number for x and y in each corner and void row, or "
+            "delete the incomplete rows: "
+            + ", ".join(geometry_row_issues[:8])
+            + (", ..." if len(geometry_row_issues) > 8 else ""),
+        )
     # A void must not split the concrete into disconnected pieces (e.g. a slot
     # reaching across the section): such a section has no valid capacity.
     void_error = None
@@ -9244,6 +9298,10 @@ def build_inputs(host=st):
                  _element_signature(tendon_elements),
                  tuple(bar_row_issues), tuple(tendon_row_issues),
                  _slab_density_signature(slab_density))
+    if geometry_row_issues:
+        # Only an incomplete input extends the signature, so the signature of
+        # a complete section is unchanged.
+        geom_sig = geom_sig + (("geometry-row-issues", geometry_row_issues),)
     # Table actions live in their canonical frames, while the shared calculation
     # context excludes row values. Exact row signatures then let the case engine
     # reuse unchanged rows when another row is edited.
@@ -9876,20 +9934,23 @@ def _section_properties_table(box, properties, bars, tendons) -> None:
     rows = [
         "| Property | Value |",
         "|---|---|",
-        f"| Net concrete area $A_c$ | {spaced(area_mm2)} mm$^2$ |",
-        f"| Gross centroid $(x_c, y_c)$ | ({cx_mm:.1f}, {cy_mm:.1f}) mm |",
-        f"| $I_x$ about the centroid | {_times_ten(i_x, 'mm$^4$')} |",
-        f"| $I_y$ about the centroid | {_times_ten(i_y, 'mm$^4$')} |",
+        f"| Area $A_c$ | {spaced(area_mm2)} mm$^2$ |",
+        f"| Centroid $(x_c, y_c)$ | ({cx_mm:.1f}, {cy_mm:.1f}) mm |",
+        f"| $I_x$ about the centroidal axis parallel to x | "
+        f"{_times_ten(i_x, 'mm$^4$')} |",
+        f"| $I_y$ about the centroidal axis parallel to y | "
+        f"{_times_ten(i_y, 'mm$^4$')} |",
         f"| $I_{{xy}}$ about the centroid | {_times_ten(i_xy, 'mm$^4$')} |",
         f"| Total bar area $A_s$ | {spaced(a_s)} mm$^2$ |",
         f"| Total tendon area $A_p$ | {spaced(a_p)} mm$^2$ |",
-        f"| $\\rho_l = A_s / A_c$ | {100.0 * a_s / area_mm2:.3f} % |",
+        f"| Reinforcement ratio $A_s / A_c$ (all bars) | "
+        f"{100.0 * a_s / area_mm2:.3f} % |",
     ]
-    box.markdown("**Section properties**")
+    box.markdown("**Gross section properties**")
     box.markdown("\n".join(rows))
     box.caption(
-        "Gross concrete properties without the reinforcement. "
-        "They are for the input check only."
+        "Gross section: the concrete with the voids deducted and without the "
+        "reinforcement. For the input check only."
     )
 
 
@@ -9904,21 +9965,9 @@ def _record_view_selection(chart_key, memo_name) -> None:
     entry = st.session_state.get("_fig_cache", {}).get(memo_name)
     if entry is None or not points:
         return
-    figure = entry[1]
-    for point in points:
-        try:
-            trace = figure.data[int(point["curve_number"])]
-            index = int(point.get("point_index", point.get("point_number")))
-        except (KeyError, TypeError, ValueError, IndexError):
-            continue
-        meta = getattr(trace, "meta", None)
-        if not isinstance(meta, dict):
-            continue
-        references = meta.get(section_drawing.SELECT_META) or []
-        if 0 <= index < len(references):
-            family, element_id = references[index]
-            _set_section_selection(family, element_id)
-            return
+    reference = section_drawing.selected_reference(entry[1], points)
+    if reference is not None:
+        _set_section_selection(*reference)
 
 
 def _selection_caption(selection, outer_ids, hole_ids, bar_ids, tendon_ids):
@@ -9943,13 +9992,22 @@ def _selection_caption(selection, outer_ids, hole_ids, bar_ids, tendon_ids):
 
 
 _MOVE_ORIGIN_CONFIRM_KEY = "_move_origin_confirm"
+# Stored inputs with coordinates in the section frame, beside the point tables:
+# the centres of the torsion sub-rectangles (EN 1992-1-1 6.3.1(3)).
+_SECTION_FRAME_SCALARS = tuple(
+    (f"torsion_sub_x{i}", f"torsion_sub_y{i}") for i in range(4)
+)
 
 
 def _shift_section_tables(dx_mm, dy_mm) -> None:
-    """Move every point of the four section tables by ``(dx, dy)`` in mm.
+    """Move every point of the section by ``(dx, dy)`` in mm.
 
-    The IDs, the rows and the other columns do not change (decision 10). The
-    applied Quick Section settings no longer describe the moved geometry.
+    The four point tables and each stored coordinate in the section frame
+    (``_SECTION_FRAME_SCALARS``, with their durable mirror) move together, so a
+    valid torsion partition stays valid. The IDs, the rows and the other columns
+    do not change (decision 10). The applied Quick Section settings no longer
+    describe the moved geometry. Call it from a widget callback: the torsion
+    inputs can be mounted in the same run.
     """
 
     tables = _section_table_snapshot()
@@ -9961,8 +10019,28 @@ def _shift_section_tables(dx_mm, dy_mm) -> None:
             frame[column] = (values + float(delta)).round(6).astype("float64")
         moved[base] = frame
     _reseed_section_tables(moved)
+    durable = st.session_state.get(_INPUT_STATE_KEY)
+    stores = [st.session_state] + ([durable] if isinstance(durable, dict) else [])
+    for keys in _SECTION_FRAME_SCALARS:
+        for key, delta in zip(keys, (dx_mm, dy_mm)):
+            for store in stores:
+                if key in store:
+                    value = _to_number(store[key])
+                    if value is not None:
+                        store[key] = round(value + float(delta), 6)
     for base in tables:
         _prune_applied_quick_section_settings(base)
+
+
+def _confirm_move_origin(dx_mm, dy_mm) -> None:
+    """Confirm-button callback of "Move origin to gross centroid"."""
+
+    st.session_state.pop(_MOVE_ORIGIN_CONFIRM_KEY, None)
+    _shift_section_tables(dx_mm, dy_mm)
+
+
+def _cancel_move_origin() -> None:
+    st.session_state.pop(_MOVE_ORIGIN_CONFIRM_KEY, None)
 
 
 def _move_origin_command(box, properties) -> None:
@@ -9975,37 +10053,31 @@ def _move_origin_command(box, properties) -> None:
         width="stretch",
         disabled=math.hypot(cx_mm, cy_mm) < 1e-6,
         help="Move all points so that the gross centroid is at O. "
-             "A separate confirmation is required.",
+             "You must confirm the move.",
     ):
         st.session_state[_MOVE_ORIGIN_CONFIRM_KEY] = True
     if not st.session_state.get(_MOVE_ORIGIN_CONFIRM_KEY):
         return
-    slot = box.empty()
-    with slot.container():
+    with box.container():
         _manual_warning(
             st,
             "confirmation-required",
-            f"Move all corners, voids, bars and tendons by "
-            f"({-cx_mm:.1f}, {-cy_mm:.1f}) mm? The IDs do not change. "
-            "The moments of the action cases then act about the new origin. "
-            "Sector does not change the entered moments.",
+            f"Move all corners, voids, bars, tendons and torsion "
+            f"sub-rectangles by ({-cx_mm:.1f}, {-cy_mm:.1f}) mm? The IDs do "
+            "not change. The entered case moments keep their values and then "
+            "act about the new origin, so the results of a case with N not 0 "
+            "change.",
         )
         confirm_col, cancel_col = st.columns(2)
-        confirm = confirm_col.button(
+        confirm_col.button(
             "Confirm move", key="confirm_move_origin", type="primary",
-            width="stretch",
+            width="stretch", on_click=_confirm_move_origin,
+            args=(-cx_mm, -cy_mm),
         )
-        cancel = cancel_col.button(
+        cancel_col.button(
             "Cancel", key="cancel_move_origin", width="stretch",
+            on_click=_cancel_move_origin,
         )
-    if confirm:
-        st.session_state.pop(_MOVE_ORIGIN_CONFIRM_KEY, None)
-        _shift_section_tables(-cx_mm, -cy_mm)
-        slot.empty()
-        st.rerun()
-    elif cancel:
-        st.session_state.pop(_MOVE_ORIGIN_CONFIRM_KEY, None)
-        slot.empty()
 
 
 def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
@@ -10109,7 +10181,7 @@ def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
                     outer,
                     holes,
                     bar_xy,
-                    title="Section view" if compact else "Section preview",
+                    title="Section view",
                     tendons=tendon_xy,
                     show_labels=True,
                     label_scale=label_scale,
@@ -10154,8 +10226,9 @@ def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
                 )
             else:
                 box.caption(
-                    "Select a corner, an edge middle, a bar or a tendon to mark "
-                    "its table rows. Select an ID in a table to mark it here."
+                    "Select a corner, the middle of an edge, a bar or a tendon "
+                    "to mark its table rows. Select an ID in a table to mark it "
+                    "here."
                 )
             if properties is not None:
                 offset = math.hypot(*properties.centroid)
@@ -10175,7 +10248,8 @@ def _section_input_preview(box, outer, holes, bars, tendons, bar_elements=None,
             if not compact:
                 if properties is None:
                     box.caption(
-                        "Section properties need a valid concrete outline."
+                        "Sector shows the section properties only for a "
+                        "valid concrete outline."
                     )
                 else:
                     _section_properties_table(box, properties, bars, tendons)
