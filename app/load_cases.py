@@ -6,6 +6,13 @@ Stresses are always calculation outputs; crack width is an optional numerical
 calculation per Elastic action. Independent long-term and short-term permitted
 widths are Analysis settings, not action-row fields. No required combinations
 are inferred.
+
+Schema 29 adds three case attributes to both tables: a location tag, the design
+situation (default persistent) and a reserved stage (blank or "final"). The
+attributes have no engineering effect in Sector 0.97.1. They are not part of
+the case records, the row signatures or the results, so an attribute edit does
+not make a result stale. The editors show ``TABLE_COLUMNS``; the canonical
+tables and the project files use ``PERSISTED_COLUMNS``.
 """
 
 from __future__ import annotations
@@ -90,6 +97,28 @@ ELASTIC_FLAGS = ("calculate_crack_width",)
 TABLE_COLUMNS = {
     PLASTIC_TABLE_KEY: PLASTIC_COLUMNS,
     ELASTIC_TABLE_KEY: ELASTIC_COLUMNS,
+}
+
+# Case attributes (schema 29) with no engineering effect.
+LOCATION_TAG = "location_tag"
+DESIGN_SITUATION = "design_situation"
+STAGE = "stage"
+ATTRIBUTE_COLUMNS = (LOCATION_TAG, DESIGN_SITUATION, STAGE)
+# EN 1990 3.2(2): persistent, transient, accidental and seismic situations.
+DESIGN_SITUATIONS = ("persistent", "transient", "accidental", "seismic")
+DEFAULT_DESIGN_SITUATION = "persistent"
+# The stage column is reserved: blank or "final" in Sector 0.97.1.
+FINAL_STAGE = "final"
+STAGES = ("", FINAL_STAGE)
+MAX_LOCATION_TAG_LENGTH = 60
+ATTRIBUTE_DEFAULTS = {
+    LOCATION_TAG: "",
+    DESIGN_SITUATION: DEFAULT_DESIGN_SITUATION,
+    STAGE: "",
+}
+PERSISTED_COLUMNS = {
+    key: (*columns, *ATTRIBUTE_COLUMNS)
+    for key, columns in TABLE_COLUMNS.items()
 }
 NUMERIC_COLUMNS = {
     PLASTIC_TABLE_KEY: PLASTIC_NUMERIC,
@@ -287,15 +316,101 @@ def empty_table(key: str) -> pd.DataFrame:
         data.setdefault(column, pd.Series(dtype="string"))
     data.update({column: pd.Series(dtype="bool")
                  for column in FLAG_COLUMNS[key]})
-    frame = pd.DataFrame(data, columns=TABLE_COLUMNS[key])
+    data.update({column: pd.Series(dtype="string")
+                 for column in ATTRIBUTE_COLUMNS})
+    frame = pd.DataFrame(data, columns=PERSISTED_COLUMNS[key])
     frame.attrs["sector_load_case_table"] = key
     return frame
+
+
+def _design_situation(value) -> str:
+    """Return a canonical design situation; keep invalid text for validation."""
+
+    text = _text(value)
+    if not text:
+        return DEFAULT_DESIGN_SITUATION
+    folded = text.casefold()
+    return folded if folded in DESIGN_SITUATIONS else text
+
+
+def _stage(value) -> str:
+    """Return a canonical reserved stage; keep invalid text for validation."""
+
+    text = _text(value)
+    folded = text.casefold()
+    return folded if folded in STAGES else text
+
+
+_ATTRIBUTE_MAPPERS = {
+    LOCATION_TAG: _text,
+    DESIGN_SITUATION: _design_situation,
+    STAGE: _stage,
+}
+
+
+def attribute_error(column: str, value) -> str | None:
+    """Return the reason why one attribute value is not valid, or ``None``."""
+
+    if column == LOCATION_TAG:
+        if type(value) is not str:
+            return "must be text"
+        if len(value) > MAX_LOCATION_TAG_LENGTH or any(
+            ord(character) < 32 for character in value
+        ):
+            return (
+                "must be one line of at most "
+                f"{MAX_LOCATION_TAG_LENGTH} characters"
+            )
+        return None
+    if column == DESIGN_SITUATION:
+        if value not in DESIGN_SITUATIONS:
+            return "must be persistent, transient, accidental or seismic"
+        return None
+    if column == STAGE:
+        if value not in STAGES:
+            return 'must be blank or "final"'
+        return None
+    raise ValueError(f"unknown case attribute: {column}")
+
+
+def attribute_errors(value, key: str) -> list[str]:
+    """Return one message for each invalid attribute cell of a table."""
+
+    frame = normalise_table(value, key)
+    errors = []
+    for row_number, row in enumerate(frame.to_dict("records"), start=1):
+        for column in ATTRIBUTE_COLUMNS:
+            reason = attribute_error(column, row[column])
+            if reason is not None:
+                errors.append(f"{key} row {row_number}: {column} {reason}")
+    return errors
+
+
+def case_attributes(value, key: str) -> dict[str, dict[str, str]]:
+    """Return the attributes of each active case, keyed by the case name.
+
+    Case names are unique over both tables (``validation_errors``), so the
+    result presentation can join these attributes to a result by its name. A
+    row without a name is left out.
+    """
+
+    frame = active_table(value, key)
+    attributes = {}
+    for row in frame.to_dict("records"):
+        name = _text(row[NAME])
+        if name:
+            attributes[name] = {
+                column: str(row[column]) for column in ATTRIBUTE_COLUMNS
+            }
+    return attributes
 
 
 def normalise_table(value, key: str) -> pd.DataFrame:
     """Coerce a table-like value to the canonical columns and dtypes.
 
-    Unknown columns are discarded. Blank force cells become zero and the
+    Unknown columns are discarded, and a missing attribute column gets its
+    default (blank location tag, persistent, blank stage). Blank force cells
+    become zero and the
     numeric action cells become zero; invalid nonblank values remain invalid so
     :func:`validation_errors` can reject them before calculation. A canonical
     frame carries an attrs ledger plus a tagged NaN sentinel: repeated validation
@@ -308,7 +423,7 @@ def normalise_table(value, key: str) -> pd.DataFrame:
     canonical_source = bool(
         isinstance(value, pd.DataFrame)
         and value.attrs.get("sector_load_case_table") == key
-        and tuple(value.columns) == TABLE_COLUMNS[key]
+        and tuple(value.columns) == PERSISTED_COLUMNS[key]
     )
     try:
         frame = value.copy(deep=True) if isinstance(value, pd.DataFrame) else pd.DataFrame(value)
@@ -364,7 +479,14 @@ def normalise_table(value, key: str) -> pd.DataFrame:
     for column in FLAG_COLUMNS[key]:
         source = frame[column] if column in frame else pd.Series(False, index=frame.index)
         result[column] = source.map(_flag).astype("bool")
-    result = result.loc[:, TABLE_COLUMNS[key]].reset_index(drop=True)
+    for column in ATTRIBUTE_COLUMNS:
+        source = (
+            frame[column]
+            if column in frame
+            else pd.Series(ATTRIBUTE_DEFAULTS[column], index=frame.index)
+        )
+        result[column] = source.map(_ATTRIBUTE_MAPPERS[column]).astype("string")
+    result = result.loc[:, PERSISTED_COLUMNS[key]].reset_index(drop=True)
     result.attrs["sector_load_case_table"] = key
     set_decimal_issue_ledger(result.attrs, issues)
     return result

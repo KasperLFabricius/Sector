@@ -1324,6 +1324,26 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
     return pre, updated
 
 
+def _group_material_ids(kind):
+    """Return the material IDs of the bar groups of one material kind.
+
+    A group material gets the same protection as a bar material, so a project
+    with a group stays savable (schema 29).
+    """
+    element = "bar" if kind == "mild" else "tendon"
+    groups = st.session_state.get(rebar_table.GROUPS_KEY)
+    items = groups.get("items") if isinstance(groups, dict) else None
+    if not isinstance(items, list):
+        return ()
+    return tuple(
+        str(item["material_id"]).strip()
+        for item in items
+        if isinstance(item, dict)
+        and item.get("element") == element
+        and str(item.get("material_id") or "").strip()
+    )
+
+
 def _assigned_ids_in_base_table(table_key, column):
     """Return durable grid assignments before catalogues are normalized."""
 
@@ -1365,9 +1385,13 @@ def _ensure_material_catalog_state():
                 "bars_base", rebar_table.MATERIAL_ID
             ),
             *capacity_material_ids,
+            *_group_material_ids("mild"),
         ),
-        "prestress": _assigned_ids_in_base_table(
-            "tendons_base", rebar_table.MATERIAL_ID
+        "prestress": (
+            *_assigned_ids_in_base_table(
+                "tendons_base", rebar_table.MATERIAL_ID
+            ),
+            *_group_material_ids("prestress"),
         ),
     }
     for kind in mat_catalog.KINDS:
@@ -1423,6 +1447,8 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
                             locked=False):
     """Edit one catalogue and return it with the selected material preview law."""
     key = mat_catalog.catalog_key(kind)
+    group_ids = set(_group_material_ids(kind))
+    protected_ids = (*protected_ids, *group_ids)
     reserved_ids = (*assigned_ids, *protected_ids)
     catalogue = mat_catalog.normalise_catalog(
         st.session_state[key], kind, reserved_ids=reserved_ids
@@ -1457,6 +1483,8 @@ def _material_catalog_panel(box, kind, assigned_ids, *, protected_ids=(),
                   or selected in protected),
         help=("Assigned materials cannot be deleted. Reassign their elements first."
               if counts.get(selected, 0) > 0 else
+              "A bar group in the project uses this material."
+              if selected in group_ids else
               "This material is the active member-check reference. Select another "
               "reference first." if selected in protected else None),
     )
@@ -3618,6 +3646,20 @@ def _reseed_section_tables(tables):
         _reseed_table(base, ed, canonical)
 
 
+def _live_point_table(base_key, df):
+    """Return a loaded point table with the columns of its live editor.
+
+    Schema 29 stores corner IDs and bar-group IDs in the project file. The
+    point editors do not show these columns yet, so the live tables keep their
+    present columns. A save then gives the corners their IDs in row order and
+    leaves the group IDs blank, which is the present behaviour.
+    """
+    kind = _reinforcement_kind(base_key)
+    if kind:
+        return rebar_table.normalise_table(df, kind)
+    return df.reindex(columns=_CORNER_COLS).copy(deep=True)
+
+
 def _clear_section_tables():
     """Empty every point table through the same grid-safe reseed path."""
     _reseed_section_tables({
@@ -4241,7 +4283,9 @@ def _apply_project_text(text: str) -> None:
             continue
         # Re-seed the grid (bump its version) so it rebuilds from the loaded points
         # rather than keeping the previous session's live state.
-        _reseed_table(key, ed_for_base.get(key, key + "_ed"), df)
+        _reseed_table(
+            key, ed_for_base.get(key, key + "_ed"), _live_point_table(key, df)
+        )
     for key, value in scalars.items():
         st.session_state[key] = value
     if "torsion_gamma_ct" in scalars:

@@ -3923,7 +3923,11 @@ def test_non_density_loaded_snapshot_survives_reload_draft_back_and_autosave(
     assert saved_scalars["qsv_qs_rebar_mode"] == "By number"
     for key, expected in tables_a.items():
         if key in saved_tables:
-            assert saved_tables[key].equals(expected), key
+            # Schema 29: the file adds the corner-ID and group-ID columns
+            # that the live editors of 0.97.1 do not show yet.
+            assert saved_tables[key].reindex(
+                columns=expected.columns
+            ).equals(expected), key
 
     _open_qs(restored)
     _apply_qs(restored)
@@ -4368,7 +4372,11 @@ def test_density_rows_require_explicit_conversion_before_persisting_as_bars(
     saved_tables, saved_scalars = project_io.parse_project(
         autosave.read_text(encoding="utf-8")
     )
-    assert saved_tables["bars_base"].equals(explicit)
+    # Schema 29: the file adds a blank group ID to each bar.
+    assert saved_tables["bars_base"].reindex(columns=explicit.columns).equals(
+        explicit
+    )
+    assert set(saved_tables["bars_base"]["group ID"]) <= {""}
     assert saved_scalars["qsv_shape"] == "Slab strip"
     assert "qsv_qs_rebar_mode" not in saved_scalars
     assert "qsv_bot_s" not in saved_scalars
@@ -5250,10 +5258,9 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
     ):
         payload["scalars"].pop(key)
     payload["scalars"][project_io.LEGACY_SHARED_CRACK_WIDTH_KEY] = 0.20
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     source = json.dumps(payload)
 
     at = _fresh()
@@ -5368,10 +5375,9 @@ def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
     payload["version"] = project_io.MIGRATABLE_VERSION
     payload["scalars"].pop("shear_gamma_v")
     payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY)
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
 
     at = _fresh()
     at.session_state["_pending_project"] = json.dumps(payload)
@@ -9690,16 +9696,22 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     elastic = _widget(at.dataframe, "elastic_cases_editor").value
     goto_action_family(at, "Plastic")
     plastic = _widget(at.dataframe, "plastic_cases_editor").value
+    # Schema 29: the editor data also holds the three case attributes. The
+    # column order of the editor (TABLE_COLUMNS) does not show them yet.
+    attributes = ["location_tag", "design_situation", "stage"]
     assert list(plastic.columns) == [
         "name", "description", "n_ed_kn", "mx_ed_knm", "my_ed_knm",
         "vx_ed_kn", "vy_ed_kn", "vx_face", "vy_face", "t_ed_knm",
-        "check_minimum_reinforcement",
+        "check_minimum_reinforcement", *attributes,
     ]
     assert list(elastic.columns) == [
         "name", "description",
         "n_long_ed_kn", "mx_long_ed_knm", "my_long_ed_knm",
         "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
-        "calculate_crack_width",
+        "calculate_crack_width", *attributes,
+    ]
+    assert list(load_cases.TABLE_COLUMNS[load_cases.PLASTIC_TABLE_KEY]) == [
+        column for column in plastic.columns if column not in attributes
     ]
     for editor_key, action_columns in (
         ("plastic_cases_editor", load_cases.PLASTIC_NUMERIC),

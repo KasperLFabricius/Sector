@@ -33,6 +33,7 @@ from sector import capacity, torsion  # noqa: E402
 APP = str(ROOT / "app" / "sector_app.py")
 # 0.97.0 TB-05: the reference project gains the schema 28 input
 # shear_include_tendons = False; both input hashes change, no other value.
+# 0.97.1 D1: the schema-29 fields are outside input_sha256 (decision 7).
 EXPECTED_INPUT_SHA256 = (
     "214186e258e2cfe40af6138e69afd7dfcc9dba99c90a7ecf13c2d6bd63ebfcbf"
 )

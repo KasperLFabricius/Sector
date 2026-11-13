@@ -5,10 +5,14 @@ coefficients and direct method choices needed to reproduce a calculation.
 Sector 0.94 projects used schema 25. Sector 0.95 used schema 26 to separate
 long-term, short-term and heightened permitted crack-width inputs. Sector 0.96.9
 used schema 27 to persist the user-selected DS/EN 1992-1-1:2023 shear partial
-factor. Sector 0.97.0 uses schema 28 for the corrected calculation methods and
-their method inputs (pivot C, the member maximum moment MEd,max).
-Schemas 25, 26 and 27 have bounded in-memory migrations; schema 24 and future
-schemas remain unsupported. Retired component-mapped bridge inputs are
+factor. Sector 0.97.0 used schema 28 for the corrected calculation methods and
+their method inputs (pivot C, the member maximum moment MEd,max). Sector 0.97.1
+uses schema 29 for the section-model provisions with no engineering effect:
+stable corner IDs, the region list with template parameters, bar groups, the
+case attributes (location tag, design situation, reserved stage) and the
+automatic-recalculation preference.
+Schemas 25, 26, 27 and 28 have bounded in-memory migrations; schema 24 and
+future schemas remain unsupported. Retired component-mapped bridge inputs are
 deliberately absent from the schema.
 """
 
@@ -30,7 +34,7 @@ import pandas as pd
 import reinforcement_table as rebar_table
 
 from app import engineer_messages, modelled_direction, report_profiles, report_sources
-from app import heightened_crack_adapter
+from app import heightened_crack_adapter, section_ids
 from app.table_field_definitions import (
     decimal_issue_ledger,
 )
@@ -55,7 +59,12 @@ from sector.sls_identity import (
 )
 
 FORMAT = "sector-project"
-VERSION = 28
+VERSION = 29
+# Schema 28 (Sector 0.97.0) has the current calculation methods. Its migration
+# adds only the schema-29 provisions, which have no engineering effect.
+SCHEMA28_VERSION = 28
+# The names of the three older constants come from the schema-28 release:
+# PREVIOUS_VERSION is schema 27.
 PREVIOUS_VERSION = 27
 MIGRATABLE_VERSION = 26
 LEGACY_MIGRATABLE_VERSION = 25
@@ -63,6 +72,7 @@ MIGRATABLE_VERSIONS = (
     LEGACY_MIGRATABLE_VERSION,
     MIGRATABLE_VERSION,
     PREVIOUS_VERSION,
+    SCHEMA28_VERSION,
 )
 
 # Sector 0.97.0 corrected these calculation methods. A project from schema 27 or
@@ -169,8 +179,16 @@ def _development_schema28(source_version, provenance: Mapping) -> bool:
     """True for a schema-28 file from a development build before 0.97.0."""
 
     return (
-        source_version == VERSION
+        source_version == SCHEMA28_VERSION
         and provenance.get("sector_version") in _DEVELOPMENT_SCHEMA28_VERSIONS
+    )
+
+
+def _schema28_methods_apply(source_version, provenance: Mapping) -> bool:
+    """True for a file saved before the 0.97.0 method corrections."""
+
+    return source_version < SCHEMA28_VERSION or _development_schema28(
+        source_version, provenance
     )
 
 
@@ -332,6 +350,10 @@ QUICK_SECTION_SCALAR_KEYS = (
 )
 
 
+# Schema 29: automatic recalculation after an edit, off by default. A local
+# preference like autosave_on, with no engineering effect.
+AUTO_RECALCULATE_KEY = "auto_recalculate_on"
+
 # Current UI/session inputs only. Deprecated compliance, authority, cover-
 # calculator, multidirectional-interaction and SLS-limit fields are absent.
 SCALAR_KEYS = [
@@ -401,8 +423,11 @@ SCALAR_KEYS = [
     # Project/report document metadata. Roles do not imply approval status.
     "rep_proj_no", "rep_proj_name", "rep_section", "rep_rev",
     "rep_author", "rep_checker", "rep_approver", "rep_comments", report_sources.KEY,
+    # Section model (schema 29): region list with template parameters, and bar
+    # groups. No engineering effect; the point tables stay authoritative.
+    section_ids.REGIONS_KEY, rebar_table.GROUPS_KEY,
     # Local application preferences that are meaningful on restore.
-    "autosave_on", "autosave_min",
+    "autosave_on", "autosave_min", AUTO_RECALCULATE_KEY,
 ]
 
 # Project-owned presentation choices that must survive save/load without
@@ -466,6 +491,7 @@ _BOOLEAN_SCALAR_KEYS = frozenset({
     "combined_on",
     "combined_mv_independent",
     "autosave_on",
+    AUTO_RECALCULATE_KEY,
 })
 
 _INTEGER_SCALAR_KEYS = frozenset({
@@ -528,6 +554,8 @@ _NESTED_SCALAR_KEYS = frozenset({
     fatigue_inputs.DETAIL_CATALOG_KEY,
     fatigue_inputs.BASIS_KEY,
     capacity.TORSION_CASE_AUTHORITIES_KEY,
+    section_ids.REGIONS_KEY,
+    rebar_table.GROUPS_KEY,
 })
 
 _EXACT_TEXT_OPTIONS = {
@@ -866,7 +894,86 @@ def _validate_nested_scalar(value, key: str):
         return _validate_fatigue_basis(value, key)
     if key == capacity.TORSION_CASE_AUTHORITIES_KEY:
         return _validate_torsion_case_authorities(value, key)
+    if key == section_ids.REGIONS_KEY:
+        try:
+            return section_ids.validate_regions(value)
+        except ValueError as exc:
+            raise _invalid_input(str(exc)) from exc
+    if key == rebar_table.GROUPS_KEY:
+        return _validate_reinforcement_groups(value, key)
     raise RuntimeError(f"unhandled nested project scalar {key}")
+
+
+def default_reinforcement_groups() -> dict:
+    """Return the empty bar-group table of a schema-29 project."""
+
+    return {"version": rebar_table.GROUPS_VERSION, "next_id": 1, "items": []}
+
+
+def _validate_reinforcement_groups(value, key: str) -> dict:
+    """Validate the bar-group table (schema 29).
+
+    Each group has an ID G<n>, the element kind (bar or tendon), the generator
+    kind, the flat generator parameters and the material ID of its elements.
+    ``next_id`` is above every group number, so a deleted group ID is not used
+    again.
+    """
+
+    catalog, items = _validate_catalog_envelope(
+        value,
+        key,
+        expected_version=rebar_table.GROUPS_VERSION,
+    )
+    fields = {"id", "element", "generator", "parameters", "material_id"}
+    pattern = section_ids.id_pattern(rebar_table.GROUP_ID_PREFIX)
+    groups = []
+    numbers = []
+    for position, item in enumerate(items, start=1):
+        label = f"{key} item {position}"
+        if set(item) != fields:
+            raise _invalid_input(
+                f"{label} must contain id, element, generator, parameters "
+                "and material_id"
+            )
+        group_id = item["id"]
+        match = (
+            pattern.fullmatch(group_id) if type(group_id) is str else None
+        )
+        if match is None:
+            raise _invalid_input(f"{label} id must be G followed by a number")
+        if group_id in {group["id"] for group in groups}:
+            raise _invalid_input(f"{label} id {group_id} is not unique")
+        if item["element"] not in rebar_table.GROUP_ELEMENTS:
+            raise _invalid_input(f"{label} element must be bar or tendon")
+        if item["generator"] not in rebar_table.GROUP_GENERATORS:
+            raise _invalid_input(f"{label} generator is not supported")
+        material_id = item["material_id"]
+        if (
+            type(material_id) is not str
+            or not material_id
+            or material_id != material_id.strip()
+        ):
+            raise _invalid_input(f"{label} material_id must be an ID")
+        try:
+            parameters = section_ids.validate_parameters(
+                item["parameters"], label
+            )
+        except ValueError as exc:
+            raise _invalid_input(str(exc)) from exc
+        numbers.append(int(match.group(1)))
+        groups.append({
+            "id": group_id,
+            "element": item["element"],
+            "generator": item["generator"],
+            "parameters": parameters,
+            "material_id": material_id,
+        })
+    next_id = max(catalog.get("next_id", 1), max(numbers, default=0) + 1)
+    return {
+        "version": rebar_table.GROUPS_VERSION,
+        "next_id": next_id,
+        "items": groups,
+    }
 
 
 def _validated_scalar_payload(scalars: Mapping) -> dict:
@@ -980,24 +1087,17 @@ def _nonnegative_real(value, label: str) -> float:
     return 0.0 if number == 0.0 else number
 
 
-def _normalise_table(value, key: str) -> pd.DataFrame:
+def _normalise_table(value, key: str, *, next_number: int = 1) -> pd.DataFrame:
     if key in CASE_TABLE_KEYS:
         return load_cases.normalise_table(value, key)
     if key == fatigue_inputs.SPECTRUM_TABLE_KEY:
         return fatigue_inputs.normalise_spectrum_table(value)
     kind = REINFORCEMENT_TABLE_KEYS.get(key)
     if kind:
-        return rebar_table.normalise_table(value, kind)
-    if value is None:
-        return pd.DataFrame(columns=list(_GEOMETRY_COLUMNS), dtype="float64")
-    frame = (
-        value.copy(deep=True)
-        if isinstance(value, pd.DataFrame)
-        else pd.DataFrame(value)
-    )
-    for column in frame.columns:
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    return frame.astype("float64") if len(frame.columns) else frame
+        return rebar_table.normalise_table(value, kind, with_group=True)
+    if key in section_ids.GEOMETRY_TABLE_KEYS:
+        return section_ids.normalise_geometry_table(value, key, next_number)
+    raise RuntimeError(f"unhandled project table {key}")
 
 
 def _validate_canonical_table(frame: pd.DataFrame, key: str) -> None:
@@ -1012,6 +1112,9 @@ def _validate_canonical_table(frame: pd.DataFrame, key: str) -> None:
         )
     if key in CASE_TABLE_KEYS:
         load_cases.table_records(frame, key)
+        attribute_errors = load_cases.attribute_errors(frame, key)
+        if attribute_errors:
+            raise _invalid_input(attribute_errors[0])
     elif key == fatigue_inputs.SPECTRUM_TABLE_KEY:
         fatigue_inputs.spectrum_records(frame)
     elif key in REINFORCEMENT_TABLE_KEYS:
@@ -1025,8 +1128,8 @@ def _validate_canonical_table(frame: pd.DataFrame, key: str) -> None:
             )
 
 
-def _table_to_obj(value, key: str) -> dict:
-    frame = _normalise_table(value, key)
+def _table_to_obj(value, key: str, *, next_number: int = 1) -> dict:
+    frame = _normalise_table(value, key, next_number=next_number)
     _validate_canonical_table(frame, key)
     columns = [str(column) for column in frame.columns]
     rows = [
@@ -1040,15 +1143,42 @@ def _table_to_obj(value, key: str) -> dict:
 
 
 def _expected_table_columns(key: str) -> tuple[str, ...]:
-    if key in TABLE_KEYS[:2]:
+    if key in section_ids.GEOMETRY_TABLE_KEYS:
+        return tuple(section_ids.COLUMNS)
+    if key in REINFORCEMENT_TABLE_KEYS:
+        return tuple(rebar_table.PROJECT_COLUMNS)
+    if key in CASE_TABLE_KEYS:
+        return tuple(load_cases.PERSISTED_COLUMNS[key])
+    if key == fatigue_inputs.SPECTRUM_TABLE_KEY:
+        return tuple(fatigue_inputs.SPECTRUM_COLUMNS)
+    raise RuntimeError(f"unhandled project table {key}")
+
+
+def _schema28_table_columns(key: str) -> tuple[str, ...]:
+    """Return the table columns of schemas 25 to 28."""
+
+    if key in section_ids.GEOMETRY_TABLE_KEYS:
         return _GEOMETRY_COLUMNS
     if key in REINFORCEMENT_TABLE_KEYS:
         return tuple(rebar_table.COLUMNS)
     if key in CASE_TABLE_KEYS:
         return tuple(load_cases.TABLE_COLUMNS[key])
-    if key == fatigue_inputs.SPECTRUM_TABLE_KEY:
-        return tuple(fatigue_inputs.SPECTRUM_COLUMNS)
-    raise RuntimeError(f"unhandled project table {key}")
+    return _expected_table_columns(key)
+
+
+def _accepted_table_columns(key: str, source_version) -> tuple[tuple[str, ...], ...]:
+    """Return the column lists that a file of ``source_version`` can contain.
+
+    A file of schema 25 to 28 has the earlier columns, and the migration adds
+    the schema-29 columns with their defaults. As for the scalars, where an
+    earlier file can contain a later key, an earlier file can also contain the
+    schema-29 columns.
+    """
+
+    current = _expected_table_columns(key)
+    if source_version == VERSION:
+        return (current,)
+    return (_schema28_table_columns(key), current)
 
 
 def _table_cell_kinds(
@@ -1057,14 +1187,19 @@ def _table_cell_kinds(
     """Return numeric, nullable-numeric, text and Boolean columns."""
 
     if key == "corners_base":
-        return set(_GEOMETRY_COLUMNS), set(), set(), set()
+        return set(_GEOMETRY_COLUMNS), set(), {section_ids.ID}, set()
     if key == "hole_base":
-        return set(_GEOMETRY_COLUMNS), set(_GEOMETRY_COLUMNS), set(), set()
+        return (
+            set(_GEOMETRY_COLUMNS),
+            set(_GEOMETRY_COLUMNS),
+            {section_ids.ID},
+            set(),
+        )
     if key in REINFORCEMENT_TABLE_KEYS:
         return (
             set(rebar_table.NUMERIC_COLUMNS),
             set(rebar_table.NUMERIC_COLUMNS),
-            set(rebar_table.TEXT_COLUMNS),
+            set(rebar_table.PROJECT_TEXT_COLUMNS),
             set(),
         )
     if key in CASE_TABLE_KEYS:
@@ -1073,7 +1208,7 @@ def _table_cell_kinds(
             # A wholly blank editor row is a supported transport state and is
             # removed by the canonical action-table validation below.
             set(load_cases.NUMERIC_COLUMNS[key]),
-            set(load_cases.TEXT_COLUMNS[key]),
+            {*load_cases.TEXT_COLUMNS[key], *load_cases.ATTRIBUTE_COLUMNS},
             set(load_cases.FLAG_COLUMNS[key]),
         )
     if key == fatigue_inputs.SPECTRUM_TABLE_KEY:
@@ -1087,7 +1222,12 @@ def _table_cell_kinds(
     raise RuntimeError(f"unhandled project table {key}")
 
 
-def _validated_table_rows(value, key: str) -> tuple[list[str], list[list]]:
+def _validated_table_rows(
+    value,
+    key: str,
+    *,
+    source_version=VERSION,
+) -> tuple[list[str], list[list]]:
     if not isinstance(value, Mapping):
         raise _invalid_input(f"{key} must be a table object")
     unknown = set(value) - {"columns", "rows"}
@@ -1095,8 +1235,10 @@ def _validated_table_rows(value, key: str) -> tuple[list[str], list[list]]:
         raise _invalid_input(f"{key} table contains unknown fields")
     columns = value.get("columns")
     rows = value.get("rows")
-    expected = list(_expected_table_columns(key))
-    if type(columns) is not list or columns != expected:
+    accepted = [
+        list(option) for option in _accepted_table_columns(key, source_version)
+    ]
+    if type(columns) is not list or columns not in accepted:
         raise _invalid_input(f"{key} table columns do not match the current format")
     if type(rows) is not list:
         raise _invalid_input(f"{key} table rows must be a list")
@@ -1146,20 +1288,42 @@ def _validated_table_rows(value, key: str) -> tuple[list[str], list[list]]:
                     and text_value not in rebar_table.SIZE_MODES
                 ):
                     raise _invalid_input(f"{label} is not a supported size mode")
+                if key in CASE_TABLE_KEYS and column in load_cases.ATTRIBUTE_COLUMNS:
+                    reason = load_cases.attribute_error(column, text_value)
+                    if reason is not None:
+                        raise _invalid_input(f"{label} {reason}")
                 validated.append(text_value)
                 continue
             raise RuntimeError(f"untyped project table column {key}.{column}")
+        if key == section_ids.VOIDS_TABLE_KEY and section_ids.ID in columns:
+            record = dict(zip(columns, validated))
+            if (
+                all(record[column] is None for column in _GEOMETRY_COLUMNS)
+                and record[section_ids.ID]
+            ):
+                raise _invalid_input(
+                    f"{key} row {row_number}: a void separator row must have "
+                    "a blank ID"
+                )
         validated_rows.append(validated)
     return columns, validated_rows
 
 
-def _obj_to_table(value, key: str) -> pd.DataFrame:
-    columns, rows = _validated_table_rows(value, key)
+def _obj_to_table(
+    value,
+    key: str,
+    *,
+    source_version=VERSION,
+    next_number: int = 1,
+) -> pd.DataFrame:
+    columns, rows = _validated_table_rows(
+        value, key, source_version=source_version
+    )
     try:
         frame = pd.DataFrame(rows, columns=columns)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{key} table rows are not tabular") from exc
-    canonical = _normalise_table(frame, key)
+    canonical = _normalise_table(frame, key, next_number=next_number)
     _validate_canonical_table(canonical, key)
     return canonical
 
@@ -1275,6 +1439,37 @@ def _assigned_catalog_ids(
     )
 
 
+def _validate_group_references(payload: Mapping, tables: Mapping) -> None:
+    """Reject an element whose group ID names no group of its element kind."""
+
+    groups = {
+        group["id"]: group["element"]
+        for group in payload[rebar_table.GROUPS_KEY]["items"]
+    }
+    for key, kind in REINFORCEMENT_TABLE_KEYS.items():
+        frame = rebar_table.normalise_table(
+            tables.get(key), kind, with_group=True
+        )
+        for element_id, group_id in zip(
+            frame[rebar_table.ELEMENT_ID].tolist(),
+            frame[rebar_table.GROUP_ID].tolist(),
+        ):
+            group_id = rebar_table.text_cell(group_id)
+            if group_id and groups.get(group_id) != kind:
+                raise _invalid_input(
+                    f"{key} {element_id} refers to {group_id}, which is not "
+                    f"a {kind} group"
+                )
+
+
+def _group_material_ids(payload: Mapping, kind: str) -> tuple[str, ...]:
+    return tuple(
+        group["material_id"]
+        for group in payload[rebar_table.GROUPS_KEY]["items"]
+        if group["element"] == kind
+    )
+
+
 def _canonical_scalars(
     scalars: Mapping,
     tables: Mapping,
@@ -1282,6 +1477,20 @@ def _canonical_scalars(
     migrate_gamma_v: bool = False,
 ) -> dict:
     payload = _validated_scalar_payload(scalars)
+    # Schema-29 defaults give the present behaviour: one region without a
+    # template, no bar group and no automatic recalculation.
+    payload.setdefault(section_ids.REGIONS_KEY, section_ids.default_regions())
+    payload.setdefault(rebar_table.GROUPS_KEY, default_reinforcement_groups())
+    payload.setdefault(AUTO_RECALCULATE_KEY, False)
+    region = payload[section_ids.REGIONS_KEY]["items"][0]
+    for key, field in section_ids.COUNTER_FIELDS.items():
+        frame = section_ids.normalise_geometry_table(
+            tables.get(key), key, region[field]
+        )
+        region[field] = max(
+            region[field], section_ids.next_number_after(frame, key)
+        )
+    _validate_group_references(payload, tables)
     payload.setdefault(
         "torsion_design_basis",
         capacity.TORSION_APPLICABILITY_NOT_ESTABLISHED,
@@ -1360,6 +1569,8 @@ def _canonical_scalars(
     mild_ids, prestress_ids, bar_fatigue_ids, tendon_fatigue_ids = (
         _assigned_catalog_ids(tables)
     )
+    mild_ids = (*mild_ids, *_group_material_ids(payload, "bar"))
+    prestress_ids = (*prestress_ids, *_group_material_ids(payload, "tendon"))
     capacity_material_id = rebar_table.text_cell(
         payload.get("capacity_steel_material_id")
     )
@@ -1526,15 +1737,89 @@ def _canonical_scalars(
     return payload
 
 
+def _stored_corner_counters(scalars: Mapping) -> dict[str, int]:
+    """Return the corner counters that the project records, or 1."""
+
+    try:
+        region = section_ids.validate_regions(
+            _json_value(scalars.get(section_ids.REGIONS_KEY))
+        )["items"][0]
+    except (TypeError, ValueError):
+        # The scalar validation reports the invalid region list.
+        return {key: 1 for key in section_ids.COUNTER_FIELDS}
+    return {
+        key: region[field] for key, field in section_ids.COUNTER_FIELDS.items()
+    }
+
+
 def _canonical_inputs(tables: Mapping, scalars: Mapping) -> dict:
     _validate_geometry(tables)
+    counters = (
+        _stored_corner_counters(scalars)
+        if section_ids.REGIONS_KEY in scalars
+        else {key: 1 for key in section_ids.COUNTER_FIELDS}
+    )
     return {
         "tables": {
-            key: _table_to_obj(tables.get(key), key)
+            key: _table_to_obj(tables.get(key), key, next_number=counters.get(key, 1))
             for key in PROJECT_TABLE_KEYS
         },
         "scalars": _canonical_scalars(scalars, tables),
     }
+
+
+# Schema-29 fields with no engineering effect. They are outside the project
+# correlation hash input_sha256 (decision 7), so a file from Sector 0.97.0 keeps
+# its recorded correlation after a save with no edit. persistence_sha256 covers
+# them.
+SCHEMA29_SCALAR_KEYS = (
+    section_ids.REGIONS_KEY,
+    rebar_table.GROUPS_KEY,
+    AUTO_RECALCULATE_KEY,
+)
+
+
+def _schema29_columns(key: str) -> frozenset[str]:
+    if key in section_ids.GEOMETRY_TABLE_KEYS:
+        return frozenset({section_ids.ID})
+    if key in REINFORCEMENT_TABLE_KEYS:
+        return frozenset({rebar_table.GROUP_ID})
+    if key in CASE_TABLE_KEYS:
+        return frozenset(load_cases.ATTRIBUTE_COLUMNS)
+    return frozenset()
+
+
+def _correlation_content(content: Mapping) -> dict:
+    """Return the inputs without the schema-29 fields, for ``input_sha256``.
+
+    A malformed table stays as it is, so that the validation reports it.
+    """
+
+    tables = {}
+    for key, table in dict(content.get("tables", {})).items():
+        drop = _schema29_columns(key)
+        columns = table.get("columns") if isinstance(table, Mapping) else None
+        rows = table.get("rows") if isinstance(table, Mapping) else None
+        if (
+            not drop
+            or type(columns) is not list
+            or type(rows) is not list
+            or any(type(row) is not list or len(row) != len(columns) for row in rows)
+        ):
+            tables[key] = table
+            continue
+        keep = [i for i, column in enumerate(columns) if column not in drop]
+        tables[key] = {
+            **table,
+            "columns": [columns[i] for i in keep],
+            "rows": [[row[i] for i in keep] for row in rows],
+        }
+    scalars = {
+        key: value
+        for key, value in dict(content.get("scalars", {})).items()
+        if key not in SCHEMA29_SCALAR_KEYS
+    }
+    return {"tables": tables, "scalars": scalars}
 
 
 def _canonical_presentation(scalars: Mapping) -> dict:
@@ -1579,8 +1864,11 @@ def _input_digest(content: Mapping) -> str:
 
 
 def input_sha256(tables: Mapping, scalars: Mapping) -> str:
-    """Hash the complete canonical schema input block for project correlation."""
-    return _input_digest(_canonical_inputs(tables, scalars))
+    """Hash the canonical input block for project correlation.
+
+    The schema-29 fields with no engineering effect are outside this hash.
+    """
+    return _input_digest(_correlation_content(_canonical_inputs(tables, scalars)))
 
 
 def persistence_sha256(tables: Mapping, scalars: Mapping) -> str:
@@ -1954,7 +2242,7 @@ def dump_project(
 ) -> str:
     """Serialize one current-schema project."""
     content = _canonical_inputs(tables, scalars)
-    digest = _input_digest(content)
+    digest = _input_digest(_correlation_content(content))
     app_version = _validated_recorded_version(
         app_version or sector_version,
         "project sector_version",
@@ -2031,8 +2319,8 @@ def _decode(text: str) -> dict:
         raise ProjectInputError(
             f"unsupported Sector project schema {version!r}; "
             f"only current schema {VERSION} and migrations from schemas "
-            f"{LEGACY_MIGRATABLE_VERSION}, {MIGRATABLE_VERSION} and "
-            f"{PREVIOUS_VERSION} are supported",
+            f"{LEGACY_MIGRATABLE_VERSION}, {MIGRATABLE_VERSION}, "
+            f"{PREVIOUS_VERSION} and {SCHEMA28_VERSION} are supported",
             engineer_message=_PROJECT_INCOMPATIBLE,
         )
     if not isinstance(data.get("tables"), Mapping):
@@ -2068,6 +2356,19 @@ def engineer_error_message(error: Exception) -> str:
     )
 
 
+def recorded_input_sha256(payload: Mapping) -> str:
+    """Return the input digest that a project file of its schema records.
+
+    Schema 29 records the digest without the schema-29 fields (decision 7).
+    Schemas 25 to 28 record the digest of the complete input block.
+    """
+
+    content = {"tables": payload["tables"], "scalars": payload["scalars"]}
+    if payload.get("version") == VERSION:
+        content = _correlation_content(content)
+    return _input_digest(content)
+
+
 def project_provenance(text: str) -> dict:
     """Read provenance and verify current inputs/calculation correlation."""
     data = _decode(text)
@@ -2076,7 +2377,7 @@ def project_provenance(text: str) -> dict:
         "scalars": data["scalars"],
     }
     try:
-        actual = _input_digest(content)
+        actual = recorded_input_sha256(data)
     except (TypeError, ValueError) as exc:
         raise ProjectInputError(
             "project inputs are not canonical JSON",
@@ -2277,8 +2578,20 @@ def parse_project_with_info(text: str):
     migration_warnings: tuple[str, ...] = ()
     migration_provenance = {"source_key": None}
     heightened_contract_migrated = False
+    # The region counters of the file number a row without a valid ID, so a
+    # load issues the same IDs as a save and never a deleted number.
+    counters = (
+        _stored_corner_counters(raw_scalars)
+        if section_ids.REGIONS_KEY in raw_scalars
+        else {}
+    )
     tables = {
-        key: _obj_to_table(data["tables"][key], key)
+        key: _obj_to_table(
+            data["tables"][key],
+            key,
+            source_version=source_version,
+            next_number=counters.get(key, 1),
+        )
         for key in PROJECT_TABLE_KEYS
     }
     # Case-scoped engineering authority is keyed by the practising engineer's
@@ -2409,7 +2722,9 @@ def parse_project_with_info(text: str):
         scalars = _canonical_scalars(raw_scalars, tables)
 
     method_changes: tuple[str, ...] = ()
-    if source_version != VERSION or _development_schema28(source_version, provenance):
+    # A schema-28 file from Sector 0.97.0 has the current methods. Its migration
+    # adds only the schema-29 defaults, so it has no method-change message.
+    if _schema28_methods_apply(source_version, provenance):
         _schema28_defaults(scalars)
         method_changes = (
             schema28_migration_warning(
@@ -2425,8 +2740,15 @@ def parse_project_with_info(text: str):
     info = {
         "source_schema_version": source_version,
         "target_schema_version": VERSION,
+        # A schema-28 file from Sector 0.97.0 gets only the schema-29 defaults,
+        # which have no engineering effect and no editor yet, so its load is
+        # not a conversion that the engineer must review.
         "migrated": (
-            source_version != VERSION or heightened_contract_migrated
+            (
+                source_version != VERSION
+                and _schema28_methods_apply(source_version, provenance)
+            )
+            or heightened_contract_migrated
         ),
         "migration_warnings": migration_warnings,
         "method_changes": method_changes,

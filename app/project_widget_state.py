@@ -104,7 +104,7 @@ def recovery_values(snapshot):
             canonical = fatigue_inputs.normalise_spectrum_table(fold_editor_patch(frame, patch))
         else:
             import load_cases
-            if tuple(snapshot[seed_key].columns) != tuple(load_cases.TABLE_COLUMNS[table]):
+            if tuple(snapshot[seed_key].columns) != tuple(load_cases.PERSISTED_COLUMNS[table]):
                 raise ValueError("The recovery action row seed is incomplete.")
             frame = load_cases.editor_table(snapshot[seed_key], table)
             canonical = load_cases.normalise_table(fold_editor_patch(frame, patch), table)

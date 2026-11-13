@@ -105,7 +105,12 @@ def case_signature(
     key: str,
     context: Mapping | None = None,
 ) -> tuple:
-    """Stable row signature including all crack-width inputs where used."""
+    """Stable row signature including all crack-width inputs where used.
+
+    The schema-29 case attributes (location tag, design situation and stage)
+    have no engineering effect, so they are not part of the signature and an
+    attribute edit does not make the result of the row stale.
+    """
 
     signature = tuple(record[column] for column in load_cases.TABLE_COLUMNS[key])
     if key == load_cases.ELASTIC_TABLE_KEY:

@@ -70,10 +70,9 @@ def test_current_project_rejects_unsafe_plastic_sweep_with_authored_copy(
         "v_inc": 15.0,
     }))
     payload["scalars"].update(sweep)
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
 
     with pytest.raises(project_io.ProjectInputError) as caught:
         project_io.parse_project(json.dumps(payload))
@@ -275,10 +274,9 @@ def _schema25_payload(
         payload["scalars"][project_io.LEGACY_SHARED_CRACK_WIDTH_KEY] = (
             shared_width
         )
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     return payload
 
 
@@ -329,10 +327,9 @@ def _schema26_payload(tables=None, scalars=None) -> dict:
     payload["version"] = project_io.MIGRATABLE_VERSION
     payload["scalars"].pop("shear_gamma_v", None)
     payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY, None)
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     return payload
 
 
@@ -640,10 +637,9 @@ def test_current_schema_2023_shear_links_require_gamma_v_on_dump_and_parse():
     scalars["shear_gamma_v"] = 1.40
     payload = json.loads(project_io.dump_project(tables, scalars))
     payload["scalars"].pop("shear_gamma_v")
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     with pytest.raises(
         ValueError,
         match="shear_gamma_v is required when the DS/EN",
@@ -673,10 +669,7 @@ def test_shared_link_authority_round_trips_and_missing_defaults_false():
     missing_payload["scalars"].pop("shear_links")
     missing_payload["scalars"].pop("torsion_nu_v")
     missing_payload["provenance"]["input_sha256"] = (
-        project_io._input_digest({
-            "tables": missing_payload["tables"],
-            "scalars": missing_payload["scalars"],
-        })
+        project_io.recorded_input_sha256(missing_payload)
     )
     missing_text = json.dumps(missing_payload)
     missing_tables, missing_loaded = project_io.parse_project(missing_text)
@@ -718,10 +711,9 @@ def test_torsion_applicability_choices_round_trip_and_missing_defaults_safe():
     payload = json.loads(text)
     payload["scalars"].pop("torsion_design_basis")
     payload["scalars"].pop("torsion_member_scope")
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     _, missing = project_io.parse_project(json.dumps(payload))
 
     assert missing["torsion_design_basis"] == (
@@ -844,10 +836,9 @@ def test_missing_current_torsion_case_mapping_fails_closed_for_every_case():
     text = project_io.dump_project(tables, scalars)
     payload = json.loads(text)
     payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY)
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
 
     _, loaded = project_io.parse_project(json.dumps(payload))
 
@@ -897,10 +888,9 @@ def test_hash_valid_project_rejects_ambiguous_case_identities_before_authority(
             ),
         }
     }
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
 
     with pytest.raises(project_io.ProjectInputError) as caught:
         project_io.parse_project(json.dumps(payload))
@@ -950,10 +940,9 @@ def test_torsion_case_authority_mapping_rejects_malformed_values(invalid):
 
     payload = json.loads(valid_text)
     payload["scalars"][capacity.TORSION_CASE_AUTHORITIES_KEY] = invalid
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     with pytest.raises(project_io.ProjectInputError) as exc_info:
         project_io.parse_project(json.dumps(payload))
     assert project_io.engineer_error_message(exc_info.value) == (
@@ -975,10 +964,9 @@ def test_omitted_torsion_applicability_defaults_safe_in_supported_schemas(
     payload["scalars"].pop("torsion_design_basis", None)
     payload["scalars"].pop("torsion_member_scope", None)
     payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY, None)
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
 
     _, loaded = project_io.parse_project(json.dumps(payload))
 
@@ -1025,10 +1013,9 @@ def test_torsion_applicability_choices_are_strict_exact_text(key, invalid):
 
     payload = json.loads(valid_text)
     payload["scalars"][key] = invalid
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     with pytest.raises(project_io.ProjectInputError):
         project_io.parse_project(json.dumps(payload))
 
@@ -1045,10 +1032,9 @@ def test_shared_link_authorities_must_be_serialized_booleans(key, invalid):
 
     payload = json.loads(valid_text)
     payload["scalars"][key] = invalid
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     with pytest.raises(ValueError, match=rf"^{key} must be a Boolean$"):
         project_io.parse_project(json.dumps(payload))
 
@@ -1116,7 +1102,9 @@ def test_schema_27_serializes_exact_three_crack_width_inputs():
     elastic = payload["tables"][load_cases.ELASTIC_TABLE_KEY]
 
     assert payload["version"] == project_io.VERSION
-    assert tuple(elastic["columns"]) == load_cases.ELASTIC_COLUMNS
+    assert tuple(elastic["columns"]) == load_cases.PERSISTED_COLUMNS[
+        load_cases.ELASTIC_TABLE_KEY
+    ]
     assert project_io.LEGACY_SHARED_CRACK_WIDTH_KEY not in payload["scalars"]
     assert payload["scalars"][
         "sls_long_term_permitted_crack_width_mm"
@@ -1366,10 +1354,9 @@ def test_current_schema_migrates_exact_legacy_report_labels_and_scalar_placement
     payload = json.loads(project_io.dump_project(tables, scalars))
     payload["presentation"].pop(project_io.REPORT_PROFILE_KEY)
     payload["scalars"][project_io.REPORT_PROFILE_KEY] = legacy_label
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
 
     text = json.dumps(payload)
     assert project_io.project_provenance(text)["input_hash_valid"] is True
@@ -1561,10 +1548,9 @@ def test_project_parse_rejects_hash_valid_malformed_nonblank_decimal(
     data = json.loads(project_io.dump_project(tables, scalars))
     encoded = data["tables"][table_key]
     encoded["rows"][0][encoded["columns"].index(column)] = entered
-    data["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": data["tables"],
-        "scalars": data["scalars"],
-    })
+    data["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(data)
+    )
 
     with pytest.raises(
         ValueError,
@@ -1707,10 +1693,9 @@ def test_parse_rejects_hash_valid_project_with_missing_assigned_material():
         reinforcement_table.MATERIAL_ID
     )
     bar_table["rows"][0][material_column] = "M2"
-    data["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": data["tables"],
-        "scalars": data["scalars"],
-    })
+    data["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(data)
+    )
 
     with pytest.raises(ValueError, match="M2"):
         project_io.parse_project(json.dumps(data))
@@ -1724,10 +1709,9 @@ def test_parse_rejects_hash_valid_project_with_missing_capacity_material():
     )
     data = json.loads(project_io.dump_project(tables, scalars))
     data["scalars"]["capacity_steel_material_id"] = "M2"
-    data["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": data["tables"],
-        "scalars": data["scalars"],
-    })
+    data["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(data)
+    )
 
     with pytest.raises(ValueError, match="M2"):
         project_io.parse_project(json.dumps(data))
@@ -1821,10 +1805,9 @@ def test_current_loader_rejects_coherently_rehashed_unsupported_method(
     scalars[key] = label
     data = json.loads(project_io.dump_project(tables, scalars))
     data["scalars"][key] = "unsupported method"
-    data["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": data["tables"],
-        "scalars": data["scalars"],
-    })
+    data["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(data)
+    )
 
     with pytest.raises(capacity.CapacityMethodError, match="unsupported"):
         project_io.parse_project(json.dumps(data))
@@ -1853,7 +1836,7 @@ def test_retired_schemas_name_the_current_and_migratable_versions(version):
             ValueError,
             match=(
                 rf"unsupported Sector project schema {version}; only current "
-                r"schema 28 and migrations from schemas 25, 26 and 27"
+                r"schema 29 and migrations from schemas 25, 26, 27 and 28"
             ),
         ):
             reader(text)
@@ -1865,8 +1848,8 @@ def test_noncurrent_non_v23_schema_names_current_and_migratable_versions():
     with pytest.raises(
         ValueError,
         match=(
-            r"unsupported Sector project schema 22; only current schema 28 "
-            r"and migrations from schemas 25, 26 and 27"
+            r"unsupported Sector project schema 22; only current schema 29 "
+            r"and migrations from schemas 25, 26, 27 and 28"
         ),
     ):
         project_io.parse_project(text)
@@ -1908,10 +1891,9 @@ def test_rehashed_current_schema_rejects_each_retired_table_as_unknown(
     tables, scalars = _current_project()
     data = json.loads(project_io.dump_project(tables, scalars))
     data["tables"][retired_table] = {"columns": [], "rows": []}
-    data["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": data["tables"],
-        "scalars": data["scalars"],
-    })
+    data["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(data)
+    )
 
     with pytest.raises(
         ValueError,
@@ -1924,10 +1906,9 @@ def test_rehashed_current_schema_rejects_retired_bridge_scalar_as_unknown():
     tables, scalars = _current_project()
     data = json.loads(project_io.dump_project(tables, scalars))
     data["scalars"]["bridge_standard"] = "retired"
-    data["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": data["tables"],
-        "scalars": data["scalars"],
-    })
+    data["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(data)
+    )
 
     with pytest.raises(
         ValueError,
@@ -1972,10 +1953,9 @@ def test_rehashed_current_schema_rejects_an_unregistered_fatigue_edition():
     tables, scalars = _current_project()
     data = json.loads(project_io.dump_project(tables, scalars))
     data["scalars"]["fatigue_edition"] = "DS/EN 1992-1-1:2023"
-    data["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": data["tables"],
-        "scalars": data["scalars"],
-    })
+    data["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(data)
+    )
 
     with pytest.raises(ValueError, match="registered basis keys"):
         project_io.parse_project(json.dumps(data))
@@ -2083,10 +2063,9 @@ def test_legacy_heightened_migration_rejects_mixed_old_and_new_contract():
     payload["scalars"][
         "sls_heightened_fine_effective_tension_area_mm2"
     ] = 120_000.0
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
 
     with pytest.raises(ValueError, match="mixes retired and current"):
         project_io.parse_project_with_info(json.dumps(payload))
@@ -2506,9 +2485,9 @@ def test_document_roles_reject_nontext_project_values(key, invalid):
     tables, scalars = _current_project()
     payload = json.loads(project_io.dump_project(tables, scalars))
     payload["scalars"][key] = invalid
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"], "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     with pytest.raises(project_io.ProjectInputError, match=f"{key} must be text"):
         project_io.parse_project(json.dumps(payload))
 

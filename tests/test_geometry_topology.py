@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from fractions import Fraction
-import hashlib
 import itertools
 import json
 import math
@@ -689,36 +688,33 @@ def test_empty_mutated_ring_container_keeps_canonical_solver_and_ui_diagnostic()
 def _project_payload(outer, holes):
     import project_io
 
+    # Schema 29: each corner row has its stable ID; a void separator has none.
     hole_rows = []
+    void_corners = 0
     for index, hole in enumerate(holes):
         if index:
-            hole_rows.append([None, None])
-        hole_rows.extend([[1000.0 * x, 1000.0 * y] for x, y in hole])
+            hole_rows.append(["", None, None])
+        for x, y in hole:
+            void_corners += 1
+            hole_rows.append([f"V{void_corners}", 1000.0 * x, 1000.0 * y])
     payload = json.loads(
         project_io.dump_project({}, {}, app_version="0.91", revision="test")
     )
     payload["tables"]["corners_base"] = {
-        "columns": ["x (mm)", "y (mm)"],
-        "rows": [[1000.0 * x, 1000.0 * y] for x, y in outer],
+        "columns": ["ID", "x (mm)", "y (mm)"],
+        "rows": [
+            [f"C{number}", 1000.0 * x, 1000.0 * y]
+            for number, (x, y) in enumerate(outer, start=1)
+        ],
     }
     payload["tables"]["hole_base"] = {
-        "columns": ["x (mm)", "y (mm)"],
+        "columns": ["ID", "x (mm)", "y (mm)"],
         "rows": hole_rows,
     }
-    content = {
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    }
-    canonical = json.dumps(
-        content,
-        sort_keys=True,
-        separators=(",", ":"),
-        ensure_ascii=True,
-        allow_nan=False,
+    # Schema 29 records the digest without the schema-29 fields.
+    payload["provenance"]["input_sha256"] = project_io.recorded_input_sha256(
+        payload
     )
-    payload["provenance"]["input_sha256"] = hashlib.sha256(
-        canonical.encode("utf-8")
-    ).hexdigest()
     return payload
 
 
@@ -744,8 +740,10 @@ def test_current_schema_mixed_winding_project_remains_round_trip_compatible():
     )
     round_trip = project_io.dump_project(tables, scalars)
     restored, _ = project_io.parse_project(round_trip)
+    # Schema 29 keeps the corner order and adds the stable corner IDs.
     assert restored["corners_base"].values.tolist() == [
-        [1000.0 * x, 1000.0 * y] for x, y in outer_cw
+        [f"C{number}", 1000.0 * x, 1000.0 * y]
+        for number, (x, y) in enumerate(outer_cw, start=1)
     ]
 
 

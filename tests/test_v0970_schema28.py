@@ -37,16 +37,17 @@ def _schema27_text(*, tendons=None, **scalar_changes) -> str:
     payload["version"] = project_io.PREVIOUS_VERSION
     for key in NEW_KEYS:
         payload["scalars"].pop(key, None)
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     return json.dumps(payload)
 
 
-def test_current_schema_is_28():
-    assert project_io.VERSION == 28
+def test_current_schema_is_29_and_schemas_27_and_28_migrate():
+    # Sector 0.97.1 moved the live schema to 29 (no engineering effect).
+    assert project_io.VERSION == 29
     assert 27 in project_io.MIGRATABLE_VERSIONS
+    assert 28 in project_io.MIGRATABLE_VERSIONS
 
 
 def test_schema27_project_loads_with_corrected_methods_and_message():
@@ -79,10 +80,9 @@ def test_schema27_project_with_the_2023_preset_loads_without_pivot_c():
     # of the pivot C limit is off for the 2023 concrete preset.
     payload = json.loads(_schema27_text())
     payload["scalars"]["conc_preset"] = codes.EC2_2023.label
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     _tables, scalars, info = project_io.parse_project_with_info(json.dumps(payload))
     assert info["source_schema_version"] == 27
     assert scalars["conc_preset"] == codes.EC2_2023.label
@@ -101,10 +101,9 @@ def test_schema27_project_without_the_preset_gets_pivot_c_of_the_default_preset(
     monkeypatch.setenv("SECTOR_AUTOSAVE_DIR", str(tmp_path / "autosave"))
     payload = json.loads(_schema27_text())
     del payload["scalars"]["conc_preset"]
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     text = json.dumps(payload)
     _tables, scalars, info = project_io.parse_project_with_info(text)
     assert info["source_schema_version"] == 27
@@ -130,10 +129,9 @@ def test_load_message_states_a_pivot_c_limit_that_the_file_clears():
 
     payload = json.loads(_schema27_text())
     payload["scalars"]["conc_pivot_c"] = False
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     _tables, scalars, info = project_io.parse_project_with_info(json.dumps(payload))
     assert scalars["conc_pivot_c"] is False
     assert cleared in " ".join(info["method_changes"])
@@ -167,10 +165,9 @@ def test_schema27_project_with_2023_shear_includes_the_tendons():
     payload = json.loads(_schema27_text())
     payload["scalars"]["shear_method"] = codes.EC2_2023.label
     payload["scalars"]["combined_on"] = False
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     tables, scalars, info = project_io.parse_project_with_info(json.dumps(payload))
     assert info["source_schema_version"] == 27
     assert scalars[capacity.SHEAR_TENDONS_KEY] is True
@@ -188,10 +185,9 @@ def test_schema27_project_takes_the_shear_method_from_combined():
     payload["scalars"]["shear_method"] = codes.EC2_2023.label
     assert payload["scalars"]["combined_on"] is True
     assert payload["scalars"]["combined_method"] == codes.EC2_2005_DKNA.label
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     _tables, scalars, info = project_io.parse_project_with_info(json.dumps(payload))
     assert scalars[capacity.SHEAR_TENDONS_KEY] is False
     assert project_io.SCHEMA28_TENDON_CHANGE not in " ".join(info["method_changes"])
@@ -225,10 +221,9 @@ def test_tendon_option_rejects_a_non_boolean_value():
     scalars[capacity.SHEAR_TENDONS_KEY] = True
     payload = json.loads(project_io.dump_project(tables, scalars))
     payload["scalars"][capacity.SHEAR_TENDONS_KEY] = 1
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     with pytest.raises(ValueError):
         project_io.parse_project_with_info(json.dumps(payload))
 
@@ -276,7 +271,23 @@ def _development_schema28_text(app_version, *, tendons=None, **scalar_changes) -
         )
     scalars = dict(reproducible_example.project_scalars(), **scalar_changes)
     scalars.pop(capacity.SHEAR_TENDONS_KEY)
-    return project_io.dump_project(tables, scalars, app_version=app_version)
+    payload = json.loads(
+        project_io.dump_project(tables, scalars, app_version=app_version)
+    )
+    # Schema 29 is current since Sector 0.97.1; these files are schema 28,
+    # without the schema-29 columns and scalars.
+    payload["version"] = project_io.SCHEMA28_VERSION
+    for key in project_io.SCHEMA29_SCALAR_KEYS:
+        payload["scalars"].pop(key)
+    for key, table in payload["tables"].items():
+        legacy = list(project_io._schema28_table_columns(key))
+        keep = [table["columns"].index(column) for column in legacy]
+        table["columns"] = legacy
+        table["rows"] = [[row[i] for i in keep] for row in table["rows"]]
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
+    return json.dumps(payload)
 
 
 def test_development_schema28_file_loads_with_the_message():
@@ -286,7 +297,7 @@ def test_development_schema28_file_loads_with_the_message():
                    shear_method=codes.EC2_2023.label, combined_on=False)
     text = _development_schema28_text("0.96.9", **changes)
     _tables, scalars, info = project_io.parse_project_with_info(text)
-    assert info["source_schema_version"] == project_io.VERSION
+    assert info["source_schema_version"] == project_io.SCHEMA28_VERSION
     assert scalars[capacity.SHEAR_TENDONS_KEY] is True
     message = " ".join(info["method_changes"])
     assert project_io.SCHEMA28_TENDON_CHANGE in message

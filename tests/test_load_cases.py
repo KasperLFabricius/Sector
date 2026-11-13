@@ -15,7 +15,13 @@ def test_default_tables_are_current_output_only_schema():
     tables = load_cases.default_tables()
     elastic = tables[load_cases.ELASTIC_TABLE_KEY]
 
-    assert tuple(elastic.columns) == load_cases.ELASTIC_COLUMNS
+    # Schema 29 adds the case attributes after the action columns.
+    assert tuple(elastic.columns) == load_cases.PERSISTED_COLUMNS[
+        load_cases.ELASTIC_TABLE_KEY
+    ]
+    assert tuple(elastic.columns[: len(load_cases.ELASTIC_COLUMNS)]) == (
+        load_cases.ELASTIC_COLUMNS
+    )
     assert "calculate_crack_width" in elastic
     assert "ordinary_crack_criterion_mm" not in elastic
     assert "check_stress" not in elastic
@@ -33,7 +39,9 @@ def test_legacy_ordinary_crack_criterion_is_not_action_table_state():
         load_cases.ELASTIC_TABLE_KEY,
     )
 
-    assert tuple(elastic.columns) == load_cases.ELASTIC_COLUMNS
+    assert tuple(elastic.columns) == load_cases.PERSISTED_COLUMNS[
+        load_cases.ELASTIC_TABLE_KEY
+    ]
     assert "ordinary_crack_criterion_mm" not in elastic
     assert load_cases.validation_errors(
         load_cases.empty_table(load_cases.PLASTIC_TABLE_KEY), elastic
