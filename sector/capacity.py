@@ -4790,8 +4790,9 @@ def tube_torsion_scan_values(
     ``trd_s``, ``trd_max``, ``util`` and ``asl_req`` at each angle. This function
     runs the same branches and kernels as :func:`tube_torsion` and returns these
     five values with the same objects, but it does not build the publication
-    payload. The callers build the full payload with :func:`tube_torsion` only
-    at the selected angle.
+    payload. The callers build the full payload with :func:`tube_torsion` once:
+    at the selected member angle when a live torsion action joins the scan,
+    otherwise over the entered band (resistance optimum).
     """
     state = _tube_torsion_state(
         tube,

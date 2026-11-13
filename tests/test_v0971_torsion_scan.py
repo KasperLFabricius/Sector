@@ -2,8 +2,9 @@
 
 The member strut-angle scan (EN 1992-1-1:2005 6.3.2(2): one strut angle for
 shear and torsion, inside the limits of 6.2.3(2)) evaluates 1501 angles. Each
-angle now uses ``capacity.tube_torsion_scan_values``, and the full tube payload
-is built only at the selected angle.
+angle now uses ``capacity.tube_torsion_scan_values``. The full tube payload is
+built once: at the selected angle when a live torsion action joins the scan,
+otherwise over the entered band (resistance optimum).
 
 Reference hand calculation (EN 1992-1-1:2005, recommended values): a solid
 300 x 600 mm rectangle with four corner bars at 50 mm from the faces, C30,
@@ -246,8 +247,14 @@ def test_publication_scan_builds_the_tube_payload_only_at_the_selected_angle(
     assert abs(selection["cot"] - expected_cot) <= step
 
 
-def test_calculate_builds_tube_payloads_only_at_the_selected_angle(monkeypatch):
-    """All scan sites of one Calculate, producer and publication validators."""
+def test_calculate_builds_tube_payloads_at_the_selected_angle_or_band(
+    monkeypatch,
+):
+    """All scan sites of one Calculate, producer and publication validators.
+
+    A tube payload occurs only at the selected angle or, for the single-angle
+    checks that use the resistance optimum, over the entered band.
+    """
     from app import calculation_service
     from tools import report_render_fixture
 
@@ -286,5 +293,13 @@ def test_scan_never_reaches_a_tube_with_incomplete_wall_evidence(monkeypatch):
     monkeypatch.setattr(calculation_service, "_tube_torsion", forbidden)
     out = {}
     calculation_service._run_uniaxial_capacity_checks(inp, out)
-    assert out["torsion"]["util"] is None
-    assert out["torsion"]["valid"] is False
+    result = out["torsion"]
+    # The cause is the wall gate, not another gate (links, angle range).
+    reason = "torsion wall reinforcement mapping is incomplete"
+    assert result["closed_links_present"] is True
+    assert result["tube"]["reason"] == reason
+    assert result["assessment_reason"] == reason
+    assert result["assessment_status"] == "NOT ASSESSED"
+    assert result["resistance_status"] == "NOT ASSESSED"
+    assert result["util"] is None
+    assert result["valid"] is False

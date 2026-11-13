@@ -4000,7 +4000,8 @@ def _current_torsion_only_children(inp):
     @functools.lru_cache(maxsize=4096)
     def torsion_scan_at(cot):
         # The scan reads only the utilisation of each sub-tube. The full
-        # payload is built once, at the selected angle.
+        # payload is built once: at the selected angle when torsion is live,
+        # otherwise over the entered band.
         return torsion_at(cot, capacity.tube_torsion_scan_values)
 
     try:

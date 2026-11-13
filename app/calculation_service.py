@@ -2047,7 +2047,9 @@ def _run_uniaxial_capacity_checks(inp, out):
 
             The torsion entries hold only the scan values of each sub-tube
             (``t_ed``, ``trd_s``, ``trd_max``, ``util`` and ``asl_req``). The
-            full torsion payload is built below at the selected angle only.
+            full torsion payload is built below once: at ``cot_star`` when a
+            live load drives the angle and torsion is live, otherwise over the
+            entered band (resistance optimum).
             """
             s = {}
             if link_ctx is not None:
