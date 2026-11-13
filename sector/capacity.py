@@ -4686,6 +4686,167 @@ def tube_torsion(
     angle_applicability=None,
 ):
     """Build the resistance/utilisation payload for one thin-walled tube."""
+    state = _tube_torsion_state(
+        tube,
+        t_ed,
+        closed_links_present=closed_links_present,
+        tcode=tcode,
+        fck=fck,
+        fcd=fcd,
+        alpha_cw=alpha_cw,
+        fywd=fywd,
+        asw_over_s=asw_over_s,
+        cot_min=cot_min,
+        cot_max=cot_max,
+        nu_detail=nu_detail,
+        fctd=fctd,
+        fyd_long=fyd_long,
+        angle_applicability=angle_applicability,
+    )
+    if isinstance(state, dict):
+        return state
+    (
+        nu_t, cot, angle, angle_applicability, steel, strut, selection,
+        cracking, util, longitudinal,
+    ) = state
+    if angle is not None:
+        angle_selection = asdict(angle)
+    else:
+        angle_selection = {
+            "cot": cot,
+            "tan": (math.inf if cot == 0.0 else 1.0 / cot),
+            "theta_deg": math.degrees(math.atan2(1.0, cot)),
+            "sin_cos": cot / (1.0 + cot * cot),
+            "cot_min": cot_min,
+            "cot_max": cot_max,
+            "cot_unconstrained": 1.0,
+            "selection": "no transverse reinforcement; crushing optimum",
+        }
+    tube_valid = bool(tube["valid"])
+    transverse_resistance_assessed = bool(
+        selection.full_resistance_assessed
+    )
+    valid = bool(tube_valid and transverse_resistance_assessed)
+    assessment_reason = (
+        None
+        if transverse_resistance_assessed
+        else selection.reason
+    )
+    return {
+        "tube": tube,
+        "t_ed": t_ed,
+        "trd_s": steel.trd_s,
+        "trd_max": strut.trd_max,
+        "trd": selection.resistance,
+        "trd_c": cracking.trd_c,
+        "cot": cot,
+        "theta_deg": math.degrees(math.atan2(1.0, cot)),
+        "util": util,
+        "asl_req": longitudinal.asl_required_mm2,
+        "nu": nu_t,
+        "governs": selection.governs,
+        "valid": valid,
+        "tube_valid": tube_valid,
+        "closed_links_present": selection.closed_links_present,
+        "transverse_resistance_assessed": transverse_resistance_assessed,
+        # Retained for current project/result consumers; this field now means
+        # only that the transverse-steel/concrete-strut component is available.
+        "full_resistance_assessed": transverse_resistance_assessed,
+        "assessment_reason": assessment_reason,
+        "angle_selection": angle_selection,
+        "angle_applicability": dict(angle_applicability),
+        "steel_resistance": asdict(steel),
+        "strut_resistance": asdict(strut),
+        "resistance_selection": asdict(selection),
+        "cracking_resistance": asdict(cracking),
+        "longitudinal_reinforcement": asdict(longitudinal),
+    }
+
+
+TUBE_TORSION_SCAN_KEYS = ("t_ed", "trd_s", "trd_max", "util", "asl_req")
+
+
+def tube_torsion_scan_values(
+    tube,
+    t_ed,
+    *,
+    closed_links_present,
+    tcode,
+    fck,
+    fcd,
+    alpha_cw,
+    fywd,
+    asw_over_s,
+    cot_min,
+    cot_max,
+    nu_detail,
+    fctd,
+    fyd_long,
+    angle_applicability=None,
+):
+    """Return the angle-dependent values of one tube for the strut-angle scan.
+
+    The 1501-point scan of the member strut angle reads only ``t_ed``,
+    ``trd_s``, ``trd_max``, ``util`` and ``asl_req`` at each angle. This function
+    runs the same branches and kernels as :func:`tube_torsion` and returns these
+    five values with the same objects, but it does not build the publication
+    payload. The callers build the full payload with :func:`tube_torsion` once:
+    at the selected member angle when a live torsion action joins the scan,
+    otherwise over the entered band (resistance optimum).
+    """
+    state = _tube_torsion_state(
+        tube,
+        t_ed,
+        closed_links_present=closed_links_present,
+        tcode=tcode,
+        fck=fck,
+        fcd=fcd,
+        alpha_cw=alpha_cw,
+        fywd=fywd,
+        asw_over_s=asw_over_s,
+        cot_min=cot_min,
+        cot_max=cot_max,
+        nu_detail=nu_detail,
+        fctd=fctd,
+        fyd_long=fyd_long,
+        angle_applicability=angle_applicability,
+    )
+    if isinstance(state, dict):
+        return {key: state[key] for key in TUBE_TORSION_SCAN_KEYS}
+    steel, strut, util, longitudinal = state[4], state[5], state[8], state[9]
+    return {
+        "t_ed": t_ed,
+        "trd_s": steel.trd_s,
+        "trd_max": strut.trd_max,
+        "util": util,
+        "asl_req": longitudinal.asl_required_mm2,
+    }
+
+
+def _tube_torsion_state(
+    tube,
+    t_ed,
+    *,
+    closed_links_present,
+    tcode,
+    fck,
+    fcd,
+    alpha_cw,
+    fywd,
+    asw_over_s,
+    cot_min,
+    cot_max,
+    nu_detail,
+    fctd,
+    fyd_long,
+    angle_applicability,
+):
+    """Run the tube gates and resistance kernels of one strut angle.
+
+    Return the unassessed payload (a dict) when a gate rejects the tube or the
+    angle range. Otherwise return the kernel results as one tuple for
+    :func:`tube_torsion` (payload) and :func:`tube_torsion_scan_values` (scan).
+    """
     wall_evidence = (
         tube.get("wall_evidence") if isinstance(tube, dict) else None
     )
@@ -4751,19 +4912,9 @@ def tube_torsion(
     if a_t > 0.0:
         angle = shear.optimum_strut_angle(a_t, b_t, cot_min, cot_max)
         cot = angle.cot
-        angle_selection = asdict(angle)
     else:
+        angle = None
         cot = min(max(cot_min, 1.0), cot_max)
-        angle_selection = {
-            "cot": cot,
-            "tan": (math.inf if cot == 0.0 else 1.0 / cot),
-            "theta_deg": math.degrees(math.atan2(1.0, cot)),
-            "sin_cos": cot / (1.0 + cot * cot),
-            "cot_min": cot_min,
-            "cot_max": cot_max,
-            "cot_unconstrained": 1.0,
-            "selection": "no transverse reinforcement; crushing optimum",
-        }
     torsion = _module("torsion")
     steel = torsion.trd_s_result(tube["Ak"], fywd, asw_over_s, cot)
     strut = torsion.trd_max_result(
@@ -4789,45 +4940,10 @@ def tube_torsion(
     longitudinal = torsion.asl_required_result(
         t_ed, tube["uk"], tube["Ak"], fyd_long, cot
     )
-    tube_valid = bool(tube["valid"])
-    transverse_resistance_assessed = bool(
-        selection.full_resistance_assessed
+    return (
+        nu_t, cot, angle, angle_applicability, steel, strut, selection,
+        cracking, util, longitudinal,
     )
-    valid = bool(tube_valid and transverse_resistance_assessed)
-    assessment_reason = (
-        None
-        if transverse_resistance_assessed
-        else selection.reason
-    )
-    return {
-        "tube": tube,
-        "t_ed": t_ed,
-        "trd_s": steel.trd_s,
-        "trd_max": strut.trd_max,
-        "trd": selection.resistance,
-        "trd_c": cracking.trd_c,
-        "cot": cot,
-        "theta_deg": math.degrees(math.atan2(1.0, cot)),
-        "util": util,
-        "asl_req": longitudinal.asl_required_mm2,
-        "nu": nu_t,
-        "governs": selection.governs,
-        "valid": valid,
-        "tube_valid": tube_valid,
-        "closed_links_present": selection.closed_links_present,
-        "transverse_resistance_assessed": transverse_resistance_assessed,
-        # Retained for current project/result consumers; this field now means
-        # only that the transverse-steel/concrete-strut component is available.
-        "full_resistance_assessed": transverse_resistance_assessed,
-        "assessment_reason": assessment_reason,
-        "angle_selection": angle_selection,
-        "angle_applicability": dict(angle_applicability),
-        "steel_resistance": asdict(steel),
-        "strut_resistance": asdict(strut),
-        "resistance_selection": asdict(selection),
-        "cracking_resistance": asdict(cracking),
-        "longitudinal_reinforcement": asdict(longitudinal),
-    }
 
 
 def unassessed_tube_torsion(

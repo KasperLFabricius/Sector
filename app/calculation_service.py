@@ -2043,15 +2043,24 @@ def _run_uniaxial_capacity_checks(inp, out):
 
         @functools.lru_cache(maxsize=4096)
         def _snap(cot):
-            """Every strut-angle-dependent resistance at one cot."""
+            """Every strut-angle-dependent resistance at one cot.
+
+            The torsion entries hold only the scan values of each sub-tube
+            (``t_ed``, ``trd_s``, ``trd_max``, ``util`` and ``asl_req``). The
+            full torsion payload is built below once: at ``cot_star`` when a
+            live load drives the angle and torsion is live, otherwise over the
+            entered band (resistance optimum).
+            """
             s = {}
             if link_ctx is not None:
                 s["lk"] = link_ctx["build"](cot, cot)
             if tors_ctx is not None and torsion_geometry_valid:
                 tk = dict(tors_ctx["_tk"], cot_min=cot, cot_max=cot)
-                s["subs"] = tuple(_tube_torsion(tb, te, **tk)
-                                  for tb, te in zip(tors_ctx["subtubes"],
-                                                    tors_ctx["ted_parts"]))
+                s["subs"] = tuple(
+                    capacity.tube_torsion_scan_values(tb, te, **tk)
+                    for tb, te in zip(tors_ctx["subtubes"],
+                                      tors_ctx["ted_parts"])
+                )
             return s
 
         def _ftd_t_at(cot):

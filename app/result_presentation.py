@@ -3522,6 +3522,8 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
 
     @functools.lru_cache(maxsize=4096)
     def torsion_at(cot):
+        # Scan values only: the objectives read t_ed, trd_s, trd_max, util and
+        # asl_req, the same objects as in the full tube payload.
         if not torsion_geometry_valid:
             return ()
         kwargs = dict(
@@ -3530,7 +3532,7 @@ def _current_member_angle_selection(inp, shear_result, torsion_result):
             cot_max=cot,
         )
         return tuple(
-            capacity.tube_torsion(tube, action, **kwargs)
+            capacity.tube_torsion_scan_values(tube, action, **kwargs)
             for tube, action in zip(
                 torsion_context["subtubes"],
                 torsion_context["ted_parts"],
@@ -3981,10 +3983,9 @@ def _current_torsion_only_children(inp):
         and torsion_context["angle_applicability"].get("applicable") is True
     )
 
-    @functools.lru_cache(maxsize=4096)
-    def torsion_at(cot):
+    def torsion_at(cot, tube_function=capacity.tube_torsion):
         return tuple(
-            capacity.tube_torsion(
+            tube_function(
                 tube,
                 action,
                 **dict(torsion_context["_tk"], cot_min=cot, cot_max=cot),
@@ -3996,9 +3997,16 @@ def _current_torsion_only_children(inp):
             )
         )
 
+    @functools.lru_cache(maxsize=4096)
+    def torsion_scan_at(cot):
+        # The scan reads only the utilisation of each sub-tube. The full
+        # payload is built once: at the selected angle when torsion is live,
+        # otherwise over the entered band.
+        return torsion_at(cot, capacity.tube_torsion_scan_values)
+
     try:
         objectives = tuple(
-            lambda cot, index=index: torsion_at(cot)[index]["util"]
+            lambda cot, index=index: torsion_scan_at(cot)[index]["util"]
             for index in range(len(torsion_context["subtubes"]))
         )
         labels = tuple(
