@@ -1,6 +1,6 @@
 """Pure orchestration for running Sector's typed load-case tables.
 
-The numerical calculation remains owned by ``sector_app.run_analysis``'s
+The numerical calculation remains owned by ``calculation_service.run_analysis``'s
 single-case implementation.  This module maps canonical table rows onto that
 stable input contract, invokes an injected single-case runner, and returns an
 ordered result per named case.  Keeping the orchestration free of Streamlit makes

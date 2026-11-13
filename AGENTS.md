@@ -21,7 +21,8 @@ label. It governs every change.
 | Shear, torsion, M-V-T | `sector/shear.py`, `sector/torsion.py`, `sector/combined.py`, `sector/capacity.py` | Resistances, chord checks, shared strut angle, result validators. |
 | Detailing | `sector/detailing.py` | Minimum reinforcement, spacing, link rules. |
 | Fatigue | `sector/fatigue.py` | Reinforcement S-N and Miner, concrete fatigue with the fibre search. |
-| Application | `app/sector_app.py` | Streamlit script: input pages, `build_inputs`, calculation orchestration (`run_analysis`, `_run_uniaxial_capacity_checks`), result views. |
+| Application | `app/sector_app.py` | Streamlit script: input pages, `build_inputs`, result views. It imports the names of the calculation service again for one release (0.97.1). |
+| Calculation service | `app/calculation_service.py` | Calculation orchestration without Streamlit (`run_analysis`, `_run_uniaxial_capacity_checks`, `_run_capacity_checks`), `calculate_project` and the command line `python app/calculation_service.py <project file>`. Until AR-09, `project_inputs` builds the inputs of a project file in a headless Streamlit session of the application. |
 | Project files | `app/project_io.py`, `app/session_state_migrations.py` | Schema, validation and migrations of `.sector` project files. |
 | Presentation | `app/result_presentation.py`, `app/fatigue_presentation.py` | Result rows, statuses and the publication validators that re-check retained results. |
 | Report | `app/sector_report.py`, `app/report_*.py`, `app/publication_*.py` | PDF reports (Brief, Standard, Audit). |
@@ -33,7 +34,9 @@ label. It governs every change.
 1. The input pages write Streamlit session state.
 2. `build_inputs` in `app/sector_app.py` converts session state to one `inp`
    dictionary (materials, section, actions, method options).
-3. `run_analysis` runs the engine for each action case and returns `results`.
+3. `run_analysis` in `app/calculation_service.py` runs the engine for each
+   action case and returns `results`. `calculate_project` gives the same
+   calculation without the browser interface.
 4. `app/result_presentation.py` turns results into rows, statuses and notes. Its
    validators recompute the retained values from `inp`; a mismatch gives NOT
    ASSESSED instead of a stale verdict.

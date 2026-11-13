@@ -254,7 +254,7 @@ def test_manual_distinguishes_fixed_prestress_cracking_threshold():
         'classifies the section as cracked',
         r"\sigma_{pre,i}+\lambda_{cr}\sigma_{ext,i}=f_{ctm}",
         'Only the external $N/M$ scales',
-        'prestress-only fiber stress is larger than',
+        'prestress-only fibre stress is larger than',
         r"$\lambda_{cr}=0$",
         '$\\lambda_{cr}<1$: cracked',
         '$\\lambda_{cr}\\ge 1$: uncracked',

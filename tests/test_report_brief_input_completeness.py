@@ -138,11 +138,15 @@ def test_brief_default_auto_dimensions_and_selected_member_options_remain_explic
 
 def _native_density_inputs():
     inp = _inputs()
-    # Use the native pure layout producer, without starting Streamlit.
+    # Use the native pure layout producer, without starting Streamlit. The
+    # clear-cover helper is in the calculation service since 0.97.1 (AR-07).
     source = ROOT / "app/sector_app.py"
-    names = {"_slab_density_layout", "_slab_face_clear_cover_mm"}
-    nodes = [node for node in ast.parse(source.read_text(encoding="utf-8")).body
+    sources = {source: {"_slab_density_layout"},
+               ROOT / "app/calculation_service.py": {"_slab_face_clear_cover_mm"}}
+    nodes = [node for path, names in sources.items()
+             for node in ast.parse(path.read_text(encoding="utf-8")).body
              if isinstance(node, ast.FunctionDef) and node.name in names]
+    assert len(nodes) == 2
     import numpy as np
     namespace = {"math": math, "np": np, "templates": templates, "_MM": 1000.}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), "exec"), namespace)
@@ -251,7 +255,7 @@ def test_brief_tendon_assignments_prestrain_and_fatigue_modifiers_are_complete()
 
 
 def _native_slab_guidance():
-    source = ROOT / "app/sector_app.py"
+    source = ROOT / "app/calculation_service.py"
     assignments = [node for node in ast.parse(source.read_text(encoding="utf-8")).body
                    if isinstance(node, ast.Assign)
                    and any(isinstance(target, ast.Name) and target.id == "_SLAB_DENSITY_GUIDANCE"

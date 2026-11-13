@@ -17,6 +17,7 @@ RETIRED_PROJECT_KEYS = (
 
 LIVE_SURFACES = (
     ROOT / "app" / "sector_app.py",
+    ROOT / "app" / "calculation_service.py",
     ROOT / "app" / "project_io.py",
     ROOT / "app" / "sector_report.py",
     ROOT / "app" / "manual.py",
@@ -69,9 +70,11 @@ def test_streamlit_has_only_a_hot_reload_alias_for_the_retired_view():
     source = path.read_text(encoding="utf-8")
     assert source.count('"Bridge Calculations"') == 1
     assert '"Bridge Calculations": "Results Overview"' in source
+    service = (ROOT / "app" / "calculation_service.py").read_text(encoding="utf-8")
     function_names = {
         node.name
-        for node in ast.walk(ast.parse(source))
+        for text in (source, service)
+        for node in ast.walk(ast.parse(text))
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     }
     assert "bridge_view" not in function_names
