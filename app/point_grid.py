@@ -1,10 +1,13 @@
 """A single editable point grid (one table per point set) built on Tabulator.
 
 Replaces the previous two-part layout (an ID-free ``st.data_editor`` beside a
-read-only ID list). One grid now carries a frozen, non-editable ID column that
-auto-numbers the complete points (matching the plot), a frozen header, freely
-editable numeric cells and Excel-style block paste -- features ``st.data_editor``
-cannot combine. It is a self-contained Streamlit Components v2 component: the
+read-only ID list). One grid carries a frozen, non-editable ID column, a frozen
+header, freely editable numeric cells and Excel-style block paste -- features
+``st.data_editor`` cannot combine. The corner, void, bar and tendon grids keep
+persistent IDs (the same IDs as the section view); a grid without an ID column
+auto-numbers its complete rows. A pasted cell with one comma and no dot is a
+decimal comma, and a pasted text that is not a number stays visible as an error
+cell. A click on an ID selects that element in the section view. It is a self-contained Streamlit Components v2 component: the
 vendored Tabulator assets and Sector renderer under ``point_grid_frontend/`` are
 passed as inline content, so the frozen desktop app needs no separately installed
 component package and no frontend build step.

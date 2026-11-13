@@ -2483,12 +2483,24 @@ def _render_point_table(box, base_key, ed_key, cols, id_start=1):
     if kind:
         stable = rebar_table.normalise_table(edited, kind)
     elif geometry:
-        stable = _geometry_table(edited, base_key)
+        # The browser counter first, so a number issued and deleted between
+        # two reports is not issued again here.
         _advance_region_counter(
             base_key,
-            stable,
+            section_ids.empty_geometry_table(),
             reported_next_id(st.session_state.get(ed_key), data_version),
         )
+        stable = _geometry_table(edited, base_key)
+        _advance_region_counter(base_key, stable)
+        reported_ids = edited.reindex(columns=[section_ids.ID])[section_ids.ID]
+        if stable[section_ids.ID].tolist() != [
+            str(value).strip() if isinstance(value, str) else ""
+            for value in reported_ids.tolist()
+        ]:
+            # Python issued an ID that the grid does not show (a row without
+            # a valid ID). Re-seed the grid, so the same report cannot issue a
+            # second number on the next run and the grid shows the new ID.
+            st.session_state[ed_key + "_ver"] = version + 1
     else:
         stable = edited.reindex(columns=cols).copy(deep=True)
     current_geometry = _point_table_geometry_frame(stable, base_key, cols)
@@ -8607,7 +8619,11 @@ def build_inputs(host=st):
             continue
         canonical = _geometry_table(df, base_key)
         if list(df.columns) != cols or not canonical.equals(df):
-            _reseed_table(base_key, ed_key, canonical)
+            # Give the stored table its IDs without a re-seed, so a grid report
+            # of this seed is still read. The grid gets the IDs from the
+            # re-seed in _render_point_table when its rows differ.
+            st.session_state[base_key] = canonical
+            _advance_region_counter(base_key, canonical)
 
     if sec.button(
         "Open Quick Section...", key="open_qs", width="stretch",

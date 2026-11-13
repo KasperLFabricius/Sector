@@ -493,7 +493,10 @@ def test_hidden_input_previews_do_not_emit_plotly_figures():
     assert set(at.session_state["_fig_cache"]) == {"section"}
 
     _goto_material_tab(at, "Concrete")
-    assert set(at.session_state["_fig_cache"]) == {"section", "concrete"}
+    # The compact section view stays beside the material inputs (PR I1).
+    assert set(at.session_state["_fig_cache"]) == {
+        "section", "section_compact", "concrete",
+    }
     assert not at.exception
 
 
@@ -4584,13 +4587,16 @@ def test_builder_settings_persist_between_openings():
 
 
 def test_section_tables_hold_loaded_points_and_stable_reinforcement_schema():
-    # Geometry remains coordinate-only. Reinforcement additionally retains stable
-    # IDs, its declared size basis, and assignment metadata for later checks.
+    # Geometry keeps the stable corner IDs (schema 29, PR I1). Reinforcement
+    # retains stable IDs, its declared size basis, and assignment metadata.
     import reinforcement_table as rt
 
     at = _fresh_qs()
     _set_and_click(at, "qs_apply", ("number_input", "tnd_n", 4))
-    assert list(at.session_state["corners_base"].columns) == ["x (mm)", "y (mm)"]
+    assert list(at.session_state["corners_base"].columns) == [
+        "ID", "x (mm)", "y (mm)",
+    ]
+    assert at.session_state["corners_base"]["ID"].str.fullmatch(r"C\d+").all()
     assert list(at.session_state["bars_base"].columns) == rt.COLUMNS
     assert list(at.session_state["tendons_base"].columns) == rt.COLUMNS
     assert len(at.session_state["corners_base"]) >= 3
@@ -4608,7 +4614,8 @@ def test_coordinates_are_in_millimetres():
     at = _fresh()
     at.run()
     cb = at.session_state["corners_base"]
-    assert list(cb.columns) == ["x (mm)", "y (mm)"]
+    assert list(cb.columns) == ["ID", "x (mm)", "y (mm)"]
+    assert cb["ID"].tolist() == ["C1", "C2", "C3", "C4"]
     assert set(cb["x (mm)"].abs().round().tolist()) == {200.0}
     assert set(cb["y (mm)"].abs().round().tolist()) == {300.0}
 
@@ -4730,13 +4737,14 @@ def test_incomplete_point_rows_block_calculation_until_corrected():
 
 
 def test_box_girder_void_loads_and_calculates():
-    # The box cavity loads into the (data-only) void table and the section still
-    # calculates.
+    # The box cavity loads into the void table (with its stable void-corner IDs)
+    # and the section still calculates.
     at = _fresh_qs()
     at.selectbox(key="shape").set_value("Box girder").run()
     _apply_qs(at)
     hb = at.session_state["hole_base"]
-    assert len(hb) >= 3 and list(hb.columns) == ["x (mm)", "y (mm)"]
+    assert len(hb) >= 3 and list(hb.columns) == ["ID", "x (mm)", "y (mm)"]
+    assert hb["ID"].str.fullmatch(r"V\d+").all()
     _calculate(at)
     assert not at.exception
     assert "plastic" in at.session_state["results"]

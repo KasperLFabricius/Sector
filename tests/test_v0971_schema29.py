@@ -692,13 +692,16 @@ def test_app_loads_schema29_fields_and_keeps_the_engineering_inputs(
     assert project_io.result_sha256(
         at.session_state["_latest_inputs"]["signature"]
     ) == reference_signature
-    # The live point tables keep their present columns in Sector 0.97.1.
-    assert list(at.session_state["corners_base"].columns) == ["x (mm)", "y (mm)"]
+    # The live corner table shows the stored IDs (PR I1, decision 28). The
+    # reinforcement tables keep their columns until PR I3.
+    assert list(at.session_state["corners_base"].columns) == [
+        "ID", "x (mm)", "y (mm)",
+    ]
     assert list(at.session_state["bars_base"].columns) == rebar.COLUMNS
     assert at.session_state[project_io.AUTO_RECALCULATE_KEY] is True
     saved = _app_save(at)
     # The case attributes, the region list, the groups and the preference
-    # survive the application save. The corners get their IDs in row order.
+    # survive the application save. The corners keep their stored IDs.
     plastic = saved["tables"][PLASTIC]
     index = plastic["columns"].index(load_cases.DESIGN_SITUATION)
     assert {row[index] for row in plastic["rows"]} == {"accidental"}
@@ -707,7 +710,7 @@ def test_app_loads_schema29_fields_and_keeps_the_engineering_inputs(
     assert saved["scalars"][rebar.GROUPS_KEY]["items"][0]["id"] == "G2"
     assert saved["scalars"][project_io.AUTO_RECALCULATE_KEY] is True
     assert [row[0] for row in saved["tables"]["corners_base"]["rows"]] == [
-        "C1", "C2", "C3", "C4",
+        "C1", "C3", "C4", "C9",
     ]
     assert project_io.parse_project(json.dumps(saved)) is not None
 
