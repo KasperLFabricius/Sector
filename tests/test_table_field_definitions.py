@@ -23,8 +23,8 @@ def test_registry_covers_all_seven_editable_tables_in_stable_order():
         "hole_base": ("x (mm)", "y (mm)"),
         "bars_base": tuple(reinforcement_table.COLUMNS),
         "tendons_base": tuple(reinforcement_table.COLUMNS),
-        load_cases.PLASTIC_TABLE_KEY: load_cases.PLASTIC_COLUMNS,
-        load_cases.ELASTIC_TABLE_KEY: load_cases.ELASTIC_COLUMNS,
+        load_cases.PLASTIC_TABLE_KEY: load_cases.PERSISTED_COLUMNS[load_cases.PLASTIC_TABLE_KEY],
+        load_cases.ELASTIC_TABLE_KEY: load_cases.PERSISTED_COLUMNS[load_cases.ELASTIC_TABLE_KEY],
         fatigue_inputs.SPECTRUM_TABLE_KEY: fatigue_inputs.SPECTRUM_COLUMNS,
     }
 

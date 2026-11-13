@@ -42,6 +42,7 @@ import publication_image_export
 from publication_items import publish_manual_blocks, published_manual_parts
 from publication_notation import normalize_trusted_markup
 import publication_theme
+from app import action_csv
 from app import manual_information_architecture as manual_ia
 from app import report_profiles
 from app import publication_branding
@@ -652,7 +653,9 @@ def editable_field_publication_rows(table_key: str) -> list[list[str]]:
         if field.source != "User input":
             meaning += " Source: " + field.source + "."
         dependency = table_fields.method_dependency(table_key, field)
-        if dependency != common_dependency:
+        if field.key in table_fields.CASE_ATTRIBUTE_KEYS:
+            meaning += " " + dependency + "."
+        elif dependency != common_dependency:
             meaning += " Used by: " + dependency + "."
         rule = table_fields.input_rule(field).replace("Blank = False", "Blank = off")
         rule = rule.replace("Blank = True", "Blank = on")
@@ -715,9 +718,11 @@ def manual_blocks() -> list:
         for table_key in keys:
             h2(table_fields.TABLE_TITLES[table_key] + " fields")
             definitions = table_fields.table_fields(table_key)
+            # The case attributes give their own "Used by" text in their rows.
             dependencies = dict.fromkeys(
                 table_fields.method_dependency(table_key, definition)
-                for definition in definitions)
+                for definition in definitions
+                if definition.key not in table_fields.CASE_ATTRIBUTE_KEYS)
             md(" ".join(dependencies))
             table(["Field / unit", "Meaning / sign", "Default / validation"],
                   editable_field_publication_rows(table_key))
@@ -1204,8 +1209,27 @@ def manual_blocks() -> list:
 
     h1("Loads")
     md('Open **Actions**. Select the **Plastic**, **Elastic** or **Fatigue** tab. In Plastic or Elastic, select the required case. Each active row has one name. Case names are unique across the Plastic/capacity, Elastic and fatigue-bin tables. Use the optional description for the project classification, combination or source. Add, duplicate, delete or paste cases with the case controls. The **Fatigue** tab contains the existing grouped spectrum and bin table. Each bin has sustained/basic actions, a cyclic increment and a cycle count. Sector solves the basic and combined states elastically. Select **Open fatigue analysis settings** to enable fatigue or change its analysis settings. Saved spectra remain retained when fatigue is disabled.')
-    md('**Axes and signs**\n\nView the section as drawn: +x points right and +y points up. Coordinates are in millimeters from the section origin. Enter moments about that origin. Sector applies its existing centroid translation.\n\n- Positive $N$ means tension. Negative $N$ means compression.\n- For centered pure bending, positive $M_x$ compresses the top face and positive $M_y$ compresses the right face.\n- Positive $V_x$ acts along +x. Positive $V_y$ acts along +y. Resistance uses the action magnitudes.\n- $V_x$ pairs with $M_y$; $V_y$ pairs with $M_x$ for automatic tension-face selection.\n- Keep the signed source torsion action $T$ and document its sense. Current torsion resistance uses $|T|$.\n\nAxial force, biaxial bending and prestress determine the actual combined stress field. The centered pure-bending examples describe the moment convention.')
+    md('**Axes and signs**\n\nView the section as drawn: +x points right and +y points up. Coordinates are in millimetres from the section origin O. Enter $M_x$ and $M_y$ about the axes through O. For moments about a centroid C at $(x_c, y_c)$, enter $M_x = M_{x,C} - N y_c$ and $M_y = M_{y,C} - N x_c$, with $N$ in kN (positive in tension), $x_c$ and $y_c$ in m and the moments in kNm.\n\n- Positive $N$ means tension. Negative $N$ means compression.\n- For centred pure bending, positive $M_x$ compresses the top face and positive $M_y$ compresses the right face.\n- Positive $V_x$ acts along +x. Positive $V_y$ acts along +y. Resistance uses the action magnitudes.\n- $V_x$ pairs with $M_y$; $V_y$ pairs with $M_x$ for automatic tension-face selection.\n- Keep the signed source torsion action $T$ and document its sense. Current torsion resistance uses $|T|$.\n\nAxial force, biaxial bending and prestress determine the actual combined stress field. The centred pure-bending examples describe the moment convention.')
     md('**Paste action cases**\n\n1. Select the **Plastic** or **Elastic** tab.\n2. Open **Paste cases with preview**.\n3. Select **Download paste headings** and retain the required column headings.\n4. Paste the headings and case rows into **Spreadsheet rows**.\n5. Examine the parsed preview and correct each marked cell.\n6. Select **Append previewed cases** with the displayed row count.\n\nThe preview accepts tab, semicolon or comma-separated columns. Forces use kN and moments use kNm. Numeric cells accept a dot or comma decimal. Ambiguous grouped or mixed separators require correction. Blank ordinary action cells use zero. Required case names stay explicit. Elastic instantaneous values are additional increments to the sustained actions. For example, -350 kN sustained and -120 kN instantaneous give -470 kN total.')
+    md('**Import and export actions (CSV v1)**\n\n'
+       'Open **Import and export actions (CSV v1)** above the action tabs. Select **Download actions CSV** to save the active Plastic and Elastic cases in one file. Select **Download CSV template** for a file without cases. The file has this form:\n\n'
+       '1. Line 1 is the version line `# sector-actions-csv v1`.\n'
+       '2. Line 2 has the column headings of the table below.\n'
+       '3. Line 3 has the unit of each column.\n'
+       '4. Each further line is one case. A ULS row goes to the Plastic table and an SLS row to the Elastic table. Leave the columns of the other limit state blank.\n\n'
+       'Sector reads comma, semicolon and tab delimiters, and the dot or comma decimal. In a comma-delimited file, put each comma decimal in quotes. Sector rejects a row with more cells than the heading row. The location tag, design situation and stage have no calculation effect.\n\n'
+       'Only `limit_state` and `name` are necessary. An omitted column or a blank cell gets the default of its field:\n\n'
+       '- Actions: 0.\n'
+       '- `check_minimum_reinforcement` and `calculate_crack_width`: false. Sector also reads true, yes, no, on, off, 1 and 0.\n'
+       '- `vx_face` and `vy_face`: auto. The other values are negative (also left or bottom) and positive (also right or top).\n'
+       '- `design_situation`: persistent. The other values are transient, accidental and seismic.\n'
+       '- `location_tag` and `stage`: blank. The stage is blank or final.\n\n'
+       'For the meaning of each field, see (Loads > Plastic and capacity cases fields) and (Loads > Elastic cases fields).\n\n'
+       'Select a file to see the preview. **Append to the current cases** keeps the current cases. **Replace the Plastic and Elastic cases** removes them. A torsion declaration stays only for a Plastic case with the same name and the same entries in each Plastic column. The case attributes are not compared. '
+       'A case name must not be the name of a current case (Append), of another line of the file or of a fatigue bin. '
+       'A file without the version line gives a message. Paste such a block into one table with **Paste cases with preview**.\n\n'
+       'A spreadsheet can read a text cell that starts with =, +, - or @ as a formula. Examine such case names and descriptions before you open the file in a spreadsheet.')
+    table(["Column", "Unit", "Rows", "Content"], action_csv.field_reference_rows())
     md('**Selected case** identifies the working row. **Add case** creates a row. **Duplicate selected** copies its actions. For a copied Plastic case, select the minimum-reinforcement check and torsion declarations again as applicable. **Delete selected** removes the selected row. Examine the remaining actions before calculation.')
     table(["Table", "Per-row fields", "Row-specific rule"],
           [["Plastic / capacity", "$N_{Ed}$, $M_{x,Ed}$, $M_{y,Ed}$, $V_{x,Ed}$, $V_{y,Ed}$, $T_{Ed}$",

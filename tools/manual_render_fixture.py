@@ -69,11 +69,12 @@ _MANUAL_CROPS = (
         "manual cover footer",
         1,
         (0.09, 0.94, 0.92, 0.98),
-        # The footer has the current version and the 151-page count (0.97.0 chord
+        # The footer has the current version and the 155-page count (0.97.0 chord
         # and MEd,max text, then the SLS, prestress, fatigue and DK NA text and
-        # the five added status rows); the crop geometry is unchanged. Re-pinned
-        # for the version 0.97.0 in the footer (page count unchanged).
-        "67da90357fdcaee6050f37794ab8460bab85dd58cb99ff0031545c5206f9b0de",
+        # the five added status rows; 0.97.1 I2 adds the CSV v1 action file
+        # text and table and the case-attribute rows); the crop geometry is
+        # unchanged.
+        "11de5fa6eb54c755431693ce1e3dea80059f0c1cd02de8817d75807709d55e09",
     ),
 )
 

@@ -687,7 +687,8 @@ def test_manual_editable_table_matrix_is_generated_from_shared_registry():
     tables = [block[2] for block in manual.manual_blocks()
               if block[0] == "table" and block[1] == headers]
     assert len(tables) == len(table_fields.TABLE_KEYS) == 7
-    assert sum(map(len, tables)) == 50
+    # 50 fields, plus the three case attributes of the Plastic and Elastic tables.
+    assert sum(map(len, tables)) == 56
     for key, rows in zip(table_fields.TABLE_KEYS, tables, strict=True):
         definitions = table_fields.table_fields(key)
         assert len(rows) == len(definitions)

@@ -9696,8 +9696,8 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     elastic = _widget(at.dataframe, "elastic_cases_editor").value
     goto_action_family(at, "Plastic")
     plastic = _widget(at.dataframe, "plastic_cases_editor").value
-    # Schema 29: the editor data also holds the three case attributes. The
-    # column order of the editor (TABLE_COLUMNS) does not show them yet.
+    # Schema 29: the editor data also holds the three case attributes, and
+    # the editors show them (column order PERSISTED_COLUMNS).
     attributes = ["location_tag", "design_situation", "stage"]
     assert list(plastic.columns) == [
         "name", "description", "n_ed_kn", "mx_ed_knm", "my_ed_knm",

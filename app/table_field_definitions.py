@@ -288,6 +288,11 @@ _TABLE_METHOD_DEPENDENCIES = MappingProxyType({
 })
 
 
+CASE_ATTRIBUTE_DEPENDENCY = (
+    "No calculation uses this value. Sector saves it with the case"
+)
+
+
 def validation_rule(definition: FieldDefinition) -> str:
     """Return one explicit manual validation rule from the canonical field role."""
 
@@ -308,6 +313,12 @@ def validation_rule(definition: FieldDefinition) -> str:
         return "Required finite area greater than zero."
     if definition.key == "calculate_crack_width":
         return "On requests the calculation. Off leaves it unrequested."
+    if definition.key == "location_tag":
+        return "Optional. One line of at most 60 characters."
+    if definition.key == "design_situation":
+        return "One of: persistent, transient, accidental, seismic."
+    if definition.key == "stage":
+        return 'Blank or "final".'
     if definition.unit != "-" or definition.math_symbol != "-":
         return "Enter a finite decimal value. Use the sign convention in this table."
     return "Value must meet the input requirements stated in this table."
@@ -321,6 +332,8 @@ def method_dependency(table_key: str, definition: FieldDefinition) -> str:
         raise ValueError(
             f"field {definition.key!r} does not belong to editable table {table_key!r}"
         )
+    if definition.key in CASE_ATTRIBUTE_KEYS:
+        return CASE_ATTRIBUTE_DEPENDENCY
     return _TABLE_METHOD_DEPENDENCIES[table_key]
 
 
@@ -446,14 +459,41 @@ _CASE_ID_FIELDS = (
     ),
 )
 
+# Schema-29 case attributes. They have no calculation effect, so they stay out of
+# the case records, the row signatures and the input hash (load_cases).
+CASE_ATTRIBUTE_KEYS = ("location_tag", "design_situation", "stage")
+_CASE_ATTRIBUTE_FIELDS = (
+    _field(
+        "location_tag", "Location tag",
+        "Optional member position of the case, for example a span or a support. "
+        "One line of at most 60 characters. No calculation uses this value.",
+        "-", "-", "Project text that groups cases by their position.",
+        "Not applicable.", BlankPolicy.EMPTY_TEXT,
+    ),
+    _field(
+        "design_situation", "Design situation",
+        "Design situation of the case to EN 1990 3.2(2): persistent, transient, "
+        "accidental or seismic. No calculation uses this value.",
+        "-", "-", "Design situation that applies to the case.",
+        "Not applicable.", BlankPolicy.DEFAULT, "User selection", "persistent",
+    ),
+    _field(
+        "stage", "Stage",
+        'Reserved for construction stages. Use blank or "final". '
+        "No calculation uses this value.",
+        "-", "-", "Stage of the case. All cases apply to the final stage.",
+        "Not applicable.", BlankPolicy.EMPTY_TEXT,
+    ),
+)
+
 _PLASTIC_FIELDS = (
     *_CASE_ID_FIELDS,
     _action("n_ed_kn", "Axial force", "N_{Ed}", "kN",
             "Design axial force.", 'Tension is positive. Compression is negative.'),
     _action("mx_ed_knm", "Moment about x", "M_{x,Ed}", "kN m",
-            "Design moment about the x axis.", "Uses the declared section-axis sign."),
+            "Design moment about the x axis through the section origin O.", "Uses the declared section-axis sign."),
     _action("my_ed_knm", "Moment about y", "M_{y,Ed}", "kN m",
-            "Design moment about the y axis.", "Uses the declared section-axis sign."),
+            "Design moment about the y axis through the section origin O.", "Uses the declared section-axis sign."),
     _action("vx_ed_kn", "Shear along x", "V_{x,Ed}", "kN",
             "Signed design shear along x, paired with bending about y.",
             "Uses the declared positive x direction."),
@@ -480,6 +520,7 @@ _PLASTIC_FIELDS = (
         'Requests the modeled-direction minimum-reinforcement assessment.',
         "Not applicable.", BlankPolicy.DEFAULT, "User selection", False,
     ),
+    *_CASE_ATTRIBUTE_FIELDS,
 )
 
 _ELASTIC_FIELDS = (
@@ -487,21 +528,22 @@ _ELASTIC_FIELDS = (
     _action("n_long_ed_kn", "Sustained axial force", "N_{Ed,long}", "kN",
             "Sustained axial-force part.", 'Tension is positive. Compression is negative.'),
     _action("mx_long_ed_knm", "Sustained moment about x", "M_{x,Ed,long}", "kN m",
-            "Sustained moment part about x.", "Uses the declared section-axis sign."),
+            "Sustained moment part about the x axis through the origin O.", "Uses the declared section-axis sign."),
     _action("my_long_ed_knm", "Sustained moment about y", "M_{y,Ed,long}", "kN m",
-            "Sustained moment part about y.", "Uses the declared section-axis sign."),
+            "Sustained moment part about the y axis through the origin O.", "Uses the declared section-axis sign."),
     _action("n_short_ed_kn", "Instantaneous axial force", "N_{Ed,short}", "kN",
             "Additional instantaneous axial force added to the sustained action.", 'Tension is positive. Compression is negative.'),
     _action("mx_short_ed_knm", "Instantaneous moment about x", "M_{x,Ed,short}", "kN m",
-            "Additional instantaneous moment about x added to the sustained action.", "Uses the declared section-axis sign."),
+            "Additional instantaneous moment about the x axis through the origin O, added to the sustained action.", "Uses the declared section-axis sign."),
     _action("my_short_ed_knm", "Instantaneous moment about y", "M_{y,Ed,short}", "kN m",
-            "Additional instantaneous moment about y added to the sustained action.", "Uses the declared section-axis sign."),
+            "Additional instantaneous moment about the y axis through the origin O, added to the sustained action.", "Uses the declared section-axis sign."),
     _field(
         "calculate_crack_width", "Calculate crack width",
         "Run the selected crack-width calculation for this case.", "-", "-",
         "Requests numerical crack-width calculation for the elastic action.",
         "Not applicable.", BlankPolicy.DEFAULT, "User selection", False,
     ),
+    *_CASE_ATTRIBUTE_FIELDS,
 )
 
 _FATIGUE_FIELDS = (
@@ -528,16 +570,16 @@ _FATIGUE_FIELDS = (
     _action("n_long_ed_kn", "Basic axial force", "N_{Ed,long}", "kN",
             "Sustained or basic axial force.", 'Tension is positive. Compression is negative.'),
     _action("mx_long_ed_knm", "Basic moment about x", "M_{x,Ed,long}", "kN m",
-            "Sustained or basic moment about x.", "Uses the declared section-axis sign."),
+            "Sustained or basic moment about the x axis through the origin O.", "Uses the declared section-axis sign."),
     _action("my_long_ed_knm", "Basic moment about y", "M_{y,Ed,long}", "kN m",
-            "Sustained or basic moment about y.", "Uses the declared section-axis sign."),
+            "Sustained or basic moment about the y axis through the origin O.", "Uses the declared section-axis sign."),
     _action("n_short_ed_kn", "Cyclic axial increment", "\\Delta N_{Ed}", "kN",
             "Cyclic axial-force increment added to the basic state.",
             'Tension is positive. Compression is negative.'),
     _action("mx_short_ed_knm", "Cyclic moment increment about x", "\\Delta M_{x,Ed}", "kN m",
-            "Cyclic moment increment about x.", "Uses the declared section-axis sign."),
+            "Cyclic moment increment about the x axis through the origin O.", "Uses the declared section-axis sign."),
     _action("my_short_ed_knm", "Cyclic moment increment about y", "\\Delta M_{y,Ed}", "kN m",
-            "Cyclic moment increment about y.", "Uses the declared section-axis sign."),
+            "Cyclic moment increment about the y axis through the origin O.", "Uses the declared section-axis sign."),
 )
 
 TABLE_FIELD_DEFINITIONS = MappingProxyType(

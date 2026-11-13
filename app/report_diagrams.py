@@ -344,3 +344,115 @@ def crack_effective_area_figure(inp, crack, state, *, title):
                        text="<br>".join(notes), align="left")
     fig.update_layout(margin=dict(l=65, r=35, t=145, b=100), legend=dict(orientation="h", y=-0.18))
     return fig
+
+
+_SIGN_PANELS = (
+    ("x", "y", (0.0, 0.31), "Axes, origin O, forces"),
+    ("x2", "y2", (0.345, 0.655), "+Mx, centred bending"),
+    ("x3", "y3", (0.69, 1.0), "+My, centred bending"),
+)
+_SIGN_HALF_B = 0.6
+_SIGN_HALF_H = 0.7
+_SIGN_BAND = 0.4
+_SIGN_COMPRESSION = "rgba(213,94,0,0.30)"
+_SIGN_TENSION = "rgba(0,114,178,0.22)"
+_SIGN_FONT = dict(size=13, color=viz.SCHEMATIC_INK)
+
+
+def _sign_arrow(fig, xref, yref, start, end, label=None, label_at=None, *, width=2):
+    fig.add_annotation(
+        x=end[0], y=end[1], ax=start[0], ay=start[1], xref=xref, yref=yref,
+        axref=xref, ayref=yref, showarrow=True, arrowhead=2, arrowsize=1.1,
+        arrowwidth=width, arrowcolor=viz.SCHEMATIC_INK, text="",
+    )
+    if label:
+        fig.add_annotation(x=label_at[0], y=label_at[1], xref=xref, yref=yref,
+                           text=label, showarrow=False, font=_SIGN_FONT)
+
+
+def _sign_polygon(fig, xref, yref, xs, ys, fill, *, pattern=None):
+    fig.add_trace(go.Scatter(
+        x=[*xs, xs[0]], y=[*ys, ys[0]], mode="lines", fill="toself",
+        fillcolor=fill, line=dict(color=viz.CONCRETE_LINE, width=1.5),
+        fillpattern=pattern, xaxis=xref, yaxis=yref,
+        hoverinfo="skip", showlegend=False,
+    ))
+
+
+def action_sign_convention_figure():
+    """Show the positive actions of the action tables on a schematic section.
+
+    The section is viewed as drawn: +x to the right and +y up. N is positive in
+    tension. Moments act about the coordinate origin O. For centred pure
+    bending, +Mx compresses the top face and +My compresses the right face.
+    Vx and Vy act along +x and +y. Sector keeps the sign of T and uses |T| in
+    the torsion check, so the T arc has a head at each end.
+    """
+    fig = go.Figure()
+    b, h, band = _SIGN_HALF_B, _SIGN_HALF_H, _SIGN_BAND
+    rect_x, rect_y = (-b, b, b, -b), (-h, -h, h, h)
+    for index, (xref, yref, domain, title) in enumerate(_SIGN_PANELS):
+        suffix = "" if index == 0 else str(index + 1)
+        fig.update_layout({
+            f"xaxis{suffix}": dict(domain=list(domain), range=[-1.1, 1.1],
+                                   visible=False, fixedrange=True),
+            f"yaxis{suffix}": dict(range=[-1.15, 1.15], visible=False,
+                                   fixedrange=True, scaleanchor=xref, scaleratio=1),
+        })
+        fig.add_annotation(x=sum(domain) / 2, y=1.0, xref="paper", yref="paper",
+                           xanchor="center", yanchor="bottom", text=f"<b>{title}</b>",
+                           showarrow=False, font=_SIGN_FONT)
+        _sign_polygon(fig, xref, yref, rect_x, rect_y, viz.CONCRETE_FILL)
+        if index == 0:
+            continue
+        if index == 1:
+            compressed = ((-b, b, b, -b), (h - band, h - band, h, h))
+            tension = ((-b, b, b, -b), (-h, -h, -h + band, -h + band))
+            labels = (((0.0, h - band / 2), 0), ((0.0, -h + band / 2), 0))
+            axis_line = dict(x0=-b, x1=b, y0=0.0, y1=0.0)
+        else:
+            compressed = ((b - band, b, b, b - band), (-h, -h, h, h))
+            tension = ((-b, -b + band, -b + band, -b), (-h, -h, h, h))
+            labels = (((b - band / 2, 0.0), -90), ((-b + band / 2, 0.0), -90))
+            axis_line = dict(x0=0.0, x1=0.0, y0=-h, y1=h)
+        _sign_polygon(fig, xref, yref, *compressed, _SIGN_COMPRESSION,
+                      pattern=dict(shape="x", fgcolor=viz.BAR_COMPRESSION,
+                                   size=8, solidity=0.15))
+        _sign_polygon(fig, xref, yref, *tension, _SIGN_TENSION)
+        for (position, angle), text in zip(labels, ("Compression", "Tension")):
+            fig.add_annotation(x=position[0], y=position[1], xref=xref, yref=yref,
+                               text=text, textangle=angle, showarrow=False,
+                               font=_SIGN_FONT)
+        fig.add_shape(type="line", xref=xref, yref=yref, **axis_line,
+                      line=dict(color=viz.NA_LINE, width=2, dash="dash"))
+    # Panel 1: axes from O, shear forces, torsion and the axial-force sign.
+    fig.add_trace(go.Scatter(
+        x=[0.0], y=[0.0], mode="markers", hoverinfo="skip", showlegend=False,
+        marker=dict(symbol="cross-thin", size=12,
+                    line=dict(color=viz.SCHEMATIC_INK, width=2)),
+    ))
+    fig.add_annotation(x=0.13, y=0.13, xref="x", yref="y", text="O",
+                       showarrow=False, font=_SIGN_FONT)
+    _sign_arrow(fig, "x", "y", (0.0, 0.0), (1.0, 0.0), "+x", (1.0, 0.13))
+    _sign_arrow(fig, "x", "y", (0.0, 0.0), (0.0, 1.0), "+y", (0.15, 1.0))
+    _sign_arrow(fig, "x", "y", (-0.3, -0.95), (0.3, -0.95), "+Vx", (0.53, -0.95), width=3)
+    _sign_arrow(fig, "x", "y", (-0.9, -0.3), (-0.9, 0.3), "+Vy", (-0.9, 0.45), width=3)
+    angles = [math.radians(200 + 7 * step) for step in range(21)]
+    arc_x = [0.32 * math.cos(angle) for angle in angles]
+    arc_y = [0.32 * math.sin(angle) for angle in angles]
+    fig.add_trace(go.Scatter(
+        x=arc_x, y=arc_y, mode="lines", line=dict(color=viz.SCHEMATIC_INK, width=2),
+        hoverinfo="skip", showlegend=False,
+    ))
+    for tip, before in ((0, 3), (-1, -4)):
+        _sign_arrow(fig, "x", "y", (arc_x[before], arc_y[before]), (arc_x[tip], arc_y[tip]))
+    fig.add_annotation(x=0.0, y=-0.47, xref="x", yref="y", text="T",
+                       showarrow=False, font=_SIGN_FONT)
+    fig.add_annotation(x=-1.05, y=1.02, xref="x", yref="y", xanchor="left",
+                       text="+N = tension", showarrow=False, font=_SIGN_FONT)
+    fig.update_layout(
+        height=270, margin=dict(l=4, r=4, t=30, b=4), plot_bgcolor="white",
+        paper_bgcolor="white", font=dict(family="Arial, sans-serif", size=13),
+        showlegend=False, dragmode=False,
+    )
+    return fig

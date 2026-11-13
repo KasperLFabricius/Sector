@@ -123,7 +123,7 @@ def test_workspace_schematic_matches_exact_publication_identity():
 
 @pytest.mark.parametrize("number,headers", [
     (11, ["Application page", "Manual destination"]),
-    (76, ["Symptom", "Likely cause", "Correction"]),
+    (77, ["Symptom", "Likely cause", "Correction"]),
 ])
 def test_navigation_table_has_exact_ordered_publication_contract(number, headers):
     from app import publication_items as publication
