@@ -561,6 +561,30 @@ def expected_core_job() -> dict[str, Any]:
     }
 
 
+# Performance budget (AR-15, tools/perf_budget.py). It restores the same locked
+# environment as the core shards. The step limit is about three times the
+# normal run time; the job limit adds the set-up.
+PERF_STEP_TIMEOUT = 20
+
+
+def expected_perf_job() -> dict[str, Any]:
+    return {
+        "name": "Performance budget",
+        "needs": "preflight",
+        "runs-on": "windows-latest",
+        "timeout-minutes": 30,
+        "steps": [
+            *_setup_steps(),
+            *_environment_steps(save=False),
+            {"name": "Run performance budget", "timeout-minutes": PERF_STEP_TIMEOUT,
+             "run": "python tools/perf_budget.py --output perf-budget --baseline tools/perf_budget_baseline.json"},
+            {"name": "Upload performance budget evidence", "if": "always()", "uses": QA_UPLOAD_ACTION,
+             "with": {"name": "sector-perf-${{ github.run_id }}-${{ github.run_attempt }}",
+                      "path": "perf-budget/", "if-no-files-found": "error", "retention-days": 30}},
+        ],
+    }
+
+
 def expected_preflight_job() -> dict[str, Any]:
     return {
         "name": "Fast source preflight",
@@ -677,6 +701,8 @@ def validate_workflow(data: Mapping[str, Any], workflow_text: str) -> None:
         raise CoverageGateContractError("fast preflight execution contract differs")
     if jobs.get("core") != expected_core_job():
         raise CoverageGateContractError("core shard execution or evidence contract differs")
+    if jobs.get("perf") != expected_perf_job():
+        raise CoverageGateContractError("performance budget job contract differs")
     portable = jobs.get("portable")
     if not isinstance(portable, Mapping) or portable.get("needs") != ["core", "test"]:
         raise CoverageGateContractError("portable must require every core shard and the complete aggregate gate")

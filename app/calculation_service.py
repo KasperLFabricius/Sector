@@ -1675,6 +1675,23 @@ def _clear_spacing_result(inp):
     )
 
 
+# Progress steps that ``run_analysis`` reports (UI-04), in their order. The
+# action-set steps come from ``case_analysis.run_case_tables``.
+PROGRESS_SECTION = "section"
+PROGRESS_SINGLE = "single"
+PROGRESS_PLASTIC = "plastic"   # case_analysis.PROGRESS_PLASTIC
+PROGRESS_ELASTIC = "elastic"   # case_analysis.PROGRESS_ELASTIC
+PROGRESS_SPACING = "spacing"
+PROGRESS_FATIGUE = "fatigue"
+PROGRESS_SELECTION = "selection"
+PROGRESS_REGISTER = "register"   # presentation_record, after run_analysis
+
+
+def _report_progress(progress, step, index=1, count=1, name=""):
+    if progress is not None:
+        progress(step, index, count, name)
+
+
 def run_analysis(
     inp,
     *,
@@ -1684,8 +1701,17 @@ def run_analysis(
     reuse_plastic_bending_cases=None,
     reuse_elastic_cases=None,
     reuse_fatigue=None,
+    progress=None,
 ):
-    """Run every current named action and enabled calculation."""
+    """Run every current named action and enabled calculation.
+
+    ``progress`` (optional) is called at the start of each step as
+    ``progress(step, index, count, name)``. The steps are the ``PROGRESS_*``
+    names of this module: section and material properties, each Plastic and
+    Elastic action set (from ``case_analysis.run_case_tables``), clear
+    spacing, fatigue and the worked-example selection. The callback does not
+    change the results.
+    """
     sweep_error = case_analysis.plastic_sweep_error(inp)
     if sweep_error is not None:
         raise engineer_messages.EngineerValidationError(sweep_error)
@@ -1696,9 +1722,11 @@ def run_analysis(
             or inp.get("void_error")
             or inp.get("steel_error") or inp.get("material_error")):
         return {}
+    _report_progress(progress, PROGRESS_SECTION)
     shared_results = _section_and_material_results(inp)
     elastic_solver_inputs = _elastic_solver_inputs(inp, shared_results)
     if "plastic_cases" not in inp and "elastic_cases" not in inp:
+        _report_progress(progress, PROGRESS_SINGLE)
         result = _run_single_analysis(
             inp,
             reuse_plastic=reuse_plastic,
@@ -1707,8 +1735,10 @@ def run_analysis(
             shared_results=shared_results,
         )
         if inp.get("clear_spacing_on"):
+            _report_progress(progress, PROGRESS_SPACING)
             result["clear_spacing"] = _clear_spacing_result(inp)
         if inp.get("fatigue_on"):
+            _report_progress(progress, PROGRESS_FATIGUE)
             result["fatigue"] = (
                 reuse_fatigue
                 if reuse_fatigue is not None
@@ -1716,6 +1746,7 @@ def run_analysis(
             )
         result.update(shared_results)
         _attach_heightened_crack_control(inp, result)
+        _report_progress(progress, PROGRESS_SELECTION)
         result["worked_example_selection"] = (
             presentation.worked_example_selection(inp, result)
         )
@@ -1735,10 +1766,13 @@ def run_analysis(
         reuse_plastic=reuse_plastic_cases,
         reuse_plastic_bending=reuse_plastic_bending_cases,
         reuse_elastic=reuse_elastic_cases,
+        progress=progress,
     )
     if inp.get("clear_spacing_on"):
+        _report_progress(progress, PROGRESS_SPACING)
         result["clear_spacing"] = _clear_spacing_result(inp)
     if inp.get("fatigue_on"):
+        _report_progress(progress, PROGRESS_FATIGUE)
         result["fatigue"] = (
             reuse_fatigue
             if reuse_fatigue is not None
@@ -1746,6 +1780,7 @@ def run_analysis(
         )
     result.update(shared_results)
     _attach_heightened_crack_control(inp, result)
+    _report_progress(progress, PROGRESS_SELECTION)
     result["worked_example_selection"] = (
         presentation.worked_example_selection(inp, result)
     )
@@ -3413,9 +3448,26 @@ def project_inputs(project, *, timeout: float = 180.0) -> dict:
     return state["_latest_inputs"]
 
 
-def _calculate_one(item) -> dict:
+def presentation_record(inp, results, *, progress=None, capacity_contract=()):
+    """Build the stored result presentation of one completed calculation.
+
+    The record (``app/stored_presentation.py`` gives its structure) holds the
+    result register keyed by section, stage and case, with the digests that
+    a reader checks. It is not part of ``results``. Returns None for empty
+    results or for inputs without an engineering signature.
+    """
+
+    if not results:
+        return None
+    _report_progress(progress, PROGRESS_REGISTER)
+    return presentation.stored_presentation_record(
+        inp, results, capacity_contract=capacity_contract
+    )
+
+
+def _calculate_one(item, progress=None) -> dict:
     inp = item if _is_input_document(item) else project_inputs(item)
-    results = run_analysis(inp)
+    results = run_analysis(inp, progress=progress)
     return {
         "inputs": inp,
         "results": results,
@@ -3423,7 +3475,7 @@ def _calculate_one(item) -> dict:
     }
 
 
-def calculate_project(project_or_list):
+def calculate_project(project_or_list, *, progress=None):
     """Calculate one project, or each project of a list, without Streamlit state.
 
     An item is a calculation input document (the ``inp`` mapping that the
@@ -3436,11 +3488,14 @@ def calculate_project(project_or_list):
     order for a list. A result set is a dictionary with ``inputs``,
     ``results`` and ``result_sha256`` (``project_io.result_sha256`` of the
     results, the value of the calculation record).
+
+    ``progress`` is optional: the ``run_analysis`` progress callback for each
+    calculation. The calculation is the same without it.
     """
 
     if isinstance(project_or_list, list):
-        return [_calculate_one(item) for item in project_or_list]
-    return _calculate_one(project_or_list)
+        return [_calculate_one(item, progress) for item in project_or_list]
+    return _calculate_one(project_or_list, progress)
 
 
 def _summary_lines(

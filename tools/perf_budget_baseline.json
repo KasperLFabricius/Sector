@@ -1,0 +1,28 @@
+{
+ "ratios": {
+  "calculate": 21.4847,
+  "input_build": 8.3506,
+  "register_build": 6.4088,
+  "register_read": 0.1582,
+  "report_audit": 42.2962,
+  "report_brief": 16.9649,
+  "report_standard": 37.567
+ },
+ "schema": 1,
+ "source": {
+  "measured_at_utc": "2026-11-13T15:59:19+00:00",
+  "platform": "Windows-11-10.0.26100-SP0",
+  "python": "3.14.10",
+  "seconds": {
+   "calculate": 32.9458,
+   "calibration": 1.5335,
+   "input_build": 12.8053,
+   "register_build": 9.8276,
+   "register_read": 0.2427,
+   "report_audit": 64.8593,
+   "report_brief": 26.0149,
+   "report_standard": 57.6072,
+   "warm_up": 2.4842
+  }
+ }
+}

@@ -171,6 +171,7 @@ from app.calculation_service import (  # noqa: E402, F401
     _formula_631_detailing_state,
     _attach_formula_631_detailing_state,
 )
+from app import calculation_service, stored_presentation  # noqa: E402
 
 # The tool version comes from the sector package (the single source of truth); it
 # shows in the title, the browser tab, the About panel and the report footer.
@@ -15210,6 +15211,66 @@ def _without_capacity_results(results):
     return safe
 
 
+_CALCULATION_STEP_LABELS = {
+    calculation_service.PROGRESS_SECTION: "Section and material properties",
+    calculation_service.PROGRESS_SINGLE: "Requested analyses",
+    calculation_service.PROGRESS_PLASTIC: "Plastic action sets",
+    calculation_service.PROGRESS_ELASTIC: "Elastic action sets",
+    calculation_service.PROGRESS_SPACING: "Clear spacing",
+    calculation_service.PROGRESS_FATIGUE: "Fatigue",
+    calculation_service.PROGRESS_SELECTION: "Worked examples for the report",
+    calculation_service.PROGRESS_REGISTER: "Result register",
+}
+
+
+class _CalculationProgress:
+    """Show the Calculate steps in one status container (UI-04).
+
+    ``run_analysis`` calls the object at the start of each step. The label of
+    the container shows the current step; each completed step adds one line
+    with its time.
+    """
+
+    def __init__(self, status):
+        self._status = status
+        self._started = time.perf_counter()
+        self._step = None
+        self._step_started = self._started
+
+    def _close_step(self):
+        if self._step is None:
+            return
+        seconds = time.perf_counter() - self._step_started
+        label = _CALCULATION_STEP_LABELS.get(self._step, str(self._step))
+        self._status.caption(f"Done: {label} ({seconds:.1f} s)")
+        self._step = None
+
+    def __call__(self, step, index, count, name):
+        if step != self._step:
+            self._close_step()
+            self._step = step
+            self._step_started = time.perf_counter()
+        label = _CALCULATION_STEP_LABELS.get(step, str(step))
+        if count > 1 or name:
+            label += f", {index} of {count}"
+            if name:
+                label += f" ({name})"
+        self._status.update(label=f"Calculating: {label}", state="running")
+
+    def complete(self):
+        self._close_step()
+        seconds = time.perf_counter() - self._started
+        self._status.update(
+            label=f"Calculation complete in {seconds:.1f} s",
+            state="complete",
+            expanded=False,
+        )
+
+    def stopped(self):
+        self._close_step()
+        self._status.update(label="Calculation stopped", state="error")
+
+
 @st.fragment
 def _analysis_workspace(inp):
     """Render and operate the main analysis workspace independently.
@@ -15318,6 +15379,9 @@ def _analysis_workspace(inp):
         engineering_input_sha256 = _engineering_input_hash(inp)
         project_input_sha256 = _calculation_project_hash(inp)
         calculation_revision = source_revision()
+        progress = _CalculationProgress(
+            st.status("Calculating", expanded=False)
+        )
         try:
             completed = run_analysis(
                 inp,
@@ -15327,8 +15391,10 @@ def _analysis_workspace(inp):
                 reuse_plastic_bending_cases=reuse_plastic_bending_cases,
                 reuse_elastic_cases=reuse_elastic_cases,
                 reuse_fatigue=reuse_fatigue,
+                progress=progress,
             )
         except Exception as exc:
+            progress.stopped()
             st.session_state["_case_error"] = _calculation_failure_message(exc)
             st.error(st.session_state["_case_error"])
         else:
@@ -15339,6 +15405,28 @@ def _analysis_workspace(inp):
                 project_input_sha256,
                 calculation_revision,
             )
+            # AR-01: build the result register one time for this calculation.
+            # A failed build keeps no record; the views then calculate the
+            # rows as before.
+            try:
+                record = calculation_service.presentation_record(
+                    inp,
+                    completed,
+                    progress=progress,
+                    capacity_contract=_CAPACITY_RESULT_CONTRACT_TOKEN,
+                )
+            except Exception:
+                record = None
+            if record is None:
+                st.session_state.pop(stored_presentation.SESSION_KEY, None)
+            else:
+                st.session_state[stored_presentation.SESSION_KEY] = record
+            progress.complete()
+    # The views read the stored register of the last calculation when its
+    # digests agree with the inputs and results that they show.
+    stored_presentation.activate(
+        st.session_state.get(stored_presentation.SESSION_KEY)
+    )
 
     view = c_view.selectbox(
         "View", VIEWS, key="view",
