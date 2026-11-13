@@ -11,13 +11,18 @@ Schema 29 adds three case attributes to both tables: a location tag, the design
 situation (default persistent) and a reserved stage (blank or "final"). The
 attributes have no engineering effect in Sector 0.97.1. They are not part of
 the case records, the row signatures or the results, so an attribute edit does
-not make a result stale. The editors show ``TABLE_COLUMNS``; the canonical
-tables and the project files use ``PERSISTED_COLUMNS``.
+not make a result stale. The editors, the canonical tables, the project files
+and the CSV v1 action files (``action_csv``) use ``PERSISTED_COLUMNS``. The
+row signatures and the case records use ``TABLE_COLUMNS`` only.
 """
 
 from __future__ import annotations
 
+import copy
 import math
+import struct
+import threading
+from collections import OrderedDict
 from collections.abc import Mapping
 
 import pandas as pd
@@ -405,7 +410,97 @@ def case_attributes(value, key: str) -> dict[str, dict[str, str]]:
     return attributes
 
 
+_MEMO_SIZE = 64
+_MEMO: OrderedDict = OrderedDict()
+_MEMO_LOCK = threading.Lock()
+_UNMEMOISABLE = object()
+
+
+def _cell_token(value):
+    """Return an exact, hashable token for one cell, or ``_UNMEMOISABLE``.
+
+    A float keeps its bit pattern, so the tagged invalid-decimal NaN and an
+    ordinary NaN give different tokens.
+    """
+
+    value_type = type(value)
+    if value is None:
+        return ("none",)
+    if value_type is bool:
+        return ("bool", value)
+    if value_type is int:
+        return ("int", value)
+    if value_type is float:
+        return ("float", struct.pack("<d", value))
+    if value_type is str:
+        return ("str", value)
+    if value is pd.NA:
+        return ("na",)
+    return _UNMEMOISABLE
+
+
+def _memo_key(value, key: str):
+    """Return the content digest of a DataFrame for the memo, or ``None``.
+
+    The digest holds every input of the normalisation: the table kind, the
+    column names and dtypes, each cell value, the canonical flag and the
+    issue ledger. A cell of another type disables the memo for that call.
+    """
+
+    if not isinstance(value, pd.DataFrame) or not value.columns.is_unique:
+        return None
+    canonical = bool(
+        value.attrs.get("sector_load_case_table") == key
+        and tuple(value.columns) == PERSISTED_COLUMNS[key]
+    )
+    cells = []
+    for column in value.columns:
+        if type(column) is not str:
+            return None
+        tokens = tuple(_cell_token(cell) for cell in value[column].tolist())
+        if _UNMEMOISABLE in tokens:
+            return None
+        cells.append((column, str(value[column].dtype), tokens))
+    ledger = (
+        tuple(sorted(decimal_issue_ledger(value.attrs).items()))
+        if canonical else ()
+    )
+    return (key, canonical, ledger, tuple(cells))
+
+
+def _detached(frame: pd.DataFrame) -> pd.DataFrame:
+    result = frame.copy(deep=True)
+    result.attrs = copy.deepcopy(frame.attrs)
+    return result
+
+
 def normalise_table(value, key: str) -> pd.DataFrame:
+    """Return the canonical table, from the memo when the content is known.
+
+    UI-31: one Actions rerun normalises the same two tables many times. The
+    memo keeps the last results, keyed by the exact table content
+    (``_memo_key``), and gives each caller a detached copy.
+    """
+
+    key = _kind(key)
+    memo_key = _memo_key(value, key)
+    if memo_key is not None:
+        with _MEMO_LOCK:
+            cached = _MEMO.get(memo_key)
+            if cached is not None:
+                _MEMO.move_to_end(memo_key)
+        if cached is not None:
+            return _detached(cached)
+    result = _normalise_table(value, key)
+    if memo_key is not None:
+        with _MEMO_LOCK:
+            _MEMO[memo_key] = _detached(result)
+            while len(_MEMO) > _MEMO_SIZE:
+                _MEMO.popitem(last=False)
+    return result
+
+
+def _normalise_table(value, key: str) -> pd.DataFrame:
     """Coerce a table-like value to the canonical columns and dtypes.
 
     Unknown columns are discarded, and a missing attribute column gets its

@@ -2676,6 +2676,22 @@ def _case_column_config(key):
             width=220,
         ),
     }
+    # Schema-29 case attributes: no calculation effect (load_cases).
+    attributes = {
+        load_cases.LOCATION_TAG: st.column_config.TextColumn(
+            "Location tag", help=definition(load_cases.LOCATION_TAG).help,
+            max_chars=load_cases.MAX_LOCATION_TAG_LENGTH, width=140,
+        ),
+        load_cases.DESIGN_SITUATION: st.column_config.SelectboxColumn(
+            "Design situation", help=definition(load_cases.DESIGN_SITUATION).help,
+            options=list(load_cases.DESIGN_SITUATIONS),
+            default=load_cases.DEFAULT_DESIGN_SITUATION, required=True, width=150,
+        ),
+        load_cases.STAGE: st.column_config.TextColumn(
+            "Stage", help=definition(load_cases.STAGE).help,
+            validate=r"^(final)?$", max_chars=5, width="small",
+        ),
+    }
 
     def force(column, label):
         field = definition(column)
@@ -2716,6 +2732,7 @@ def _case_column_config(key):
                 default=False,
                 width=180,
             ),
+            **attributes,
         }
     return {
         **text,
@@ -2730,6 +2747,7 @@ def _case_column_config(key):
             help=definition("calculate_crack_width").help,
             default=False, width=190,
         ),
+        **attributes,
     }
 
 
@@ -2764,7 +2782,7 @@ def _case_table_editor(box, key):
                 "width": "stretch",
                 "height": "auto",
                 "column_config": _case_column_config(key),
-                "column_order": load_cases.TABLE_COLUMNS[key],
+                "column_order": load_cases.PERSISTED_COLUMNS[key],
             },
         ),
     )
@@ -2795,7 +2813,9 @@ def _load_case_editors(box, *, fatigue_on=False):
         notice = st.session_state.pop(action_workspace.NOTICE_KEY, None)
         if notice:
             (box.success if notice[0] else box.warning)(notice[1])
-    action_workspace.conventions(box)
+    action_workspace.sign_convention(action_workspace.conventions(box))
+    action_workspace.csv_panel(box, state=st.session_state,
+                               on_change=_snapshot_completed_input_state)
     plastic_box, elastic_box, fatigue_box = action_workspace.family_stages(
         box, state=st.session_state,
         on_change=_snapshot_completed_input_state,

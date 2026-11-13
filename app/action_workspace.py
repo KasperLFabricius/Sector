@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import functools
 import hashlib
 import io
 import json
@@ -12,7 +13,7 @@ from collections.abc import Mapping
 import pandas as pd
 from input_stage_host import stateful_input_tabs
 
-from app import input_issues, load_cases
+from app import action_csv, input_issues, load_cases
 from app.table_field_definitions import field_definition
 
 FAMILY_KEY = "_actions_family"
@@ -83,6 +84,11 @@ def prepare_paste(text, table):
     if table not in load_cases.CASE_TABLE_KEYS:
         raise ValueError("Select a supported action family.")
     text = str(text).lstrip("\ufeff")
+    if action_csv.is_versioned(text):
+        raise ValueError(
+            "This text starts with a version line. Import a CSV v1 file with "
+            "Import and export actions (CSV v1)."
+        )
     delimiter = "\t" if "\t" in text else ";" if ";" in text else ","
     rows = list(csv.reader(io.StringIO(text), delimiter=delimiter, strict=True))
     rows = [row for row in rows if any(cell.strip() for cell in row)]
@@ -91,7 +97,7 @@ def prepare_paste(text, table):
     header = [cell.strip() for cell in rows[0]]
     if len(header) != len(set(header)):
         raise ValueError("Use each column heading once.")
-    unknown = set(header) - set(load_cases.TABLE_COLUMNS[table])
+    unknown = set(header) - set(load_cases.PERSISTED_COLUMNS[table])
     if unknown or load_cases.NAME not in header:
         raise ValueError("Use the template column headings, including name.")
     if any(len(row) != len(header) for row in rows[1:]):
@@ -102,11 +108,17 @@ def prepare_paste(text, table):
                                  {"", "0", "1", "true", "false", "yes", "no", "on", "off"}
                                  for value in frame[flag]):
             raise ValueError(f"Use true or false in {flag}.")
-    return load_cases.normalise_table(frame, table)
+    frame = load_cases.normalise_table(frame, table)
+    for number, row in enumerate(frame.to_dict("records"), start=1):
+        for column in load_cases.ATTRIBUTE_COLUMNS:
+            reason = load_cases.attribute_error(column, row[column])
+            if reason is not None:
+                raise ValueError(f"Pasted row {number}: {column} {reason}.")
+    return frame
 
 
 def paste_template(table):
-    return "\t".join(load_cases.TABLE_COLUMNS[table]) + "\n"
+    return "\t".join(load_cases.PERSISTED_COLUMNS[table]) + "\n"
 
 
 def _join_frames(first, second, table):
@@ -205,6 +217,9 @@ def consume_command(state, reseed):
     command = state.pop(COMMAND_KEY, None)
     if command is None:
         return
+    if command.get("operation") == "import":
+        _consume_import(state, reseed, command)
+        return
     try:
         result, mapping, selected = edit_cases(
             {key: state.get(key) for key in load_cases.CASE_TABLE_KEYS},
@@ -225,6 +240,47 @@ def consume_command(state, reseed):
     state["_pending_input_events"] = pending
     state.pop(FOCUS_KEY, None)
     state[NOTICE_KEY] = (True, "Action table updated. Review the selected case before calculation.")
+
+
+CSV_FILE_VERSION_KEY = "_actions_csv_file_version"
+
+
+def import_cases(tables, authorities, *, text, mode, expected_digest=None):
+    """Return both case tables, declarations and counts for one CSV v1 import."""
+    if expected_digest is not None and table_digest(tables) != expected_digest:
+        raise ValueError("The action tables changed. Review them and repeat the command.")
+    return action_csv.import_cases(tables, authorities, text=text, mode=mode)
+
+
+def _consume_import(state, reseed, command):
+    try:
+        result, mapping, counts = import_cases(
+            {key: state.get(key) for key in load_cases.CASE_TABLE_KEYS},
+            state.get(AUTHORITY_KEY), text=command.get("text", ""),
+            mode=command.get("mode"), expected_digest=command.get("expected_digest"),
+        )
+    except (ValueError, csv.Error) as exc:
+        state[NOTICE_KEY] = (False, str(exc))
+        return
+    pending = dict(state.get("_pending_input_events", {}))
+    for table in load_cases.CASE_TABLE_KEYS:
+        reseed(table, result[table])
+        selected = 0 if len(result[table]) else None
+        state[selection_key(table)] = selected
+        retain_selection(state, table)
+        pending[table] = result[table].copy(deep=True)
+        pending[selection_key(table)] = selected
+    state[AUTHORITY_KEY] = mapping
+    pending[AUTHORITY_KEY] = copy.deepcopy(mapping)
+    state["_pending_input_events"] = pending
+    state.pop(FOCUS_KEY, None)
+    # A new uploader key clears the imported file from the panel.
+    state[CSV_FILE_VERSION_KEY] = int(state.get(CSV_FILE_VERSION_KEY, 0)) + 1
+    uls = counts[load_cases.PLASTIC_TABLE_KEY]
+    sls = counts[load_cases.ELASTIC_TABLE_KEY]
+    state[NOTICE_KEY] = (
+        True, f"Imported {uls} ULS and {sls} SLS cases. Review the cases and "
+              "the torsion declarations before calculation.")
 
 
 def resolve_focus(state):
@@ -314,7 +370,10 @@ def conventions(host):
     rules = (
         "**Axes:** +x points right; +y points up in the section view.",
         "**Axial force:** positive N is tension; negative N is compression.",
-        "**Bending:** positive Mx compresses the top face and positive My compresses the right face for centered pure bending.",
+        "**Bending:** positive Mx compresses the top face and positive My compresses the right face for centred pure bending.",
+        "**Moment reference:** Mx and My act about the x and y axes through the section origin O (0, 0). "
+        "For moments about a centroid C at (xc, yc), enter Mx = Mx,C - N yc and My = My,C - N xc, "
+        "with N positive in tension.",
         "**Shear:** Vx pairs with My; Vy pairs with Mx. Negative-coordinate faces are left for Vx and bottom for Vy. "
         "Positive-coordinate faces are right for Vx and top for Vy. Automatic uses the adjusted moment and checks both faces when it is effectively zero.",
         "**Torsion:** retain the source model's documented signed torsion action. The current resistance check uses its magnitude.",
@@ -326,6 +385,89 @@ def conventions(host):
     )
     for rule in rules:
         guide.markdown("- " + rule)
+    return guide
+
+
+@functools.cache
+def _sign_figure():
+    # Deferred: the figure module loads the report drawing helpers.
+    import report_diagrams
+
+    return report_diagrams.action_sign_convention_figure()
+
+
+def sign_convention(host):
+    """Show the sign-convention figure of the action tables."""
+    if not bool(getattr(host, "open", True)):
+        return
+    host.plotly_chart(_sign_figure(), width="stretch",
+                      config={"displayModeBar": False, "staticPlot": True},
+                      key="_actions_sign_figure")
+    host.caption(
+        "Positive actions on the section as drawn. Moments act about the origin O. "
+        "The bending panels show centred pure bending, with the neutral axis dashed. "
+        "Sector keeps the sign of T and uses |T| in the torsion check."
+    )
+
+
+def csv_panel(host, *, state, on_change=None):
+    """Export both case tables to one CSV v1 file and import such a file."""
+    if not bool(getattr(host, "open", True)):
+        return
+    panel = host.expander("Import and export actions (CSV v1)", expanded=False)
+    panel.caption(
+        "One CSV file holds the Plastic (ULS) and Elastic (SLS) cases. Line 1 is the "
+        "version line, line 2 has the column headings and line 3 the units."
+    )
+    tables = {key: state.get(key) for key in load_cases.CASE_TABLE_KEYS}
+    form = panel.radio(
+        "File form", ("Comma, decimal point", "Semicolon, decimal comma"),
+        key="_actions_csv_form", horizontal=True,
+        help="Select the delimiter and decimal separator of the downloaded file.",
+    )
+    delimiter = ";" if form.startswith("Semicolon") else ","
+    left, right = panel.columns(2)
+    left.download_button(
+        "Download actions CSV", action_csv.export_csv(tables, delimiter=delimiter),
+        file_name="sector-actions-v1.csv", mime="text/csv", key="_actions_csv_export",
+        help="Download the active Plastic and Elastic cases with full numeric precision.")
+    right.download_button(
+        "Download CSV template", action_csv.template(delimiter=delimiter),
+        file_name="sector-actions-v1-template.csv", mime="text/csv",
+        key="_actions_csv_template",
+        help="Download the version line, the column headings and the units row.")
+    version = int(state.get(CSV_FILE_VERSION_KEY, 0))
+    upload = panel.file_uploader(
+        "CSV v1 file to import", type=["csv", "txt"], key=f"_actions_csv_file::{version}",
+        help="Comma, semicolon or tab delimiters. Numeric cells accept a dot or comma decimal.")
+    if upload is None:
+        return
+    mode_label = panel.radio(
+        "Import mode", ("Append to the current cases", "Replace the Plastic and Elastic cases"),
+        key="_actions_csv_mode",
+        help="Append keeps the current cases. Replace removes them. Fatigue spectra do not change.")
+    mode = "replace" if mode_label.startswith("Replace") else "append"
+    digest = table_digest(tables)
+    try:
+        text = action_csv.decode(upload.getvalue())
+        preview = action_csv.parse(text)
+        import_cases(tables, state.get(AUTHORITY_KEY), text=text, mode=mode,
+                     expected_digest=digest)
+    except (ValueError, csv.Error) as exc:
+        panel.error(str(exc))
+        return
+    counts = {key: len(preview[key]) for key in load_cases.CASE_TABLE_KEYS}
+    for family, key in TABLES.items():
+        if counts[key]:
+            panel.markdown(f"**{family} cases ({action_csv.TABLE_LIMIT_STATES[key]})**")
+            panel.dataframe(load_cases.editor_table(preview[key], key), hide_index=True, width="stretch")
+    uls, sls = counts[load_cases.PLASTIC_TABLE_KEY], counts[load_cases.ELASTIC_TABLE_KEY]
+    panel.button(
+        f"Import {uls} ULS and {sls} SLS cases", key="_actions_csv_apply",
+        help="Apply this validated preview. Review the torsion declarations after the import.",
+        on_click=queue_command, args=(state, {
+            "operation": "import", "text": text, "mode": mode, "expected_digest": digest,
+        }, on_change))
 
 
 
