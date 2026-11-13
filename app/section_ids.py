@@ -10,9 +10,9 @@ order of the table, for example ``C3-C4``.
 ``normalise_geometry_table`` keeps each valid ID, so a deletion does not
 renumber the other IDs. A row without a valid ID gets the next number that the
 region has not issued (``next_corner`` or ``next_void_corner``), on load and on
-save, so a deleted ID is not used again. The point editors of Sector 0.97.1
-do not keep the IDs yet (PR I1), so an application save numbers the corners in
-row order.
+save, so a deleted ID is not used again. The corner and void grids of the
+application show the ID column and keep each ID through an edit, an insertion,
+a deletion and a reorder. A new row gets the next number of the region counter.
 
 The section model is a list of regions. Schema 29 accepts one region, ``A1``,
 which owns the corner and void tables. The prefix A keeps the region ID apart
@@ -217,6 +217,117 @@ def corner_ids(value, key: str) -> list[str]:
 
     frame = normalise_geometry_table(value, key)
     return [element_id for element_id in frame[ID].tolist() if element_id]
+
+
+def ring_rows(value, key: str, next_number: int = 1) -> list[list[dict]]:
+    """Return the complete rows of each ring of one geometry table, in order.
+
+    Each row is ``{"id", "x", "y"}``. The corner table is one ring. The void
+    table splits into one ring for each void at the separator rows (rows with
+    two blank coordinates). A row with one blank or non-numeric coordinate is
+    incomplete: it has an ID but is not a corner of a ring, and it does not
+    separate two voids. Empty rings are left out.
+    """
+
+    frame = normalise_geometry_table(value, key, next_number)
+    rings: list[list[dict]] = []
+    current: list[dict] = []
+    for element_id, x, y in frame.itertuples(index=False, name=None):
+        if key == VOIDS_TABLE_KEY and _blank_coordinates(x, y):
+            if current:
+                rings.append(current)
+            current = []
+            continue
+        if math.isnan(x) or math.isnan(y):
+            continue
+        current.append({"id": element_id, "x": float(x), "y": float(y)})
+    if current:
+        rings.append(current)
+    return rings
+
+
+def ring_corner_ids(value, key: str, next_number: int = 1) -> list[list[str]]:
+    """Return the corner IDs of each ring, split at the void separator rows.
+
+    Use this helper, not ``corner_ids``, for edges: ``corner_ids`` of the void
+    table is one flat list over all voids, so ``ring_edge_ids`` of it would
+    make one false ring through all voids.
+    """
+
+    return [
+        [row["id"] for row in ring]
+        for ring in ring_rows(value, key, next_number)
+    ]
+
+
+def incomplete_row_ids(value, key: str, next_number: int = 1) -> list[str]:
+    """Return the IDs of the rows with one blank or non-numeric coordinate.
+
+    A corner-table row with two blank coordinates is also incomplete. A
+    void-table row with two blank coordinates is a separator, not an
+    incomplete row.
+    """
+
+    frame = normalise_geometry_table(value, key, next_number)
+    out = []
+    for element_id, x, y in frame.itertuples(index=False, name=None):
+        if key == VOIDS_TABLE_KEY and _blank_coordinates(x, y):
+            continue
+        if math.isnan(x) or math.isnan(y):
+            out.append(element_id)
+    return out
+
+
+# Families of the stable IDs. A selection or a reference that stores a bare ID
+# also stores its family, because the same text can name two elements (the
+# region A1 and, before the prefix A, the bar R1).
+FAMILY_REGION = "region"
+FAMILY_CORNER = "corner"
+FAMILY_VOID_CORNER = "void corner"
+FAMILY_EDGE = "edge"
+FAMILY_VOID_EDGE = "void edge"
+FAMILY_BAR = "bar"
+FAMILY_TENDON = "tendon"
+FAMILY_GROUP = "group"
+FAMILIES = (
+    FAMILY_REGION,
+    FAMILY_CORNER,
+    FAMILY_VOID_CORNER,
+    FAMILY_EDGE,
+    FAMILY_VOID_EDGE,
+    FAMILY_BAR,
+    FAMILY_TENDON,
+    FAMILY_GROUP,
+)
+
+
+def element_reference(family: str, element_id: str) -> dict:
+    """Return one reference ``{"family", "id"}``, or raise ``ValueError``.
+
+    The family decides the ID form, so a bare ID never names two elements.
+    """
+
+    if family not in FAMILIES:
+        raise ValueError(f"unknown ID family: {family!r}")
+    if type(element_id) is not str:
+        raise ValueError("an element ID must be text")
+    if family in (FAMILY_EDGE, FAMILY_VOID_EDGE):
+        start_id, _end_id = parse_edge_id(element_id)
+        prefix = CORNER_PREFIX if family == FAMILY_EDGE else VOID_CORNER_PREFIX
+        if _corner_prefix(start_id) != prefix:
+            raise ValueError(f"{element_id!r} is not a {family} ID")
+        return {"family": family, "id": element_id}
+    prefix = {
+        FAMILY_REGION: REGION_PREFIX,
+        FAMILY_CORNER: CORNER_PREFIX,
+        FAMILY_VOID_CORNER: VOID_CORNER_PREFIX,
+        FAMILY_BAR: "R",
+        FAMILY_TENDON: "P",
+        FAMILY_GROUP: "G",
+    }[family]
+    if id_pattern(prefix).fullmatch(element_id) is None:
+        raise ValueError(f"{element_id!r} is not a {family} ID")
+    return {"family": family, "id": element_id}
 
 
 def edge_id(start_id: str, end_id: str) -> str:

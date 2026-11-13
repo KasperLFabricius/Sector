@@ -167,3 +167,29 @@
   color: var(--st-red-text-color, #b91c1c);
   font-size: 0.8125rem;
 }
+
+/* Two-way selection with the section view. The outline keeps the selection
+   visible without colour alone. */
+.tabulator-row.pg-selected .tabulator-cell {
+  background: var(--st-secondary-background-color);
+  font-weight: 600;
+}
+
+.tabulator-row.pg-selected {
+  outline: 2px solid var(--st-primary-color, #534ab7);
+  outline-offset: -2px;
+}
+
+.tabulator .tabulator-cell.pg-id {
+  cursor: pointer;
+}
+
+/* A pasted text that is not a number stays visible until it is corrected. */
+.tabulator .tabulator-cell.pg-invalid {
+  color: var(--st-red-color, #b3261e);
+  text-decoration: underline wavy;
+}
+
+.tabulator .tabulator-cell.pg-move {
+  cursor: grab;
+}
