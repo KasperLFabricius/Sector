@@ -650,6 +650,36 @@ def validate_workflow(text: str) -> None:
         < full_test_index
     ):
         raise DependencyAuditError("dependency gate workflow order differs")
+    _validate_cached_locked_install(jobs.get("perf"), "performance budget")
+
+
+# The cached QA environment (P0): a cache hit restores the locked packages, and
+# a miss installs them from the hash-locked file. ``tools/verify_coverage_gate.py``
+# pins the complete job; this check keeps the locked install of the job.
+CACHE_MISS = "steps.qa_env.outputs.cache-hit != 'true'"
+CACHE_HIT = "steps.qa_env.outputs.cache-hit == 'true'"
+RESTORE_STEP = "Restore cached QA environment"
+
+
+def _validate_cached_locked_install(job: object, label: str) -> None:
+    if not isinstance(job, Mapping):
+        raise DependencyAuditError(f"{label} job is missing")
+    steps = job.get("steps")
+    preflight_index, preflight = _one_step(steps, PREFLIGHT_STEP)
+    if set(preflight) != {"name", "run"} or preflight.get("run") != preflight_command():
+        raise DependencyAuditError(f"{label} dependency preflight can be skipped or masked")
+    restore_index, restore = _one_step(steps, RESTORE_STEP)
+    if restore.get("if") != CACHE_HIT or (restore.get("with") or {}).get(
+        "fail-on-cache-miss"
+    ) is not True:
+        raise DependencyAuditError(f"{label} cached environment restore differs")
+    install_index, install = _one_step(steps, INSTALL_STEP)
+    if set(install) != {"name", "if", "run"} or install.get("if") != CACHE_MISS or install.get(
+        "run"
+    ) != "python -m pip install --require-hashes -r requirements-dev.txt":
+        raise DependencyAuditError(f"{label} locked QA install can be skipped or weakened")
+    if not preflight_index < restore_index < install_index:
+        raise DependencyAuditError(f"{label} dependency step order differs")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

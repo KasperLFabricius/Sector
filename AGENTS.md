@@ -25,6 +25,7 @@ label. It governs every change.
 | Calculation service | `app/calculation_service.py` | Calculation orchestration without Streamlit (`run_analysis`, `_run_uniaxial_capacity_checks`, `_run_capacity_checks`), `calculate_project` and the command line `python app/calculation_service.py <project file>`. Until AR-09, `project_inputs` builds the inputs of a project file in a headless Streamlit session of the application. |
 | Project files | `app/project_io.py`, `app/session_state_migrations.py` | Schema, validation and migrations of `.sector` project files. |
 | Presentation | `app/result_presentation.py`, `app/fatigue_presentation.py` | Result rows, statuses and the publication validators that re-check retained results. |
+| Stored presentation | `app/stored_presentation.py` | The result register of the last Calculate, keyed by section, stage and case, with its digests (structure in the module docstring). |
 | Report | `app/sector_report.py`, `app/report_*.py`, `app/publication_*.py` | PDF reports (Brief, Standard, Audit). |
 | Manual | `app/manual*.py` | Built-in manual content and renderers. |
 | Tests | `tests/` | pytest suite. `tests/test_v0970_*.py` hold the 0.97.0 hand-calculation tests. |
@@ -39,7 +40,10 @@ label. It governs every change.
    calculation without the browser interface.
 4. `app/result_presentation.py` turns results into rows, statuses and notes. Its
    validators recompute the retained values from `inp`; a mismatch gives NOT
-   ASSESSED instead of a stale verdict.
+   ASSESSED instead of a stale verdict. After each Calculate, the application
+   builds the result register one time and stores it beside the results
+   (`app/stored_presentation.py`). A rerun reads the stored rows only when
+   all digests agree, and calculates them again otherwise.
 5. The views, the PDF report and the manual read the same results.
 
 Session state lives in `st.session_state` and is saved in project files through
@@ -68,7 +72,12 @@ The pinned interpreter is CPython 3.14 (`.python-version`) with
 - Ruff policy: `python tools/verify_ruff_policy.py quality-ruff-policy.toml --execute`
 
 CI (`.github/workflows/qa.yml`) runs the shards of `tools/qa_core_shards.py`,
-the coverage, Ruff, mypy and dependency gates.
+the coverage, Ruff, mypy and dependency gates, and the performance budget
+(`tools/perf_budget.py`). The budget compares each phase time, divided by the
+time of a fixed calibration workload, with `tools/perf_budget_baseline.json`:
+a warning above 1.25 times the baseline ratio, a failure above 2 times. After
+an intended change of the run time, write a new baseline from the CI evidence
+(artefact `sector-perf-<run id>-<attempt>`).
 
 ## Development test loop
 

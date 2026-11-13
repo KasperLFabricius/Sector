@@ -28,6 +28,7 @@ from app import engineer_messages
 from app import elastic_display
 from app import report_summary_notation as report_notation
 from app import modelled_direction
+from app import stored_presentation
 from sector import capacity, codes, combined as combined_core
 from sector import geometry as section_geometry
 from sector import shear as shear_core
@@ -9678,8 +9679,58 @@ def _noncurrent_case_summary_rows(rows):
     return retained
 
 
-@publication_calculation_scope()
 def multi_case_summary_rows(inp, results, *, stale=False):
+    """Return one ordered result register across every canonical case row.
+
+    When the script run has an active stored presentation
+    (``stored_presentation.activate``) whose digests agree with ``inp``,
+    ``results`` and ``stale``, the stored rows are returned. Otherwise the
+    rows are calculated. Rows calculated again for the calculation of the
+    active record are kept in it as a variant.
+    """
+
+    record = stored_presentation.active_record()
+    if record is not None:
+        stored = stored_presentation.read_rows(record, inp, results, stale=stale)
+        if stored is not None:
+            return stored
+    rows = calculated_multi_case_summary_rows(inp, results, stale=stale)
+    if record is not None:
+        stored_presentation.remember_variant(
+            record, inp, results, rows,
+            stale=stale, governing=governing_row_positions(rows),
+        )
+    return rows
+
+
+def stored_presentation_record(inp, results, *, revision=None, capacity_contract=()):
+    """Build the stored presentation of one completed calculation (AR-01).
+
+    Returns the record of ``stored_presentation`` (rows keyed by section,
+    stage and case, with the digests), or None when ``inp`` has no
+    engineering signature.
+    """
+
+    rows = calculated_multi_case_summary_rows(inp, results)
+    return stored_presentation.new_record(
+        inp,
+        results,
+        rows,
+        governing=governing_row_positions(rows),
+        revision=revision,
+        capacity_contract=capacity_contract,
+    )
+
+
+def governing_row_positions(rows):
+    """Return the register position of the governing row of each check type."""
+
+    _retained, order, selected = _governing_summary_selection(rows)
+    return [selected[key][0] for key in order]
+
+
+@publication_calculation_scope()
+def calculated_multi_case_summary_rows(inp, results, *, stale=False):
     """Build one ordered result register across every canonical case row."""
     inp = inp or {}
     results = results or {}

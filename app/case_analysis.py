@@ -28,6 +28,9 @@ _PLASTIC_RESULT_KEYS = (
     "transverse_reinforcement",
 )
 _ELASTIC_RESULT_KEYS = ("elastic",)
+# Progress steps that ``run_case_tables`` reports (UI-04).
+PROGRESS_PLASTIC = "plastic"
+PROGRESS_ELASTIC = "elastic"
 
 _PLASTIC_SWEEP_VALUES = EngineerMessage(
     "PLASTIC-SWEEP-VALUES",
@@ -408,6 +411,7 @@ def run_case_tables(
     reuse_plastic: Sequence[Mapping] | None = None,
     reuse_plastic_bending: Sequence[Mapping] | None = None,
     reuse_elastic: Sequence[Mapping] | None = None,
+    progress: Callable[[str, int, int, str], None] | None = None,
 ) -> dict:
     """Run every active canonical case through ``runner`` in table order.
 
@@ -415,6 +419,11 @@ def run_case_tables(
     them solely when the corresponding shared geometry/material/method signature
     is unchanged. This separation lets a future table edit recompute only changed
     rows without ever reusing results across changed engineering context.
+
+    ``progress`` (optional) is called before each action set as
+    ``progress(step, index, count, name)``: ``step`` is ``PROGRESS_PLASTIC`` or
+    ``PROGRESS_ELASTIC``, ``index`` counts from 1 to ``count``, and ``name`` is
+    the action-set ID. Reused action sets are also reported.
     """
     plastic_table = inp.get("plastic_cases")
     elastic_table = inp.get("elastic_cases")
@@ -442,7 +451,10 @@ def run_case_tables(
     plastic_entries = []
     if plastic_required:
         bending_live = mode in {"Plastic", "Both"}
-        for record in plastic_rows:
+        for index, record in enumerate(plastic_rows, start=1):
+            if progress is not None:
+                progress(PROGRESS_PLASTIC, index, len(plastic_rows),
+                         str(record[load_cases.NAME]))
             signature = case_signature(
                 record, load_cases.PLASTIC_TABLE_KEY, inp
             )
@@ -497,7 +509,10 @@ def run_case_tables(
 
     elastic_entries = []
     if elastic_required:
-        for record in elastic_rows:
+        for index, record in enumerate(elastic_rows, start=1):
+            if progress is not None:
+                progress(PROGRESS_ELASTIC, index, len(elastic_rows),
+                         str(record[load_cases.NAME]))
             signature = case_signature(
                 record, load_cases.ELASTIC_TABLE_KEY, inp
             )
