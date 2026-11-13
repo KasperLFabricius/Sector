@@ -84,18 +84,12 @@ def goto_widget_owner(at, key):
     if route == "materials":
         values.update(_material_tab=family, _material_tab_preference=family)
     elif route == "settings":
+        from app import input_issues
+
         page = mvt_workspace.field_page(key)
-        if page is not None:
-            group = "Shear / torsion / M-V-T"
+        group = input_issues.settings_group(key, mvt_input=page is not None)
+        if group == "Shear / torsion / M-V-T":
             values["_mvt_page"] = page
-        elif key.startswith("sls_"):
-            group = "Crack width"
-        elif key.startswith("fatigue_"):
-            group = "Fatigue"
-        elif key.startswith(("detailing_", "minimum_reinforcement_", "transverse_", "clear_spacing_")) or key == "modelled_direction_alias":
-            group = "Detailing"
-        else:
-            group = "General"
         values["_analysis_group"] = group
     changed = _navigation_values(at, values)
     current = at.session_state.to_dict().get("_workflow_page")

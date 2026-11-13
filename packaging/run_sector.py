@@ -111,6 +111,8 @@ def _streamlit_argv(
         "--browser.gatherUsageStats=false",
         "--client.toolbarMode=viewer",
         "--client.showErrorDetails=type",
+        # Same as [runner] in .streamlit/config.toml: Sector uses no magic.
+        "--runner.magicEnabled=false",
         *_theme_argv(),
     ]
 

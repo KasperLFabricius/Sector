@@ -97,6 +97,7 @@ def test_existing_launch_flags_keep_their_authority(bundle, launcher):
         "--server.headless=true", "--server.fileWatcherType=none",
         "--server.runOnSave=false", "--browser.gatherUsageStats=false",
         "--client.toolbarMode=viewer", "--client.showErrorDetails=type",
+        "--runner.magicEnabled=false",
     ]
 
 
