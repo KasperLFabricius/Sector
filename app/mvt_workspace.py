@@ -21,10 +21,6 @@ _SHARED_KEYS = frozenset({
     "shear_vx_link_legs", "shear_vy_link_legs",
     "shear_vx_transverse_leg_spacing", "shear_vy_transverse_leg_spacing",
     "strut_cot_min", "strut_cot_max", "capacity_steel_material_id",
-    # Member maximum moment MEd,max (rendered on the shared page).
-    "shear_med_max_on", "shear_med_max_copy",
-    "shear_med_max_mx_pos", "shear_med_max_mx_neg",
-    "shear_med_max_my_pos", "shear_med_max_my_neg",
 })
 
 
@@ -35,6 +31,8 @@ def field_page(key):
         return PAGES[0]
     if key in _SHARED_KEYS:
         return PAGES[1]
+    if key.startswith("shear_med_max_"):
+        return None  # MEd,max is in the Member settings group.
     if key.startswith("shear_"):
         return PAGES[2]
     if key.startswith(("torsion_", "_torsion_case_")):
