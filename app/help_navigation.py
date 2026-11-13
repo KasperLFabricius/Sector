@@ -9,7 +9,7 @@ PAGE_HELP = {
     "section": "Define the outline, voids, reinforcing bars and tendons. Use Quick Section or the point tables. Review the drawing and material assignments before calculation.",
     "materials": "Choose the material family and catalogue entry. Each question mark explains the adjacent input. A preset fills the stated material law; review the editable values and diagram.",
     "actions": "Select the Plastic, Elastic or Fatigue tab. Fatigue contains grouped spectra with basic actions, cyclic increments and cycle counts. Review names and units. Open Axes, signs and paste rules for the input conventions. Use the field guide for each table column.",
-    "settings": "Select a settings group. Shear, torsion and M-V-T has five pages. The shared reinforcement page supplies common member inputs. Select a check explicitly before calculation.",
+    "settings": "Select a settings group. Member holds the member context inputs. Shear, torsion and M-V-T has five pages. The shared reinforcement page supplies the common links and reference material. Select a check explicitly before calculation.",
     "results": "Review the governing rows and their conditions. Select a row to see its numerical result and criterion. Open selected result retains that case. Recalculate when inputs change.",
     "report": "Complete document details and references, then choose Brief, Standard or Audit. Review the coverage and generate the report. The preview and download use the same current PDF.",
     "project": "Save a project file for transfer or deliberate record keeping. Autosave creates a separate recovery file at the selected interval. Review the source and time before restoring a recovery copy.",

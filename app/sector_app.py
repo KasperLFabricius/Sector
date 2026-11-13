@@ -32,6 +32,7 @@ import streamlit as st  # noqa: E402
 import app_run_probe  # noqa: E402
 from app import action_workspace  # noqa: E402
 from app import input_issues, workflow_navigation, result_workspace, navigation_context, help_navigation  # noqa: E402
+from app import material_cards  # noqa: E402
 from app import mvt_workspace  # noqa: E402
 from app import engineer_messages  # noqa: E402
 from app import elastic_display  # noqa: E402
@@ -473,11 +474,21 @@ def _prefill(prefix, preset, presets):
 
 
 def _input_widget_kwargs(key, kwargs, *, host=None):
-    """Attach the input-event journal while preserving an existing callback."""
+    """Attach the input-event journal while preserving an existing callback.
+
+    ``on_change="ignore"`` keeps a field from starting a rerun. The journal
+    does not hold the value of such a field, so a page change in the next
+    rerun loses it. Sector uses it for no input field: each input enters the
+    project file, the report or the input signature.
+    """
 
     options = dict(kwargs)
     if host is not None and not isinstance(host, InputStage):
         options.setdefault("persist_state", "session")
+    if options.get("on_change") == "ignore":
+        options.pop("args", None)
+        options.pop("kwargs", None)
+        return options
     callback = options.pop("on_change", None)
     callback_args = tuple(options.pop("args", ()) or ())
     callback_kwargs = dict(options.pop("kwargs", {}) or {})
@@ -1051,12 +1062,9 @@ def concrete_panel(box, locked=False, lock_elastic=False, *, heading=True,
     concrete = mp.build_concrete(curve=curve, fck=fck, gamma_c=gamma_c,
                                  alpha_cc=alpha_cc, eps_c2=eps_c2, eps_cu2=eps_cu2, n=n,
                                  pivot_c=bool(pivot_c))
-    note = (
-        f"  ($\\eta_{{cc}}={eta_cc:.6f}$, $k_{{tc}}={k_tc:.2f}$)"
-        if auto is not None else ""
-    )
-    box.caption(f"curve {curve},  $f_{{cd}}$ = {concrete.fcd:.3f} MPa,  "
-                f"$\\varepsilon_{{cu2}}$ = {concrete.eps_cu2 * 1000.0:.3f} {_PERMILLE}{note}")
+    # The material card beside the curve gives the design values.
+    if auto is not None:
+        box.caption(f"$\\eta_{{cc}}={eta_cc:.6f}$, $k_{{tc}}={k_tc:.2f}$")
 
     # Mean tensile strength fctm feeds the serviceability cracking check. It lives
     # with the concrete (not the loads); the Auto button refreshes it from the
@@ -1242,12 +1250,9 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
             for f in mp.MILD_FIELD_META}
     steel = _safe_build(box, mp.build_mild, curve, vals,
                         active_in_compression=active_comp)
-    comp = "active" if active_comp else "tension-only"
+    # The material card beside the curve gives the design values.
     if steel is None:
         box.caption("Material diagram unavailable until the values are corrected.")
-    else:
-        box.caption(f"$f_{{yd}}$ = {steel.fytk / vals['gamma_y']:.3f} MPa,  "
-                    f"$E_s$ = {vals['Es']:.0f} GPa,  compression {comp}")
     if not catalogue_mode:
         return steel
     updated = {
@@ -1305,13 +1310,11 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
                        disabled=locked and f not in ("IS", "Es"))
             for f in mp.PRESTRESS_FIELD_META}
     pre = _safe_build(box, mp.build_prestress, curve, vals)
+    # The material card beside the curve gives the design values.
     if curve in (1, 2, 3, 4, 5):
-        box.caption(f"built-in curve {curve} (fixed shape); only the prestrain "
-                    f"$IS={vals['IS']:.3f}$ {_PERMILLE} applies")
-    else:
-        box.caption(f"$IS={vals['IS']:.3f}$ {_PERMILLE},  "
-                    f"$f_{{pd}}={vals['fytk'] / vals['gamma_y']:.3f}$ MPa,  "
-                    f"$E_p={vals['Es']:.0f}$ GPa")
+        box.caption(f"Built-in curve {curve} (fixed shape). Only the prestrain "
+                    f"$IS={vals['IS']:.3f}$ {_PERMILLE}, $\\gamma_y$ and $E_p$ "
+                    "apply.")
     if not catalogue_mode:
         return pre
     updated = {
@@ -3518,18 +3521,12 @@ def _queue_input_issue_navigation(issue: input_issues.InputIssue) -> None:
     st.session_state["_input_tab"] = stage_label
     if target.stage == "Analysis settings":
         map_page = mvt_workspace.field_page(target.widget_key)
-        if map_page is not None:
-            group = "Shear / torsion / M-V-T"
+        group = input_issues.settings_group(
+            target.widget_key, mvt_input=map_page is not None
+        )
+        if group == "Shear / torsion / M-V-T":
             durable["_mvt_page"] = map_page
             st.session_state["_mvt_page"] = map_page
-        elif str(target.widget_key or "").startswith("sls_"):
-            group = "Crack width"
-        elif str(target.widget_key or "").startswith("fatigue_"):
-            group = "Fatigue"
-        elif str(target.widget_key or "").startswith(("detailing_", "minimum_reinforcement_")):
-            group = "Detailing"
-        else:
-            group = "General"
         durable["_analysis_group"] = group
         st.session_state["_analysis_group"] = group
     if target.material_family is not None:
@@ -6735,16 +6732,25 @@ def build_inputs(host=st):
     sec, sec_preview = sec_tab.columns([1.15, 0.85], gap="large")
     focus = st.session_state.get(_INPUT_ISSUE_FOCUS_KEY, {})
     focus_widget = str(focus.get("widget_key") or "")
-    analysis_groups = ("General", "Shear / torsion / M-V-T", "Crack width", "Detailing", "Fatigue")
+    analysis_groups = input_issues.SETTINGS_GROUPS
     normalise_stage_selection(st.session_state, "_analysis_group", analysis_groups)
     selected_group = aset.segmented_control(
         "Settings group", analysis_groups, key="_analysis_group", required=True,
         on_change=_snapshot_completed_input_state,
         help="Choose the settings group. Other groups retain their entered values.",
     )
-    aset, sts, scw, det, fat = input_stages(
+    aset, member, sts, scw, det, fat = input_stages(
         aset, analysis_groups, selected_group, state=st.session_state,
     )
+    # Member context of the section (L9). The panel can grow into a "Member and
+    # environment" page. The widget keys and project fields stay the same.
+    member.caption(
+        "Sector calculates one cross-section. These inputs describe the member "
+        "that contains it. Each input states the check that uses it."
+    )
+    member_moment = member.container()
+    member_crack = member.container()
+    member_detailing = member.container()
     mode = aset.radio(
         "Bending analysis",
         ["Plastic", "Elastic", "Both"],
@@ -7223,9 +7229,10 @@ def build_inputs(host=st):
             "its value is saved for use if the Danish first-generation basis is "
             "selected."
         )
+    member_crack.markdown("**Crack width**")
     sls_member = _seeded_selectbox(
-        scw,
-        "Member type",
+        member_crack,
+        "Member type for crack width",
         ["Beam", "Slab"],
         "Beam",
         "sls_member",
@@ -7234,6 +7241,16 @@ def build_inputs(host=st):
             "DK NA fine-system selection for the (h-x)/3 effective-height "
             f"term. Ignored by other methods. {sls_member_help}"
         ),
+    )
+    if not (elastic_on and sls_cw and sls_dk_na):
+        member_crack.caption(
+            "This input has no effect now. It has an effect only with an "
+            "Elastic analysis, the DK NA crack-width basis and an Elastic "
+            "case with Crack width selected."
+        )
+    scw.caption(
+        "The member type of the DK NA crack-width calculation is in the "
+        "Member settings group."
     )
 
     heightened_basis = (
@@ -7441,9 +7458,10 @@ def build_inputs(host=st):
                 "to review or disable the calculation."
             )
 
+    member_detailing.markdown("**Detailing**")
     detailing_member_type = _seeded_selectbox(
-        det,
-        "Member type",
+        member_detailing,
+        "Member type for detailing",
         list(detailing.MEMBER_TYPES),
         detailing.MEMBER_BEAM,
         "detailing_member_type",
@@ -7452,7 +7470,7 @@ def build_inputs(host=st):
     )
     if detailing_member_type == detailing.MEMBER_SLAB:
         detailing_cut_direction = _seeded_selectbox(
-            det,
+            member_detailing,
             "Section cut direction",
             list(detailing.CUT_DIRECTIONS),
             detailing.CUT_TRANSVERSE,
@@ -7468,6 +7486,10 @@ def build_inputs(host=st):
     else:
         detailing_cut_direction = detailing.CUT_TRANSVERSE
         st.session_state["detailing_cut_direction"] = detailing_cut_direction
+    det.caption(
+        "The member type and the section cut direction are in the Member "
+        "settings group."
+    )
 
     modelled_direction_alias = _seeded_text(
         det,
@@ -7485,6 +7507,8 @@ def build_inputs(host=st):
         alias=modelled_direction_alias,
     )
     det.info(f"Modelled reinforcement direction: {direction_label}")
+    # The cut direction is in the Member group, so its result shows there too.
+    member_detailing.info(f"Modelled reinforcement direction: {direction_label}")
 
     detailing_help_edition = st.session_state.get(
         "detailing_edition", detailing.EC2_2005_DKNA
@@ -7528,6 +7552,13 @@ def build_inputs(host=st):
         "clear_spacing_on",
         help=clear_spacing_help,
     )
+    if not (minimum_reinforcement_on or transverse_detailing_on
+            or clear_spacing_on):
+        member_detailing.caption(
+            "These inputs have no effect on the results now. Only the "
+            "detailing checks use "
+            "these inputs. Select the checks in the Detailing settings group."
+        )
     detailing_edition = _seeded_selectbox(
         det,
         "Detailing edition",
@@ -8182,9 +8213,19 @@ def build_inputs(host=st):
                 "substantiated."
             )
     med_max_values = _member_moment_inputs(
-        mvt_shared,
+        member_moment,
         case_frames[load_cases.PLASTIC_TABLE_KEY],
         disabled=not (shear_on or torsion_on),
+    )
+    if not (shear_on or torsion_on):
+        member_moment.caption(
+            "These inputs have no effect now. Only the chord checks of shear "
+            "and torsion use "
+            r"$M_{Ed,max}$."
+        )
+    mvt_shared.caption(
+        r"The member maximum moment $M_{Ed,max}$ is in the Member settings "
+        "group."
     )
     if "_capacity_steel_pending_material_id" in st.session_state:
         st.session_state["capacity_steel_material_id"] = st.session_state.pop(
@@ -8796,6 +8837,45 @@ def build_inputs(host=st):
 
     mild_material_map = _material_map(mild_catalogue, "mild")
     prestress_material_map = _material_map(prestress_catalogue, "prestress")
+    # Material cards: each card reads the material object of the calculation
+    # (the concrete law of inp and the catalogue laws of the bars and tendons).
+    _material_card(
+        conc_preview,
+        lambda: material_cards.concrete_card(
+            concrete, fctm_mpa=sls_fctm, ec_gpa=conc_Ec,
+            preset=concrete_preset,
+        ),
+        visible=bool(mat_tab.open and conc_tab.open and concrete is not None),
+    )
+    selected_mild_law = mild_material_map.get(selected_mild_id)
+    _material_card(
+        mild_preview,
+        lambda: material_cards.reinforcing_steel_card(
+            selected_mild_law,
+            preset=mat_catalog.entry_map(
+                mild_catalogue, "mild")[selected_mild_id]["preset"],
+            title=mat_catalog.entry_label(
+                mat_catalog.entry_map(mild_catalogue, "mild")[selected_mild_id]
+            ),
+        ),
+        visible=bool(mat_tab.open and mild_tab.open
+                     and selected_mild_law is not None),
+    )
+    selected_prestress_law = prestress_material_map.get(selected_prestress_id)
+    _material_card(
+        pre_preview,
+        lambda: material_cards.prestressing_steel_card(
+            selected_prestress_law,
+            preset=mat_catalog.entry_map(
+                prestress_catalogue, "prestress")[selected_prestress_id]["preset"],
+            title=mat_catalog.entry_label(
+                mat_catalog.entry_map(
+                    prestress_catalogue, "prestress")[selected_prestress_id]
+            ),
+        ),
+        visible=bool(mat_tab.open and pre_tab.open
+                     and selected_prestress_law is not None),
+    )
     reference_steel = mild_material_map.get(capacity_steel_material_id)
     bar_materials = [
         mild_material_map.get(item["material_id"])
@@ -9631,6 +9711,23 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
             )
         finally:
             app_run_probe.stop_phase(st.session_state, preview_token)
+
+
+def _material_card(box, card_builder, *, visible):
+    """Show the material values of one material law below its curve.
+
+    ``card_builder`` reads the material of the calculation. It runs only when
+    the card is visible, and it is not called for a material that has no law.
+    """
+    if not visible:
+        return
+    preview_token = app_run_probe.start_phase(st.session_state, "preview")
+    try:
+        card = card_builder()
+        box.markdown(material_cards.card_markdown(card))
+        box.caption(material_cards.card_caption(card))
+    finally:
+        app_run_probe.stop_phase(st.session_state, preview_token)
 
 
 def _open_overview_result(row, inp, results):
