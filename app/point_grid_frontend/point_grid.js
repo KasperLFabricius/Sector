@@ -21,6 +21,11 @@ function createPointGridInstance(parentElement) {
     idColumn: null,
     idPrefix: "",
     nextId: 1,
+    idNext: 1,
+    separatorRows: false,
+    movableRows: false,
+    selectedIds: [],
+    selectionToken: 0,
     derivedSize: null,
     defaultValues: {},
     compactPasteFields: [],
@@ -49,6 +54,28 @@ function createPointGridInstance(parentElement) {
 
   state.isPersistentId = () => Boolean(state.idColumn)
 
+  // A number cell is usable only with a finite number. Number("") and
+  // Number(null) are 0, so test the blank forms first.
+  state.isNumberValue = value => (
+    value !== null && value !== undefined && value !== ""
+    && Number.isFinite(Number(value))
+  )
+
+  // Python receives a text cell as a blank cell. A void-table row without any
+  // usable number therefore separates two voids in Python and in the browser
+  // alike, and it has no ID. A row with text in a number cell is reported in
+  // ``text_rows``, so Python names it and blocks the calculation.
+  state.isSeparator = row => state.separatorRows && state.columnSpecs.every(
+    spec => spec.type !== "number" || !state.isNumberValue(row[spec.field]),
+  )
+
+  state.hasTextCell = row => state.columnSpecs.some(spec => {
+    if (spec.type !== "number") return false
+    const value = row[spec.field]
+    return typeof value === "string" && value.trim().length > 0
+      && !Number.isFinite(Number(value))
+  })
+
   state.idPattern = () => new RegExp(
     `^${state.idPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([1-9][0-9]*)$`,
   )
@@ -62,9 +89,14 @@ function createPointGridInstance(parentElement) {
       const match = value.match(pattern)
       if (match) maximum = Math.max(maximum, Number(match[1]))
     })
-    state.nextId = maximum + 1
+    // The region counter keeps a deleted number out of use.
+    state.nextId = Math.max(maximum + 1, state.idNext, state.nextId || 1)
     rows.forEach(row => {
       let value = String(row[state.idColumn] ?? "").trim()
+      if (state.isSeparator(row)) {
+        row[state.idColumn] = ""
+        return
+      }
       if (!pattern.test(value) || used.has(value)) value = ""
       if (!value) {
         do {
@@ -131,6 +163,24 @@ function createPointGridInstance(parentElement) {
     return text
   }
 
+  // Paste rule: a cell with exactly one comma and no dot is a decimal comma.
+  // A comma after a non-zero integer of one to three digits and before exactly
+  // three digits (1,200) can also be a thousands separator, so the cell is not
+  // read. A non-numeric text stays in the cell as an error cell. It is not a
+  // number, so the row is incomplete until the engineer corrects it.
+  state.pasteValue = (raw, spec) => {
+    if (spec.type !== "number") return state.coerceValue(raw, spec)
+    const text = String(raw ?? "").trim()
+    if (!text.length) return null
+    const commas = (text.match(/,/g) || []).length
+    if (commas === 1 && /^[+-]?[1-9][0-9]{0,2},[0-9]{3}$/.test(text)) return text
+    const candidate = commas === 1 && !text.includes(".")
+      ? text.replace(",", ".")
+      : text
+    const number = Number(candidate)
+    return Number.isFinite(number) ? number : text
+  }
+
   state.normaliseSizeRow = row => {
     const fields = state.derivedSize
     if (!fields) return row
@@ -162,10 +212,46 @@ function createPointGridInstance(parentElement) {
 
   state.emit = () => {
     if (!state.table || !state.setStateValue) return
-    state.setStateValue("payload", {
+    const payload = {
       data_version: state.dataVersion,
       rows: state.currentRows(),
+      text_rows: state.table.getData()
+        .map((row, index) => (state.hasTextCell(row) ? index : -1))
+        .filter(index => index >= 0),
+    }
+    // The next number of the browser counter, so Python can keep a number that
+    // was issued and deleted between two reports out of use.
+    if (state.isPersistentId()) payload.next_id = state.nextId
+    state.setStateValue("payload", payload)
+  }
+
+  state.emitSelection = id => {
+    if (!state.setStateValue || !id) return
+    state.selectionToken += 1
+    state.setStateValue("selection", {
+      data_version: state.dataVersion,
+      id,
+      token: `${Date.now()}-${state.selectionToken}`,
     })
+  }
+
+  state.applySelection = ids => {
+    state.selectedIds = Array.isArray(ids) ? ids.map(String) : []
+    if (!state.table || !state.isPersistentId()) return
+    const wanted = new Set(state.selectedIds)
+    let first = null
+    state.table.getRows().forEach(row => {
+      const id = String(row.getData()[state.idColumn] ?? "")
+      const element = row.getElement()
+      const selected = Boolean(id) && wanted.has(id)
+      element.classList.toggle("pg-selected", selected)
+      if (selected) element.setAttribute("aria-selected", "true")
+      else element.removeAttribute("aria-selected")
+      if (selected && first === null) first = row
+    })
+    if (first !== null && state.tableReady) {
+      Promise.resolve(first.scrollTo("nearest", false)).catch(() => {})
+    }
   }
 
   state.setWarning = message => {
@@ -193,7 +279,19 @@ function createPointGridInstance(parentElement) {
   state.renumber = () => {
     if (!state.table) return
     if (state.isPersistentId()) {
+      if (state.separatorRows) {
+        state.table.getRows().forEach(row => {
+          const data = row.getData()
+          const id = String(data[state.idColumn] ?? "")
+          if (state.isSeparator(data)) {
+            if (id) row.update({ [state.idColumn]: "" })
+          } else if (!id) {
+            row.update({ [state.idColumn]: state.allocateId() })
+          }
+        })
+      }
       state.refreshDeleteLabels()
+      state.applySelection(state.selectedIds)
       return
     }
     let nextId = state.idStart
@@ -207,6 +305,22 @@ function createPointGridInstance(parentElement) {
 
   state.formatNumber = cell => {
     const value = cell.getValue()
+    const element = cell.getElement()
+    const invalid = typeof value === "string" && value.trim().length > 0
+      && !Number.isFinite(Number(value))
+    element.classList.toggle("pg-invalid", invalid)
+    if (invalid) {
+      element.setAttribute(
+        "title",
+        "Not read as a number. Enter a number with a decimal point.",
+      )
+      // Tabulator writes a string result as HTML. Return a text node, so
+      // pasted clipboard text can never become markup.
+      const text = document.createElement("span")
+      text.textContent = value
+      return text
+    }
+    element.removeAttribute("title")
     if (value === null || value === undefined || value === "") return ""
     const number = Number(value)
     return Number.isFinite(number)
@@ -298,7 +412,9 @@ function createPointGridInstance(parentElement) {
   state.blankRow = () => {
     const row = {}
     state.columnSpecs.forEach(spec => {
-      if (spec.field === state.idColumn) row[spec.field] = state.allocateId()
+      if (spec.field === state.idColumn) {
+        row[spec.field] = state.separatorRows ? "" : state.allocateId()
+      }
       else if (Object.hasOwn(state.defaultValues, spec.field)) {
         row[spec.field] = state.coerceValue(state.defaultValues[spec.field], spec)
       } else if (spec.type === "select") {
@@ -316,7 +432,7 @@ function createPointGridInstance(parentElement) {
     const row = {}
     specs.forEach((spec, index) => {
       const raw = cells[index] === undefined ? "" : String(cells[index]).trim()
-      row[spec.field] = state.coerceValue(raw, spec)
+      row[spec.field] = state.pasteValue(raw, spec)
     })
     return state.normaliseSizeRow(row)
   }))
@@ -343,13 +459,17 @@ function createPointGridInstance(parentElement) {
 
     state.clearWarning()
     const pastedRows = state.pasteToEditableColumns(text, selectedSpecs)
-    const mergedRows = state.currentRows()
+    // Keep the error text of earlier pastes in the cells.
+    const mergedRows = state.table.getData().map(row => ({ ...row }))
     const start = Math.min(state.pasteAnchorRow, mergedRows.length)
     pastedRows.forEach((row, index) => {
       const target = start + index
       const existing = mergedRows[target] || state.blankRow()
       const merged = { ...existing, ...row }
-      if (state.isPersistentId() && !merged[state.idColumn]) {
+      if (
+        state.isPersistentId() && !merged[state.idColumn]
+        && !state.isSeparator(merged)
+      ) {
         merged[state.idColumn] = state.allocateId()
       }
       mergedRows[target] = state.normaliseSizeRow(merged)
@@ -362,6 +482,21 @@ function createPointGridInstance(parentElement) {
 
   state.buildColumns = () => {
     const definitions = []
+    if (state.movableRows) {
+      definitions.push({
+        title: "",
+        field: "_move",
+        width: 28,
+        headerSort: false,
+        editable: false,
+        clipboard: false,
+        frozen: true,
+        rowHandle: true,
+        formatter: "handle",
+        cssClass: "pg-move",
+        tooltip: "Drag to move the row",
+      })
+    }
     if (!state.isPersistentId()) {
       definitions.push({
         title: "ID",
@@ -405,6 +540,13 @@ function createPointGridInstance(parentElement) {
           : spec.derived_role ? `pg-${spec.derived_role}` : "",
       }
       if (help) definition.headerTooltip = help
+      if (isId && state.isPersistentId()) {
+        definition.tooltip = "Select to show this element in the section view"
+        definition.cellClick = (_event, cell) => {
+          const id = String(cell.getValue() ?? "")
+          if (id) state.emitSelection(id)
+        }
+      }
       if (isNumber) {
         definition.editor = "number"
         definition.editorParams = { selectContents: true }
@@ -461,6 +603,8 @@ function createPointGridInstance(parentElement) {
     column_specs: data.column_specs || [],
     id_column: data.id_column || null,
     id_prefix: data.id_prefix || "",
+    separator_rows: Boolean(data.separator_rows),
+    movable_rows: Boolean(data.movable_rows),
     derived_size: data.derived_size || null,
     default_values: data.default_values || {},
     compact_paste_fields: data.compact_paste_fields || [],
@@ -489,6 +633,13 @@ function createPointGridInstance(parentElement) {
       ? String(data.id_column)
       : null
     state.idPrefix = String(data.id_prefix || "")
+    const requestedNext = Number(data.id_next)
+    state.idNext = Number.isFinite(requestedNext) && requestedNext >= 1
+      ? Math.floor(requestedNext)
+      : 1
+    state.nextId = Math.max(state.nextId || 1, state.idNext)
+    state.separatorRows = Boolean(data.separator_rows)
+    state.movableRows = Boolean(data.movable_rows)
     state.derivedSize = data.derived_size && typeof data.derived_size === "object"
       ? { ...data.derived_size }
       : null
@@ -509,7 +660,11 @@ function createPointGridInstance(parentElement) {
   }
 
   state.build = data => {
+    state.nextId = 1
     state.configure(data)
+    state.selectedIds = Array.isArray(data.selected_ids)
+      ? data.selected_ids.map(String)
+      : []
     state.pasteAnchorRow = 0
     const rows = Array.isArray(data.rows)
       ? data.rows.map(row => {
@@ -549,6 +704,7 @@ function createPointGridInstance(parentElement) {
       clipboardPasteParser: state.pasteToEditableColumns,
       addRowPos: "bottom",
       reactiveData: false,
+      movableRows: state.movableRows,
     })
     state.table = table
 
@@ -556,6 +712,7 @@ function createPointGridInstance(parentElement) {
       if (state.table !== table) return
       state.tableReady = true
       state.refreshDeleteLabels()
+      state.applySelection(state.selectedIds)
       state.redrawIfVisible(true)
     })
     table.on("renderComplete", () => state.refreshDeleteLabels())
@@ -573,6 +730,10 @@ function createPointGridInstance(parentElement) {
       })
     })
     table.on("rowDeleted", () => {
+      state.renumber()
+      state.emit()
+    })
+    table.on("rowMoved", () => {
       state.renumber()
       state.emit()
     })
@@ -691,13 +852,19 @@ export default function renderPointGrid(component) {
     !== state.configurationSignature
   ) {
     state.updateConfiguration(nextData)
+    state.applySelection(nextData.selected_ids)
     return state.cleanup
   }
 
   state.label = String(nextData.label || state.label)
   state.gridElement.setAttribute("aria-label", state.label)
   state.addButton.setAttribute("aria-label", `Add row to ${state.label}`)
+  const requestedNext = Number(nextData.id_next)
+  if (Number.isFinite(requestedNext) && requestedNext > state.nextId) {
+    state.nextId = Math.floor(requestedNext)
+  }
   state.refreshDeleteLabels()
+  state.applySelection(nextData.selected_ids)
   state.redrawIfVisible(true)
   return state.cleanup
 }

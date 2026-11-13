@@ -37,6 +37,13 @@ LINK_LINE = "#56B4E9"                         # shear-link ties in the truss sch
 GUIDE_LINE = "#b8bdc4"                        # dotted projection guides
 SCHEMATIC_INK = "#2c2c2a"                     # strong schematic lines + labels
 SCHEMATIC_FILL = "rgba(120,130,140,0.10)"    # neutral schematic body fill
+# Section view: the selected element and the reference points. The selection
+# uses a thick dark outline, so it does not depend on a hue.
+SELECTION_LINE = "#2c2c2a"
+ORIGIN_MARK = "#2c2c2a"
+CENTROID_MARK = "#5b6770"
+# Trace metadata key that maps a clicked point to its element reference.
+SELECT_META = "sector_select"
 
 # One shared layout template, so every figure matches (and matches the PDF report
 # typography). Registered as "sector" and layered on plotly_white; each figure uses
@@ -89,7 +96,8 @@ _LABEL_BASE_SIZE = 11.0   # default point-label font (px), scaled by label_scale
 
 
 def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0,
-                      label_min_gap=0.04, bar_ids=None, tendon_ids=None):
+                      label_min_gap=0.04, bar_ids=None, tendon_ids=None,
+                      corner_labels=None):
     """Number the reinforcement (bars then tendons, continuously) and the
     concrete corners, so the drawing cross-references the result tables.
 
@@ -99,6 +107,8 @@ def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0,
     stress. ``label_scale`` scales the font; ``label_min_gap`` is the minimum
     label spacing as a fraction of the section size -- labels closer than that
     thin out, independently of the font size (0 keeps every label).
+    ``corner_labels`` replaces the corner numbers with the stable corner IDs
+    (outer ring then voids), as the input grids show them.
     """
     xs = [v[0] for v in outer] or [0.0]
     ys = [v[1] for v in outer] or [0.0]
@@ -125,13 +135,18 @@ def _add_point_labels(fig, outer, holes, bars, tendons, label_scale=1.0,
     cy = sum(ys) / len(ys)
     off = 0.05 * span * label_scale
     lx, ly, txt = [], [], []
+    labels = (
+        list(corner_labels)
+        if corner_labels is not None and len(corner_labels) == len(verts)
+        else [str(i + 1) for i in range(len(verts))]
+    )
     for i in _decimate(verts, min_dist):      # nudge each kept label outward
         v = verts[i]
         dx, dy = v[0] - cx, v[1] - cy
         d = math.hypot(dx, dy) or 1.0
         lx.append(v[0] + off * dx / d)
         ly.append(v[1] + off * dy / d)
-        txt.append(str(i + 1))
+        txt.append(labels[i])
     fig.add_trace(go.Scatter(
         x=lx, y=ly, mode="text", text=txt,
         textfont=dict(size=size, color=CORNER_LABEL), hoverinfo="skip",
@@ -215,12 +230,101 @@ def _marker_sizes(points, base, lo, hi):
     return [min(max(base * (d / med), lo), hi) if d > 0.0 else base for d in dias]
 
 
+def selected_reference(figure, points):
+    """Return ``(family, ID)`` of the first selectable clicked point, or None.
+
+    ``points`` is the Plotly selection (``curve_number`` and ``point_index``).
+    Only traces with ``SELECT_META`` are selectable; a label, the origin or the
+    selection mark gives None.
+    """
+
+    for point in points or ():
+        try:
+            trace = figure.data[int(point["curve_number"])]
+            index = int(point.get("point_index", point.get("point_number")))
+        except (KeyError, TypeError, ValueError, IndexError):
+            continue
+        meta = getattr(trace, "meta", None)
+        if not isinstance(meta, dict):
+            continue
+        references = meta.get(SELECT_META) or []
+        if 0 <= index < len(references):
+            family, element_id = references[index]
+            return family, element_id
+    return None
+
+
+def _ring_edges(ids, ring):
+    """Return ``(edge ID, start, end)`` of one closed ring with corner IDs."""
+
+    count = len(ring)
+    if count < 3 or ids is None or len(ids) != count:
+        return []
+    return [
+        (f"{ids[i]}-{ids[(i + 1) % count]}", ring[i], ring[(i + 1) % count])
+        for i in range(count)
+    ]
+
+
+def _selection_marks(fig, selection, outer, holes, bars, tendons, outer_ids,
+                     hole_ids, bar_ids, tendon_ids, unit):
+    """Draw the selected element with a thick dark outline."""
+
+    if not isinstance(selection, dict):
+        return
+    family = selection.get("family")
+    element_id = selection.get("id")
+    point = None
+    if family in ("edge", "void edge"):
+        rings = (
+            [(outer_ids, outer)] if family == "edge"
+            else list(zip(hole_ids or [], holes))
+        )
+        for ids, ring in rings:
+            for edge, start, end in _ring_edges(ids, ring):
+                if edge == element_id:
+                    fig.add_trace(go.Scatter(
+                        x=[start[0], end[0]], y=[start[1], end[1]],
+                        mode="lines", line=dict(color=SELECTION_LINE, width=5),
+                        name=f"selected edge {edge}", hoverinfo="skip",
+                        showlegend=True,
+                    ))
+                    return
+        return
+    candidates = {
+        "corner": (outer_ids, outer),
+        "void corner": (
+            [i for ids in (hole_ids or []) for i in ids],
+            [v for ring in holes for v in ring],
+        ),
+        "bar": (bar_ids, bars),
+        "tendon": (tendon_ids, tendons),
+    }.get(family)
+    if candidates is None:
+        return
+    ids, points = candidates
+    ids = list(ids or [])
+    if element_id in ids and ids.index(element_id) < len(points):
+        point = points[ids.index(element_id)]
+    if point is None:
+        return
+    fig.add_trace(go.Scatter(
+        x=[point[0]], y=[point[1]], mode="markers",
+        marker=dict(size=22, symbol="circle-open", color=SELECTION_LINE,
+                    line=dict(width=3, color=SELECTION_LINE)),
+        name=f"selected {family} {element_id}", hoverinfo="skip",
+        showlegend=True,
+    ))
+
+
 def section_figure(outer, holes=None, bars=None, bar_colors=None,
                    na_line=None, title="Section", tendons=None, tendon_colors=None,
                    zones=None, show_labels=False, label_scale=1.0, label_min_gap=0.04,
                    height=440, scale=1.0, unit="m", bar_hover=None, tendon_hover=None,
                    bar_ids=None, tendon_ids=None, corner_hover=None,
-                   geometry_hover=True):
+                   geometry_hover=True, outer_ids=None, hole_ids=None,
+                   selectable=False, selection=None, show_origin=False,
+                   centroid=None):
     """Draw the section: concrete outline, holes, reinforcement and neutral axis.
 
     Reinforcement is drawn consistently across the views: bars are circles and
@@ -237,6 +341,14 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     scales the label font and ``label_min_gap`` is the minimum label spacing
     (fraction of the section size) below which labels are thinned out -- the two
     are independent.
+
+    The input section view passes the stable corner IDs (``outer_ids`` and one
+    list for each void in ``hole_ids``). The labels and the hover then show the
+    IDs. ``selectable`` adds a selection reference to each corner, edge, bar and
+    tendon point (trace ``meta`` under ``SELECT_META``) and an edge target at
+    the middle of each polygon edge. ``selection`` (``{"family", "id"}``) marks
+    one element. ``show_origin`` marks the coordinate origin O, and
+    ``centroid`` (in metres) marks the gross centroid.
     """
     # Scale every geometry input once, up front, so the traces and the labels are
     # all drawn in the display units. Guard with ``is None`` rather than a truth
@@ -279,8 +391,15 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     # polygons skip hover, so these markers report each corner's coordinates without
     # drawing anything over the outline.
     corner_verts = [v for ring in [outer, *(holes or [])] for v in ring]
+    flat_hole_ids = [i for ids in (hole_ids or []) for i in ids]
+    corner_labels = (
+        list(outer_ids) + flat_hole_ids
+        if outer_ids is not None
+        and len(list(outer_ids)) + len(flat_hole_ids) == len(corner_verts)
+        else None
+    )
     if corner_verts and (geometry_hover or corner_hover):
-        fig.add_trace(go.Scatter(
+        corner_trace = dict(
             x=[v[0] for v in corner_verts], y=[v[1] for v in corner_verts],
             mode="markers", marker=dict(size=12, color="rgba(0,0,0,0)"),
             customdata=_point_hover(
@@ -289,9 +408,37 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
                 "Corner",
                 unit,
                 corner_hover,
+                corner_labels,
                 include_geometry=geometry_hover,
             ),
-            hovertemplate="%{customdata}<extra></extra>", showlegend=False))
+            hovertemplate="%{customdata}<extra></extra>", showlegend=False)
+        if selectable and corner_labels is not None:
+            corner_trace["meta"] = {SELECT_META: (
+                [["corner", i] for i in outer_ids]
+                + [["void corner", i] for i in flat_hole_ids]
+            )}
+        fig.add_trace(go.Scatter(**corner_trace))
+    if selectable and corner_labels is not None:
+        edges = [("edge", edge) for edge in _ring_edges(list(outer_ids), outer)]
+        for ids, ring in zip(hole_ids or [], holes):
+            edges.extend(("void edge", edge) for edge in _ring_edges(ids, ring))
+        if edges:
+            dec = 3 if unit == "m" else 0
+            fig.add_trace(go.Scatter(
+                x=[(a[0] + b[0]) / 2.0 for _f, (_e, a, b) in edges],
+                y=[(a[1] + b[1]) / 2.0 for _f, (_e, a, b) in edges],
+                mode="markers",
+                marker=dict(size=10, color="rgba(0,0,0,0)"),
+                customdata=[
+                    f"Edge {_html_escape(edge, quote=True)}<br>length = "
+                    f"{math.hypot(b[0] - a[0], b[1] - a[1]):.{dec}f} {unit}"
+                    for _f, (edge, a, b) in edges
+                ],
+                hovertemplate="%{customdata}<extra></extra>",
+                meta={SELECT_META: [[family, edge] for family, (edge, _a, _b)
+                                    in edges]},
+                showlegend=False,
+            ))
     if bars:
         bx = [b[0] for b in bars]
         by = [b[1] for b in bars]
@@ -306,6 +453,11 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
                                      bars, 1, "Bar", unit, bar_hover, bar_ids,
                                      include_geometry=geometry_hover),
                                  hovertemplate="%{customdata}<extra></extra>",
+                                 meta=(
+                                     {SELECT_META: [["bar", i] for i in bar_ids]}
+                                     if selectable and bar_ids is not None
+                                     and len(bar_ids) == len(bars) else None
+                                 ),
                                  showlegend=True))
     if tendons:
         tx = [t[0] for t in tendons]
@@ -322,6 +474,13 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
                                      tendon_hover, tendon_ids,
                                      include_geometry=geometry_hover),
                                  hovertemplate="%{customdata}<extra></extra>",
+                                 meta=(
+                                     {SELECT_META: [["tendon", i]
+                                                    for i in tendon_ids]}
+                                     if selectable and tendon_ids is not None
+                                     and len(tendon_ids) == len(tendons)
+                                     else None
+                                 ),
                                  showlegend=True))
     state_colors = list(bar_colors or []) + list(tendon_colors or [])
     if BAR_TENSION in state_colors:
@@ -347,14 +506,67 @@ def section_figure(outer, holes=None, bars=None, bar_colors=None,
     if show_labels:
         _add_point_labels(
             fig, outer, holes, bars, tendons, label_scale, label_min_gap,
-            bar_ids, tendon_ids,
+            bar_ids, tendon_ids, corner_labels,
         )
+    origin_far = False
+    if show_origin and outer:
+        oxs = [p[0] for p in outer]
+        oys = [p[1] for p in outer]
+        reach = max(max(oxs) - min(oxs), max(oys) - min(oys))
+        # A plotted O far from the section makes the drawing small. Name O in
+        # the legend only when it lies more than one section size outside.
+        origin_far = not (
+            min(oxs) - reach <= 0.0 <= max(oxs) + reach
+            and min(oys) - reach <= 0.0 <= max(oys) + reach
+        )
+    if show_origin and origin_far:
+        fig.add_trace(go.Scatter(
+            x=[None], y=[None], mode="markers",
+            marker=dict(size=14, symbol="cross-thin-open",
+                        line=dict(width=2, color=ORIGIN_MARK)),
+            name="origin O (moment reference) outside the view",
+            hoverinfo="skip", showlegend=True,
+        ))
+    elif show_origin:
+        fig.add_trace(go.Scatter(
+            x=[0.0], y=[0.0], mode="markers+text", text=["O"],
+            textposition="bottom left",
+            textfont=dict(size=_LABEL_BASE_SIZE * label_scale, color=ORIGIN_MARK),
+            marker=dict(size=14, symbol="cross-thin-open",
+                        line=dict(width=2, color=ORIGIN_MARK)),
+            name="origin O (moment reference)",
+            hovertemplate="Origin O<br>x = 0, y = 0<extra></extra>",
+            showlegend=True,
+        ))
+    if centroid is not None:
+        gx, gy = centroid[0] * scale, centroid[1] * scale
+        dec = 3 if unit == "m" else 0
+        fig.add_trace(go.Scatter(
+            x=[gx], y=[gy], mode="markers",
+            marker=dict(size=13, symbol="circle-cross-open",
+                        line=dict(width=2, color=CENTROID_MARK),
+                        color=CENTROID_MARK),
+            name="gross centroid",
+            hovertemplate=(
+                f"Gross centroid<br>x = {gx:.{dec}f} {unit}, "
+                f"y = {gy:.{dec}f} {unit}<extra></extra>"
+            ),
+            showlegend=True,
+        ))
+    _selection_marks(
+        fig, selection, outer, holes, bars, tendons,
+        list(outer_ids) if outer_ids is not None else None, hole_ids,
+        bar_ids, tendon_ids, unit,
+    )
     fig.update_layout(
         title=title, template=_TEMPLATE, height=height,
         margin=dict(l=10, r=10, t=_LEGEND_TOP_M, b=_LEGEND_BOT_M),
         xaxis=dict(title=dict(text=f"x ({unit})", standoff=10), zeroline=True),
         yaxis=dict(title=f"y ({unit})", scaleanchor="x", scaleratio=1, zeroline=True),
-        showlegend=bool(na_line) or bool(zones) or bool(bars) or bool(tendons),
+        showlegend=(
+            bool(na_line) or bool(zones) or bool(bars) or bool(tendons)
+            or show_origin or centroid is not None
+        ),
         # Below the plot and below the x-axis title, clear of the plotly modebar
         # (which the above-the-plot position collided with). A height-scaled y keeps
         # a constant gap below the title without spilling past the bottom margin.

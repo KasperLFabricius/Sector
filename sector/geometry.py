@@ -807,6 +807,87 @@ def area_moment_breakdown(rings: Iterable[Vertices]) -> AreaMomentBreakdown:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class SectionPart:
+    """One part of a section: an outer ring, its voids and a modulus ratio.
+
+    ``modulus_ratio`` is the modulus of the part divided by the reference
+    modulus (1 for the reference material). The rings can have either winding;
+    :func:`section_properties` orients them.
+    """
+
+    outer: Vertices
+    holes: tuple[Vertices, ...] = ()
+    modulus_ratio: float = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class TransformedAreaProperties:
+    """Transformed area properties of a list of section parts.
+
+    ``area`` is the sum of ``modulus_ratio * A`` over the parts. ``centroid``
+    is the transformed centroid. ``i_x`` is the second moment about the axis
+    through the centroid parallel to x (the integral of ``(y - y_c)^2``),
+    ``i_y`` the one about the axis parallel to y (the integral of
+    ``(x - x_c)^2``) and ``i_xy`` the product moment (the integral of
+    ``(x - x_c)(y - y_c)``), each weighted by the modulus ratio.
+    ``part_areas`` holds the net area of each part without the weight.
+    """
+
+    area: float
+    centroid: tuple[float, float]
+    i_x: float
+    i_y: float
+    i_xy: float
+    part_areas: tuple[float, ...]
+
+
+def section_properties(
+    parts: Iterable[SectionPart],
+) -> TransformedAreaProperties:
+    """Return the transformed area properties of a list of section parts.
+
+    Each part contributes ``modulus_ratio`` times the exact polygon moments of
+    its outer ring (counter-clockwise) less its voids (clockwise), from
+    :func:`area_moments`. One part with ratio 1 gives the gross concrete
+    properties. A part list with no positive transformed area, a ratio that is
+    not finite or not positive, or a part with a net area that is not positive
+    raises :class:`ValueError`.
+    """
+
+    total = _ZERO_MOMENTS
+    part_areas = []
+    for part in parts:
+        ratio = float(part.modulus_ratio)
+        if not math.isfinite(ratio) or ratio <= 0.0:
+            raise ValueError("a modulus ratio must be finite and positive")
+        rings = [orient(part.outer, ccw=True)]
+        rings.extend(orient(hole, ccw=False) for hole in part.holes)
+        moments = area_moments_rings(rings)
+        if not moments.area > 0.0:
+            raise ValueError("a section part must have a positive net area")
+        part_areas.append(moments.area)
+        total = total + AreaMoments(
+            ratio * moments.area,
+            ratio * moments.sx,
+            ratio * moments.sy,
+            ratio * moments.sxx,
+            ratio * moments.syy,
+            ratio * moments.sxy,
+        )
+    if not total.area > 0.0:
+        raise ValueError("the section parts have no positive area")
+    cx, cy = total.centroid
+    return TransformedAreaProperties(
+        area=total.area,
+        centroid=(cx, cy),
+        i_x=total.syy - total.area * cy * cy,
+        i_y=total.sxx - total.area * cx * cx,
+        i_xy=total.sxy - total.area * cx * cy,
+        part_areas=tuple(part_areas),
+    )
+
+
 def _segment_distance(px, py, ax, ay, bx, by) -> float:
     """Distance from point ``(px, py)`` to the segment ``(ax,ay)-(bx,by)``."""
     dx, dy = bx - ax, by - ay

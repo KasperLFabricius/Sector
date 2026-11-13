@@ -15,8 +15,12 @@ BUTTON_KEYS = frozenset({
     "overview_open_result", "overview_related_inputs", "overview_status_help",
     "_close_report_preview", "initialise_inputs", "manual_gen_pdf",
     "manual_dl_pdf", "manual_dl_html", "manual_close",
+    "move_origin_to_centroid", "confirm_move_origin", "cancel_move_origin",
 })
 _BUTTON_PATTERNS = (
+    # The section view: its chart selection and its Clear selection buttons.
+    r"_section_view_chart_section(?:_compact)?",
+    r"clear_selection_section(?:_compact)?",
     r"(?:mild|prestress)_catalog_(?:add|duplicate|delete)",
     r"_ed_(?:bars|tendons)_bulk_apply",
     r"analysis-input-issue-[0-9]+-[a-zA-Z0-9_-]+",

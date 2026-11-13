@@ -1,10 +1,15 @@
 """A single editable point grid (one table per point set) built on Tabulator.
 
 Replaces the previous two-part layout (an ID-free ``st.data_editor`` beside a
-read-only ID list). One grid now carries a frozen, non-editable ID column that
-auto-numbers the complete points (matching the plot), a frozen header, freely
-editable numeric cells and Excel-style block paste -- features ``st.data_editor``
-cannot combine. It is a self-contained Streamlit Components v2 component: the
+read-only ID list). One grid carries a frozen, non-editable ID column, a frozen
+header, freely editable numeric cells and Excel-style block paste -- features
+``st.data_editor`` cannot combine. The corner, void, bar and tendon grids keep
+persistent IDs (the same IDs as the section view); a grid without an ID column
+auto-numbers its complete rows. A pasted cell with one comma and no dot is a
+decimal comma (except a possible thousands separator such as 1,200), and a
+pasted text that is not a number stays visible as an error cell. A click on an
+ID selects that element in the section view. It is a self-contained Streamlit
+Components v2 component: the
 vendored Tabulator assets and Sector renderer under ``point_grid_frontend/`` are
 passed as inline content, so the frozen desktop app needs no separately installed
 component package and no frontend build step.
@@ -204,15 +209,76 @@ def _versioned_rows(value, data_version):
     return rows if isinstance(rows, list) else None
 
 
+def reported_next_id(value, data_version) -> int | None:
+    """Return the next ID number that the browser counter reported, or None.
+
+    The browser issues a new persistent ID from its counter. A row that is
+    added and deleted between two reports never reaches Python, so the counter
+    itself is reported with the rows.
+    """
+    if not isinstance(value, dict):
+        return None
+    nested = value.get("payload")
+    if isinstance(nested, dict):
+        value = nested
+    if str(value.get("data_version")) != str(data_version):
+        return None
+    number = value.get("next_id")
+    if type(number) is float and number.is_integer():
+        number = int(number)
+    return number if type(number) is int and number >= 1 else None
+
+
+def reported_text_rows(value, data_version) -> list[int]:
+    """Return the row positions with text in a number cell, from the last report.
+
+    The browser sends such a cell as a blank cell, so Python can only name the
+    row from this list.
+    """
+    if not isinstance(value, dict):
+        return []
+    nested = value.get("payload")
+    if isinstance(nested, dict):
+        value = nested
+    if str(value.get("data_version")) != str(data_version):
+        return []
+    rows = value.get("text_rows")
+    if not isinstance(rows, list):
+        return []
+    return sorted({
+        int(index) for index in rows
+        if type(index) is int and index >= 0
+    })
+
+
+def selection_event(value, data_version) -> tuple[str, str] | None:
+    """Return ``(element ID, token)`` of the last ID click in the grid, or None."""
+    if not isinstance(value, dict):
+        return None
+    event = value.get("selection")
+    if not isinstance(event, dict):
+        return None
+    if str(event.get("data_version")) != str(data_version):
+        return None
+    element_id = event.get("id")
+    token = event.get("token")
+    if type(element_id) is not str or not element_id or token is None:
+        return None
+    return element_id, str(token)
+
+
 def point_grid(df: pd.DataFrame, columns, *, key: str, id_start: int = 1,
                data_version: int = 0, label: str | None = None,
                column_specs=None, component_options=None,
-               on_change=None) -> pd.DataFrame:
+               on_change=None, on_select=None) -> pd.DataFrame:
     """Render the editable grid for ``df`` and return the edited rows.
 
-    Numeric-only geometry tables use an auto-numbered display ID. Rich
-    reinforcement tables pass ``column_specs`` plus persistent-ID/derived-size
-    ``component_options``. Bump ``data_version`` to re-seed from ``df``.
+    A grid without an ID column uses an auto-numbered display ID. A grid with
+    persistent IDs (reinforcement, and the corner and void tables from schema
+    29) passes ``column_specs`` and ``component_options`` with ``id_column``,
+    ``id_prefix`` and the region counter ``id_next``. ``selected_ids`` in the
+    options marks rows of the selection, and a click on an ID cell calls
+    ``on_select``. Bump ``data_version`` to re-seed from ``df``.
     """
     cols = list(columns)
     specs = _normalise_specs(cols, column_specs)
@@ -233,8 +299,9 @@ def point_grid(df: pd.DataFrame, columns, *, key: str, id_start: int = 1,
     result = _component(
         key=key,
         data=data,
-        default={"payload": default},
+        default={"payload": default, "selection": None},
         on_payload_change=on_change or (lambda: None),
+        on_selection_change=on_select or (lambda: None),
         width="stretch",
         height="content",
     )
