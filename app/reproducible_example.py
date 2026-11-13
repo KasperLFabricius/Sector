@@ -295,6 +295,14 @@ def project_scalars() -> dict:
         "rep_report_content": "Audit",
         "autosave_on": True,
         "autosave_min": 5,
+        # Schema-29 section model and preference, at their defaults.
+        "section_regions": {
+            "version": 1,
+            "items": [{"id": "A1", "template": None,
+                       "next_corner": 5, "next_void_corner": 1}],
+        },
+        "reinforcement_groups": {"version": 1, "next_id": 1, "items": []},
+        "auto_recalculate_on": False,
     }
 
 

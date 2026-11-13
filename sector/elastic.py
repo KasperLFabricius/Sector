@@ -909,6 +909,104 @@ def solve_elastic_combined(
     )
 
 
+class BondedPrestressError(ValueError):
+    """The bonded tendon state under prestress alone cannot be established.
+
+    When the correction of the locked-in stress does not converge, ``element``
+    is the index of the tendon with the largest stress residual,
+    ``effective_stress`` is its effective stress ``Ep*IS`` and
+    ``concrete_stress`` is the reference concrete stress ``Ec*eps_c`` at its
+    level under prestress alone (kN/m2, ``Ec = 1`` normalisation, so the
+    concrete strain is ``concrete_stress*n/Es``). The three values are
+    ``None`` when no elastic state exists.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        element: int | None = None,
+        effective_stress: float | None = None,
+        concrete_stress: float | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.element = element
+        self.effective_stress = effective_stress
+        self.concrete_stress = concrete_stress
+
+
+def _prestress_alone_plane(
+    rings: list[np.ndarray],
+    bx: np.ndarray,
+    by: np.ndarray,
+    ba: np.ndarray,
+    n: float,
+    n_mult: np.ndarray,
+    locked: np.ndarray,
+    displace_concrete: bool,
+    cracked: bool,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Raw stress plane and section stiffness under the locked-in stress alone.
+
+    The external action is zero, so the target is the negative resultant of
+    ``locked``. The cracked state is the no-tension Newton solve of
+    :func:`solve_elastic`; the uncracked (Stage I) state is the one linear
+    solve of :func:`solve_elastic_uncracked`. Returns ``None`` when the state
+    does not converge or the section stiffness is singular.
+    """
+    target = -_prestress_resultant(locked, bx, by, ba)
+    if cracked:
+        plane, converged, _, _, matrix = _newton_solve(
+            rings, bx, by, ba, target, n, displace_concrete, 100,
+            _DEFAULT_TOL, n_mult=n_mult,
+        )
+        return (plane, matrix) if converged else None
+    _, matrix = _resultants_and_jacobian(
+        rings, bx, by, ba, np.zeros(3), n, displace_concrete=displace_concrete,
+        cracked=False, n_mult=n_mult,
+    )
+    try:
+        plane = np.linalg.solve(matrix, target)
+    except np.linalg.LinAlgError:
+        return None
+    return plane, matrix
+
+
+def _newton_correction(
+    matrix: np.ndarray,
+    bx: np.ndarray,
+    by: np.ndarray,
+    ba: np.ndarray,
+    stiffness: np.ndarray,
+    tendon: np.ndarray,
+    residual: np.ndarray,
+) -> np.ndarray:
+    """Newton step on the locked-in tendon stresses for one crack pattern.
+
+    For a fixed compression zone the tendon stress under prestress alone is
+    ``T(sigma_0) = (I - D C J^-1 B) sigma_0``: ``B`` gives the resultant of the
+    tendon stresses, ``J`` is the section stiffness, ``C`` gives the plane value
+    at each tendon and ``D = n*n_mult``. The map is linear, so the step
+    ``(I - D C J^-1 B)^-1 r`` removes the residual ``r`` in one step. A singular
+    matrix gives the plain residual step ``r``.
+    """
+    index = np.flatnonzero(tendon)
+    step = residual[index]
+    forces = np.vstack((ba[index], ba[index] * by[index], ba[index] * bx[index]))
+    levels = np.column_stack((np.ones(index.size), bx[index], by[index]))
+    try:
+        response = np.linalg.solve(matrix, forces)
+        derivative = np.eye(index.size) - stiffness[index, None] * (levels @ response)
+        newton = np.linalg.solve(derivative, residual[index])
+    except np.linalg.LinAlgError:
+        newton = None
+    if newton is not None and np.all(np.isfinite(newton)):
+        step = newton
+    correction = np.zeros_like(residual)
+    correction[index] = step
+    return correction
+
+
 def bonded_prestress_stress(
     section: Section,
     n: float,
@@ -917,8 +1015,9 @@ def bonded_prestress_stress(
     n_mult: np.ndarray | None = None,
     tendon_mask: np.ndarray | None = None,
     displace_concrete: bool = True,
+    cracked: bool = True,
     rel_tol: float = 1.0e-10,
-    max_iter: int = 100,
+    max_iter: int = 20,
 ) -> np.ndarray:
     """Locked-in tendon stress that gives the effective stress under prestress alone.
 
@@ -931,22 +1030,28 @@ def bonded_prestress_stress(
     ``sigma_0 = Ep*IS - Ep*eps_c,p``, where ``eps_c,p`` is the concrete strain at
     the tendon under that prestress at the modular ratio ``n``. ``sigma_0/Ep`` is
     then the bond strain difference of EN 1992-1-1 Figure 6.1, which includes the
-    decompression strain.
+    decompression strain. ``sigma_0`` is negative where prestress alone
+    elongates the concrete at a lightly stressed tendon by more than ``IS``.
+
+    ``cracked`` selects the section model: the no-tension (Stage II) section of
+    :func:`solve_elastic` and :func:`solve_elastic_combined`, or the uncracked
+    (Stage I) section of :func:`solve_elastic_uncracked`. With the stress of its
+    own model, each model gives the tendon stress ``Ep*IS`` under prestress
+    alone.
 
     Direct solution: with the tendon forces fixed at ``Ap*Ep*IS``, the concrete
     and the ordinary bars have the same equilibrium as in the bonded model, so
     one solve with zero tendon stiffness gives the strain plane, and
-    ``sigma_0 = Ep*IS - n*n_mult*s`` at each tendon. A solve of the bonded model
-    then checks the tendon stresses. When the no-tension state takes another
-    crack pattern, residual steps correct ``sigma_0`` (for a fixed crack pattern
-    the tendon stress is ``(I + K)^-1 sigma_0`` with ``K`` similar to a positive
-    semi-definite matrix, so these steps converge). ``sigma_0`` is negative
-    where prestress alone elongates the concrete at a lightly stressed tendon by
-    more than ``IS``.
+    ``sigma_0 = Ep*IS - n*n_mult*s`` at each tendon. For the uncracked section
+    this is one linear solve. A solve of the bonded model then checks the
+    tendon stresses. If a residual remains (precision of the elastic solve, or
+    another crack pattern), at most ``max_iter`` Newton steps correct
+    ``sigma_0`` (see :func:`_newton_correction`).
 
     ``tendon_mask`` marks the tendons (default: the elements with a non-zero
-    effective stress). Raises ``ValueError`` when an elastic state or the
-    correction does not converge.
+    effective stress). Raises :class:`BondedPrestressError` (a ``ValueError``)
+    when an elastic state or the correction does not converge. For the
+    correction, the error names the tendon with the largest residual.
     """
     effective = np.asarray(effective_stress, dtype=float)
     scale = float(np.max(np.abs(effective))) if effective.size else 0.0
@@ -961,37 +1066,57 @@ def bonded_prestress_stress(
         raise ValueError("one tendon flag is required per element")
     if np.any(effective[~tendon] != 0.0):
         raise ValueError("an ordinary bar cannot carry an effective prestress")
-    bx, by, _ = section.bar_arrays()
+    section.require_valid_analysis_inputs()
+    rings = section.integration_rings()
+    bx, by, ba = section.bar_arrays()
+    effective = _validated_element_array(
+        effective, len(ba), "effective tendon stresses"
+    )
     multiplier = (
         np.ones(effective.shape, dtype=float)
         if n_mult is None
-        else np.asarray(n_mult, dtype=float)
+        else _validated_element_array(n_mult, len(ba), "modular-ratio multipliers")
     )
-    free = solve_elastic_combined(
-        section, 0.0, 0.0, 0.0, n, 0.0, 0.0, 0.0, n,
-        displace_concrete=displace_concrete,
-        n_mult=np.where(tendon, 0.0, multiplier),
-        prestress_stress=np.where(tendon, effective, 0.0),
+    stiffness = float(n) * multiplier
+    free = _prestress_alone_plane(
+        rings, bx, by, ba, n, np.where(tendon, 0.0, multiplier),
+        np.where(tendon, effective, 0.0), displace_concrete, cracked,
     )
-    if not free.converged:
-        raise ValueError("the elastic state under prestress alone did not converge")
-    plane = free.long
-    concrete = plane.eps0 + plane.kx * bx + plane.ky * by
-    locked = np.where(tendon, effective - float(n) * multiplier * concrete, 0.0)
-    if not np.all(np.isfinite(locked)):
-        raise ValueError("the bonded prestress state is not finite")
-    for _ in range(max_iter):
-        state = solve_elastic_combined(
-            section, 0.0, 0.0, 0.0, n, 0.0, 0.0, 0.0, n,
-            displace_concrete=displace_concrete,
-            n_mult=n_mult,
-            prestress_stress=locked,
+    if free is None:
+        raise BondedPrestressError(
+            "the elastic state under prestress alone did not converge"
         )
-        if not state.converged:
-            raise ValueError("the elastic state under prestress alone did not converge")
-        solved = np.asarray(state.bar_stress_total, dtype=float)
-        residual = np.where(tendon, effective - solved, 0.0)
-        if float(np.max(np.abs(residual))) <= rel_tol * scale:
+    plane = free[0]
+    concrete = plane[0] + plane[1] * bx + plane[2] * by
+    locked = np.where(tendon, effective - stiffness * concrete, 0.0)
+    if not np.all(np.isfinite(locked)):
+        raise BondedPrestressError("the bonded prestress state is not finite")
+    iteration = 0
+    while True:
+        state = _prestress_alone_plane(
+            rings, bx, by, ba, n, multiplier, locked, displace_concrete, cracked,
+        )
+        if state is None:
+            raise BondedPrestressError(
+                "the elastic state under prestress alone did not converge"
+            )
+        plane, matrix = state
+        concrete = plane[0] + plane[1] * bx + plane[2] * by
+        residual = np.where(
+            tendon, effective - (locked + stiffness * concrete), 0.0
+        )
+        worst = int(np.argmax(np.abs(residual)))
+        if abs(float(residual[worst])) <= rel_tol * scale:
             return locked
-        locked = locked + residual
-    raise ValueError("the bonded prestress state did not converge")
+        if iteration >= max_iter:
+            break
+        locked = locked + _newton_correction(
+            matrix, bx, by, ba, stiffness, tendon, residual
+        )
+        iteration += 1
+    raise BondedPrestressError(
+        "the bonded prestress state did not converge",
+        element=worst,
+        effective_stress=float(effective[worst]),
+        concrete_stress=float(concrete[worst]),
+    )

@@ -17,7 +17,7 @@ from sector.section import Section
 
 
 def adapters():
-    source = Path(__file__).resolve().parents[1] / "app" / "sector_app.py"
+    source = Path(__file__).resolve().parents[1] / "app" / "calculation_service.py"
     names = {"_plastic_point_result", "_elastic_state_result", "_elastic_resultant_result"}
     nodes = [n for n in ast.parse(source.read_text(encoding="utf-8")).body
              if isinstance(n, ast.FunctionDef) and n.name in names]

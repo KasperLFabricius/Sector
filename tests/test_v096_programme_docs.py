@@ -47,8 +47,8 @@ def test_pr01_freezes_exact_current_main_without_bumping_product() -> None:
 def test_pr06_owns_bounded_schema_27_transition_without_bumping_product() -> None:
     project_io = _text(PROJECT_IO)
     assert __version__ == "0.97.0"
-    # Sector 0.97.0 moved the live schema to 28; schema 27 stays migratable.
-    assert re.search(r"^VERSION\s*=\s*28$", project_io, re.MULTILINE)
+    # Sector 0.97.1 moved the live schema to 29; schema 27 stays migratable.
+    assert re.search(r"^VERSION\s*=\s*29$", project_io, re.MULTILINE)
     assert re.search(r"^PREVIOUS_VERSION\s*=\s*27$", project_io, re.MULTILINE)
     assert re.search(r"^MIGRATABLE_VERSION\s*=\s*26$", project_io, re.MULTILINE)
     assert re.search(

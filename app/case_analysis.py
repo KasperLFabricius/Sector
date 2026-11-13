@@ -1,6 +1,6 @@
 """Pure orchestration for running Sector's typed load-case tables.
 
-The numerical calculation remains owned by ``sector_app.run_analysis``'s
+The numerical calculation remains owned by ``calculation_service.run_analysis``'s
 single-case implementation.  This module maps canonical table rows onto that
 stable input contract, invokes an injected single-case runner, and returns an
 ordered result per named case.  Keeping the orchestration free of Streamlit makes
@@ -105,7 +105,12 @@ def case_signature(
     key: str,
     context: Mapping | None = None,
 ) -> tuple:
-    """Stable row signature including all crack-width inputs where used."""
+    """Stable row signature including all crack-width inputs where used.
+
+    The schema-29 case attributes (location tag, design situation and stage)
+    have no engineering effect, so they are not part of the signature and an
+    attribute edit does not make the result of the row stale.
+    """
 
     signature = tuple(record[column] for column in load_cases.TABLE_COLUMNS[key])
     if key == load_cases.ELASTIC_TABLE_KEY:

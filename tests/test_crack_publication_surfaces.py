@@ -9,6 +9,7 @@ from tools.crack_publication_wording import retired_crack_wording_rules
 
 _ROOT = Path(__file__).resolve().parents[1]
 _PYTHON_PUBLICATION_FILES = (
+    "app/calculation_service.py",
     "app/case_analysis.py",
     "app/heightened_crack_adapter.py",
     "app/input_issues.py",

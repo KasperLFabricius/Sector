@@ -428,6 +428,7 @@ def test_live_negative_reinforcement_area_blocks_solver_and_result(
 ):
     import reinforcement_table as rebar_table
     import sector_app
+    from app import calculation_service
 
     at = _fresh()
     at.run()
@@ -454,8 +455,8 @@ def test_live_negative_reinforcement_area_blocks_solver_and_result(
         solver_calls.append(True)
         raise AssertionError("invalid reinforcement reached a solver")
 
-    monkeypatch.setattr(sector_app, "solve_plastic", forbidden_solver)
-    monkeypatch.setattr(sector_app, "solve_elastic_combined", forbidden_solver)
+    monkeypatch.setattr(calculation_service, "solve_plastic", forbidden_solver)
+    monkeypatch.setattr(calculation_service, "solve_elastic_combined", forbidden_solver)
     assert sector_app.run_analysis(latest) == {}
     assert solver_calls == []
 
@@ -1085,6 +1086,7 @@ def test_run_analysis_prepares_shared_calculations_once_across_named_cases(
 
     import importlib
     import sector_app
+    from app import calculation_service
     from sector.materials import Concrete, MildSteel, Prestress
     from sector.section import Section
 
@@ -1192,7 +1194,7 @@ def test_run_analysis_prepares_shared_calculations_once_across_named_cases(
             ],
         }
 
-    monkeypatch.setattr(sector_app, "_run_single_analysis", fake_single)
+    monkeypatch.setattr(calculation_service, "_run_single_analysis", fake_single)
     monkeypatch.setattr(case_analysis_core, "run_case_tables", fake_cases)
 
     result = sector_app.run_analysis(inp)
@@ -1377,6 +1379,7 @@ def test_run_analysis_rejects_unsafe_sweep_before_shared_or_warm_work(
     monkeypatch,
 ):
     import sector_app
+    from app import calculation_service
 
     reached = []
 
@@ -1390,7 +1393,7 @@ def test_run_analysis_rejects_unsafe_sweep_before_shared_or_warm_work(
         "_warm_solver",
         "_run_single_analysis",
     ):
-        monkeypatch.setattr(sector_app, name, forbidden)
+        monkeypatch.setattr(calculation_service, name, forbidden)
 
     with pytest.raises(
         sector_app.engineer_messages.EngineerValidationError
@@ -1412,6 +1415,7 @@ def test_run_analysis_rejects_unsafe_sweep_before_shared_or_warm_work(
 
 def test_run_analysis_rejects_numpy_boolean_sweep_before_any_work(monkeypatch):
     import sector_app
+    from app import calculation_service
 
     reached = []
 
@@ -1425,7 +1429,7 @@ def test_run_analysis_rejects_numpy_boolean_sweep_before_any_work(monkeypatch):
         "_warm_solver",
         "_run_single_analysis",
     ):
-        monkeypatch.setattr(sector_app, name, forbidden)
+        monkeypatch.setattr(calculation_service, name, forbidden)
 
     with pytest.raises(
         sector_app.engineer_messages.EngineerValidationError
@@ -2233,16 +2237,31 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
     locked_stress = 195_000.0 * bond_strain
     assert prestress_stress == pytest.approx([locked_stress * 1000.0], rel=1e-8)
 
-    # Independent Stage-I equilibrium in N and mm with the locked-in stress
-    # sigma_p(0) = Ep eps_p(0) = 601.97 MPa. The transformed tendon replaces
-    # its occupied concrete area, so its added area is (Ep/Ec - 1)Ap.
-    added_area = (6.85 * 0.975 - 1.0) * 1000.0
-    stress_intercept, stress_gradient = np.linalg.solve(
-        [[300.0 * 600.0 + added_area, -250.0 * added_area],
-         [-250.0 * added_area, 300.0 * 600.0**3 / 12.0 + 250.0**2 * added_area]],
-        [-locked_stress * 1000.0, locked_stress * 1000.0 * 250.0],
+    # Independent Stage-I equilibrium in N and mm (0.97.1, R2B-06): the Stage I
+    # check uses the locked-in stress of the uncracked section, so under
+    # prestress alone the tendon stress is Ep IS = 500 MPa also in Stage I.
+    # The concrete then carries P = Ap Ep IS = 500 kN at y = -250 mm on the
+    # section without tendon stiffness (the duct concrete is displaced):
+    # A_n = 179000 mm2, y_n = 250000/179000 = 1.39665 mm,
+    # I_n = 300 x 600^3/12 + 180000 y_n^2 - 1000 (250 + y_n)^2 = 5.337151e9 mm4.
+    # Top fibre: 4.23928 MPa (0.97.0, Stage II locked-in stress: 4.57167 MPa).
+    net_area = 300.0 * 600.0 - 1000.0
+    net_centroid = 1000.0 * 250.0 / net_area
+    net_inertia = (
+        300.0 * 600.0**3 / 12.0 + 300.0 * 600.0 * net_centroid**2
+        - 1000.0 * (250.0 + net_centroid) ** 2
     )
-    expected_sigma_ct = stress_intercept + 300.0 * stress_gradient
+    prestress_force = 1000.0 * 500.0
+
+    def stage_one_stress(y):
+        return (-prestress_force / net_area - prestress_force
+                * (-250.0 - net_centroid) * (y - net_centroid) / net_inertia)
+
+    expected_sigma_ct = stage_one_stress(300.0)
+    assert expected_sigma_ct == pytest.approx(4.23928, abs=1.0e-5)
+    assert latest["tendon_stage_one_stress"] == pytest.approx(
+        [(500.0 - 6.85 * 0.975 * stage_one_stress(-250.0)) * 1000.0], rel=1e-9
+    )
     elastic_results = (
         results["elastic"],
         results["elastic_cases"][0]["results"]["elastic"],
@@ -2307,9 +2326,9 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
         "P1 P1 195000.0 0.002564 500.000 1000.0 500.000",
         "Long-term 0.000 0.000 0.000 Short-term 0.000 0.000 0.000",
         "Locked-in prestress stays fixed.",
-        "If a prestress-only fiber stress exceeds fct,eff, " + chr(0x03BB) + "cr = 0.",
+        "If a prestress-only fibre stress exceeds fct,eff, " + chr(0x03BB) + "cr = 0.",
         "only the external N and M are scaled.",
-        "The smallest positive fiber solution governs.",
+        "The smallest positive fibre solution governs.",
         f"Calculated {chr(0x03C3)}ct,I = {expected_sigma_ct:.3f} MPa.",
         f"{expected_sigma_ct:.3f} MPa",
         "Calculated " + chr(0x03BB) + "cr = 0.000.", "The section is cracked.",
@@ -2318,6 +2337,27 @@ def test_eccentric_prestress_alone_cracks_through_the_real_app_adapter():
         assert expected in report_text
     assert "Report profile Standard" in report_text
     assert "= 1 - 6.85 / 6.85" not in report_text
+    assert "The cracking threshold gives its locked-in stress." in report_text
+    # 0.97.1 E1 (review T03): the printed Stage I locked-in stress reproduces the
+    # printed sigma_ct,I. Hand solve of the bonded uncracked section in N and mm:
+    # the transformed tendon adds (Ep/Ec - 1) Ap, and the locked-in force
+    # Ap sigma_p,I(0) acts at y = -250 mm.
+    printed_locked = float(re.search(
+        r"Stage I locked-in tendon stress .*?P1 = ([0-9.]+) MPa", report_text
+    ).group(1))
+    printed_sigma_ct = float(re.search(
+        "Calculated " + chr(0x03C3) + r"ct,I = ([0-9.]+) MPa", report_text
+    ).group(1))
+    assert printed_locked == pytest.approx(558.199, abs=1.0e-3)
+    added_area = (6.85 * 0.975 - 1.0) * 1000.0
+    stress_intercept, stress_gradient = np.linalg.solve(
+        [[300.0 * 600.0 + added_area, -250.0 * added_area],
+         [-250.0 * added_area, 300.0 * 600.0**3 / 12.0 + 250.0**2 * added_area]],
+        [-printed_locked * 1000.0, printed_locked * 1000.0 * 250.0],
+    )
+    assert stress_intercept + 300.0 * stress_gradient == pytest.approx(
+        printed_sigma_ct, abs=1.0e-3
+    )
 
     # The same calculated state supplies Audit's detailed substitution chain;
     # Standard above must still build and retain its relation and cracked result.
@@ -3883,7 +3923,11 @@ def test_non_density_loaded_snapshot_survives_reload_draft_back_and_autosave(
     assert saved_scalars["qsv_qs_rebar_mode"] == "By number"
     for key, expected in tables_a.items():
         if key in saved_tables:
-            assert saved_tables[key].equals(expected), key
+            # Schema 29: the file adds the corner-ID and group-ID columns
+            # that the live editors of 0.97.1 do not show yet.
+            assert saved_tables[key].reindex(
+                columns=expected.columns
+            ).equals(expected), key
 
     _open_qs(restored)
     _apply_qs(restored)
@@ -4328,7 +4372,11 @@ def test_density_rows_require_explicit_conversion_before_persisting_as_bars(
     saved_tables, saved_scalars = project_io.parse_project(
         autosave.read_text(encoding="utf-8")
     )
-    assert saved_tables["bars_base"].equals(explicit)
+    # Schema 29: the file adds a blank group ID to each bar.
+    assert saved_tables["bars_base"].reindex(columns=explicit.columns).equals(
+        explicit
+    )
+    assert set(saved_tables["bars_base"]["group ID"]) <= {""}
     assert saved_scalars["qsv_shape"] == "Slab strip"
     assert "qsv_qs_rebar_mode" not in saved_scalars
     assert "qsv_bot_s" not in saved_scalars
@@ -5210,10 +5258,9 @@ def test_schema_25_shared_crack_width_migrates_with_visible_warning():
     ):
         payload["scalars"].pop(key)
     payload["scalars"][project_io.LEGACY_SHARED_CRACK_WIDTH_KEY] = 0.20
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
     source = json.dumps(payload)
 
     at = _fresh()
@@ -5328,10 +5375,9 @@ def test_schema_26_linked_2023_shear_migration_requires_gamma_v_review():
     payload["version"] = project_io.MIGRATABLE_VERSION
     payload["scalars"].pop("shear_gamma_v")
     payload["scalars"].pop(capacity.TORSION_CASE_AUTHORITIES_KEY)
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"],
-        "scalars": payload["scalars"],
-    })
+    payload["provenance"]["input_sha256"] = (
+        project_io.recorded_input_sha256(payload)
+    )
 
     at = _fresh()
     at.session_state["_pending_project"] = json.dumps(payload)
@@ -7310,6 +7356,7 @@ def test_material_nonfinite_design_ordinate_is_blocked_before_solver(
     monkeypatch,
 ):
     import sector_app
+    from app import calculation_service
     from sector import material_presets
 
     class Box:
@@ -7353,7 +7400,7 @@ def test_material_nonfinite_design_ordinate_is_blocked_before_solver(
         raise AssertionError("invalid material reached a solver")
 
     monkeypatch.setattr(
-        sector_app, "_section_and_material_results", forbidden_solver
+        calculation_service, "_section_and_material_results", forbidden_solver
     )
     assert sector_app.run_analysis(
         {"section": object(), "material_error": box.messages[0]}
@@ -7365,6 +7412,7 @@ def test_material_factored_yield_nan_escape_is_blocked_before_solver(
     monkeypatch,
 ):
     import sector_app
+    from app import calculation_service
     from sector import material_presets
 
     class Box:
@@ -7411,7 +7459,7 @@ def test_material_factored_yield_nan_escape_is_blocked_before_solver(
         raise AssertionError("invalid material reached a solver")
 
     monkeypatch.setattr(
-        sector_app, "_section_and_material_results", forbidden_solver
+        calculation_service, "_section_and_material_results", forbidden_solver
     )
     assert sector_app.run_analysis(
         {"section": object(), "material_error": box.messages[0]}
@@ -8991,6 +9039,7 @@ def test_invalid_live_material_domain_is_not_coerced_or_sent_to_solvers(
     monkeypatch,
 ):
     import sector_app
+    from app import calculation_service
 
     at = _fresh()
     at.run()
@@ -9072,9 +9121,9 @@ def test_invalid_live_material_domain_is_not_coerced_or_sent_to_solvers(
         solver_calls.append(True)
         raise AssertionError("invalid material reached a solver")
 
-    monkeypatch.setattr(sector_app, "solve_plastic", forbidden_solver)
-    monkeypatch.setattr(sector_app, "solve_elastic_combined", forbidden_solver)
-    monkeypatch.setattr(sector_app, "_run_fatigue_or_invalid", forbidden_solver)
+    monkeypatch.setattr(calculation_service, "solve_plastic", forbidden_solver)
+    monkeypatch.setattr(calculation_service, "solve_elastic_combined", forbidden_solver)
+    monkeypatch.setattr(calculation_service, "_run_fatigue_or_invalid", forbidden_solver)
     assert sector_app.run_analysis(latest) == {}
     assert solver_calls == []
 
@@ -9647,16 +9696,22 @@ def test_native_load_case_editors_use_consistent_ed_columns():
     elastic = _widget(at.dataframe, "elastic_cases_editor").value
     goto_action_family(at, "Plastic")
     plastic = _widget(at.dataframe, "plastic_cases_editor").value
+    # Schema 29: the editor data also holds the three case attributes. The
+    # column order of the editor (TABLE_COLUMNS) does not show them yet.
+    attributes = ["location_tag", "design_situation", "stage"]
     assert list(plastic.columns) == [
         "name", "description", "n_ed_kn", "mx_ed_knm", "my_ed_knm",
         "vx_ed_kn", "vy_ed_kn", "vx_face", "vy_face", "t_ed_knm",
-        "check_minimum_reinforcement",
+        "check_minimum_reinforcement", *attributes,
     ]
     assert list(elastic.columns) == [
         "name", "description",
         "n_long_ed_kn", "mx_long_ed_knm", "my_long_ed_knm",
         "n_short_ed_kn", "mx_short_ed_knm", "my_short_ed_knm",
-        "calculate_crack_width",
+        "calculate_crack_width", *attributes,
+    ]
+    assert list(load_cases.TABLE_COLUMNS[load_cases.PLASTIC_TABLE_KEY]) == [
+        column for column in plastic.columns if column not in attributes
     ]
     for editor_key, action_columns in (
         ("plastic_cases_editor", load_cases.PLASTIC_NUMERIC),
