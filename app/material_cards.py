@@ -1,4 +1,4 @@
-"""Material cards: the design values of each material law beside its curve.
+"""Material cards: the values of each material law beside its curve.
 
 A card reads each value from the material object or the entered value that the
 calculation uses. It adds no formula of its own. Each row names the clause of
@@ -11,6 +11,7 @@ page can show several materials of one kind together.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -67,6 +68,19 @@ def _clause(key: str | None, by_edition: dict[str, str]) -> str | None:
     return None if key is None else by_edition[key]
 
 
+def horizontal_top_branch(steel) -> bool:
+    """Return True when the design law of a bar has a horizontal top branch.
+
+    Curve 2 is elastic-perfectly plastic. Curves 1 and 3 are horizontal at the
+    top when the design ultimate stress futk/gamma_u equals the design yield
+    stress fytk/gamma_y (the edition presets).
+    """
+    if steel.curve == 2:
+        return True
+    return math.isclose(steel.futk / steel.gamma_u, steel.fytk / steel.gamma_y,
+                        rel_tol=1.0e-9)
+
+
 def _mpa(value: float) -> str:
     return f"{value:.2f}{_NBSP}MPa"
 
@@ -90,8 +104,8 @@ def concrete_card(concrete, *, fctm_mpa: float, ec_gpa: float,
     """
     key = edition_key(preset)
     fck = float(concrete.fck)
-    table = ("EN 1992-1-1:2004 Table 3.1" if key == _EDITION_2023
-             else "Table 3.1")
+    # The Auto buttons use EN 1992-1-1:2004 Table 3.1 for every preset.
+    table = "EN 1992-1-1:2004 Table 3.1"
     fcd_formula = (r"$\eta_{cc}k_{tc}f_{ck}/\gamma_C$" if key == _EDITION_2023
                    else r"$\alpha_{cc}f_{ck}/\gamma_c$")
     strain_clause = {
@@ -99,14 +113,17 @@ def concrete_card(concrete, *, fctm_mpa: float, ec_gpa: float,
         _EDITION_DK_NA: "Table 3.1, 3.1.7(1)",
         _EDITION_2023: "8.1.2(1), (8.4)",
     }
+    # DS/EN 1992-1-1:2023 8.1.2(1) names the ultimate strain eps_cu.
+    ultimate = (r"$\varepsilon_{cu}$" if key == _EDITION_2023
+                else r"$\varepsilon_{cu2}$")
     rows = (
         CardRow(r"$f_{cd}$", _mpa(concrete.fcd), _basis(
             fcd_formula,
             _clause(key, {
-                _EDITION_2004: "3.1.6(1)P, (3.15)",
+                _EDITION_2004: r"3.1.6(1)P, (3.15); $\gamma_c$: Table 2.1N",
                 _EDITION_DK_NA: r"3.1.6(1)P, (3.15); $\gamma_c$: DK NA "
                                 "Table 2.1Na NA",
-                _EDITION_2023: "5.1.6(1), (5.3), (5.4)",
+                _EDITION_2023: r"5.1.6(1), (5.3), (5.4); $\gamma_C$: Table 4.3",
             }),
         )),
         CardRow(r"$f_{ctm}$", _mpa(fctm_mpa), _basis(
@@ -117,41 +134,54 @@ def concrete_card(concrete, *, fctm_mpa: float, ec_gpa: float,
         )),
         CardRow(r"$\varepsilon_{c2}$", _permille(concrete.eps_c2),
                 _basis(_clause(key, strain_clause)) or "-"),
-        CardRow(r"$\varepsilon_{cu2}$", _permille(concrete.eps_cu2),
+        CardRow(ultimate, _permille(concrete.eps_cu2),
                 _basis(_clause(key, strain_clause)) or "-"),
     )
-    notes = (
+    notes = ((
         "The cracking, crack-width and minimum-reinforcement calculations use "
         r"the entered $f_{ctm}$. The torsion cracking resistance uses "
         r"$f_{ctk,0.05}=0.7f_{ctm}$ with $f_{ctm}$ of EN 1992-1-1:2004 "
         r"Table 3.1. The modular ratios and the decompression strain of "
-        r"bonded tendons use the entered $E_c$.",
-    )
+        r"bonded tendons use the entered $E_c$."
+    ),)
     return MaterialCard(title, _edition_text(preset), CONDITION, rows, notes)
 
 
 def reinforcing_steel_card(steel, *, preset: object,
                            title: str = "Reinforcing steel") -> MaterialCard:
-    """Card of one reinforcing-steel law of the calculation."""
+    """Card of one reinforcing-steel law of the calculation.
+
+    The strain-limit clause follows the top branch of the law: a horizontal
+    branch is method b) without a strain limit, an inclined branch is method
+    a) with eps_ud. The entered rupture strain is the limit of the plastic
+    analysis in both cases.
+    """
     key = edition_key(preset)
+    if horizontal_top_branch(steel):
+        strain_clause = {
+            _EDITION_2004: "3.2.7(2) b): no strain limit",
+            _EDITION_DK_NA: "DK NA 3.2.7(2): method b), no strain limit",
+            _EDITION_2023: "5.2.4(2) b): no strain limit",
+        }
+    else:
+        strain_clause = {
+            _EDITION_2004: r"3.2.7(2) a), Note 1: $0.9\varepsilon_{uk}$",
+            _EDITION_DK_NA: r"3.2.7(2) a); DK NA 3.2.7(2) selects method b)",
+            _EDITION_2023: r"5.2.4(2) a): "
+                           r"$\varepsilon_{ud}\le\varepsilon_{uk}/\gamma_S$",
+        }
     rows = (
         CardRow(r"$f_{yd}$", _mpa(capacity.design_yield(steel)), _basis(
             r"$f_{ytk}/\gamma_y$",
             _clause(key, {
-                _EDITION_2004: "3.2.7(2), Figure 3.8",
+                _EDITION_2004: r"3.2.7(2), Figure 3.8; $\gamma_s$: Table 2.1N",
                 _EDITION_DK_NA: r"3.2.7(2), Figure 3.8; $\gamma_s$: DK NA "
                                 "Table 2.1Na NA",
-                _EDITION_2023: "5.2.4(1), (5.11)",
+                _EDITION_2023: r"5.2.4(1), (5.11); $\gamma_S$: Table 4.3",
             }),
         )),
         CardRow(r"$\varepsilon_{ud}$", _permille(steel.eut), _basis(
-            r"Entered $\varepsilon_{ut}$",
-            _clause(key, {
-                _EDITION_2004: "3.2.7(2) a)",
-                _EDITION_DK_NA: "3.2.7(2) a); DK NA 3.2.7(2): b), no strain "
-                                "limit",
-                _EDITION_2023: "5.2.4(2) a)",
-            }),
+            r"Entered $\varepsilon_{ut}$", _clause(key, strain_clause),
         )),
         CardRow("Compression", "active" if (
             steel.active_in_compression and steel.fyck > 0.0) else "tension only",
@@ -171,27 +201,40 @@ def prestressing_steel_card(prestress, *, preset: object,
     if prestress.curve in (6, 7):
         fpd = CardRow(r"$f_{pd}$", _mpa(capacity.design_yield(prestress)),
                       _basis(r"$f_{p0.1k}/\gamma_y$", _clause(key, {
-                          _EDITION_2004: "3.3.6(6)",
+                          _EDITION_2004: r"3.3.6(6); $\gamma_s$: Table 2.1N",
                           _EDITION_DK_NA: r"3.3.6(6); $\gamma_s$: DK NA "
                                           "Table 2.1Na NA",
-                          _EDITION_2023: "5.3.3(1), (5.12)",
+                          _EDITION_2023: r"5.3.3(1), (5.12); $\gamma_S$: "
+                                         "Table 4.3",
                       })))
     else:
         fpd = CardRow(r"$f_{pd}$", "-",
                       f"Built-in curve {prestress.curve}: fixed law")
+    strain = prestress.rupture_strain
+    if prestress.curve in (6, 7):
+        # The law reaches fpk/gamma_u at eut, so eut is eps_uk of the clauses.
+        # The clause values are references only (owner question Q4).
+        source = r"Entered $\varepsilon_{ut}$, total tendon strain"
+        reference = _clause(key, {
+            _EDITION_2004: r"3.3.6(7), Note: $0.9\varepsilon_{uk}$ = "
+                           + _permille(0.9 * strain),
+            _EDITION_DK_NA: r"3.3.6(7), Note: $0.9\varepsilon_{uk}$ = "
+                            + _permille(0.9 * strain),
+            _EDITION_2023: r"5.3.3(2) a): $\varepsilon_{uk}/\gamma_S$ = "
+                           + _permille(strain / prestress.gamma_u),
+        })
+    else:
+        source = f"Built-in curve {prestress.curve}: fixed rupture strain"
+        reference = None
     rows = (
         fpd,
-        CardRow(r"$\varepsilon_{ud}$", _permille(prestress.rupture_strain),
-                _basis("Total tendon strain", _clause(key, {
-                    _EDITION_2004: "3.3.6(7)",
-                    _EDITION_DK_NA: "3.3.6(7)",
-                    _EDITION_2023: "5.3.3(2) a)",
-                }))),
+        CardRow(r"$\varepsilon_{ud}$", _permille(strain),
+                _basis(source, reference)),
     )
-    notes = (
+    notes = ((
         "The plastic analysis limits the total tendon strain to "
-        r"$\varepsilon_{ud}$.",
-    )
+        r"$\varepsilon_{ud}$."
+    ),)
     return MaterialCard(title, _edition_text(preset), STEEL_CONDITION, rows,
                         notes)
 
@@ -203,7 +246,7 @@ def card_markdown(cards: MaterialCard | Iterable[MaterialCard]) -> str:
     blocks = []
     for card in cards:
         blocks.append("\n".join((
-            f"**Design values: {card.title}**",
+            f"**Material values: {card.title}**",
             "",
             "| Quantity | Value | Basis |",
             "|---|---|---|",

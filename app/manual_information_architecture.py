@@ -354,7 +354,7 @@ WORKFLOWS: Final[tuple[Workflow, ...]] = (
         "detailing", 'Examine detailing', "Minimum reinforcement, links and spacing results",
         "detailing", 'Calculated applicable action rows', 'Each requested check has a status and related assessment message',
         "results-stale",
-        'Under Analysis settings > Detailing, enable each required detailing check. Complete its link and member inputs. Under Actions, select Check minimum reinforcement on each required Plastic/capacity row. Open Results. Select Calculate. Open Detailing. Examine each requested status.',
+        'Under Analysis settings > Detailing, enable each required detailing check and complete its link inputs. Under Analysis settings > Member, complete the member type and the section cut direction. Under Actions, select Check minimum reinforcement on each required Plastic/capacity row. Open Results. Select Calculate. Open Detailing. Examine each requested status.',
     ),
     Workflow(
         "shear-check", "Calculate shear resistance", "Directional shear resistance and governing face",

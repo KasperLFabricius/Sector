@@ -475,9 +475,10 @@ def _prefill(prefix, preset, presets):
 def _input_widget_kwargs(key, kwargs, *, host=None):
     """Attach the input-event journal while preserving an existing callback.
 
-    ``on_change="ignore"`` keeps a free-text field from starting a rerun. Its
-    commit then waits for the next rerun, so the journal does not apply. Use it
-    only for a field that has no dependent display or stale marking.
+    ``on_change="ignore"`` keeps a field from starting a rerun. The journal
+    does not hold the value of such a field, so a page change in the next
+    rerun loses it. Sector uses it for no input field: each input enters the
+    project file, the report or the input signature.
     """
 
     options = dict(kwargs)
@@ -1172,7 +1173,7 @@ def mild_panel(box, locked=False, *, heading=True, entry=None, prefix="mild"):
         name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name", help='Name of this reinforcing-steel catalogue entry. Bars retain their assigned material ID when this name changes.')
         description = _seeded_text(
             box, "Description", entry.get("description", ""),
-            f"{prefix}_description", on_change="ignore",
+            f"{prefix}_description",
          help='Optional description of this reinforcing-steel material. Record the grade or project reference used to identify it.')
     else:
         name, description = entry["name"], entry.get("description", "")
@@ -1288,7 +1289,7 @@ def prestress_panel(box, locked=False, *, heading=True, entry=None, prefix="pre"
         name = _seeded_text(box, "Name", entry["name"], f"{prefix}_name", help='Name of this prestressing-steel catalogue entry. Tendons retain their assigned material ID when this name changes.')
         description = _seeded_text(
             box, "Description", entry.get("description", ""),
-            f"{prefix}_description", on_change="ignore",
+            f"{prefix}_description",
          help='Optional description of this prestressing-steel material. Record the grade or project reference used to identify it.')
     else:
         name, description = entry["name"], entry.get("description", "")
@@ -1794,7 +1795,6 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         "Description",
         entry.get("description", ""),
         f"{prefix}_description",
-        on_change="ignore",
         help="Optional engineering description used to distinguish similar details.",
     )
     compatible = [
@@ -1994,7 +1994,6 @@ def _fatigue_detail_catalog_panel(box, assigned_ids, edition):
         entry.get("source", ""),
         f"{prefix}_source",
         disabled=standard_lock,
-        on_change="ignore",
         help=_fatigue_detail_value_help(
             preset,
             edition,
@@ -7244,10 +7243,9 @@ def build_inputs(host=st):
     )
     if not (elastic_on and sls_cw and sls_dk_na):
         member_crack.caption(
-            "This input has no effect now. Only the DK NA crack-width "
-            "calculation uses this input. It needs an Elastic analysis, the "
-            "DK NA crack-width basis and an Elastic case with Crack width "
-            "selected."
+            "This input has no effect now. It has an effect only with an "
+            "Elastic analysis, the DK NA crack-width basis and an Elastic "
+            "case with Crack width selected."
         )
     scw.caption(
         "The member type of the DK NA crack-width calculation is in the "
@@ -9715,7 +9713,7 @@ def _material_input_preview(box, cache_name, material, figure_builder, *, visibl
 
 
 def _material_card(box, card_builder, *, visible):
-    """Show the design values of one material law below its curve.
+    """Show the material values of one material law below its curve.
 
     ``card_builder`` reads the material of the calculation. It runs only when
     the card is visible, and it is not called for a material that has no law.

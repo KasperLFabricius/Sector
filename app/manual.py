@@ -1070,7 +1070,7 @@ def manual_blocks() -> list:
         'A prestressing-steel stress-strain curve with an initial elastic branch and a nonlinear branch to design strength and ultimate strain.')
 
     h1("Analysis & result settings")
-    md('Open **Analysis settings**. Select **General**, **Shear / torsion / M-V-T**, **Crack width**, **Detailing**, or **Fatigue**. The selected group keeps related controls together. Field help states the conditions that apply to each setting.')
+    md('Open **Analysis settings**. Select **General**, **Member**, **Shear / torsion / M-V-T**, **Crack width**, **Detailing**, or **Fatigue**. The selected group keeps related controls together. Field help states the conditions that apply to each setting.')
     md('Under **Shear / torsion / M-V-T**, use these pages:\n\n- **Checks and methods**: select the requested checks and supported design methods.\n- **Shared reinforcement**: enter the common reference material, link geometry and compression-strut limits.\n- **Shear**: enter the section form, directional web properties and method-specific inputs.\n- **Torsion**: enter tube geometry, member scope and each case declaration.\n- **Combined M-V-T**: examine component prerequisites and enter the applicable interaction assumptions.\n\nShared reinforcement has one editing location. A prerequisite link opens its control. Enabling a check keeps physical reinforcement declarations and engineering assumptions explicit.')
     h2("Analysis mode")
     md('**Bending analysis** selects **Plastic** (nonlinear M-M capacity), **Elastic** (cracked-section stresses), or **Both**. Record the project limit-state classification in each action-set name, source or note.')

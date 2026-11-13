@@ -19,6 +19,7 @@ gatherUsageStats = false
 [runner]
 # Sector writes every output with an explicit st call. Magic would only rewrite
 # the large main script on each new script compilation (a test-suite cost).
+# The portable launcher (packaging/run_sector.py) passes the same setting.
 magicEnabled = false
 
 [theme]
