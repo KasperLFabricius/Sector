@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from app import engineer_messages, load_cases
 from app.manual_information_architecture import INPUT_STAGES as REGISTERED_STAGES
 from app.table_field_definitions import field_definition
+from sector import capacity
 from sector.engineer_message import EngineerMessage
 
 _STAGE_LABELS = {stage.key: stage.label for stage in REGISTERED_STAGES}
@@ -35,6 +36,42 @@ INPUT_STAGES = frozenset(
 MATERIAL_FAMILIES = frozenset(
     {"Concrete", "Reinforcing steel", "Prestressing steel", "Fatigue details"}
 )
+
+# Settings groups of the Analysis settings stage, in their display order.
+MEMBER_GROUP = "Member"
+SETTINGS_GROUPS = (
+    "General", MEMBER_GROUP, "Shear / torsion / M-V-T", "Crack width",
+    "Detailing", "Fatigue",
+)
+# The member context inputs of the Member group. Their widget keys and project
+# fields are the same as before the group existed.
+MEMBER_INPUT_KEYS = frozenset({
+    capacity.MED_MAX_ON_KEY, *capacity.MED_MAX_KEYS.values(),
+    "shear_med_max_copy", "sls_member", "detailing_member_type",
+    "detailing_cut_direction",
+})
+
+
+def settings_group(widget_key: object, *, mvt_input: bool = False) -> str:
+    """Return the settings group that shows one Analysis settings input.
+
+    ``mvt_input`` is True when the shear, torsion and M-V-T workspace owns the
+    key (``mvt_workspace.field_page`` is not None).
+    """
+    key = str(widget_key or "")
+    if key in MEMBER_INPUT_KEYS:
+        return MEMBER_GROUP
+    if mvt_input:
+        return "Shear / torsion / M-V-T"
+    if key.startswith("sls_"):
+        return "Crack width"
+    if key.startswith("fatigue_"):
+        return "Fatigue"
+    if key.startswith((
+        "detailing_", "minimum_reinforcement_", "transverse_", "clear_spacing_",
+    )) or key == "modelled_direction_alias":
+        return "Detailing"
+    return "General"
 
 _CASE_FALLBACK = EngineerMessage(
     "ACTION-CASES",
@@ -652,9 +689,12 @@ __all__ = [
     "LOADS",
     "MATERIAL_FAMILIES",
     "MATERIAL_PARAMETERS",
+    "MEMBER_GROUP",
+    "MEMBER_INPUT_KEYS",
     "PROJECT",
     "PROJECT_REPORT",
     "SECTION",
+    "SETTINGS_GROUPS",
     "CaseLocation",
     "InputIssue",
     "InputTarget",
@@ -662,4 +702,5 @@ __all__ = [
     "heightened_issues",
     "resolve_case_location",
     "section_issues",
+    "settings_group",
 ]
