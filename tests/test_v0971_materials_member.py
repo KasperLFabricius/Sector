@@ -293,11 +293,28 @@ def test_med_max_of_a_0970_file_survives_load_and_save(tmp_path, monkeypatch):
     scalars[capacity.MED_MAX_ON_KEY] = True
     scalars["shear_med_max_mx_pos"] = 125.0
     scalars["shear_med_max_my_neg"] = 40.0
+    from app import load_cases, section_ids
+    from app import reinforcement_table as rebar
+
+    # The form that 0.97.0 wrote: schema 28, without the schema-29 fields.
     payload = json.loads(project_io.dump_project(tables, scalars))
-    payload["schema_version"] = 28
-    payload["provenance"]["input_sha256"] = project_io._input_digest({
-        "tables": payload["tables"], "scalars": payload["scalars"],
-    })
+    payload["version"] = 28
+    for key in project_io.SCHEMA29_SCALAR_KEYS:
+        payload["scalars"].pop(key)
+    schema29_columns = {
+        **{key: {section_ids.ID} for key in section_ids.GEOMETRY_TABLE_KEYS},
+        **{key: {rebar.GROUP_ID} for key in project_io.REINFORCEMENT_TABLE_KEYS},
+        **{key: set(load_cases.ATTRIBUTE_COLUMNS)
+           for key in load_cases.CASE_TABLE_KEYS},
+    }
+    for key, dropped in schema29_columns.items():
+        table = payload["tables"][key]
+        keep = [i for i, name in enumerate(table["columns"])
+                if name not in dropped]
+        table["columns"] = [table["columns"][i] for i in keep]
+        table["rows"] = [[row[i] for i in keep] for row in table["rows"]]
+    payload["provenance"]["input_sha256"] = project_io.recorded_input_sha256(
+        payload)
     text = json.dumps(payload)
     assert project_io.parse_project_with_info(text)[2]["source_schema_version"] == 28
 
