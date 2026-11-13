@@ -12,6 +12,7 @@ import ast
 import json
 import math
 import pathlib
+import sys
 import tomllib
 
 import pytest
@@ -21,10 +22,14 @@ from sector import capacity, codes, material_presets as mp
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 APP = str(ROOT / "app" / "sector_app.py")
+if str(ROOT / "app") not in sys.path:
+    sys.path.insert(0, str(ROOT / "app"))  # `import sector_app` works alone
 DK_NA = "DS/EN 1992-1-1:2005 + DK NA:2024"
 EN_2004 = "EN 1992-1-1:2005"
 EN_2023 = "DS/EN 1992-1-1:2023"
-PERMILLE = "\u2030"
+PERMILLE = chr(0x2030)
+DEGREE = chr(0x00B0)
+NBSP = chr(0x00A0)
 
 
 def _rows(card):
@@ -40,6 +45,11 @@ def _concrete(fck, gamma_c, alpha_cc, preset):
 # --- Material cards -------------------------------------------------------
 
 
+def _v(number, unit):
+    """Card value text: the number, a non-breaking space and the unit."""
+    return f"{number}{NBSP}{unit}"
+
+
 def test_dk_na_concrete_card_gives_the_standard_values():
     # C35/45. DK NA Table 2.1Na NA: gamma_c = 1.45 (gamma_0 = gamma_3 = 1.0).
     # DK NA 3.1.6(1)P keeps alpha_cc = 1.0. Formula (3.15):
@@ -50,21 +60,29 @@ def test_dk_na_concrete_card_gives_the_standard_values():
         preset=DK_NA,
     )
     rows = _rows(card)
-    fcd = rows[r"$f_{cd}=\alpha_{cc}f_{ck}/\gamma_c$"]
-    assert fcd.value == f"{35.0 / 1.45:.2f} MPa" == "24.14 MPa"
-    assert fcd.clause == r"3.1.6(1)P, (3.15); $\gamma_c$: DK NA Table 2.1Na NA"
+    fcd = rows[r"$f_{cd}$"]
+    assert fcd.value == _v(f"{35.0 / 1.45:.2f}", "MPa") == _v("24.14", "MPa")
+    assert fcd.basis == (r"$\alpha_{cc}f_{ck}/\gamma_c$; 3.1.6(1)P, (3.15); "
+                         r"$\gamma_c$: DK NA Table 2.1Na NA")
     # The entered values of the calculation, with the Table 3.1 reference.
-    fctm = rows[r"$f_{ctm}$ (entered)"]
-    assert fctm.value == "2.90 MPa"
-    assert fctm.clause == f"Table 3.1: {0.30 * 35.0 ** (2.0 / 3.0):.2f} MPa"
-    ec = rows[r"$E_c$ (entered)"]
-    assert ec.value == "30.0 GPa"
-    assert ec.clause == f"Table 3.1, $E_{{cm}}$: {22.0 * (43.0 / 10.0) ** 0.3:.1f} GPa"
-    assert rows[r"$\varepsilon_{c2}$"].value == f"2.00 {PERMILLE}"
-    assert rows[r"$\varepsilon_{cu2}$"].value == f"3.50 {PERMILLE}"
-    assert rows[r"$\varepsilon_{cu2}$"].clause == "Table 3.1, 3.1.7(1)"
+    fctm = rows[r"$f_{ctm}$"]
+    assert fctm.value == _v("2.90", "MPa")
+    assert fctm.basis == "Entered; Table 3.1: " + _v(
+        f"{0.30 * 35.0 ** (2.0 / 3.0):.2f}", "MPa")
+    ec = rows[r"$E_c$"]
+    assert ec.value == _v("30.0", "GPa")
+    assert ec.basis == "Entered; Table 3.1, $E_{cm}$: " + _v(
+        f"{22.0 * (43.0 / 10.0) ** 0.3:.1f}", "GPa")
+    assert rows[r"$\varepsilon_{c2}$"].value == _v("2.00", PERMILLE)
+    assert rows[r"$\varepsilon_{cu2}$"].value == _v("3.50", PERMILLE)
+    assert rows[r"$\varepsilon_{cu2}$"].basis == "Table 3.1, 3.1.7(1)"
     assert card.edition == DK_NA
-    assert card.condition == "20 \u00b0C, concrete age 28 days, persistent design situation"
+    assert card.condition == (
+        f"20 {DEGREE}C, concrete age 28 days, persistent design situation"
+    )
+    caption = material_cards.card_caption(card)
+    assert caption.startswith(f"Edition: {DK_NA}. Condition: 20 {DEGREE}C")
+    assert "torsion cracking resistance" in caption
 
 
 def test_2023_concrete_card_uses_the_2023_formula_and_clauses():
@@ -77,18 +95,19 @@ def test_2023_concrete_card_uses_the_2023_formula_and_clauses():
         preset=EN_2023,
     )
     rows = _rows(card)
-    fcd = rows[r"$f_{cd}=\eta_{cc}k_{tc}f_{ck}/\gamma_C$"]
-    assert fcd.value == f"{eta_cc * 0.85 * 50.0 / 1.5:.2f} MPa" == "26.30 MPa"
-    assert fcd.clause == "5.1.6(1), (5.3), (5.4)"
-    assert rows[r"$\varepsilon_{cu2}$"].clause == "8.1.2(1), (8.4)"
+    fcd = rows[r"$f_{cd}$"]
+    assert fcd.value == _v(f"{eta_cc * 0.85 * 50.0 / 1.5:.2f}", "MPa") == _v(
+        "26.30", "MPa")
+    assert fcd.basis == r"$\eta_{cc}k_{tc}f_{ck}/\gamma_C$; 5.1.6(1), (5.3), (5.4)"
+    assert rows[r"$\varepsilon_{cu2}$"].basis == "8.1.2(1), (8.4)"
     # The Auto buttons use EN 1992-1-1:2004 Table 3.1; the card names it.
-    assert rows[r"$f_{ctm}$ (entered)"].clause.startswith(
-        "EN 1992-1-1:2004 Table 3.1: "
+    assert rows[r"$f_{ctm}$"].basis.startswith(
+        "Entered; EN 1992-1-1:2004 Table 3.1: "
     )
 
 
 def test_concrete_card_reads_the_law_of_the_calculation():
-    # A lifted ultimate strain and a custom curve preset come from the law.
+    # A curve preset has no standard clause; the values come from the law.
     concrete = mp.build_concrete(curve=1, fck=30.0, gamma_c=1.2, alpha_cc=0.85,
                                  eps_c2=2.2, eps_cu2=3.0)
     card = material_cards.concrete_card(
@@ -96,9 +115,10 @@ def test_concrete_card_reads_the_law_of_the_calculation():
     )
     rows = _rows(card)
     # Formula (3.15) with the entered operands: 0.85 x 30 / 1.2 = 21.25 MPa.
-    assert rows[r"$f_{cd}=\alpha_{cc}f_{ck}/\gamma_c$"].value == "21.25 MPa"
-    assert rows[r"$f_{cd}=\alpha_{cc}f_{ck}/\gamma_c$"].clause == "-"
-    assert rows[r"$\varepsilon_{cu2}$"].value == f"3.00 {PERMILLE}"
+    assert rows[r"$f_{cd}$"].value == _v("21.25", "MPa")
+    assert rows[r"$f_{cd}$"].basis == r"$\alpha_{cc}f_{ck}/\gamma_c$"
+    assert rows[r"$\varepsilon_{cu2}$"].value == _v("3.00", PERMILLE)
+    assert rows[r"$\varepsilon_{cu2}$"].basis == "-"
     assert "Sector curve law, no standard clause" in card.edition
     assert material_cards.edition_key("Curve 1 (cubic)") is None
     assert material_cards.edition_key(DK_NA) == codes.EC2_2005_DKNA.key
@@ -111,14 +131,15 @@ def test_dk_na_reinforcing_steel_card():
     steel = mp.build_mild(**mp.MILD_PRESETS[DK_NA])
     card = material_cards.reinforcing_steel_card(steel, preset=DK_NA, title="M1")
     rows = _rows(card)
-    fyd = rows[r"$f_{yd}=f_{ytk}/\gamma_y$"]
-    assert fyd.value == f"{550.0 / 1.20:.2f} MPa" == "458.33 MPa"
-    assert fyd.clause.startswith("3.2.7(2), Figure 3.8")
-    eud = rows[r"$\varepsilon_{ud}$ (entered $\varepsilon_{ut}$)"]
-    assert eud.value == f"50.00 {PERMILLE}"
-    assert eud.clause == "3.2.7(2) a). DK NA 3.2.7(2): b), no strain limit"
+    fyd = rows[r"$f_{yd}$"]
+    assert fyd.value == _v(f"{550.0 / 1.20:.2f}", "MPa") == _v("458.33", "MPa")
+    assert fyd.basis.startswith(r"$f_{ytk}/\gamma_y$; 3.2.7(2), Figure 3.8")
+    eud = rows[r"$\varepsilon_{ud}$"]
+    assert eud.value == _v("50.00", PERMILLE)
+    assert eud.basis == (r"Entered $\varepsilon_{ut}$; 3.2.7(2) a); DK NA "
+                         "3.2.7(2): b), no strain limit")
     assert rows["Compression"].value == "active"
-    assert card.condition == "20 \u00b0C, persistent design situation"
+    assert card.condition == f"20 {DEGREE}C, persistent design situation"
     tension_only = mp.build_mild(**mp.MILD_PRESETS[DK_NA] | {
         "active_in_compression": False})
     assert _rows(material_cards.reinforcing_steel_card(
@@ -127,51 +148,53 @@ def test_dk_na_reinforcing_steel_card():
 
 @pytest.mark.parametrize(("preset", "fyd", "fyd_clause", "eud_clause"), [
     # EN 1992-1-1:2004 Table 2.1N gamma_s = 1.15: 500 / 1.15 = 434.78 MPa.
-    (EN_2004, 500.0 / 1.15, "3.2.7(2), Figure 3.8", "3.2.7(2) a)"),
+    (EN_2004, 500.0 / 1.15, "; 3.2.7(2), Figure 3.8", "; 3.2.7(2) a)"),
     # DS/EN 1992-1-1:2023 5.2.4(1), (5.11): 500 / 1.15 = 434.78 MPa.
-    (EN_2023, 500.0 / 1.15, "5.2.4(1), (5.11)", "5.2.4(2) a)"),
-    ("Curve 2 (elastic-perfectly-plastic)", 500.0, "-", "-"),
+    (EN_2023, 500.0 / 1.15, "; 5.2.4(1), (5.11)", "; 5.2.4(2) a)"),
+    ("Curve 2 (elastic-perfectly-plastic)", 500.0, "", ""),
 ])
 def test_reinforcing_steel_card_clause_follows_the_edition(
     preset, fyd, fyd_clause, eud_clause
 ):
     steel = mp.build_mild(**mp.MILD_PRESETS[preset])
     rows = _rows(material_cards.reinforcing_steel_card(steel, preset=preset))
-    assert rows[r"$f_{yd}=f_{ytk}/\gamma_y$"].value == f"{fyd:.2f} MPa"
-    assert rows[r"$f_{yd}=f_{ytk}/\gamma_y$"].clause == fyd_clause
-    assert rows[r"$\varepsilon_{ud}$ (entered $\varepsilon_{ut}$)"].clause == eud_clause
+    assert rows[r"$f_{yd}$"].value == _v(f"{fyd:.2f}", "MPa")
+    assert rows[r"$f_{yd}$"].basis == r"$f_{ytk}/\gamma_y$" + fyd_clause
+    assert rows[r"$\varepsilon_{ud}$"].basis == (
+        r"Entered $\varepsilon_{ut}$" + eud_clause)
 
 
 def test_steel_card_value_is_the_engine_design_yield():
     # The card reads the same function as the shear and torsion checks.
     steel = mp.build_mild(**mp.MILD_PRESETS[DK_NA] | {"gamma_y": 1.32})
     card = material_cards.reinforcing_steel_card(steel, preset=DK_NA)
-    assert _rows(card)[r"$f_{yd}=f_{ytk}/\gamma_y$"].value == (
-        f"{capacity.design_yield(steel):.2f} MPa"
-    ) == f"{550.0 / 1.32:.2f} MPa"
+    assert _rows(card)[r"$f_{yd}$"].value == _v(
+        f"{capacity.design_yield(steel):.2f}", "MPa"
+    ) == _v(f"{550.0 / 1.32:.2f}", "MPa")
 
 
 def test_prestressing_steel_cards():
     # 3.3.6(6): fpd = fp0,1k / gamma_s = 1640 / 1.20 = 1366.67 MPa (DK NA).
     tendon = mp.build_prestress(**mp.PRESTRESS_PRESETS[DK_NA])
     rows = _rows(material_cards.prestressing_steel_card(tendon, preset=DK_NA))
-    assert rows[r"$f_{pd}=f_{p0.1k}/\gamma_y$"].value == "1366.67 MPa"
-    assert rows[r"$f_{pd}=f_{p0.1k}/\gamma_y$"].clause.startswith("3.3.6(6)")
-    assert rows[r"$\varepsilon_{ud}$ (total strain)"].value == f"35.00 {PERMILLE}"
-    assert rows[r"$\varepsilon_{ud}$ (total strain)"].clause == "3.3.6(7)"
+    assert rows[r"$f_{pd}$"].value == _v("1366.67", "MPa")
+    assert rows[r"$f_{pd}$"].basis.startswith(r"$f_{p0.1k}/\gamma_y$; 3.3.6(6)")
+    assert rows[r"$\varepsilon_{ud}$"].value == _v("35.00", PERMILLE)
+    assert rows[r"$\varepsilon_{ud}$"].basis == "Total tendon strain; 3.3.6(7)"
     # 2023 5.3.3(1), (5.12): 1640 / 1.15 = 1426.09 MPa.
     tendon = mp.build_prestress(**mp.PRESTRESS_PRESETS[EN_2023])
     rows = _rows(material_cards.prestressing_steel_card(tendon, preset=EN_2023))
-    assert rows[r"$f_{pd}=f_{p0.1k}/\gamma_y$"].value == f"{1640.0 / 1.15:.2f} MPa"
-    assert rows[r"$f_{pd}=f_{p0.1k}/\gamma_y$"].clause == "5.3.3(1), (5.12)"
-    assert rows[r"$\varepsilon_{ud}$ (total strain)"].clause == "5.3.3(2) a)"
+    assert rows[r"$f_{pd}$"].value == _v(f"{1640.0 / 1.15:.2f}", "MPa")
+    assert rows[r"$f_{pd}$"].basis == r"$f_{p0.1k}/\gamma_y$; 5.3.3(1), (5.12)"
+    assert rows[r"$\varepsilon_{ud}$"].basis == "Total tendon strain; 5.3.3(2) a)"
     # A built-in curve is a fixed law with the fixed 3.5 % rupture strain.
     builtin = mp.build_prestress(**mp.PRESTRESS_PRESETS["Curve 1 (built-in)"])
     rows = _rows(material_cards.prestressing_steel_card(
         builtin, preset="Curve 1 (built-in)"))
     assert rows[r"$f_{pd}$"].value == "-"
-    assert rows[r"$f_{pd}$"].clause == "Built-in curve 1: fixed law"
-    assert rows[r"$\varepsilon_{ud}$ (total strain)"].value == f"35.00 {PERMILLE}"
+    assert rows[r"$f_{pd}$"].basis == "Built-in curve 1: fixed law"
+    assert rows[r"$\varepsilon_{ud}$"].value == _v("35.00", PERMILLE)
+    assert rows[r"$\varepsilon_{ud}$"].basis == "Total tendon strain"
 
 
 def test_card_markdown_accepts_several_materials():
@@ -182,10 +205,9 @@ def test_card_markdown_accepts_several_materials():
     text = material_cards.card_markdown([first, second])
     assert "**Design values: M1 - B550**" in text
     assert "**Design values: M2 - B500**" in text
-    assert text.count("| Quantity | Value | Clause |") == 2
+    assert text.count("| Quantity | Value | Basis |") == 2
     assert material_cards.card_markdown(first) in text
-    assert text.isascii() is False  # the per-mille and degree signs
-    assert "\u2014" not in text
+    assert chr(0x2014) not in text
 
 
 # --- Member settings group -------------------------------------------------
@@ -345,9 +367,9 @@ def test_only_free_text_without_dependent_display_ignores_reruns(default_app):
     assert all(fields[key] is True for key in descriptions)
     text = " ".join(item.value for item in at.markdown)
     # Figure 3.8 with DK NA Table 2.1Na NA: 550 / 1.20 = 458.33 MPa.
-    assert "Design values: M1" in text and "458.33 MPa" in text
+    assert "Design values: M1" in text and "458.33" + NBSP + "MPa" in text
     goto_material(at, "Concrete")
     text = " ".join(item.value for item in at.markdown)
     # Formula (3.15): 35 / 1.45 = 24.14 MPa (default C35, DK NA).
-    assert "**Design values: Concrete**" in text and "24.14 MPa" in text
+    assert "**Design values: Concrete**" in text and "24.14" + NBSP + "MPa" in text
     assert math.isclose(at.number_input(key="conc_fck").value, 35.0)
