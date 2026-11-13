@@ -7244,9 +7244,10 @@ def build_inputs(host=st):
     )
     if not (elastic_on and sls_cw and sls_dk_na):
         member_crack.caption(
-            "No effect now. Only the DK NA crack-width calculation uses this "
-            "input. It needs an Elastic analysis, the DK NA crack-width basis "
-            "and an Elastic case with Crack width selected."
+            "This input has no effect now. Only the DK NA crack-width "
+            "calculation uses this input. It needs an Elastic analysis, the "
+            "DK NA crack-width basis and an Elastic case with Crack width "
+            "selected."
         )
     scw.caption(
         "The member type of the DK NA crack-width calculation is in the "
@@ -7553,7 +7554,8 @@ def build_inputs(host=st):
     if not (minimum_reinforcement_on or transverse_detailing_on
             or clear_spacing_on):
         member_detailing.caption(
-            "No effect on the results now. Only the detailing checks use "
+            "These inputs have no effect on the results now. Only the "
+            "detailing checks use "
             "these inputs. Select the checks in the Detailing settings group."
         )
     detailing_edition = _seeded_selectbox(
@@ -8216,7 +8218,8 @@ def build_inputs(host=st):
     )
     if not (shear_on or torsion_on):
         member_moment.caption(
-            "No effect now. Only the chord checks of shear and torsion use "
+            "These inputs have no effect now. Only the chord checks of shear "
+            "and torsion use "
             r"$M_{Ed,max}$."
         )
     mvt_shared.caption(
