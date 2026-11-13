@@ -4395,6 +4395,7 @@ def _apply_project_text(text: str) -> None:
         "result_plastic_case_context_sig", "result_elastic_case_context_sig",
         "result_plastic_bending_context_sig",
         "result_input_snapshot", "_latest_inputs",
+        stored_presentation.SESSION_KEY,
         "_case_error", "pl_state", "_report_msg",
         _INPUT_ISSUE_FOCUS_KEY, _SHOW_INPUT_ISSUES_KEY,
         "_workflow_calculate_request", "_next_workflow_page", "_actions_pending_command",
