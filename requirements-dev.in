@@ -15,12 +15,12 @@ pytest-xdist>=3.0,<4
 pytest-cov>=7.1,<8
 pip-tools>=7.6,<8
 pyyaml>=6.0,<7
-ruff>=0.16.1,<0.17
-mypy>=2.3,<2.4
+ruff>=0.17.5,<0.18
+mypy>=2.4.1,<2.5
 pip-audit>=2.10,<2.11
 
 # PDF structure inspection used by publication and report QA.
 pypdf>=6.19.0,<7
 
 # Cross-platform PDFium renderer used to inspect the actual report pages in CI.
-pypdfium2>=5.0,<6
+pypdfium2>=5.15.2,<6
